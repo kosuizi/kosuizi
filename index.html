@@ -3020,7 +3020,7 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary){
 
 // ── Günün Antrenmanı Motoru (yeniden yazıldı) ─────────────────────────────────
 
-function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts, planMode='optimize'){
+function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts, planMode='optimize', planTodayDay=null){
   if(!athlete) return null;
   const last=history[history.length-1];
   const today=new Date();
@@ -3183,8 +3183,9 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   const daysToIntermediate=intermediateForPlan.length
     ?Math.ceil((new Date(intermediateForPlan[0].tarih+'T12:00:00')-today)/864e5):null;
 
-  // planDay'den temel şablonu al
-  let tpl=planDay(todayStr,athlete,simStateToday,phase,daysToRace,daysToIntermediate,
+  // planTodayDay varsa (generateTwoWeekPlan'dan geldi) onu kullan — haftalık planla tutarlılık
+  // yoksa planDay'i doğrudan çağır (fallback)
+  let tpl=planTodayDay||planDay(todayStr,athlete,simStateToday,phase,daysToRace,daysToIntermediate,
     wkStatsForPlan,kosuGunleri,caprazGunleri);
 
   // Dinlenme veya antrenman günü değilse hemen dön
@@ -3794,14 +3795,25 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
 
 const ZONE_COLORS={Z1:'#6ee7b7',Z2:'#34d399',Z3:'#fbbf24',Z4:'#f97316',Z5a:'#ef4444',Z5b:'#dc2626',Z5c:'#991b1b'};
 
-function GununAntrenmanTab({athlete,history,races,workouts,planMode}){
+function GununAntrenmanTab({athlete,history,races,workouts,planMode,testPlanlar}){
   const today=new Date();
   const {start:wStart}=getWeekBounds(0);
   const athWks=(workouts||[]).filter(w=>w.athleteId===athlete?.id);
   const wkWorkouts=athWks.filter(w=>new Date(w.date+'T12:00:00')>=wStart);
 
-  const rec=React.useMemo(()=>recommendWorkout(athlete,history,races,wkWorkouts,workouts,planMode),
-    [athlete,history,races,wkWorkouts,planMode]);
+  // generateTwoWeekPlan'dan bugünün gününü al — haftalık planla tutarlı tek kaynak
+  const todayStr=today.toISOString().split('T')[0];
+  const planTodayDay=React.useMemo(()=>{
+    if(!athlete)return null;
+    const racesOverride=planMode==='optimize'?races:races;
+    const plan=generateTwoWeekPlan(athlete,history,racesOverride,workouts,testPlanlar||[]);
+    const thisWeek=plan.weeks?.[0];
+    if(!thisWeek)return null;
+    return thisWeek.days.find(d=>d.date===todayStr)||null;
+  },[athlete,history,races,workouts,planMode,testPlanlar,todayStr]);
+
+  const rec=React.useMemo(()=>recommendWorkout(athlete,history,races,wkWorkouts,workouts,planMode,planTodayDay),
+    [athlete,history,races,wkWorkouts,planMode,planTodayDay]);
 
   if(!athlete) return React.createElement('div',{className:'empty'},'Sporcu seçilmedi.');
   if(!rec) return React.createElement('div',{className:'empty'},'Yeterli veri yok.');
@@ -6377,7 +6389,7 @@ function App(){
     ),
     React.createElement('div',{className:'content'},
       tab==='dashboard'&&React.createElement(Dashboard,{workouts:athWks,athlete,history,races}),
-      tab==='gunun'&&React.createElement(GununAntrenmanTab,{athlete,history,races,workouts,planMode}),
+      tab==='gunun'&&React.createElement(GununAntrenmanTab,{athlete,history,races,workouts,planMode,testPlanlar}),
       tab==='plan'&&React.createElement(HaftalikPlanTab,{athlete,history,races,workouts,planMode,setPlanMode,testPlanlar}),
       tab==='lider'&&React.createElement(LiderlikTab,{athletes,workouts,teamName,teamLogo}),
       tab==='bolge'&&React.createElement(BolgeTab,{athlete,workouts:athWks,onUpdateAthlete:handleUpdateAthlete}),
