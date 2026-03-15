@@ -3313,7 +3313,10 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
   if(!isAntrenman) return REST;
   // Simüle edilmiş gelecek değerlere göre ACWR blokerini uygulama — tahmin değerlerini blok olarak kullanmak yanlış
   const isSimulatedFuture=!isPast&&wkStats.weekOff>0;
-  if(inj>=8||(acwr>1.5&&!isSimulatedFuture)) return{...REST,baslik:'Zorunlu Dinlenme',yapilar:[{baslik:'Dinlenme',detay:acwr>1.5?'ACWR > 1.5':'Sakatlık'}]};
+  // Çapraz günler ACWR bloğundan muaf — düşük yoğunluklu, toparlanmaya yardımcı
+  // Mevcut haftada ACWR eşiğini biraz yükselt (simülasyon hataları için)
+  const acwrEsik=isCapraz?99:(isSimulatedFuture?99:1.5);
+  if(inj>=8||(acwr>acwrEsik&&!isSimulatedFuture)) return{...REST,baslik:'Zorunlu Dinlenme',yapilar:[{baslik:'Dinlenme',detay:acwr>acwrEsik?'ACWR > '+acwrEsik:'Sakatlık'}]};
 
   // uzun_gun tanımlıysa uzunu sadece o güne sakla
   const uzunGunTanimli=(athlete.uzun_gun||'')!=='';
@@ -3357,7 +3360,7 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
 }
 
 // 2 haftalık plan üret
-function generateTwoWeekPlan(athlete, history, races, actualWorkouts){
+function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanlar=[]){
   const today=new Date();
   const last=history[history.length-1];
   const {primary,intermediate}=selectRaces(athlete,races);
@@ -3402,6 +3405,7 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts){
       });
       const planned=planDay(dateStr,athlete,simState,phase,dtR,dtInt,wkStats,kosuGunleri,caprazGunleri);
       // wkStats güncelleme — geçmiş günlerde gerçek antrenman varsa onu kullan
+      const isTestDay=(testPlanlar||[]).some(p=>p.athId===athlete.id&&p.date===dateStr);
       const effectiveTip=isPast&&actual.length>0?(actual[0].tur||'aerobik'):planned.tip;
       if(effectiveTip!=='dinlenme'&&effectiveTip!=='capraz'&&(isPast?actual.length>0:true)){
         wkStats.count++;
@@ -3409,7 +3413,9 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts){
         if(['uzun','tirmanis'].includes(effectiveTip)) wkStats.uzunYapildi=true;
         wkStats.wkLoad+=planned.yukHedef||0;
       }
-      const loadForSim=isPast?(actualLoad||0):(planned.yukHedef||0);
+      // Test günü simülasyon yükünü %60 azalt — ACWR patlamasını önle
+      const rawLoad=isPast?(actualLoad||0):(planned.yukHedef||0);
+      const loadForSim=isTestDay?Math.round(rawLoad*0.4):rawLoad;
       simAtl=loadForSim*λ_atl+simAtl*(1-λ_atl);
       simCtl=loadForSim*λ_ctl+simCtl*(1-λ_ctl);
       let comparison=null;
@@ -3454,7 +3460,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
     const racesOverride=selectedPrimary
       ?races.map(r=>({...r,__force:r.id===selectedPrimary}))
       :races;
-    return generateTwoWeekPlan(athlete,history,racesOverride,workouts);
+    return generateTwoWeekPlan(athlete,history,racesOverride,workouts,testPlanlar||[]);
   },[athlete,history,races,workouts,selectedPrimary]);
 
   const weekTargets=React.useMemo(()=>{
