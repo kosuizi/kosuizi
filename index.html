@@ -539,7 +539,7 @@ function pbToMin(pbStr){
 
 // Yarış hazırlık skoru (0-100) — CTL, ACWR, sakatlık, faz
 function raceReadinessScore(ctl,acwr,phase,sakatlık,hrv_durum,daysLeft,race,athlete,workouts){
-  if(!ctl||!acwr)return null;
+  if(!ctl||!acwr||!athlete)return null;
   let score=50;
 
   // 1. CTL katkısı — yarışın zorluğuna göre gereken CTL tahmini
@@ -2800,6 +2800,7 @@ function tplAcici(sure_dk){
 // ── Grade Adjusted Pace (GAP) ─────────────────────────────────────────────────
 
 function calcWeeklyTargets(athlete, races, workouts, optimizeMode=false){
+  if(!athlete)return[];
   const {primary}=selectRaces(athlete,races);
   if(!primary||!primary.prep_weeks)return[];
 
@@ -2879,6 +2880,7 @@ function calcWeeklyTargets(athlete, races, workouts, optimizeMode=false){
 }
 
 function calcWeeklyTargetsCore(athlete, races, workouts, primary){
+  if(!athlete||!primary)return[];
   const today=new Date();
   const raceDate=new Date(primary.tarih+'T12:00:00');
   const prepWeeks=parseInt(primary.prep_weeks)||16;
@@ -3280,6 +3282,7 @@ function selectRaces(athlete, races){
 
 // Tek gün için plan üret (şablon motoru ile)
 function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate, wkStats, kosuGunleri, caprazGunleri){
+  if(!athlete)return{tip:'dinlenme',baslik:'Dinlenme',sure_dk:0,yukHedef:0,yapilar:[],isPast:false,isToday:false};
   const today=new Date();
   const d=new Date(date+'T12:00:00');
   const dayShort=DAYS_SHORT[d.getDay()];
@@ -4644,6 +4647,7 @@ const TEST_TURLERI={
 
 // Test zamanlama: Bu sporcu için şu an test önerilmeli mi?
 function calcTestTiming(athlete, history, races, workouts){
+  if(!athlete)return[];
   const last=history[history.length-1];
   const ctl=last?.ctl||0;
   const phase=last?.phase||'Temel';
@@ -4771,11 +4775,13 @@ function analyzeDynamics(workouts, athleteId){
   return{sonuc,wkCount:athWks.length,autoDetected};
 }
 
-function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout}){
+function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,testPlanlar,onSaveTestPlan,onDeleteTestPlan}){
   const [activeTest,setActiveTest]=useState(null);
   const [testForm,setTestForm]=useState({});
   const [testSaved,setTestSaved]=useState(null);
-  const [subTab,setSubTab]=useState('testler'); // 'testler' | 'dinamikler'
+  const [subTab,setSubTab]=useState('testler');
+  const [planlaTest,setPlanlaTest]=useState(null);
+  const [secilenGun,setSecilenGun]=useState(null);
 
   const oneriler=React.useMemo(()=>
     athlete?calcTestTiming(athlete,history,races,workouts):[]
@@ -4785,202 +4791,185 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout})
     athlete?analyzeDynamics(workouts,athlete.id):null
   ,[workouts,athlete]);
 
+  const athPlanlar=(testPlanlar||[]).filter(p=>p.athId===athlete?.id);
+
+  const takvimGunleri=React.useMemo(()=>{
+    if(!planlaTest||!athlete)return[];
+    const last=history[history.length-1];
+    const {primary}=selectRaces(athlete,races);
+    const kosuGunleri=athlete.kosu_gunleri||[];
+    const caprazGunleri=athlete.capraz_gunleri||[];
+    const today=new Date();
+    const gunler=[];
+    for(let i=1;i<=14;i++){
+      const d=new Date(today);
+      d.setDate(today.getDate()+i);
+      const y=d.getFullYear();
+      const m=String(d.getMonth()+1).padStart(2,'0');
+      const dd2=String(d.getDate()).padStart(2,'0');
+      const dateStr=`${y}-${m}-${dd2}`;
+      const dayShort=DAYS_SHORT[d.getDay()];
+      const daysToRace=primary?Math.ceil((new Date(primary.tarih+'T12:00:00')-d)/864e5):999;
+      const isKosuGunu=kosuGunleri.includes(dayShort);
+      const isCapraz=caprazGunleri.includes(dayShort);
+      const phase=primary?calcPhase(dateStr,primary.tarih,primary.prep_weeks,primary):'Temel';
+      let uygunluk='orta';
+      const neden=[];
+      if(!isKosuGunu&&!isCapraz){uygunluk='uygunsuz';neden.push('Antrenman günü değil');}
+      else if(daysToRace<7){uygunluk='uygunsuz';neden.push('Yarışa '+daysToRace+' gün kaldı');}
+      else if(phase==='Taper'){uygunluk='uygunsuz';neden.push('Taper haftası');}
+      else{
+        const tsb=last?.tsb||0;
+        const acwr=last?.acwr||1;
+        if(tsb>5&&acwr<1.2){uygunluk='ideal';neden.push('Form iyi, yük dengeli');}
+        else if(tsb>-5&&acwr<1.3){uygunluk='uygun';neden.push('Makul form');}
+        else if(tsb<-15)neden.push('Yorgunluk yüksek');
+        else if(acwr>1.3)neden.push('Yük birikmesi var');
+        else uygunluk='uygun';
+        if(daysToRace<14){uygunluk=uygunluk==='ideal'?'uygun':uygunluk;neden.push('Yarışa yakın');}
+        const prevDate=new Date(d);prevDate.setDate(d.getDate()-1);
+        const prevStr=`${prevDate.getFullYear()}-${String(prevDate.getMonth()+1).padStart(2,'0')}-${String(prevDate.getDate()).padStart(2,'0')}`;
+        const prevWk=(workouts||[]).find(w=>w.athleteId===athlete.id&&w.date===prevStr&&['interval','esik','yokus_kisa','yokus_uzun'].includes(w.tur));
+        if(prevWk){uygunluk=uygunluk==='ideal'?'uygun':'orta';neden.push('Dün ağır antrenman vardı');}
+      }
+      const renkMap={ideal:'var(--success)',uygun:'var(--info)',orta:'var(--warn)',uygunsuz:'var(--border)'};
+      const bgMap={ideal:'var(--success-bg)',uygun:'var(--info-bg)',orta:'var(--warn-bg)',uygunsuz:'var(--bg-secondary)'};
+      const labelMap={ideal:'⭐ İdeal',uygun:'✓ Uygun',orta:'~ Orta',uygunsuz:'✗ Uygunsuz'};
+      gunler.push({dateStr,dayShort,d,uygunluk,neden,renk:renkMap[uygunluk],bg:bgMap[uygunluk],label:labelMap[uygunluk],formatted:d.toLocaleDateString('tr-TR',{weekday:'short',day:'numeric',month:'short'})});
+    }
+    return gunler;
+  },[planlaTest,athlete,history,races,workouts]);
+
   const setF=(k,v)=>setTestForm(f=>({...f,[k]:v}));
+
+  const handlePlanKaydet=()=>{
+    if(!secilenGun||!planlaTest||!athlete)return;
+    onSaveTestPlan({id:uid(),athId:athlete.id,testTur:planlaTest.id,testAd:planlaTest.ad,date:secilenGun,olusturuldu:new Date().toISOString()});
+    setPlanlaTest(null);setSecilenGun(null);
+  };
 
   const handleTestSave=()=>{
     if(!activeTest||!athlete)return;
     const sonuc=activeTest.hesapla(testForm);
     if(!sonuc){alert('Lütfen tüm alanları doldurun.');return;}
-
-    // Sporcu profilini güncelle
     const updates={};
     if(sonuc.vo2max&&activeTest.guncelle.includes('vo2max'))updates.vo2max=String(sonuc.vo2max);
     if(sonuc.lthr&&activeTest.guncelle.includes('lthr'))updates.lthr=String(sonuc.lthr);
-    if(sonuc.pb_5k&&activeTest.guncelle.includes('pb_5k'))updates.pb_5k=sonuc.pb_5k;
-    if(sonuc.vlt_kalibre&&activeTest.guncelle.includes('vlt_kalibre')){
-      // vLT doğrudan güncelleme — vlt alanı yok ama pb_5k üzerinden hesaplanıyor
-      if(sonuc.pb_5k)updates.pb_5k=sonuc.pb_5k;
-    }
-    if(Object.keys(updates).length>0)onUpdateAthlete(athlete.id,updates);
-
-    // Test antrenman kaydı oluştur
-    const today=new Date().toISOString().split('T')[0];
-    const wRecord={
-      id:uid(),athleteId:athlete.id,date:today,
-      spor:'kosu',tur:'aerobik',
-      yapi_notu:activeTest.ad,
-      sure_sa:'0',sure_dk:'45',sure_sn:'0',
-      mesafe:activeTest.id==='zaman_5k'?'5':'',
-      ort_nabiz:testForm.maf_nabiz||testForm.tekrar4_nabiz||'',
-      rpe:'8',notlar:'Test sonucu: '+sonuc.label,
-      _isTest:true,_testTur:activeTest.id,_testSonuc:sonuc,
-      savedAt:new Date().toISOString()
-    };
-    if(activeTest.id==='cooper')wRecord.mesafe=String(Math.round((parseFloat(testForm.mesafe_m)||0)/1000*10)/10);
+    if(sonuc.pb_5k&&(activeTest.guncelle.includes('pb_5k')||activeTest.guncelle.includes('vlt_kalibre')))updates.pb_5k=sonuc.pb_5k;
+    if(Object.keys(updates).length>0)onUpdateAthlete({...athlete,...updates});
+    const today2=new Date().toISOString().split('T')[0];
+    const wRecord={id:uid(),athleteId:athlete.id,date:today2,spor:'kosu',tur:'aerobik',yapi_notu:activeTest.ad,sure_sa:'0',sure_dk:'45',sure_sn:'0',mesafe:activeTest.id==='zaman_5k'?'5':activeTest.id==='cooper'?String(Math.round((parseFloat(testForm.mesafe_m)||0)/1000*10)/10):'',ort_nabiz:testForm.maf_nabiz||testForm.tekrar4_nabiz||'',rpe:'8',notlar:'Test sonucu: '+sonuc.label,_isTest:true,_testTur:activeTest.id,_testSonuc:sonuc,savedAt:new Date().toISOString()};
     onSaveWorkout(wRecord);
-
-    setTestSaved(sonuc);
-    setTestForm({});
+    const plan=athPlanlar.find(p=>p.testTur===activeTest.id);
+    if(plan)onDeleteTestPlan(plan.id);
+    setTestSaved(sonuc);setTestForm({});
     setTimeout(()=>{setTestSaved(null);setActiveTest(null);},4000);
   };
 
-  const subTabStyle=(id)=>({
-    padding:'8px 14px',fontSize:13,cursor:'pointer',
-    borderBottom:subTab===id?'2px solid var(--info)':'2px solid transparent',
-    color:subTab===id?'var(--info)':'var(--text-secondary)',
-    fontWeight:subTab===id?600:400,whiteSpace:'nowrap'
-  });
-
-  if(!athlete)return React.createElement('div',{className:'empty'},'Sporcu seçilmedi.');
-
+  const subTabStyle=(id)=>({padding:'8px 14px',fontSize:13,cursor:'pointer',borderBottom:subTab===id?'2px solid var(--info)':'2px solid transparent',color:subTab===id?'var(--info)':'var(--text-secondary)',fontWeight:subTab===id?600:400,whiteSpace:'nowrap'});
   const durumBadge=(d)=>({onerilir:'badge-good',bekle:'badge-warn',erken:'badge-info',uygun_degil:'badge-gray',yakin_yaris:'badge-danger'}[d]||'badge-gray');
   const durumLabel=(d)=>({onerilir:'✓ Önerilir',bekle:'⏳ Bekle',erken:'🔄 Erken',uygun_degil:'— Uygun Değil',yakin_yaris:'⚠ Yarış Yakın'}[d]||d);
   const seviyeBadge=(s)=>({iyi:'badge-good',kabul:'badge-warn',gelistir:'badge-danger'}[s]||'badge-gray');
   const trendIcon=(t)=>({iyilesiyor:'↗',kötülessiyor:'↘',sabit:'→',yetersiz_veri:'—'}[t]||'—');
 
+  if(!athlete)return React.createElement('div',{className:'empty'},'Sporcu seçilmedi.');
+
   return React.createElement('div',null,
-    // Alt sekme
     React.createElement('div',{style:{display:'flex',borderBottom:'1px solid var(--border)',marginBottom:16,gap:2}},
       React.createElement('div',{style:subTabStyle('testler'),onClick:()=>setSubTab('testler')},'🧪 Test Koşuları'),
       React.createElement('div',{style:subTabStyle('dinamikler'),onClick:()=>setSubTab('dinamikler')},'📊 Koşu Dinamikleri')
     ),
 
-    // ── TESTLER ──
     subTab==='testler'&&React.createElement('div',null,
       React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:12,padding:'10px 12px',background:'var(--bg-secondary)',borderRadius:'var(--radius)'}},
         '💡 Testler sonucunda sporcu profili otomatik güncellenir: VO₂max, LTHR, pace bölgeleri ve tahminler iyileşir.'
       ),
-
-      // Test kartları
-      oneriler.map(t=>React.createElement('div',{key:t.id,className:'card',style:{marginBottom:10}},
-        React.createElement('div',{style:{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:12}},
-          React.createElement('div',{style:{flex:1}},
-            React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:4}},
-              React.createElement('span',{style:{fontSize:20}},(t.icon||'🧪')),
-              React.createElement('div',{style:{fontWeight:700,fontSize:15}},t.ad),
-              React.createElement('span',{className:'badge '+durumBadge(t.durum),style:{fontSize:11}},durumLabel(t.durum))
+      athPlanlar.length>0&&React.createElement('div',{className:'card',style:{marginBottom:12,background:'var(--info-bg)',border:'1px solid var(--info)'}},
+        React.createElement('div',{className:'card-title',style:{color:'var(--info)',marginBottom:8}},'📅 Planlı Testler'),
+        athPlanlar.map(p=>React.createElement('div',{key:p.id,style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:4,fontSize:13}},
+          React.createElement('span',null,React.createElement('strong',null,p.testAd),' · '+new Date(p.date+'T12:00:00').toLocaleDateString('tr-TR',{weekday:'long',day:'numeric',month:'long'})),
+          React.createElement('button',{className:'btn btn-sm btn-danger',onClick:()=>onDeleteTestPlan(p.id)},'İptal')
+        ))
+      ),
+      oneriler.map(t=>{
+        const mevcutPlan=athPlanlar.find(p=>p.testTur===t.id);
+        return React.createElement('div',{key:t.id,className:'card',style:{marginBottom:10}},
+          React.createElement('div',{style:{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:12}},
+            React.createElement('div',{style:{flex:1}},
+              React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:4}},
+                React.createElement('span',{style:{fontSize:20}},t.icon||'🧪'),
+                React.createElement('div',{style:{fontWeight:700,fontSize:15}},t.ad),
+                React.createElement('span',{className:'badge '+durumBadge(t.durum),style:{fontSize:11}},durumLabel(t.durum)),
+                mevcutPlan&&React.createElement('span',{className:'badge badge-info',style:{fontSize:10}},'📅 '+new Date(mevcutPlan.date+'T12:00:00').toLocaleDateString('tr-TR',{day:'numeric',month:'short'}))
+              ),
+              React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:4}},'🎯 '+t.amac),
+              React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},t.neden+(t.sonTest?' · Son test: '+fmtDate(t.sonTest.date):''))
             ),
-            React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:4}},
-              '🎯 '+t.amac
-            ),
-            React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},
-              t.neden+(t.sonTest?' · Son test: '+fmtDate(t.sonTest.date):'')
+            React.createElement('div',{style:{display:'flex',gap:6,flexShrink:0}},
+              t.durum==='onerilir'&&!mevcutPlan&&React.createElement('button',{className:'btn btn-sm',onClick:()=>{setPlanlaTest(t);setSecilenGun(null);}},'📅 Planla'),
+              t.durum==='onerilir'&&React.createElement('button',{className:'btn btn-primary btn-sm',onClick:()=>{setActiveTest(t);setTestForm({});setTestSaved(null);}},'Test Gir')
             )
           ),
-          t.durum==='onerilir'&&React.createElement('button',{
-            className:'btn btn-primary btn-sm',
-            onClick:()=>{setActiveTest(t);setTestForm({});setTestSaved(null);}
-          },'Test Gir')
-        ),
-
-        // Aktif test formu
-        activeTest?.id===t.id&&React.createElement('div',{style:{marginTop:12,paddingTop:12,borderTop:'1px solid var(--border)'}},
-          // Protokol
-          React.createElement('div',{style:{fontSize:12,fontWeight:600,marginBottom:6}},'Protokol:'),
-          React.createElement('ol',{style:{fontSize:12,color:'var(--text-secondary)',paddingLeft:20,margin:'0 0 12px'}},
-            t.protocol_steps.map((s,i)=>React.createElement('li',{key:i,style:{marginBottom:3}},s))
-          ),
-          // Girdi alanları
-          React.createElement('div',{className:'form-grid',style:{marginBottom:10}},
-            t.girdi.map(g=>React.createElement('div',{key:g.k,className:'form-group'},
-              React.createElement('label',null,g.l),
-              React.createElement('input',{type:g.type||'text',value:testForm[g.k]||'',
-                placeholder:g.ph||'',min:g.min,max:g.max,
-                onChange:e=>setF(g.k,e.target.value)})
-            ))
-          ),
-          // Önizleme
-          (()=>{
-            const prev=t.hesapla(testForm);
-            return prev&&React.createElement('div',{style:{
-              fontSize:13,fontWeight:600,padding:'8px 12px',marginBottom:10,
-              background:'var(--success-bg)',borderRadius:'var(--radius)',color:'var(--success)'
-            }},'📊 '+prev.label);
-          })(),
-          // Güncellenecek alanlar
-          React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:8}},
-            '🔄 Güncellenecek alanlar: '+t.guncelle.map(g=>({vo2max:'VO₂max',lthr:'LTHR',pb_5k:'5K PB',vlt_kalibre:'Pace bölgeleri',aerobik_baseline:'Aerobik verimlilik baseline'}[g]||g)).join(', ')
-          ),
-          testSaved&&React.createElement('div',{style:{
-            fontSize:13,padding:'8px 12px',marginBottom:8,
-            background:'var(--success-bg)',borderRadius:'var(--radius)',color:'var(--success)',fontWeight:600
-          }},'✓ Kaydedildi! '+testSaved.label),
-          React.createElement('div',{className:'flex-gap'},
-            React.createElement('button',{className:'btn btn-primary',onClick:handleTestSave},'Kaydet & Uygula'),
-            React.createElement('button',{className:'btn',onClick:()=>{setActiveTest(null);setTestForm({})}},'İptal')
+          activeTest?.id===t.id&&React.createElement('div',{style:{marginTop:12,paddingTop:12,borderTop:'1px solid var(--border)'}},
+            React.createElement('div',{style:{fontSize:12,fontWeight:600,marginBottom:6}},'Protokol:'),
+            React.createElement('ol',{style:{fontSize:12,color:'var(--text-secondary)',paddingLeft:20,margin:'0 0 12px'}},
+              t.protocol_steps.map((s,i)=>React.createElement('li',{key:i,style:{marginBottom:3}},s))
+            ),
+            React.createElement('div',{className:'form-grid',style:{marginBottom:10}},
+              t.girdi.map(g=>React.createElement('div',{key:g.k,className:'form-group'},
+                React.createElement('label',null,g.l),
+                React.createElement('input',{type:g.type||'text',value:testForm[g.k]||'',placeholder:g.ph||'',min:g.min,max:g.max,onChange:e=>setF(g.k,e.target.value)})
+              ))
+            ),
+            (()=>{const prev=t.hesapla(testForm);return prev&&React.createElement('div',{style:{fontSize:13,fontWeight:600,padding:'8px 12px',marginBottom:10,background:'var(--success-bg)',borderRadius:'var(--radius)',color:'var(--success)'}},'📊 '+prev.label);})(),
+            React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:8}},'🔄 Güncellenecek: '+t.guncelle.map(g=>({vo2max:'VO₂max',lthr:'LTHR',pb_5k:'5K PB',vlt_kalibre:'Pace bölgeleri',aerobik_baseline:'Aerobik verimlilik'}[g]||g)).join(', ')),
+            testSaved&&React.createElement('div',{style:{fontSize:13,padding:'8px 12px',marginBottom:8,background:'var(--success-bg)',borderRadius:'var(--radius)',color:'var(--success)',fontWeight:600}},'✓ Kaydedildi! '+testSaved.label),
+            React.createElement('div',{className:'flex-gap'},
+              React.createElement('button',{className:'btn btn-primary',onClick:handleTestSave},'Kaydet & Uygula'),
+              React.createElement('button',{className:'btn',onClick:()=>{setActiveTest(null);setTestForm({});}},'İptal')
+            )
           )
-        )
-      ))
+        );
+      })
     ),
 
-    // ── KOŞu DİNAMİKLERİ ──
     subTab==='dinamikler'&&React.createElement('div',null,
-      !dinamikler&&React.createElement('div',{className:'empty'},'Sabit tempolu antrenmanlarda (kolay/aerobik/uzun) kadans, yer temas veya dikey salınım verisi bulunamadı. Bu değerleri Garmin/Wahoo gibi cihazlardan aktarın.'),
+      !dinamikler&&React.createElement('div',{className:'empty'},'Sabit tempolu antrenmanlarda kadans, yer temas veya dikey salınım verisi bulunamadı.'),
       dinamikler&&React.createElement('div',null,
         React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:12,padding:'10px 12px',background:'var(--bg-secondary)',borderRadius:'var(--radius)'}},
-          '📊 Sadece sabit tempolu antrenmanlar dahil edildi — ',
-          React.createElement('strong',null,dinamikler.wkCount+' antrenman'),
-          dinamikler.autoDetected>0&&React.createElement('span',{style:{color:'var(--text-tertiary)'}},
-            ' ('+dinamikler.autoDetected+' tanesi antrenman türü bilgisi olmadan RPE/nabız/pace verisinden otomatik tespit edildi)'
-          ),
-          React.createElement('span',null,' · İnterval, tempo ve eşik hariç')
+          '📊 Sadece sabit tempolu antrenmanlar dahil edildi — ',React.createElement('strong',null,dinamikler.wkCount+' antrenman'),
+          dinamikler.autoDetected>0&&React.createElement('span',{style:{color:'var(--text-tertiary)'}},' ('+dinamikler.autoDetected+' tanesi otomatik tespit edildi)'),
+          ' · İnterval, tempo ve eşik hariç'
         ),
-        // 3 metrik kart
         React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(240px,1fr))',gap:12,marginBottom:16}},
-          [
-            {k:'kadans',l:'Kadans',aciklama:'Yüksek kadans (≥180 spm) eklem yükünü azaltır, koşu ekonomisini artırır.',oneri:{gelistir:'Metronom kullanarak kadansını yavaşça artır. Hedef: haftada +2–3 spm.',kabul:'İyi seviyedesin. Kısa yokuş tekrarları kadanı artırabilir.',iyi:'Mükemmel kadans!'}},
-            {k:'yer_kontak',l:'Yer Temas Süresi',aciklama:'Düşük yer temas süresi (<250ms) koşu verimliliğinin göstergesidir.',oneri:{gelistir:'Pliometrik egzersizler ve ayak altı kuvvetini artır. Bounding, skip A/B.',kabul:'Makul seviye. Orta ve üst vücut kuvvetini artır.',iyi:'Çok iyi yer teması!'}},
-            {k:'dikey_salinim',l:'Dikey Salınım',aciklama:'Düşük dikey salınım (<7cm) enerjiyi ileri harekete kanalize eder.',oneri:{gelistir:'Öne eğilim ve öne düşme tekniğine odaklan. Core güçlendirme.',kabul:'Kabul edilebilir. Düzlükte yalın ayak/minimal koşu dene.',iyi:'Verimli dikey hareket!'}},
+          [{k:'kadans',l:'Kadans',aciklama:'Yüksek kadans (≥180 spm) eklem yükünü azaltır.',oneri:{gelistir:'Metronom ile kadansını artır. Hedef: haftada +2–3 spm.',kabul:'İyi seviye. Kısa yokuş tekrarları kadansı artırabilir.',iyi:'Mükemmel kadans!'}},
+           {k:'yer_kontak',l:'Yer Temas Süresi',aciklama:'Düşük yer temas süresi (<250ms) koşu verimliliğinin göstergesi.',oneri:{gelistir:'Pliometrik egzersizler ve ayak altı kuvvetini artır.',kabul:'Makul seviye. Üst vücut kuvvetini artır.',iyi:'Çok iyi yer teması!'}},
+           {k:'dikey_salinim',l:'Dikey Salınım',aciklama:'Düşük dikey salınım (<7cm) enerjiyi ileri harekete kanalize eder.',oneri:{gelistir:'Öne eğilim tekniğine odaklan. Core güçlendirme.',kabul:'Kabul edilebilir. Minimal koşu dene.',iyi:'Verimli dikey hareket!'}},
           ].map(item=>{
             const d=dinamikler.sonuc[item.k];
-            if(!d)return React.createElement('div',{key:item.k,className:'card',style:{opacity:.5}},
-              React.createElement('div',{className:'card-title'},item.l),
-              React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)'}},'Veri yok')
-            );
+            if(!d)return React.createElement('div',{key:item.k,className:'card',style:{opacity:.5}},React.createElement('div',{className:'card-title'},item.l),React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)'}},'Veri yok'));
             return React.createElement('div',{key:item.k,className:'card'},
               React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}},
                 React.createElement('div',{className:'card-title',style:{margin:0}},item.l),
-                React.createElement('span',{className:'badge '+seviyeBadge(d.seviye)},
-                  {iyi:'✓ İyi',kabul:'~ Kabul',gelistir:'↑ Geliştir'}[d.seviye]
-                )
+                React.createElement('span',{className:'badge '+seviyeBadge(d.seviye)},{iyi:'✓ İyi',kabul:'~ Kabul',gelistir:'↑ Geliştir'}[d.seviye])
               ),
               React.createElement('div',{style:{display:'flex',gap:16,marginBottom:8}},
-                React.createElement('div',null,
-                  React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},'Ortalama'),
-                  React.createElement('div',{style:{fontSize:20,fontWeight:700}},d.avg+' '+d.birim)
-                ),
-                React.createElement('div',null,
-                  React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},'Son'),
-                  React.createElement('div',{style:{fontSize:18,fontWeight:600}},d.son+' '+d.birim)
-                ),
-                React.createElement('div',null,
-                  React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},'Trend'),
-                  React.createElement('div',{style:{fontSize:18,fontWeight:600,color:d.trend==='iyilesiyor'?'var(--success)':d.trend==='kötülessiyor'?'var(--danger)':'var(--text-secondary)'}},trendIcon(d.trend))
-                )
+                React.createElement('div',null,React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},'Ortalama'),React.createElement('div',{style:{fontSize:20,fontWeight:700}},d.avg+' '+d.birim)),
+                React.createElement('div',null,React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},'Son'),React.createElement('div',{style:{fontSize:18,fontWeight:600}},d.son+' '+d.birim)),
+                React.createElement('div',null,React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},'Trend'),React.createElement('div',{style:{fontSize:18,fontWeight:600,color:d.trend==='iyilesiyor'?'var(--success)':d.trend==='kötülessiyor'?'var(--danger)':'var(--text-secondary)'}},trendIcon(d.trend)))
               ),
               React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',marginBottom:8}},item.aciklama),
-              d.seviye!=='iyi'&&React.createElement('div',{style:{
-                fontSize:11,padding:'7px 10px',borderRadius:'var(--radius)',
-                background:d.seviye==='kabul'?'var(--warn-bg)':'var(--danger-bg)',
-                color:d.seviye==='kabul'?'var(--warn)':'var(--danger)'
-              }},
-                '💡 '+item.oneri[d.seviye]
-              )
+              d.seviye!=='iyi'&&React.createElement('div',{style:{fontSize:11,padding:'7px 10px',borderRadius:'var(--radius)',background:d.seviye==='kabul'?'var(--warn-bg)':'var(--danger-bg)',color:d.seviye==='kabul'?'var(--warn)':'var(--danger)'}},'💡 '+item.oneri[d.seviye])
             );
           })
         ),
-        // Referans tablosu
         React.createElement('div',{className:'card'},
           React.createElement('div',{className:'card-title'},'Referans Değerler'),
           React.createElement('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:12}},
-            React.createElement('thead',null,React.createElement('tr',{style:{background:'var(--bg-secondary)'}},
-              ['Metrik','İyi','Kabul','Geliştirmeli'].map(h=>React.createElement('th',{key:h,style:{padding:'6px 10px',textAlign:'left',fontWeight:600,color:'var(--text-secondary)'}},h))
-            )),
+            React.createElement('thead',null,React.createElement('tr',{style:{background:'var(--bg-secondary)'}},['Metrik','İyi','Kabul','Geliştirmeli'].map(h=>React.createElement('th',{key:h,style:{padding:'6px 10px',textAlign:'left',fontWeight:600,color:'var(--text-secondary)'}},h)))),
             React.createElement('tbody',null,
-              [{l:'Kadans (spm)',iyi:'>180',kabul:'170–180',gelistir:'<170'},
-               {l:'Yer Temas (ms)',iyi:'<250',kabul:'250–300',gelistir:'>300'},
-               {l:'Dikey Salınım (cm)',iyi:'<7',kabul:'7–9',gelistir:'>9'},
-              ].map((r,i)=>React.createElement('tr',{key:i,style:{borderTop:'1px solid var(--border)'}},
+              [{l:'Kadans (spm)',iyi:'>180',kabul:'170–180',gelistir:'<170'},{l:'Yer Temas (ms)',iyi:'<250',kabul:'250–300',gelistir:'>300'},{l:'Dikey Salınım (cm)',iyi:'<7',kabul:'7–9',gelistir:'>9'}]
+              .map((r,i)=>React.createElement('tr',{key:i,style:{borderTop:'1px solid var(--border)'}},
                 React.createElement('td',{style:{padding:'7px 10px',fontWeight:600}},r.l),
                 React.createElement('td',{style:{padding:'7px 10px',color:'var(--success)'}},r.iyi),
                 React.createElement('td',{style:{padding:'7px 10px',color:'var(--warn)'}},r.kabul),
@@ -4988,6 +4977,30 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout})
               ))
             )
           )
+        )
+      )
+    ),
+
+    planlaTest&&React.createElement('div',{className:'modal-bg',onClick:e=>{if(e.target.className==='modal-bg'){setPlanlaTest(null);setSecilenGun(null);}}},
+      React.createElement('div',{className:'modal',style:{maxWidth:480}},
+        React.createElement('div',{className:'modal-title'},
+          React.createElement('span',null,'📅 Test Planla — '+planlaTest.ad),
+          React.createElement('button',{className:'modal-close',onClick:()=>{setPlanlaTest(null);setSecilenGun(null);}},'×')
+        ),
+        React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:12}},'Önümüzdeki 14 gün için uygunluk analizi. Antrenman günlerin, form durumun ve yarış takvimine göre değerlendiriliyor.'),
+        React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:6,marginBottom:14}},
+          takvimGunleri.map(g=>React.createElement('div',{key:g.dateStr,onClick:()=>g.uygunluk!=='uygunsuz'&&setSecilenGun(g.dateStr),style:{padding:'8px 10px',borderRadius:'var(--radius)',cursor:g.uygunluk==='uygunsuz'?'not-allowed':'pointer',border:secilenGun===g.dateStr?'2px solid var(--info)':'1px solid var(--border)',background:secilenGun===g.dateStr?'var(--info-bg)':g.bg,opacity:g.uygunluk==='uygunsuz'?0.45:1,transition:'.1s'}},
+            React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:2}},
+              React.createElement('span',{style:{fontWeight:600,fontSize:13}},g.formatted),
+              React.createElement('span',{style:{fontSize:10,color:g.renk,fontWeight:600}},g.label)
+            ),
+            g.neden.length>0&&React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)'}},g.neden.join(' · '))
+          ))
+        ),
+        secilenGun&&React.createElement('div',{style:{fontSize:13,fontWeight:600,color:'var(--success)',marginBottom:10}},'✓ Seçilen: '+new Date(secilenGun+'T12:00:00').toLocaleDateString('tr-TR',{weekday:'long',day:'numeric',month:'long'})),
+        React.createElement('div',{className:'flex-gap'},
+          React.createElement('button',{className:'btn btn-primary',disabled:!secilenGun,onClick:handlePlanKaydet},'Kaydet'),
+          React.createElement('button',{className:'btn',onClick:()=>{setPlanlaTest(null);setSecilenGun(null);}},'İptal')
         )
       )
     )
@@ -5093,6 +5106,7 @@ function KarsilastirTab({athletes,races,workouts,allHistory}){
 }
 
 function Dashboard({workouts,athlete,history,races}){
+  if(!athlete)return React.createElement('div',{className:'empty'},'Sporcu seçilmedi.');
   const last=history[history.length-1];
   const acwrS=acwrStatus(last?.acwr);
   const tsbS=tsbStatus(last?.tsb);
@@ -6060,6 +6074,7 @@ function App(){
   const [workouts,setWorkouts]=useState([]);
   const [athHistory,setAthHistory]=useState([]);
   const [raceResults,setRaceResults]=useState([]);
+  const [testPlanlar,setTestPlanlar]=useState([]);
   const [selId,setSelId]=useState('');
   const [tab,setTab]=useState('sporcular');
   const [loaded,setLoaded]=useState(false);
@@ -6077,6 +6092,7 @@ function App(){
       let w=await fbGet('wks');
       let h=await fbGet('ath_hist');
       let rr=await fbGet('race_results');
+      let tp=await fbGet('test_planlar');
       let cfg=await fbGet('app_config');
 
       // Migration: Firebase boşsa localStorage'dan taşı
@@ -6092,6 +6108,7 @@ function App(){
       if(w?.length)setWorkouts(w);
       if(h?.length)setAthHistory(h);
       if(rr?.length)setRaceResults(rr);
+      if(tp?.length)setTestPlanlar(tp);
       if(cfg){
         if(cfg.darkMode!=null)setDarkMode(cfg.darkMode);
         if(cfg.teamName)setTeamName(cfg.teamName);
@@ -6112,6 +6129,7 @@ function App(){
   useEffect(()=>{if(loaded)fbSet('wks',workouts);},[workouts,loaded]);
   useEffect(()=>{if(loaded)fbSet('ath_hist',athHistory);},[athHistory,loaded]);
   useEffect(()=>{if(loaded)fbSet('race_results',raceResults);},[raceResults,loaded]);
+  useEffect(()=>{if(loaded)fbSet('test_planlar',testPlanlar);},[testPlanlar,loaded]);
   useEffect(()=>{if(loaded)fbSet('app_config',{darkMode,teamName,teamLogo});},[darkMode,teamName,teamLogo,loaded]);
 
   const handleUpdateAthlete=(newA)=>{
@@ -6128,17 +6146,22 @@ function App(){
 
   const handleUpdateWorkout=(id,patch)=>setWorkouts(p=>p.map(x=>x.id===id?{...x,...patch}:x));
   const handleExport=()=>{
-    const data={
-      version:1,
-      exportDate:new Date().toISOString(),
-      athletes,races,workouts,athHistory,raceResults
-    };
-    const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');
-    const dateStr=new Date().toISOString().split('T')[0];
-    a.href=url;a.download=`antrenman_takip_yedek_${dateStr}.json`;
-    a.click();URL.revokeObjectURL(url);
+    try{
+      const data={
+        version:1,
+        exportDate:new Date().toISOString(),
+        athletes,races,workouts,athHistory,raceResults
+      };
+      const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a');
+      const dateStr=new Date().toISOString().split('T')[0];
+      a.href=url;a.download=`antrenman_takip_yedek_${dateStr}.json`;
+      a.click();URL.revokeObjectURL(url);
+    }catch(e){
+      console.error('Export hatası detay:',e);
+      alert('Dışa aktarma hatası: '+e.message);
+    }
   };
 
   const importRef=useRef();
@@ -6341,7 +6364,7 @@ function App(){
       tab==='plan'&&React.createElement(HaftalikPlanTab,{athlete,history,races,workouts,planMode,setPlanMode}),
       tab==='lider'&&React.createElement(LiderlikTab,{athletes,workouts,teamName,teamLogo}),
       tab==='bolge'&&React.createElement(BolgeTab,{athlete,workouts:athWks,onUpdateAthlete:handleUpdateAthlete}),
-      tab==='test'&&React.createElement(TestTab,{athlete,history,races,workouts,onUpdateAthlete:handleUpdateAthlete,onSaveWorkout:w=>setWorkouts(p=>[...p,w])}),
+      tab==='test'&&React.createElement(TestTab,{athlete,history,races,workouts,onUpdateAthlete:handleUpdateAthlete,onSaveWorkout:w=>setWorkouts(p=>[...p,w]),testPlanlar,onSaveTestPlan:p=>setTestPlanlar(prev=>[...prev.filter(x=>!(x.athId===p.athId&&x.testTur===p.testTur)),p]),onDeleteTestPlan:id=>setTestPlanlar(p=>p.filter(x=>x.id!==id))}),
       tab==='yarislar'&&React.createElement(YarislarTab,{athlete,races,history,workouts:athWks,raceResults,onAddResult:r=>setRaceResults(p=>[...p,r]),onDeleteResult:id=>setRaceResults(p=>p.filter(x=>x.id!==id))}),
       tab==='karsilastir'&&React.createElement(KarsilastirTab,{athletes,races,workouts,allHistory,raceResults}),
       tab==='ekle'&&React.createElement(AntrenmanEkle,{onSave:w=>{
