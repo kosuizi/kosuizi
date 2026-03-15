@@ -2105,6 +2105,8 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo}){
       `;
       const cloned=el.cloneNode(true);
       cloned.style.marginBottom='0';
+      // Klondaki paylaş butonlarını kaldır
+      cloned.querySelectorAll('[data-no-export]').forEach(b=>b.remove());
       wrapper.appendChild(cloned);
       // Alt not
       const footer=document.createElement('div');
@@ -2141,6 +2143,36 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo}){
     setSharing(null);
   };
 
+  // Tüm kart paylaş
+  const shareFullCard=async()=>{
+    setDownloading(true);
+    try{
+      await loadHtml2Canvas();
+      // Paylaş butonlarını geçici gizle
+      const btns=cardRef.current.querySelectorAll('[data-no-export]');
+      btns.forEach(b=>{b._prevDisplay=b.style.display;b.style.display='none';});
+      const canvas=await window.html2canvas(cardRef.current,{
+        scale:2,useCORS:true,backgroundColor:'#0f172a',
+        width:cardRef.current.offsetWidth,height:cardRef.current.offsetHeight
+      });
+      btns.forEach(b=>{b.style.display=b._prevDisplay||'';});
+      const blob=await new Promise(r=>canvas.toBlob(r,'image/png'));
+      const dateStr=new Date().toISOString().split('T')[0];
+      const file=new File([blob],`kosuizi_haftalik_${dateStr}.png`,{type:'image/png'});
+      if(navigator.share&&navigator.canShare&&navigator.canShare({files:[file]})){
+        await navigator.share({
+          title:'Haftalık Liderlik — '+weekLabel(weekOffset),
+          text:(teamName||'Koşu İzi')+' haftalık özet',
+          files:[file]
+        });
+      } else {
+        const a=document.createElement('a');
+        a.download=file.name;a.href=URL.createObjectURL(file);a.click();URL.revokeObjectURL(a.href);
+      }
+    }catch(e){if(e.name!=='AbortError')alert('Hata: '+e.message);}
+    setDownloading(false);
+  };
+
   return React.createElement('div',null,
     // Kontroller
     React.createElement('div',{className:'flex-gap',style:{marginBottom:12}},
@@ -2148,8 +2180,9 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo}){
       React.createElement('span',{style:{fontWeight:600,fontSize:14,minWidth:120,textAlign:'center'}},weekLabel(weekOffset)),
       React.createElement('button',{className:'btn btn-sm',disabled:weekOffset>=0,onClick:()=>setWeekOffset(o=>Math.min(0,o+1))},'Sonraki →'),
       React.createElement('button',{className:'btn btn-primary btn-sm',style:{marginLeft:'auto'},onClick:downloadImage},
-        downloading?'İndiriliyor...':'⬇ Görsel İndir'
-      )
+        downloading?'İndiriliyor...':'⬇ İndir'
+      ),
+      React.createElement('button',{className:'btn btn-sm',onClick:shareFullCard,disabled:downloading},'↗ Paylaş')
     ),
 
     // Paylaşım kartı — koyu tasarım
@@ -2237,6 +2270,7 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo}){
             ),
             // Paylaş butonu
             React.createElement('button',{
+              'data-no-export':true,
               onClick:e=>{e.stopPropagation();shareAthCard(row.ath.id,row,i);},
               disabled:sharing===row.ath.id,
               style:{
@@ -2245,7 +2279,7 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo}){
                 flexShrink:0,transition:'.15s',opacity:sharing&&sharing!==row.ath.id?.5:1
               },
               title:'Kartı paylaş'
-            },sharing===row.ath.id?'⏳':'↗')
+            },sharing===row.ath.id?'◌':'↗')
           );
         }).filter(Boolean)
       ),
