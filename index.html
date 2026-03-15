@@ -4028,24 +4028,94 @@ function YarislarTab({athlete,races,history,workouts,raceResults,onAddResult,onD
         target&&React.createElement('div',null,
           React.createElement('div',{className:'divider'}),
           React.createElement('div',{className:'card-title'},'Tahmini Bitirme Süresi'),
-          React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(150px,1fr))',gap:10,marginBottom:12}},
-            React.createElement('div',{className:'metric'},
-              React.createElement('div',{className:'metric-label'},'Toplam Tahmin'),
-              React.createElement('div',{style:{fontSize:20,fontWeight:600,color:'var(--info)'}},fmtHMS(target.totalMin))
-            ),
-            React.createElement('div',{className:'metric'},
-              React.createElement('div',{className:'metric-label'},'Ort. Pace (Tahmin)'),
-              React.createElement('div',{style:{fontSize:16,fontWeight:600}},fmtPaceStr(target.totalMin,parseFloat(race.mesafe)))
-            ),
-            React.createElement('div',{className:'metric'},
-              React.createElement('div',{className:'metric-label'},'Tırmanış Ek Süre'),
-              React.createElement('div',{style:{fontSize:16,fontWeight:500}},fmtHMS(target.climbMin))
-            ),
-            target.idleMin>0&&React.createElement('div',{className:'metric'},
-              React.createElement('div',{className:'metric-label'},'Duruş Süreleri'),
-              React.createElement('div',{style:{fontSize:16,fontWeight:500}},fmtHMS(target.idleMin))
-            )
-          ),
+          (()=>{
+            // ── İyileştirme Potansiyeli ──────────────────────────────────────
+            // Yarışa ve hazırlık durumuna göre gerçekçi iyileştirme aralığı
+            const km=parseFloat(race.mesafe)||0;
+            const dp=parseFloat(race.d_plus)||0;
+            const prepWeeks=parseInt(race.prep_weeks)||12;
+            const taperW=parseInt(race.taper_w)||(km>42?3:km>21?2:1);
+            const daysLeft=race.tarih?Math.ceil((new Date(race.tarih+'T12:00:00')-new Date())/864e5):999;
+            const trainingDaysLeft=Math.max(0,daysLeft-taperW*7);
+            const totalTrainingDays=Math.max(1,(prepWeeks-taperW)*7);
+            const prepPct=Math.min(1,(totalTrainingDays-trainingDaysLeft)/totalTrainingDays);
+
+            // Mesafe & D+ bazlı max iyileştirme potansiyeli (hazırlık döngüsü başında)
+            // Kısa mesafe → daha fazla iyileşme mümkün
+            // Ultra/trail → teknik + D+ verimi önemli
+            const dpPerKm=km>0?dp/km:0;
+            let maxIyiPct;
+            if(km<=5)       maxIyiPct=6.0;
+            else if(km<=10) maxIyiPct=5.0;
+            else if(km<=21) maxIyiPct=4.0;
+            else if(km<=42) maxIyiPct=3.0;
+            else if(km<=60) maxIyiPct=2.5;
+            else            maxIyiPct=2.0;
+
+            // D+ >50m/km → trail teknik verimi ekler
+            if(dpPerKm>100) maxIyiPct+=1.0;
+            else if(dpPerKm>50) maxIyiPct+=0.5;
+
+            // Hazırlık tamamlanma oranına göre gerçekleşecek iyileşme tahmini
+            // Erken dönem → potansiyelin az bir kısmı gerçekleşti
+            // Geç dönem → potansiyelin büyük kısmı gerçekleşti
+            // S-eğrisi: orta dönemde hızlı, başta ve sonda yavaş
+            const realizePct=prepPct<0.1?0.05:prepPct<0.3?0.15+(prepPct-0.1)*0.5:
+              prepPct<0.7?0.25+(prepPct-0.3)*1.5:prepPct<0.9?0.85+(prepPct-0.7)*0.5:0.95;
+
+            const expectedIyi=round1(maxIyiPct*realizePct);
+            const minIyi=round1(expectedIyi*0.6);
+            const maxIyi=round1(Math.min(maxIyiPct,expectedIyi*1.4));
+
+            // İyileştirilmiş hedef süre aralığı
+            const tMin=round1(target.totalMin*(1-maxIyi/100));
+            const tMax=round1(target.totalMin*(1-minIyi/100));
+            const tHedef=round1(target.totalMin*(1-expectedIyi/100));
+
+            return React.createElement('div',null,
+              React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(150px,1fr))',gap:10,marginBottom:12}},
+                React.createElement('div',{className:'metric'},
+                  React.createElement('div',{className:'metric-label'},'Mevcut Tahmin'),
+                  React.createElement('div',{style:{fontSize:20,fontWeight:600,color:'var(--info)'}},fmtHMS(target.totalMin))
+                ),
+                React.createElement('div',{className:'metric',style:{border:'1px solid var(--success)',background:'var(--success-bg)'}},
+                  React.createElement('div',{className:'metric-label'},'Hazırlık Sonrası Hedef'),
+                  React.createElement('div',{style:{fontSize:18,fontWeight:700,color:'var(--success)'}},fmtHMS(tHedef)),
+                  React.createElement('div',{style:{fontSize:11,color:'var(--success)',marginTop:2}},'−'+expectedIyi+'% iyileştirme')
+                ),
+                React.createElement('div',{className:'metric'},
+                  React.createElement('div',{className:'metric-label'},'Ort. Pace (Tahmin)'),
+                  React.createElement('div',{style:{fontSize:16,fontWeight:600}},fmtPaceStr(target.totalMin,parseFloat(race.mesafe)))
+                ),
+                React.createElement('div',{className:'metric'},
+                  React.createElement('div',{className:'metric-label'},'Hedef Pace'),
+                  React.createElement('div',{style:{fontSize:16,fontWeight:600,color:'var(--success)'}},fmtPaceStr(tHedef,parseFloat(race.mesafe)))
+                ),
+                React.createElement('div',{className:'metric'},
+                  React.createElement('div',{className:'metric-label'},'Tırmanış Ek Süre'),
+                  React.createElement('div',{style:{fontSize:16,fontWeight:500}},fmtHMS(target.climbMin))
+                ),
+                target.idleMin>0&&React.createElement('div',{className:'metric'},
+                  React.createElement('div',{className:'metric-label'},'Duruş Süreleri'),
+                  React.createElement('div',{style:{fontSize:16,fontWeight:500}},fmtHMS(target.idleMin))
+                )
+              ),
+              // İyileştirme açıklaması
+              React.createElement('div',{style:{
+                fontSize:12,color:'var(--text-secondary)',padding:'10px 12px',
+                background:'var(--bg-secondary)',borderRadius:'var(--radius)',marginBottom:8
+              }},
+                React.createElement('span',{style:{fontWeight:600}},'İyileştirme potansiyeli: '),
+                'Bu yarış ('+km+'km'+( dp>0?', D+'+dp+'m':'')+') için beklenen iyileştirme aralığı: ',
+                React.createElement('span',{style:{fontWeight:600,color:'var(--success)'}},'%'+minIyi+'–%'+maxIyi),
+                ' · Hazırlık tamamlanma: ',
+                React.createElement('span',{style:{fontWeight:600}},'%'+Math.round(prepPct*100)),
+                ' · Beklenen gerçekleşme: ',
+                React.createElement('span',{style:{fontWeight:600,color:'var(--success)'}},'%'+expectedIyi),
+                React.createElement('span',{style:{color:'var(--text-tertiary)'}},' (tahmini süre aralığı: '+fmtHMS(tMax)+' – '+fmtHMS(tMin)+')')
+              )
+            );
+          })(),
           React.createElement('details',{style:{marginTop:4}},
             React.createElement('summary',{style:{fontSize:12,color:'var(--text-secondary)',cursor:'pointer',userSelect:'none',marginBottom:6}},'Faktör detayları göster'),
             React.createElement('div',{style:{columns:2,columnGap:16}},
