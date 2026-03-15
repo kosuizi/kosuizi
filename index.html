@@ -99,7 +99,7 @@ tbody tr:last-child td{border-bottom:none}
 .range-row{display:flex;align-items:center;gap:10px}
 .range-row input[type=range]{flex:1;accent-color:var(--info)}
 .range-val{font-size:14px;font-weight:600;min-width:20px;color:var(--info)}
-.sporcu-card{background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:10px;transition:.15s}
+.sporcu-card{background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px;display:flex;flex-direction:column;gap:12px;margin-bottom:10px;transition:.15s}
 .sporcu-card:hover{border-color:var(--border-hover)}
 .sporcu-info h3{font-size:15px;font-weight:600;margin-bottom:6px}
 .sporcu-meta{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
@@ -133,6 +133,60 @@ select{cursor:pointer}
 const {useState,useEffect,useMemo,useRef,useCallback}=React;
 
 const uid=()=>Math.random().toString(36).slice(2,10);
+
+// React class component — ErrorBoundary (hooks ile yapılamaz)
+class ErrorBoundary extends React.Component{
+  constructor(p){super(p);this.state={err:null};}
+  static getDerivedStateFromError(e){return{err:e};}
+  componentDidCatch(e,info){console.error('Render hatası:',e,info);}
+  render(){
+    if(this.state.err)return React.createElement('div',{style:{padding:16,color:'var(--danger)',fontSize:13,background:'var(--danger-bg)',borderRadius:8,margin:8}},
+      '⚠ Görüntüleme hatası: '+this.state.err.message,
+      React.createElement('button',{style:{marginLeft:12,fontSize:12,cursor:'pointer'},onClick:()=>this.setState({err:null})},'Yenile')
+    );
+    return this.props.children;
+  }
+}
+
+// ── Genel Paylaş Butonu ───────────────────────────────────────────────────────
+async function shareElement(el, filename, shareText){
+  if(!el)return;
+  // html2canvas yükle
+  await new Promise((resolve,reject)=>{
+    if(window.html2canvas)return resolve();
+    const s=document.createElement('script');
+    s.src='https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+    s.onload=resolve;s.onerror=()=>reject(new Error('Yüklenemedi'));
+    document.head.appendChild(s);
+  });
+  const bgColor=document.body.classList.contains('dark')?'#0a1220':'#f0f4f9';
+  const canvas=await window.html2canvas(el,{scale:2,useCORS:true,backgroundColor:bgColor});
+  const blob=await new Promise(r=>canvas.toBlob(r,'image/png'));
+  const file=new File([blob],filename,{type:'image/png'});
+  if(navigator.share&&navigator.canShare&&navigator.canShare({files:[file]})){
+    await navigator.share({title:filename.replace('.png','').replace(/_/g,' '),text:shareText||'',files:[file]});
+  } else {
+    const a=document.createElement('a');
+    a.download=filename;a.href=URL.createObjectURL(file);a.click();URL.revokeObjectURL(a.href);
+  }
+}
+
+function ShareButton({targetRef, filename, title, style}){
+  const [busy,setBusy]=useState(false);
+  const handle=async()=>{
+    if(!targetRef?.current)return;
+    setBusy(true);
+    try{await shareElement(targetRef.current,filename||'kosuizi_paylasim.png',title);}
+    catch(e){if(e.name!=='AbortError')alert('Paylaşım hatası: '+e.message);}
+    setBusy(false);
+  };
+  return React.createElement('button',{
+    onClick:handle,disabled:busy,
+    className:'btn btn-sm',
+    style:{fontSize:13,padding:'3px 8px',...(style||{})},
+    title:'Paylaş veya indir'
+  },busy?'⏳':'↗ Paylaş');
+}
 const GUNLER=['Pzt','Sal','Çar','Per','Cum','Cmt','Paz'];
 const toSec=(sa,dk,sn)=>(parseInt(sa)||0)*3600+(parseInt(dk)||0)*60+(parseInt(sn)||0);
 const fmtDur=(s)=>{const h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return h>0?`${h}s ${m}dk`:`${m}dk`};
@@ -1663,6 +1717,7 @@ function SporcularTab({athletes,races,athHistory,allHistory,onAdd,onUpdate,onDel
         const ctl=ah[ah.length-1]?.ctl;
         const acwr=ah[ah.length-1]?.acwr;
         return React.createElement('div',{key:a.id,className:'sporcu-card'},
+        React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:12}},
         React.createElement('div',{className:'sporcu-info',style:{flex:1}},
           React.createElement('div',{style:{display:'flex',gap:10,alignItems:'flex-start',marginBottom:6}},
             a.foto
@@ -1733,10 +1788,13 @@ function SporcularTab({athletes,races,athHistory,allHistory,onAdd,onUpdate,onDel
             (expandHist[a.id]?'▲ ':'▼ ')+'Geçmiş'+((athHistory||[]).filter(h=>h.athId===a.id).length?' ('+(athHistory||[]).filter(h=>h.athId===a.id).length+')':'')
           ),
           React.createElement('button',{className:'btn btn-sm btn-danger',onClick:()=>{if(confirm(a.ad+' silinsin mi?'))onDelete(a.id)}},'Sil')
-        ),
-        expandHist[a.id]&&React.createElement('div',{style:{width:'100%',marginTop:10,borderTop:'1px solid var(--border)',paddingTop:10}},
+        )
+        ), // top row kapanışı
+        expandHist[a.id]&&React.createElement('div',{style:{marginTop:4,borderTop:'1px solid var(--border)',paddingTop:10}},
           React.createElement('div',{style:{fontSize:11,fontWeight:600,textTransform:'uppercase',letterSpacing:'.5px',color:'var(--text-tertiary)',marginBottom:8}},'Sporcu Bilgi Geçmişi'),
-          React.createElement(SporcuGecmis,{athHistory,athId:a.id,onDeleteEntry:onDeleteHistoryEntry})
+          React.createElement(ErrorBoundary,null,
+            React.createElement(SporcuGecmis,{athHistory,athId:a.id,onDeleteEntry:onDeleteHistoryEntry})
+          )
         )
       );})
     ),
@@ -1989,7 +2047,9 @@ function calcWeeklyStats(workouts,athletes,weekOffset=0){
 function LiderlikTab({athletes,workouts,teamName,teamLogo}){
   const [weekOffset,setWeekOffset]=useState(0);
   const [downloading,setDownloading]=useState(false);
+  const [sharing,setSharing]=useState(null); // athId being shared
   const cardRef=React.useRef();
+  const athCardRefs=React.useRef({});
   const stats=React.useMemo(()=>calcWeeklyStats(workouts,athletes,weekOffset),[workouts,athletes,weekOffset]);
   const totalKm=round1(stats.reduce((s,r)=>s+r.mesafe,0));
   const totalDp=Math.round(stats.reduce((s,r)=>s+r.irtifa,0));
@@ -1999,28 +2059,86 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo}){
   const medalColors=['#FFD700','#C0C0C0','#CD7F32'];
   const medals=['🥇','🥈','🥉'];
 
+  const loadHtml2Canvas=()=>new Promise((resolve,reject)=>{
+    if(window.html2canvas)return resolve();
+    const script=document.createElement('script');
+    script.src='https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+    script.onload=resolve;
+    script.onerror=()=>reject(new Error('html2canvas yüklenemedi'));
+    document.head.appendChild(script);
+  });
+
   const downloadImage=async()=>{
     if(!cardRef.current)return;
     setDownloading(true);
     try{
-      // html2canvas ile çek
-      const script=document.createElement('script');
-      script.src='https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
-      script.onload=async()=>{
-        const canvas=await window.html2canvas(cardRef.current,{
-          scale:2,useCORS:true,backgroundColor:'#0f172a',
-          width:cardRef.current.offsetWidth,height:cardRef.current.offsetHeight
+      await loadHtml2Canvas();
+      const canvas=await window.html2canvas(cardRef.current,{
+        scale:2,useCORS:true,backgroundColor:'#0f172a',
+        width:cardRef.current.offsetWidth,height:cardRef.current.offsetHeight
+      });
+      const a=document.createElement('a');
+      const dateStr=new Date().toISOString().split('T')[0];
+      a.download=`kosuizi_haftalik_${dateStr}.png`;
+      a.href=canvas.toDataURL('image/png');
+      a.click();
+    }catch(e){alert('Hata: '+e.message);}
+    setDownloading(false);
+  };
+
+  // Bireysel sporcu kartını paylaş
+  const shareAthCard=async(athId,row,rank)=>{
+    setSharing(athId);
+    try{
+      await loadHtml2Canvas();
+      const el=athCardRefs.current[athId];
+      if(!el)return;
+
+      // Geçici wrapper — koyu arka plan ile
+      const wrapper=document.createElement('div');
+      wrapper.style.cssText='position:fixed;left:-9999px;top:0;background:#0f172a;padding:20px;border-radius:16px;font-family:system-ui,sans-serif;';
+      // Başlık
+      wrapper.innerHTML=`
+        <div style="color:#94a3b8;font-size:12px;margin-bottom:12px;font-weight:600;">
+          ${teamName||'Koşu İzi'} · ${weekLabel(weekOffset)}
+        </div>
+      `;
+      const cloned=el.cloneNode(true);
+      cloned.style.marginBottom='0';
+      wrapper.appendChild(cloned);
+      // Alt not
+      const footer=document.createElement('div');
+      footer.style.cssText='color:#334155;font-size:10px;margin-top:12px;';
+      footer.textContent='kosuizi.app';
+      wrapper.appendChild(footer);
+      document.body.appendChild(wrapper);
+
+      const canvas=await window.html2canvas(wrapper,{
+        scale:2,useCORS:true,backgroundColor:'#0f172a'
+      });
+      document.body.removeChild(wrapper);
+
+      const blob=await new Promise(r=>canvas.toBlob(r,'image/png'));
+      const file=new File([blob],`${(row.ath.ad||'sporcu').toLowerCase()}_hafta.png`,{type:'image/png'});
+
+      if(navigator.share&&navigator.canShare&&navigator.canShare({files:[file]})){
+        await navigator.share({
+          title:`${row.ath.ad} ${row.ath.soyad||''} — ${weekLabel(weekOffset)}`,
+          text:`${rank+1}. sıra · ${row.mesafe}km${row.irtifa>0?' · D+'+row.irtifa+'m':''} · Skor: ${row.sporSkoru}`,
+          files:[file]
         });
+      } else {
+        // Web Share API yoksa indir
         const a=document.createElement('a');
-        const dateStr=new Date().toISOString().split('T')[0];
-        a.download=`kosuizi_haftalik_${dateStr}.png`;
-        a.href=canvas.toDataURL('image/png');
+        a.download=file.name;
+        a.href=URL.createObjectURL(file);
         a.click();
-        setDownloading(false);
-      };
-      script.onerror=()=>{alert('İndirme kütüphanesi yüklenemedi.');setDownloading(false);};
-      document.head.appendChild(script);
-    }catch(e){alert('Hata: '+e.message);setDownloading(false);}
+        URL.revokeObjectURL(a.href);
+      }
+    }catch(e){
+      if(e.name!=='AbortError')alert('Paylaşım hatası: '+e.message);
+    }
+    setSharing(null);
   };
 
   return React.createElement('div',null,
@@ -2071,7 +2189,9 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo}){
           if(row.count===0&&i>=activeCount)return null;
           const pct=stats[0].sporSkoru>0?Math.round(row.sporSkoru/stats[0].sporSkoru*100):0;
           const sporList=Object.entries(row.sporDagilim).map(([k,v])=>(SPOR_MAP[k]?.emoji||'🏅')+' ×'+v).join(' ');
-          return React.createElement('div',{key:row.ath.id,style:{
+          return React.createElement('div',{key:row.ath.id,
+            ref:el=>{if(el)athCardRefs.current[row.ath.id]=el;},
+            style:{
             display:'flex',alignItems:'center',gap:12,
             padding:'10px 12px',marginBottom:8,
             background:i===0?'rgba(255,215,0,.08)':i===1?'rgba(192,192,192,.06)':i===2?'rgba(205,127,50,.06)':'rgba(255,255,255,.03)',
@@ -2114,7 +2234,18 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo}){
               row.sporSkoru>0&&React.createElement('div',{style:{marginTop:5,height:3,background:'rgba(255,255,255,.08)',borderRadius:2,width:120,overflow:'hidden'}},
                 React.createElement('div',{style:{height:'100%',width:pct+'%',background:i===0?'#fbbf24':i===1?'#94a3b8':i===2?'#b45309':'#3b82f6',borderRadius:2}})
               )
-            )
+            ),
+            // Paylaş butonu
+            React.createElement('button',{
+              onClick:e=>{e.stopPropagation();shareAthCard(row.ath.id,row,i);},
+              disabled:sharing===row.ath.id,
+              style:{
+                background:'rgba(255,255,255,.08)',border:'none',borderRadius:8,
+                padding:'6px 8px',cursor:'pointer',color:'#94a3b8',fontSize:16,
+                flexShrink:0,transition:'.15s',opacity:sharing&&sharing!==row.ath.id?.5:1
+              },
+              title:'Kartı paylaş'
+            },sharing===row.ath.id?'⏳':'↗')
           );
         }).filter(Boolean)
       ),
@@ -4396,6 +4527,10 @@ function Dashboard({workouts,athlete,history,races}){
   const acwrS=acwrStatus(last?.acwr);
   const tsbS=tsbStatus(last?.tsb);
 
+  // Paylaş ref'leri
+  const refAtlCtl=useRef();const refAcwr=useRef();
+  const refMech=useRef();const refZone=useRef();const refAerEff=useRef();
+
   // Son 7 gün metrikleri
   const wks=workouts.filter(w=>(new Date()-new Date(w.date))<=7*864e5);
   const wkLoad=round1(wks.reduce((s,w)=>s+(calcMetrics(w,athlete).yukObj||0),0));
@@ -4516,8 +4651,11 @@ function Dashboard({workouts,athlete,history,races}){
     ),
 
     // ATL/CTL grafiği
-    React.createElement('div',{className:'card'},
-      React.createElement('div',{className:'card-title'},'ATL / CTL — Son 90 gün'),
+    React.createElement('div',{ref:refAtlCtl,className:'card'},
+      React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}},
+        React.createElement('div',{className:'card-title',style:{margin:0}},'ATL / CTL — Son 90 gün'),
+        React.createElement(ShareBtn,{elRef:refAtlCtl,filename:'atl_ctl.png',title:'ATL/CTL Grafiği',text:athlete?.ad+' fitness trendi'})
+      ),
       React.createElement('div',{className:'flex-gap',style:{marginBottom:8,fontSize:11}},
         React.createElement('span',{style:{color:'#2563eb'}},'— CTL (fitness)'),
         React.createElement('span',{style:{color:'#d97706'}},'— ATL (yorgunluk)'),
@@ -4527,14 +4665,20 @@ function Dashboard({workouts,athlete,history,races}){
     ),
 
     // ACWR grafiği
-    React.createElement('div',{className:'card'},
-      React.createElement('div',{className:'card-title'},'ACWR (EWMA) — Son 90 gün  |  ideal: 0.8–1.3  |  risk >1.5'),
+    React.createElement('div',{ref:refAcwr,className:'card'},
+      React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}},
+        React.createElement('div',{className:'card-title',style:{margin:0}},'ACWR (EWMA) — Son 90 gün  |  ideal: 0.8–1.3  |  risk >1.5'),
+        React.createElement(ShareBtn,{elRef:refAcwr,filename:'acwr.png',title:'ACWR Grafiği',text:athlete?.ad+' antrenman yük dengesi'})
+      ),
       React.createElement(ChartACWR,{history:chart})
     ),
 
     // Mekanik yük grafiği
-    React.createElement('div',{className:'card'},
-      React.createElement('div',{className:'card-title'},'Mekanik Yük (AU) — Son 90 gün'),
+    React.createElement('div',{ref:refMech,className:'card'},
+      React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}},
+        React.createElement('div',{className:'card-title',style:{margin:0}},'Mekanik Yük (AU) — Son 90 gün'),
+        React.createElement(ShareBtn,{elRef:refMech,filename:'mekanik_yuk.png',title:'Mekanik Yük Grafiği',text:athlete?.ad+' mekanik stres trendi'})
+      ),
       React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:4}},'Zemin zorluğu ve irtifa düzeltmeli koşu stresi · CTL/ATL ile kıyasla: nöromüsküler yük kardiyovasküler yükün önünde mi?'),
       React.createElement('div',{className:'flex-gap',style:{marginBottom:8,fontSize:11}},
         React.createElement('span',{style:{color:'#16a34a'}},'— Mech CTL (kronik mekanik yük)'),
@@ -4545,10 +4689,13 @@ function Dashboard({workouts,athlete,history,races}){
     ),
 
     // Bölge dağılımı
-    zoneDist&&React.createElement('div',{className:'card'},
+    zoneDist&&React.createElement('div',{ref:refZone,className:'card'},
       React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}},
-        React.createElement('div',{className:'card-title',style:{margin:0}},'Yük Yoğunluk Dağılımı — Son 4 Hafta'),
-        zoneStatus&&React.createElement('span',{className:'badge '+zoneStatus.cls},zoneStatus.label)
+        React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8}},
+          React.createElement('div',{className:'card-title',style:{margin:0}},'Yük Yoğunluk Dağılımı — Son 4 Hafta'),
+          zoneStatus&&React.createElement('span',{className:'badge '+zoneStatus.cls},zoneStatus.label)
+        ),
+        React.createElement(ShareBtn,{elRef:refZone,filename:'zone_dagilim.png',title:'Yük Dağılımı',text:athlete?.ad+' bölge yoğunluk dağılımı'})
       ),
       React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',marginBottom:12}},
         'Referans model (Seiler 80/20): Düşük aerobik %75–85 · Yüksek aerobik %10–15 · Anaerobik %5–10'
@@ -4603,8 +4750,11 @@ function Dashboard({workouts,athlete,history,races}){
     ),
 
     // Aerobik verimlilik
-    React.createElement('div',{className:'card'},
-      React.createElement('div',{className:'card-title'},'Aerobik Verimlilik — 140 bpm Normalize Pace'),
+    React.createElement('div',{ref:refAerEff,className:'card'},
+      React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}},
+        React.createElement('div',{className:'card-title',style:{margin:0}},'Aerobik Verimlilik — 140 bpm Normalize Pace'),
+        React.createElement(ShareBtn,{elRef:refAerEff,filename:'aerobik_verimlilik.png',title:'Aerobik Verimlilik',text:athlete?.ad+' aerobik taban gelişimi'})
+      ),
       React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:8}},'Z2 antrenmanlarındaki pace 140 bpm\'e normalize edilir. Grafik yukarı çıkıyorsa (pace değeri küçülüyor) aynı nabızda daha hızlı koşuluyor — aerobik taban güçleniyor.'),
       React.createElement(ChartAerEff,{history})
     )
@@ -5150,30 +5300,83 @@ function generateMessages(changes,newA){
   return msgs;
 }
 
+// ── Paylaşılabilir Kart Yardımcısı ───────────────────────────────────────────
+async function shareCard(el, filename, title, text){
+  if(!el)return;
+  // html2canvas yükle
+  await new Promise((resolve,reject)=>{
+    if(window.html2canvas)return resolve();
+    const s=document.createElement('script');
+    s.src='https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+    s.onload=resolve;s.onerror=()=>reject(new Error('html2canvas yüklenemedi'));
+    document.head.appendChild(s);
+  });
+  const isDark=document.body.classList.contains('dark');
+  const canvas=await window.html2canvas(el,{
+    scale:2,useCORS:true,
+    backgroundColor:isDark?'#0a1220':'#f0f4f9',
+    width:el.offsetWidth,height:el.offsetHeight
+  });
+  const blob=await new Promise(r=>canvas.toBlob(r,'image/png'));
+  const file=new File([blob],filename,{type:'image/png'});
+  try{
+    if(navigator.share&&navigator.canShare&&navigator.canShare({files:[file]})){
+      await navigator.share({title,text,files:[file]});
+    } else {
+      const a=document.createElement('a');
+      a.download=filename;
+      a.href=URL.createObjectURL(file);
+      a.click();URL.revokeObjectURL(a.href);
+    }
+  }catch(e){if(e.name!=='AbortError')throw e;}
+}
+
+// Paylaş butonu komponenti — herhangi bir karta eklenebilir
+function ShareBtn({elRef,filename,title,text,style}){
+  const [busy,setBusy]=useState(false);
+  const handle=async()=>{
+    if(busy||!elRef?.current)return;
+    setBusy(true);
+    try{await shareCard(elRef.current,filename,title,text);}
+    catch(e){alert('Paylaşım hatası: '+e.message);}
+    setBusy(false);
+  };
+  return React.createElement('button',{
+    onClick:handle,disabled:busy,
+    style:{background:'none',border:'1px solid var(--border)',borderRadius:6,
+      padding:'3px 8px',cursor:'pointer',fontSize:12,color:'var(--text-secondary)',
+      display:'flex',alignItems:'center',gap:4,...style},
+    title:'Paylaş / İndir'
+  },busy?'⏳':(navigator.share?'↗ Paylaş':'⬇ İndir'));
+}
+
 function SporcuGecmis({athHistory,athId,onDeleteEntry}){
   const entries=(athHistory||[]).filter(h=>h.athId===athId).sort((a,b)=>new Date(b.date)-new Date(a.date));
   if(!entries.length)return React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',padding:'8px 0'}},'Henüz değişim kaydı yok.');
   const msgStyle={good:{background:'var(--success-bg)',color:'var(--success)'},warn:{background:'var(--warn-bg)',color:'var(--warn)'},danger:{background:'var(--danger-bg)',color:'var(--danger)'},info:{background:'var(--info-bg)',color:'var(--info)'}};
   return React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:10}},
-    entries.map((entry,i)=>React.createElement('div',{key:i,style:{borderLeft:'2px solid var(--border)',paddingLeft:12,position:'relative'}},
-      // Silme butonu
-      onDeleteEntry&&React.createElement('button',{
-        onClick:()=>{if(confirm('Bu kayıt silinsin mi?'))onDeleteEntry(entry)},
-        style:{position:'absolute',top:0,right:0,background:'none',border:'none',cursor:'pointer',fontSize:14,color:'var(--text-tertiary)',lineHeight:1,padding:'2px 4px'},
-        title:'Bu kaydı sil'
-      },'✕'),
-      React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:4}},
-        new Date(entry.date).toLocaleDateString('tr-TR',{day:'2-digit',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit'})
-      ),
-      entry.changes.map((c,j)=>React.createElement('div',{key:j,style:{fontSize:12,marginBottom:3}},
-        React.createElement('span',{style:{color:'var(--text-secondary)'}},(c.label)+': '),
-        React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',marginRight:4}},c.oldVal),
-        React.createElement('span',{style:{fontWeight:600,color:'var(--text-primary)'}},c.newVal)
-      )),
-      entry.messages.length>0&&React.createElement('div',{style:{marginTop:6,display:'flex',flexDirection:'column',gap:4}},
-        entry.messages.map((m,j)=>React.createElement('div',{key:j,style:{...msgStyle[m.type]||msgStyle.info,fontSize:12,padding:'5px 10px',borderRadius:6}},m.text))
-      )
-    ))
+    entries.map((entry,i)=>{
+      const changes=entry.changes||[];
+      const messages=entry.messages||[];
+      return React.createElement('div',{key:i,style:{borderLeft:'2px solid var(--border)',paddingLeft:12,position:'relative'}},
+        onDeleteEntry&&React.createElement('button',{
+          onClick:()=>{if(confirm('Bu kayıt silinsin mi?'))onDeleteEntry(entry)},
+          style:{position:'absolute',top:0,right:0,background:'none',border:'none',cursor:'pointer',fontSize:14,color:'var(--text-tertiary)',lineHeight:1,padding:'2px 4px'},
+          title:'Bu kaydı sil'
+        },'✕'),
+        React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:4}},
+          entry.date?new Date(entry.date).toLocaleDateString('tr-TR',{day:'2-digit',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit'}):''
+        ),
+        changes.map((c,j)=>React.createElement('div',{key:j,style:{fontSize:12,marginBottom:3}},
+          React.createElement('span',{style:{color:'var(--text-secondary)'}},(c.label||'')+': '),
+          React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',marginRight:4}},c.oldVal||''),
+          React.createElement('span',{style:{fontWeight:600,color:'var(--text-primary)'}},c.newVal||'')
+        )),
+        messages.length>0&&React.createElement('div',{style:{marginTop:6,display:'flex',flexDirection:'column',gap:4}},
+          messages.map((m,j)=>React.createElement('div',{key:j,style:{...(msgStyle[m?.type]||msgStyle.info),fontSize:12,padding:'5px 10px',borderRadius:6}},m?.text||''))
+        )
+      );
+    })
   );
 }
 
