@@ -1175,7 +1175,7 @@ function compressImage(file,{maxW=800,maxH=800,quality=0.75,onDone,onError}){
   reader.readAsDataURL(file);
 }
 
-const TABS=[{id:'dashboard',label:'Pano'},{id:'gunun',label:'💡 Günün Antrenmanı'},{id:'plan',label:'📅 Haftalık Plan'},{id:'lider',label:'🏆 Liderlik'},{id:'bolge',label:'Bölgeler'},{id:'yarislar',label:'Yarış Durumu'},{id:'karsilastir',label:'Karşılaştır'},{id:'ekle',label:'Antrenman Ekle'},{id:'gecmis',label:'Geçmiş'},{id:'yukle',label:'Excel Yükle'},{id:'sporcular',label:'Sporcular ve Yarışlar'}];
+const TABS=[{id:'dashboard',label:'Pano'},{id:'gunun',label:'💡 Günün Antrenmanı'},{id:'plan',label:'📅 Haftalık Plan'},{id:'lider',label:'🏆 Liderlik'},{id:'bolge',label:'Bölgeler'},{id:'test',label:'🧪 Testler'},{id:'yarislar',label:'Yarış Durumu'},{id:'karsilastir',label:'Karşılaştır'},{id:'ekle',label:'Antrenman Ekle'},{id:'gecmis',label:'Geçmiş'},{id:'yukle',label:'Excel Yükle'},{id:'sporcular',label:'Sporcular ve Yarışlar'}];
 
 const SPOR_TURLERI=[
   {v:'kosu',     l:'Koşu',       k:1.00, emoji:'🏃'},
@@ -4558,6 +4558,393 @@ function YarislarTab({athlete,races,history,workouts,raceResults,onAddResult,onD
   );
 }
 
+// ── Test Koşuları Motoru ──────────────────────────────────────────────────────
+
+const TEST_TURLERI={
+  cooper:{
+    id:'cooper', ad:'Cooper Testi (12 dk)',
+    icon:'⏱',
+    amac:'VO₂max tahmini',
+    protokol:'Düz, ölçülü bir parkurda tam 12 dakika boyunca mümkün olan en uzun mesafeyi koş. Saat başladığında dur ve mesafeyi ölç.',
+    protocol_steps:['Isınma: 10 dk hafif koşu','12 dakika boyunca mümkün olan maksimum mesafeyi koş','Mesafeyi metreler cinsinden kaydet','Soğuma: 5 dk yürüyüş'],
+    girdi:[{k:'mesafe_m',l:'Koşulan Mesafe (m)',type:'number',min:800,max:5000,ph:'ör: 2800'}],
+    hesapla:(r)=>{
+      const m=parseFloat(r.mesafe_m)||0;
+      if(!m)return null;
+      const vo2=Math.round((m-504.9)/44.73);
+      return{vo2max:Math.max(20,Math.min(90,vo2)),label:'VO₂max: ~'+vo2+' ml/kg/min'};
+    },
+    guncelle:['vo2max'],
+    freq_hafta:6,
+    uygun_faz:['Temel','Gelişme'],
+    min_ctl:15
+  },
+  zaman_5k:{
+    id:'zaman_5k', ad:'5K Zaman Denemesi',
+    icon:'🏁',
+    amac:'vLT ve pace bölgesi kalibrasyonu',
+    protokol:'Düz parkurda veya pistte 5K\'yı tam yarış temposunda koş. Mümkünse GPS saatinle ölç. Öncesinde iyi bir ısınma yap.',
+    protocol_steps:['Isınma: 15 dk (son 2×200m hızlı)','5000m\'yi mümkün olan en hızlı tempoda koş','Süreyi saat:dakika:saniye olarak kaydet','Soğuma: 10 dk kolay koşu'],
+    girdi:[{k:'sure_sa',l:'Saat',type:'number',min:0,max:1,ph:'0'},{k:'sure_dk',l:'Dakika',type:'number',min:0,max:59,ph:'25'},{k:'sure_sn',l:'Saniye',type:'number',min:0,max:59,ph:'00'}],
+    hesapla:(r)=>{
+      const sec=toSec(r.sure_sa||0,r.sure_dk||0,r.sure_sn||0);
+      if(!sec||sec<600)return null;
+      const paceSecKm=sec/5;
+      const vlt=5000/sec; // m/s
+      const pb=secToPace(paceSecKm);
+      return{vlt:Math.round(vlt*1000)/1000,pb_5k:pb,label:'5K Pace: '+pb+' /km · vLT: '+(Math.round(vlt*100)/100)+' m/s'};
+    },
+    guncelle:['vlt_kalibre','pb_5k'],
+    freq_hafta:4,
+    uygun_faz:['Temel','Gelişme','Zirve'],
+    min_ctl:20
+  },
+  maf:{
+    id:'maf', ad:'MAF Testi (Maffetone)',
+    icon:'❤️',
+    amac:'Aerobik verimlilik baseline ve gelişim takibi',
+    protokol:'MAF nabzında (180 − yaş) en az 5km\'yi sabit tutarak koş. Nabzın hiçbir zaman MAF\'ı aşmamalı. Her km\'nin pace\'ini kaydet.',
+    protocol_steps:['MAF nabzını hesapla: 180 − yaş (±düzeltme)','Isınma: 10 dk yürüyüş/çok hafif koşu','5–10 km boyunca MAF nabzını (±5 bpm) sabit tut','Her km\'nin pace\'ini not al','İlk ve son km pace farkı aerobik kapasiteni gösterir'],
+    girdi:[{k:'maf_nabiz',l:'MAF Nabzı (bpm)',type:'number',min:110,max:175,ph:'145'},{k:'km1_pace',l:'1. km Pace (dk:sn)',type:'text',ph:'6:30'},{k:'km3_pace',l:'3. km Pace (dk:sn)',type:'text',ph:'6:45'},{k:'km5_pace',l:'5. km Pace (dk:sn)',type:'text',ph:'7:00'}],
+    hesapla:(r)=>{
+      const p1=paceToSec(r.km1_pace);
+      const p5=paceToSec(r.km5_pace)||paceToSec(r.km3_pace);
+      if(!p1)return null;
+      const fark=p5?Math.round(p5-p1):null;
+      return{
+        maf_nabiz:parseInt(r.maf_nabiz)||0,
+        maf_pace:r.km1_pace,
+        label:'1. km: '+r.km1_pace+(p5?' → 5. km: '+r.km5_pace+(fark?' ('+( fark>0?'+':'')+fark+'sn/km)':''):'')
+      };
+    },
+    guncelle:['aerobik_baseline'],
+    freq_hafta:4,
+    uygun_faz:['Temel','Gelişme'],
+    min_ctl:10
+  },
+  lthr_test:{
+    id:'lthr_test', ad:'Laktat Eşiği Testi (1600m)',
+    icon:'🔥',
+    amac:'LTHR ve nabız bölgesi kalibrasyonu',
+    protokol:'4×1600m koşusu. Her tekrarda hız biraz artar. Son tekrar maksimal olmalı. Her tekrarda ortalama nabzı kaydet. Son tekrardaki nabız LTHR tahmini verir.',
+    protocol_steps:['Isınma: 15 dk (son 3×100m hızlı)','1. tekrar: rahat tempo — nabzı kaydet','2. tekrar: biraz daha hızlı — nabzı kaydet','3. tekrar: yarış temposu — nabzı kaydet','4. tekrar: maksimal — nabzı kaydet','4. tekrardaki ort. nabız = tahmini LTHR','3 dk aktif dinlenme tekrarlar arası','Soğuma: 10 dk'],
+    girdi:[{k:'tekrar1_nabiz',l:'1. Tekrar Ort. Nabız',type:'number',min:100,max:200,ph:'145'},{k:'tekrar2_nabiz',l:'2. Tekrar Ort. Nabız',type:'number',min:110,max:210,ph:'155'},{k:'tekrar3_nabiz',l:'3. Tekrar Ort. Nabız',type:'number',min:120,max:220,ph:'165'},{k:'tekrar4_nabiz',l:'4. Tekrar Ort. Nabız',type:'number',min:130,max:230,ph:'175'}],
+    hesapla:(r)=>{
+      const n4=parseInt(r.tekrar4_nabiz)||0;
+      if(!n4)return null;
+      const lthr=Math.round(n4*0.98); // Son tekrar nabzının %98'i
+      return{lthr,label:'Tahmini LTHR: '+lthr+' bpm'};
+    },
+    guncelle:['lthr'],
+    freq_hafta:8,
+    uygun_faz:['Temel','Gelişme'],
+    min_ctl:25
+  }
+};
+
+// Test zamanlama: Bu sporcu için şu an test önerilmeli mi?
+function calcTestTiming(athlete, history, races, workouts){
+  const last=history[history.length-1];
+  const ctl=last?.ctl||0;
+  const phase=last?.phase||'Temel';
+  const today=new Date();
+
+  // Yarışa kaç gün kaldı
+  const {primary}=selectRaces(athlete,races);
+  const daysToRace=primary?Math.ceil((new Date(primary.tarih+'T12:00:00')-today)/864e5):999;
+
+  // Son testleri bul
+  const athTests=(workouts||[]).filter(w=>w.athleteId===athlete.id&&w._isTest&&w._testTur);
+  const lastTestByType={};
+  athTests.forEach(w=>{
+    const prev=lastTestByType[w._testTur];
+    if(!prev||new Date(w.date)>new Date(prev.date))lastTestByType[w._testTur]=w;
+  });
+
+  const oneriler=[];
+  Object.values(TEST_TURLERI).forEach(t=>{
+    // Min CTL kontrolü
+    if(ctl<t.min_ctl){oneriler.push({...t,durum:'bekle',neden:'CTL ('+ctl.toFixed(0)+') yeterli değil — en az '+t.min_ctl+' olmalı'});return;}
+    // Faz kontrolü
+    if(!t.uygun_faz.includes(phase)&&phase!=='Temel'){oneriler.push({...t,durum:'uygun_degil',neden:phase+' fazında bu test önerilmez'});return;}
+    // Yarış yakınlık kontrolü
+    if(daysToRace<14){oneriler.push({...t,durum:'yakin_yaris',neden:'Yarışa '+daysToRace+' gün kaldı — test riskli'});return;}
+    // Frekans kontrolü
+    const lastTest=lastTestByType[t.id];
+    if(lastTest){
+      const haftalar=Math.round((today-new Date(lastTest.date+'T12:00:00'))/(7*864e5));
+      if(haftalar<t.freq_hafta){oneriler.push({...t,durum:'erken',neden:'Son testten '+haftalar+' hafta geçti — '+t.freq_hafta+' hafta beklenmeli',sonTest:lastTest});return;}
+    }
+    // Her şey uygun
+    const vadeli=!lastTest?'İlk kez':Math.round((today-new Date(lastTest.date+'T12:00:00'))/(7*864e5))+' hafta önce yapıldı';
+    oneriler.push({...t,durum:'onerilir',neden:vadeli,sonTest:lastTest||null});
+  });
+
+  return oneriler;
+}
+
+// Koşu dinamikleri analizi
+function analyzeDynamics(workouts, athleteId){
+  const STEADY_TYPES=['kolay','aerobik','uzun'];
+  const athWks=(workouts||[]).filter(w=>{
+    if(w.athleteId!==athleteId)return false;
+    if(!STEADY_TYPES.includes(w.tur))return false;
+    // Veri olan antrenmanlar
+    return parseFloat(w.kadans)>0||parseFloat(w.yer_kontak)>0||parseFloat(w.dikey_salinim)>0;
+  }).sort((a,b)=>new Date(a.date)-new Date(b.date));
+
+  if(!athWks.length)return null;
+
+  const refs={
+    kadans:{iyi:180,kabul:170,birim:'spm',yuksek_iyi:true},
+    yer_kontak:{iyi:250,kabul:300,birim:'ms',yuksek_iyi:false},
+    dikey_salinim:{iyi:7,kabul:9,birim:'cm',yuksek_iyi:false},
+  };
+
+  const sonuc={};
+  ['kadans','yer_kontak','dikey_salinim'].forEach(k=>{
+    const vals=athWks.map(w=>parseFloat(w[k])).filter(v=>v>0);
+    if(!vals.length){sonuc[k]=null;return;}
+    const avg=round1(vals.reduce((s,v)=>s+v,0)/vals.length);
+    const son=vals[vals.length-1];
+    const ref=refs[k];
+    let seviye;
+    if(ref.yuksek_iyi){seviye=avg>=ref.iyi?'iyi':avg>=ref.kabul?'kabul':'gelistir';}
+    else{seviye=avg<=ref.iyi?'iyi':avg<=ref.kabul?'kabul':'gelistir';}
+    const trend=vals.length>=3?(()=>{
+      const n=Math.min(5,vals.length);
+      const son5=vals.slice(-n);
+      const ilk5=vals.slice(0,n);
+      const avgSon=son5.reduce((s,v)=>s+v,0)/son5.length;
+      const avgIlk=ilk5.reduce((s,v)=>s+v,0)/ilk5.length;
+      const fark=ref.yuksek_iyi?avgSon-avgIlk:avgIlk-avgSon;
+      return fark>1?'iyilesiyor':fark<-1?'kötülessiyor':'sabit';
+    })():'yetersiz_veri';
+    sonuc[k]={avg,son,seviye,trend,vals,birim:ref.birim,ref};
+  });
+  return{sonuc,wkCount:athWks.length};
+}
+
+function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout}){
+  const [activeTest,setActiveTest]=useState(null);
+  const [testForm,setTestForm]=useState({});
+  const [testSaved,setTestSaved]=useState(null);
+  const [subTab,setSubTab]=useState('testler'); // 'testler' | 'dinamikler'
+
+  const oneriler=React.useMemo(()=>
+    athlete?calcTestTiming(athlete,history,races,workouts):[]
+  ,[athlete,history,races,workouts]);
+
+  const dinamikler=React.useMemo(()=>
+    athlete?analyzeDynamics(workouts,athlete.id):null
+  ,[workouts,athlete]);
+
+  const setF=(k,v)=>setTestForm(f=>({...f,[k]:v}));
+
+  const handleTestSave=()=>{
+    if(!activeTest||!athlete)return;
+    const sonuc=activeTest.hesapla(testForm);
+    if(!sonuc){alert('Lütfen tüm alanları doldurun.');return;}
+
+    // Sporcu profilini güncelle
+    const updates={};
+    if(sonuc.vo2max&&activeTest.guncelle.includes('vo2max'))updates.vo2max=String(sonuc.vo2max);
+    if(sonuc.lthr&&activeTest.guncelle.includes('lthr'))updates.lthr=String(sonuc.lthr);
+    if(sonuc.pb_5k&&activeTest.guncelle.includes('pb_5k'))updates.pb_5k=sonuc.pb_5k;
+    if(sonuc.vlt_kalibre&&activeTest.guncelle.includes('vlt_kalibre')){
+      // vLT doğrudan güncelleme — vlt alanı yok ama pb_5k üzerinden hesaplanıyor
+      if(sonuc.pb_5k)updates.pb_5k=sonuc.pb_5k;
+    }
+    if(Object.keys(updates).length>0)onUpdateAthlete(athlete.id,updates);
+
+    // Test antrenman kaydı oluştur
+    const today=new Date().toISOString().split('T')[0];
+    const wRecord={
+      id:uid(),athleteId:athlete.id,date:today,
+      spor:'kosu',tur:'aerobik',
+      yapi_notu:activeTest.ad,
+      sure_sa:'0',sure_dk:'45',sure_sn:'0',
+      mesafe:activeTest.id==='zaman_5k'?'5':'',
+      ort_nabiz:testForm.maf_nabiz||testForm.tekrar4_nabiz||'',
+      rpe:'8',notlar:'Test sonucu: '+sonuc.label,
+      _isTest:true,_testTur:activeTest.id,_testSonuc:sonuc,
+      savedAt:new Date().toISOString()
+    };
+    if(activeTest.id==='cooper')wRecord.mesafe=String(Math.round((parseFloat(testForm.mesafe_m)||0)/1000*10)/10);
+    onSaveWorkout(wRecord);
+
+    setTestSaved(sonuc);
+    setTestForm({});
+    setTimeout(()=>{setTestSaved(null);setActiveTest(null);},4000);
+  };
+
+  const subTabStyle=(id)=>({
+    padding:'8px 14px',fontSize:13,cursor:'pointer',
+    borderBottom:subTab===id?'2px solid var(--info)':'2px solid transparent',
+    color:subTab===id?'var(--info)':'var(--text-secondary)',
+    fontWeight:subTab===id?600:400,whiteSpace:'nowrap'
+  });
+
+  if(!athlete)return React.createElement('div',{className:'empty'},'Sporcu seçilmedi.');
+
+  const durumBadge=(d)=>({onerilir:'badge-good',bekle:'badge-warn',erken:'badge-info',uygun_degil:'badge-gray',yakin_yaris:'badge-danger'}[d]||'badge-gray');
+  const durumLabel=(d)=>({onerilir:'✓ Önerilir',bekle:'⏳ Bekle',erken:'🔄 Erken',uygun_degil:'— Uygun Değil',yakin_yaris:'⚠ Yarış Yakın'}[d]||d);
+  const seviyeBadge=(s)=>({iyi:'badge-good',kabul:'badge-warn',gelistir:'badge-danger'}[s]||'badge-gray');
+  const trendIcon=(t)=>({iyilesiyor:'↗',kötülessiyor:'↘',sabit:'→',yetersiz_veri:'—'}[t]||'—');
+
+  return React.createElement('div',null,
+    // Alt sekme
+    React.createElement('div',{style:{display:'flex',borderBottom:'1px solid var(--border)',marginBottom:16,gap:2}},
+      React.createElement('div',{style:subTabStyle('testler'),onClick:()=>setSubTab('testler')},'🧪 Test Koşuları'),
+      React.createElement('div',{style:subTabStyle('dinamikler'),onClick:()=>setSubTab('dinamikler')},'📊 Koşu Dinamikleri')
+    ),
+
+    // ── TESTLER ──
+    subTab==='testler'&&React.createElement('div',null,
+      React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:12,padding:'10px 12px',background:'var(--bg-secondary)',borderRadius:'var(--radius)'}},
+        '💡 Testler sonucunda sporcu profili otomatik güncellenir: VO₂max, LTHR, pace bölgeleri ve tahminler iyileşir.'
+      ),
+
+      // Test kartları
+      oneriler.map(t=>React.createElement('div',{key:t.id,className:'card',style:{marginBottom:10}},
+        React.createElement('div',{style:{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:12}},
+          React.createElement('div',{style:{flex:1}},
+            React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:4}},
+              React.createElement('span',{style:{fontSize:20}},(t.icon||'🧪')),
+              React.createElement('div',{style:{fontWeight:700,fontSize:15}},t.ad),
+              React.createElement('span',{className:'badge '+durumBadge(t.durum),style:{fontSize:11}},durumLabel(t.durum))
+            ),
+            React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:4}},
+              '🎯 '+t.amac
+            ),
+            React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},
+              t.neden+(t.sonTest?' · Son test: '+fmtDate(t.sonTest.date):'')
+            )
+          ),
+          t.durum==='onerilir'&&React.createElement('button',{
+            className:'btn btn-primary btn-sm',
+            onClick:()=>{setActiveTest(t);setTestForm({});setTestSaved(null);}
+          },'Test Gir')
+        ),
+
+        // Aktif test formu
+        activeTest?.id===t.id&&React.createElement('div',{style:{marginTop:12,paddingTop:12,borderTop:'1px solid var(--border)'}},
+          // Protokol
+          React.createElement('div',{style:{fontSize:12,fontWeight:600,marginBottom:6}},'Protokol:'),
+          React.createElement('ol',{style:{fontSize:12,color:'var(--text-secondary)',paddingLeft:20,margin:'0 0 12px'}},
+            t.protocol_steps.map((s,i)=>React.createElement('li',{key:i,style:{marginBottom:3}},s))
+          ),
+          // Girdi alanları
+          React.createElement('div',{className:'form-grid',style:{marginBottom:10}},
+            t.girdi.map(g=>React.createElement('div',{key:g.k,className:'form-group'},
+              React.createElement('label',null,g.l),
+              React.createElement('input',{type:g.type||'text',value:testForm[g.k]||'',
+                placeholder:g.ph||'',min:g.min,max:g.max,
+                onChange:e=>setF(g.k,e.target.value)})
+            ))
+          ),
+          // Önizleme
+          (()=>{
+            const prev=t.hesapla(testForm);
+            return prev&&React.createElement('div',{style:{
+              fontSize:13,fontWeight:600,padding:'8px 12px',marginBottom:10,
+              background:'var(--success-bg)',borderRadius:'var(--radius)',color:'var(--success)'
+            }},'📊 '+prev.label);
+          })(),
+          // Güncellenecek alanlar
+          React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:8}},
+            '🔄 Güncellenecek alanlar: '+t.guncelle.map(g=>({vo2max:'VO₂max',lthr:'LTHR',pb_5k:'5K PB',vlt_kalibre:'Pace bölgeleri',aerobik_baseline:'Aerobik verimlilik baseline'}[g]||g)).join(', ')
+          ),
+          testSaved&&React.createElement('div',{style:{
+            fontSize:13,padding:'8px 12px',marginBottom:8,
+            background:'var(--success-bg)',borderRadius:'var(--radius)',color:'var(--success)',fontWeight:600
+          }},'✓ Kaydedildi! '+testSaved.label),
+          React.createElement('div',{className:'flex-gap'},
+            React.createElement('button',{className:'btn btn-primary',onClick:handleTestSave},'Kaydet & Uygula'),
+            React.createElement('button',{className:'btn',onClick:()=>{setActiveTest(null);setTestForm({})}},'İptal')
+          )
+        )
+      ))
+    ),
+
+    // ── KOŞu DİNAMİKLERİ ──
+    subTab==='dinamikler'&&React.createElement('div',null,
+      !dinamikler&&React.createElement('div',{className:'empty'},'Sabit tempolu antrenmanlarda (kolay/aerobik/uzun) kadans, yer temas veya dikey salınım verisi bulunamadı. Bu değerleri Garmin/Wahoo gibi cihazlardan aktarın.'),
+      dinamikler&&React.createElement('div',null,
+        React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:12,padding:'10px 12px',background:'var(--bg-secondary)',borderRadius:'var(--radius)'}},
+          '📊 Sadece sabit tempolu antrenmanlar (Kolay/Aerobik/Uzun) dahil edildi — ',
+          React.createElement('strong',null,dinamikler.wkCount+' antrenman'),
+          ' · İnterval, tempo ve eşik hariç'
+        ),
+        // 3 metrik kart
+        React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(240px,1fr))',gap:12,marginBottom:16}},
+          [
+            {k:'kadans',l:'Kadans',aciklama:'Yüksek kadans (≥180 spm) eklem yükünü azaltır, koşu ekonomisini artırır.',oneri:{gelistir:'Metronom kullanarak kadansını yavaşça artır. Hedef: haftada +2–3 spm.',kabul:'İyi seviyedesin. Kısa yokuş tekrarları kadanı artırabilir.',iyi:'Mükemmel kadans!'}},
+            {k:'yer_kontak',l:'Yer Temas Süresi',aciklama:'Düşük yer temas süresi (<250ms) koşu verimliliğinin göstergesidir.',oneri:{gelistir:'Pliometrik egzersizler ve ayak altı kuvvetini artır. Bounding, skip A/B.',kabul:'Makul seviye. Orta ve üst vücut kuvvetini artır.',iyi:'Çok iyi yer teması!'}},
+            {k:'dikey_salinim',l:'Dikey Salınım',aciklama:'Düşük dikey salınım (<7cm) enerjiyi ileri harekete kanalize eder.',oneri:{gelistir:'Öne eğilim ve öne düşme tekniğine odaklan. Core güçlendirme.',kabul:'Kabul edilebilir. Düzlükte yalın ayak/minimal koşu dene.',iyi:'Verimli dikey hareket!'}},
+          ].map(item=>{
+            const d=dinamikler.sonuc[item.k];
+            if(!d)return React.createElement('div',{key:item.k,className:'card',style:{opacity:.5}},
+              React.createElement('div',{className:'card-title'},item.l),
+              React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)'}},'Veri yok')
+            );
+            return React.createElement('div',{key:item.k,className:'card'},
+              React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}},
+                React.createElement('div',{className:'card-title',style:{margin:0}},item.l),
+                React.createElement('span',{className:'badge '+seviyeBadge(d.seviye)},
+                  {iyi:'✓ İyi',kabul:'~ Kabul',gelistir:'↑ Geliştir'}[d.seviye]
+                )
+              ),
+              React.createElement('div',{style:{display:'flex',gap:16,marginBottom:8}},
+                React.createElement('div',null,
+                  React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},'Ortalama'),
+                  React.createElement('div',{style:{fontSize:20,fontWeight:700}},d.avg+' '+d.birim)
+                ),
+                React.createElement('div',null,
+                  React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},'Son'),
+                  React.createElement('div',{style:{fontSize:18,fontWeight:600}},d.son+' '+d.birim)
+                ),
+                React.createElement('div',null,
+                  React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},'Trend'),
+                  React.createElement('div',{style:{fontSize:18,fontWeight:600,color:d.trend==='iyilesiyor'?'var(--success)':d.trend==='kötülessiyor'?'var(--danger)':'var(--text-secondary)'}},trendIcon(d.trend))
+                )
+              ),
+              React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',marginBottom:8}},item.aciklama),
+              d.seviye!=='iyi'&&React.createElement('div',{style:{
+                fontSize:11,padding:'7px 10px',borderRadius:'var(--radius)',
+                background:d.seviye==='kabul'?'var(--warn-bg)':'var(--danger-bg)',
+                color:d.seviye==='kabul'?'var(--warn)':'var(--danger)'
+              }},
+                '💡 '+item.oneri[d.seviye]
+              )
+            );
+          })
+        ),
+        // Referans tablosu
+        React.createElement('div',{className:'card'},
+          React.createElement('div',{className:'card-title'},'Referans Değerler'),
+          React.createElement('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:12}},
+            React.createElement('thead',null,React.createElement('tr',{style:{background:'var(--bg-secondary)'}},
+              ['Metrik','İyi','Kabul','Geliştirmeli'].map(h=>React.createElement('th',{key:h,style:{padding:'6px 10px',textAlign:'left',fontWeight:600,color:'var(--text-secondary)'}},h))
+            )),
+            React.createElement('tbody',null,
+              [{l:'Kadans (spm)',iyi:'>180',kabul:'170–180',gelistir:'<170'},
+               {l:'Yer Temas (ms)',iyi:'<250',kabul:'250–300',gelistir:'>300'},
+               {l:'Dikey Salınım (cm)',iyi:'<7',kabul:'7–9',gelistir:'>9'},
+              ].map((r,i)=>React.createElement('tr',{key:i,style:{borderTop:'1px solid var(--border)'}},
+                React.createElement('td',{style:{padding:'7px 10px',fontWeight:600}},r.l),
+                React.createElement('td',{style:{padding:'7px 10px',color:'var(--success)'}},r.iyi),
+                React.createElement('td',{style:{padding:'7px 10px',color:'var(--warn)'}},r.kabul),
+                React.createElement('td',{style:{padding:'7px 10px',color:'var(--danger)'}},r.gelistir)
+              ))
+            )
+          )
+        )
+      )
+    )
+  );
+}
+
 function KarsilastirTab({athletes,races,workouts,allHistory}){
   const [raceFilter,setRaceFilter]=useState('');
   const today=new Date();
@@ -5905,6 +6292,7 @@ function App(){
       tab==='plan'&&React.createElement(HaftalikPlanTab,{athlete,history,races,workouts,planMode,setPlanMode}),
       tab==='lider'&&React.createElement(LiderlikTab,{athletes,workouts,teamName,teamLogo}),
       tab==='bolge'&&React.createElement(BolgeTab,{athlete,workouts:athWks,onUpdateAthlete:handleUpdateAthlete}),
+      tab==='test'&&React.createElement(TestTab,{athlete,history,races,workouts,onUpdateAthlete:handleUpdateAthlete,onSaveWorkout:w=>setWorkouts(p=>[...p,w])}),
       tab==='yarislar'&&React.createElement(YarislarTab,{athlete,races,history,workouts:athWks,raceResults,onAddResult:r=>setRaceResults(p=>[...p,r]),onDeleteResult:id=>setRaceResults(p=>p.filter(x=>x.id!==id))}),
       tab==='karsilastir'&&React.createElement(KarsilastirTab,{athletes,races,workouts,allHistory,raceResults}),
       tab==='ekle'&&React.createElement(AntrenmanEkle,{onSave:w=>{
