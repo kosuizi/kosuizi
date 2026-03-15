@@ -2201,10 +2201,32 @@ function realisticClimbRate(band){
 
 // ── Şablon üreticileri ─────────────────────────────────────────────────────
 
+// ── Zone bilgisi formatı ─────────────────────────────────────────────────────
+// Her aşama için "Z2 · 145–158 bpm · 5:30–6:15 (5:52) /km" formatı
+function zoneInfo(zones, zIdx, label){
+  const zLabel=label||(['Z1','Z2','Z3','Z4','Z5a','Z5b','Z5c'][zIdx]||'Z'+zIdx);
+  const hr=zones?.hrZones?.[zIdx];
+  const hrStr=hr?.lo_bpm&&hr?.hi_bpm?`${hr.lo_bpm}–${hr.hi_bpm} bpm`:'';
+  const pace=zones?.paceZones?.[zIdx];
+  const paceStr=pace?.lo_pace&&pace?.hi_pace?pz(zones,zIdx):'';
+  const parts=[zLabel,hrStr,paceStr].filter(Boolean);
+  return parts.join(' · ');
+}
+
+// Z1 spesifik (alt sınır yok)
+function zoneInfoZ1(zones){
+  const hr=zones?.hrZones?.[0];
+  const hrStr=hr?.hi_bpm?`< ${hr.hi_bpm} bpm`:'';
+  const pace=zones?.paceZones?.[0];
+  const paceStr=pace?.hi_pace?`> ${pace.hi_pace} /km`:'';
+  const parts=['Z1',hrStr,paceStr].filter(Boolean);
+  return parts.join(' · ');
+}
+
 function tplKolay(band, sure_dk, zones){
   return{
     tip:'kolay', sure_dk,
-    yapilar:[{baslik:'Kolay Koşu',detay:`${sure_dk} dk Z1 (< ${pz(zones,0)||'çok yavaş'}) — sohbet temposu`}]
+    yapilar:[{baslik:'Kolay Koşu',detay:`${sure_dk} dk — ${zoneInfoZ1(zones)||'Z1 sohbet temposu'} — konuşabilir tempoda kal`}]
   };
 }
 
@@ -2213,9 +2235,9 @@ function tplAerobik(band, sure_dk, zones, disiplin){
   return{
     tip:'aerobik', sure_dk,
     yapilar:[
-      {baslik:'Isınma',detay:`10 dk Z1`},
-      {baslik:'Aerobik Blok',detay:`${sure_dk-15} dk Z2 (${pz(zones,1)||'aerobik pace'})${isPatika?' — patika/arazi tercih et':''}`},
-      {baslik:'Soğuma',detay:'5 dk Z1 + esneme'},
+      {baslik:'Isınma',detay:`10 dk — ${zoneInfoZ1(zones)||'Z1 kolay'}`},
+      {baslik:'Aerobik Blok',detay:`${sure_dk-15} dk — ${zoneInfo(zones,1)||'Z2 aerobik'}${isPatika?' — patika/arazi tercih et':''}`},
+      {baslik:'Soğuma',detay:`5 dk — ${zoneInfoZ1(zones)||'Z1'} + esneme`},
     ]
   };
 }
@@ -2223,30 +2245,29 @@ function tplAerobik(band, sure_dk, zones, disiplin){
 function tplUzun(band, ctl, zones, disiplin, dpHedef){
   const isUltra=disiplin==='ultra';
   const isPatika=disiplin==='patika'||disiplin==='ultra'||disiplin==='karma';
-  // Ultra'da antrenmanlar çok daha uzun
   const dk=isUltra
     ?(band<=1?70:band===2?90:band===3?110:band===4?130:150)
     :(band<=1?50:band===2?65:band===3?80:band===4?95:110);
   const parts=[
-    {baslik:'Isınma',detay:'15 dk Z1'},
-    {baslik:'Uzun Koşu',detay:`${dk-15} dk Z2 (${pz(zones,1)||'aerobik pace'})${isPatika?' — arazi tercihli':''}${dpHedef>0?' · Hedef D+: ~'+dpHedef+'m':''}${isUltra?' · Dik tırmanışlarda yürüyüş stratejisi uygula':''}`.trim()},
-    {baslik:'Soğuma',detay:'5 dk Z1'},
+    {baslik:'Isınma',detay:`15 dk — ${zoneInfoZ1(zones)||'Z1 kolay'}`},
+    {baslik:'Uzun Koşu',detay:`${dk-15} dk — ${zoneInfo(zones,1)||'Z2 aerobik'}${isPatika?' — arazi tercihli':''}${dpHedef>0?' · Hedef D+: ~'+dpHedef+'m':''}${isUltra?' · Dik tırmanışlarda yürüyüş stratejisi uygula':''}`.trim()},
+    {baslik:'Soğuma',detay:`5 dk — ${zoneInfoZ1(zones)||'Z1'}`},
   ];
-  if(band>=4&&disiplin!=='yol') parts.splice(2,0,{baslik:'Ek Tırmanış',detay:`Son 20 dk içinde ${dpHedef>0?'en az '+Math.round(dpHedef*0.3)+'m tırmanış':'mümkün olduğunca tırmanış'} ekle`});
+  if(band>=4&&disiplin!=='yol') parts.splice(2,0,{baslik:'Ek Tırmanış',detay:`Son 20 dk içinde ${dpHedef>0?'en az '+Math.round(dpHedef*0.3)+'m tırmanış':'mümkün olduğunca tırmanış'} ekle — nabız ${zoneInfo(zones,2)||'Z3'} bandına çıkabilir`});
   return{tip:'uzun',sure_dk:dk,yapilar:parts,dpHedef};
 }
 
 // Ultra Trail: back-to-back uzun koşu (cumartesi-pazar tipi)
 function tplBackToBack(band, zones, dpHedef){
   const gun1=band<=2?70:band===3?90:band===4?110:130;
-  const gun2=Math.round(gun1*0.65); // 2. gün yorgun bacakla
+  const gun2=Math.round(gun1*0.65);
   const dpGun1=dpHedef>0?Math.round(dpHedef*0.6):0;
   const dpGun2=dpHedef>0?Math.round(dpHedef*0.4):0;
   return{
     tip:'uzun', sure_dk:gun1,
     yapilar:[
-      {baslik:'1. Gün — Uzun Koşu',detay:`${gun1-10} dk Z1–Z2 (${pz(zones,1)||'aerobik pace'}) arazi${dpGun1>0?' · Hedef D+: ~'+dpGun1+'m':''} · Tırmanışlarda koşu/yürüyüş karması — efor hissini Z2'de tut`},
-      {baslik:'2. Gün — Yorgun Bacak Koşusu',detay:`${gun2} dk Z1–Z2${dpGun2>0?' · Hedef D+: ~'+dpGun2+'m':''} · Amaç yorgun bacakla hareket alışkanlığı — pace önemsiz, bitiş önemli`},
+      {baslik:'1. Gün — Uzun Koşu',detay:`${gun1-10} dk — ${zoneInfo(zones,1)||'Z1–Z2 aerobik'} arazi${dpGun1>0?' · Hedef D+: ~'+dpGun1+'m':''} · Tırmanışlarda koşu/yürüyüş karması — efor hissini Z2'de tut`},
+      {baslik:'2. Gün — Yorgun Bacak Koşusu',detay:`${gun2} dk — ${zoneInfoZ1(zones)||'Z1 çok kolay'}${dpGun2>0?' · Hedef D+: ~'+dpGun2+'m':''} · Pace önemsiz, bitiş önemli`},
       {baslik:'Beslenme & Toparlanma',detay:'Her iki gün sonrası: 30dk içinde karbonhidrat + protein alımı, ertesi gün dinlenme veya çok hafif aktif toparlanma'},
     ],
     dpHedef, isBackToBack:true
@@ -2260,9 +2281,9 @@ function tplPowerHiking(band, zones, dpHedef){
   return{
     tip:'yokus_uzun', sure_dk,
     yapilar:[
-      {baslik:'Isınma',detay:'10 dk Z1 düz yürüyüş'},
-      {baslik:'Power Hiking',detay:`${sure_dk-15} dk dik tırmanış yürüyüşü (eğim >%20) — Hedef D+: ~${dpGun}m · Kolları güçlü kullan, adım kısa, ritim sabit. Kalça fleksörü ve gluteus aktivasyonu. Nabız Z2–Z3 bandında kalmalı.`},
-      {baslik:'Soğuma',detay:'5 dk düz yürüyüş + baldır/quadriceps germe'},
+      {baslik:'Isınma',detay:`10 dk — ${zoneInfoZ1(zones)||'Z1 düz yürüyüş'}`},
+      {baslik:'Power Hiking',detay:`${sure_dk-15} dk dik tırmanış yürüyüşü (eğim >%20) — ${zoneInfo(zones,1,'')||'Z2–Z3'} · Hedef D+: ~${dpGun}m · Kolları güçlü kullan, adım kısa, ritim sabit`},
+      {baslik:'Soğuma',detay:`5 dk — ${zoneInfoZ1(zones)||'Z1'} düz yürüyüş + baldır/quadriceps germe`},
     ],
     dpHedef:dpGun
   };
@@ -2273,9 +2294,9 @@ function tplKarmaYol(band, sure_dk, zones){
   return{
     tip:'aerobik', sure_dk,
     yapilar:[
-      {baslik:'Isınma',detay:'10 dk Z1'},
-      {baslik:'Yol Aerobik',detay:`${sure_dk-15} dk Z2 (${pz(zones,1)||'aerobik pace'}) — düz asfalt/bant · Pace tutarlılığına odaklan, form çalışması`},
-      {baslik:'Soğuma',detay:'5 dk Z1'},
+      {baslik:'Isınma',detay:`10 dk — ${zoneInfoZ1(zones)||'Z1'}`},
+      {baslik:'Yol Aerobik',detay:`${sure_dk-15} dk — ${zoneInfo(zones,1)||'Z2 aerobik'} — düz asfalt/bant · Pace tutarlılığına odaklan, form çalışması`},
+      {baslik:'Soğuma',detay:`5 dk — ${zoneInfoZ1(zones)||'Z1'}`},
     ]
   };
 }
@@ -2286,9 +2307,9 @@ function tplTempo(band, sure_dk, zones){
   return{
     tip:'tempo', sure_dk,
     yapilar:[
-      {baslik:'Isınma',detay:'15 dk Z1–Z2'},
-      {baslik:'Tempo Blokları',detay:`${sets} Z3 (${pz(zones,2)||'tempo pace'}), ${dinlenme} aktif dinlenme arası`},
-      {baslik:'Soğuma',detay:'10 dk Z1'},
+      {baslik:'Isınma',detay:`15 dk — ${zoneInfo(zones,0)||'Z1–Z2 kolay'} + dinamik ısınma`},
+      {baslik:'Tempo Blokları',detay:`${sets} — ${zoneInfo(zones,2)||'Z3 tempo'} · ${dinlenme} aktif dinlenme arası`},
+      {baslik:'Soğuma',detay:`10 dk — ${zoneInfoZ1(zones)||'Z1'}`},
     ]
   };
 }
@@ -2299,9 +2320,9 @@ function tplEsik(band, sure_dk, zones){
   return{
     tip:'esik', sure_dk,
     yapilar:[
-      {baslik:'Isınma',detay:'15 dk Z1–Z2 + 4×100m strides'},
-      {baslik:'Eşik Blokları',detay:`${sets} Z4 (${pz(zones,3)||'eşik pace'}), ${dinlenme} dinlenme arası`},
-      {baslik:'Soğuma',detay:'10 dk Z1'},
+      {baslik:'Isınma',detay:`15 dk — ${zoneInfo(zones,0)||'Z1–Z2'} + 4×100m strides`},
+      {baslik:'Eşik Blokları',detay:`${sets} — ${zoneInfo(zones,3)||'Z4 eşik'} · ${dinlenme} dinlenme arası`},
+      {baslik:'Soğuma',detay:`10 dk — ${zoneInfoZ1(zones)||'Z1'}`},
     ]
   };
 }
@@ -2309,34 +2330,84 @@ function tplEsik(band, sure_dk, zones){
 function tplInterval(band, phase, zones){
   const blocks=blockCount(band,phase);
   const sure_dk=band<=2?50:band===3?55:band===4?65:75;
+  const z5a=zoneInfo(zones,4)||'Z5a VO₂max';
+  const z5b=zoneInfo(zones,5)||'Z5b Anaerobik';
   let blokDetay;
   if(band<=2){
-    blokDetay=`4×3 dk Z5a (${pz(zones,4)||'VO2max pace'}), 3 dk aktif dinlenme`;
+    blokDetay=`4×3 dk — ${z5a} · 3 dk aktif dinlenme`;
   } else if(band===3){
     blokDetay=blocks===1
-      ?`6×4 dk Z5a (${pz(zones,4)}), 3 dk dinlenme`
-      :`1. Blok: 6×4 dk Z5a (${pz(zones,4)}), 3 dk dinlenme → 5 dk toparlanma → 2. Blok: 4×3 dk Z5a, 2 dk dinlenme`;
+      ?`6×4 dk — ${z5a} · 3 dk dinlenme`
+      :`1. Blok: 6×4 dk — ${z5a} · 3 dk dinlenme → 5 dk toparlanma → 2. Blok: 4×3 dk — ${z5a} · 2 dk dinlenme`;
   } else if(band===4){
     blokDetay=blocks===2
-      ?`1. Blok: 6×4 dk Z5a (${pz(zones,4)}), 2.5 dk → 5 dk → 2. Blok: 6×3 dk Z5a, 2 dk`
-      :`1. Blok: 6×4 dk Z5a → 5 dk → 2. Blok: 6×3 dk Z5a → 5 dk → 3. Blok: 4×2 dk Z5b (${pz(zones,5)})`;
+      ?`1. Blok: 6×4 dk — ${z5a} · 2.5 dk → 5 dk → 2. Blok: 6×3 dk — ${z5a} · 2 dk`
+      :`1. Blok: 6×4 dk — ${z5a} → 5 dk → 2. Blok: 6×3 dk — ${z5a} → 5 dk → 3. Blok: 4×2 dk — ${z5b}`;
   } else {
     blokDetay=blocks===2
-      ?`1. Blok: 6×5 dk Z5a (${pz(zones,4)}), 2.5 dk → 6 dk → 2. Blok: 6×4 dk Z5a, 2 dk`
-      :`1. Blok: 6×5 dk Z5a → 6 dk → 2. Blok: 6×4 dk Z5a → 5 dk → 3. Blok: 4×3 dk Z5b (${pz(zones,5)})`;
+      ?`1. Blok: 6×5 dk — ${z5a} · 2.5 dk → 6 dk → 2. Blok: 6×4 dk — ${z5a} · 2 dk`
+      :`1. Blok: 6×5 dk — ${z5a} → 6 dk → 2. Blok: 6×4 dk — ${z5a} → 5 dk → 3. Blok: 4×3 dk — ${z5b}`;
   }
   const strides=band<=2?'4×80m':band===3?'4×100m':band===4?'6×100m':'6×120m';
   return{
     tip:'interval', sure_dk,
     yapilar:[
-      {baslik:'Isınma',detay:`15 dk Z1–Z2 + ${strides} strides (30sn tam dinlenme)`},
+      {baslik:'Isınma',detay:`15 dk — ${zoneInfo(zones,1)||'Z1–Z2'} + ${strides} strides (30sn tam dinlenme)`},
       {baslik:'İnterval Blokları',detay:blokDetay},
-      {baslik:'Soğuma',detay:'10 dk Z1'},
+      {baslik:'Soğuma',detay:`10 dk — ${zoneInfoZ1(zones)||'Z1'}`},
     ]
   };
 }
 
-// ── Grade Adjusted Pace (GAP) ─────────────────────────────────────────────────
+function tplYokusKisa(band, zones){
+  const sets=band<=2?'6×30sn':band===3?'8×30sn':band===4?'8×45sn':'10×45sn';
+  const sure_dk=band<=2?40:band===3?45:50;
+  const z5a=zoneInfo(zones,4)||'Z5a maksimal';
+  return{
+    tip:'yokus_kisa', sure_dk,
+    yapilar:[
+      {baslik:'Isınma',detay:`15 dk — ${zoneInfo(zones,1)||'Z1–Z2'}`},
+      {baslik:'Kısa Yokuş Tekrarı',detay:`${sets} maksimal çıkış (eğim %8–12) — ${z5a} · Pace değil nabız/efor hedef alın · Tam yürüyüş inişi · Hafif öne eğil, kısa adım, kolları kullan`},
+      {baslik:'Soğuma',detay:`10 dk — ${zoneInfoZ1(zones)||'Z1'} + quadriceps/calves germe`},
+    ]
+  };
+}
+
+function tplYokusUzun(band, zones){
+  const sets=band<=2?'3×3 dk':band===3?'4×4 dk':band===4?'4×5 dk':'5×5 dk';
+  const sure_dk=band<=2?45:band===3?55:65;
+  const z4=zoneInfo(zones,3)||'Z4 eşik eforu';
+  return{
+    tip:'yokus_uzun', sure_dk,
+    yapilar:[
+      {baslik:'Isınma',detay:`15 dk — ${zoneInfo(zones,1)||'Z1–Z2'}`},
+      {baslik:'Uzun Yokuş Tekrarı',detay:`${sets} çıkış (eğim %6–10) — ${z4} · Efor hissi düz koşudaki eşiğe eşdeğer, pace daha yavaş olacak · Yürüyüş inişi`},
+      {baslik:'Soğuma',detay:`10 dk — ${zoneInfoZ1(zones)||'Z1'}`},
+    ]
+  };
+}
+
+function tplTeknikInis(band, sure_dk){
+  return{
+    tip:'teknik', sure_dk:40,
+    yapilar:[
+      {baslik:'Isınma',detay:'10 dk Z1 kolay koşu'},
+      {baslik:'Teknik İniş Antrenmanı',detay:'4×(3 dk kontrollü teknik iniş → 3 dk kolay çıkış) — nabız Z2–Z3 · Hız değil form: diz sönümleme, kısa adım, bak-karar ver-yürüt · Son turda hızı artır'},
+      {baslik:'Güçlendirme',detay:'10 dk Bulgarian squat, single-leg deadlift — 3×8 her bacak'},
+    ]
+  };
+}
+
+function tplAcici(sure_dk){
+  return{
+    tip:'acici', sure_dk,
+    yapilar:[
+      {baslik:'Isınma',detay:'10 dk Z1 kolay yürüyüş/koşu'},
+      {baslik:'Kısa Hızlılar',detay:'4×100m yarış temposu — Z5b–Z5c · Tam yürüyüş dinlenme arası'},
+      {baslik:'Soğuma',detay:'5 dk Z1 yürüyüş'},
+    ]
+  };
+}
 // Minetti et al. 2002 + pratik yokuş düzeltmesi
 // dpM: D+ (metre), distKm: mesafe (km), sure_dk: süre (dk)
 // Döner: { grade, gapFactor, gapPaceStr(flatPaceSec) }
@@ -2470,14 +2541,14 @@ function tplAcici(sure_dk){
   return{
     tip:'acici', sure_dk,
     yapilar:[
-      {baslik:'Isınma',detay:'10 dk Z1'},
-      {baslik:'Kısa Hızlılar',detay:'4×100m yarış temposunda, tam yürüyüş dinlenme'},
-      {baslik:'Soğuma',detay:'5 dk yürüyüş'},
+      {baslik:'Isınma',detay:'10 dk Z1 kolay yürüyüş/koşu'},
+      {baslik:'Kısa Hızlılar',detay:'4×100m yarış temposu — Z5b–Z5c · Tam yürüyüş dinlenme arası'},
+      {baslik:'Soğuma',detay:'5 dk Z1 yürüyüş'},
     ]
   };
 }
 
-// ── Yükleme Planı (haftalık mesafe + D+ hedefleri) ────────────────────────────
+// ── Grade Adjusted Pace (GAP) ─────────────────────────────────────────────────
 
 function calcWeeklyTargets(athlete, races){
   const {primary}=selectRaces(athlete,races);
