@@ -1822,6 +1822,30 @@ function ChartTargetTrend({history,race,ath,results}){
         if(!already)points.push({date:last.date,min:round1(t.totalMin)});
       }
     }
+
+    // Her nokta için iyileştirme hedefi hesapla
+    const km=parseFloat(race?.mesafe)||0;
+    const dp=parseFloat(race?.d_plus)||0;
+    const prepWeeks=parseInt(race?.prep_weeks)||12;
+    const taperW=parseInt(race?.taper_w)||(km>42?3:km>21?2:1);
+    const raceDate=race?.tarih?new Date(race.tarih+'T12:00:00'):null;
+
+    const dpPerKm=km>0?dp/km:0;
+    let maxIyiPct=km<=5?6:km<=10?5:km<=21?4:km<=42?3:km<=60?2.5:2;
+    if(dpPerKm>100)maxIyiPct+=1; else if(dpPerKm>50)maxIyiPct+=0.5;
+
+    points.forEach(p=>{
+      if(!raceDate)return;
+      const daysLeft=Math.ceil((raceDate-new Date(p.date+'T12:00:00'))/864e5);
+      const trainingDaysLeft=Math.max(0,daysLeft-taperW*7);
+      const totalTrainingDays=Math.max(1,(prepWeeks-taperW)*7);
+      const prepPct=Math.min(1,(totalTrainingDays-trainingDaysLeft)/totalTrainingDays);
+      const realizePct=prepPct<0.1?0.05:prepPct<0.3?0.15+(prepPct-0.1)*0.5:
+        prepPct<0.7?0.25+(prepPct-0.3)*1.5:prepPct<0.9?0.85+(prepPct-0.7)*0.5:0.95;
+      const expectedIyi=maxIyiPct*realizePct;
+      p.minTarget=round1(p.min*(1-expectedIyi/100));
+    });
+
     return points;
   },[history,race,ath]);
 
@@ -1849,20 +1873,25 @@ function ChartTargetTrend({history,race,ath,results}){
             pointRadius:3,pointBackgroundColor:'#7c3aed',
             tension:.4,fill:false
           },
+          {
+            label:'Hedef Süre (İyileştirme)',
+            data:chartData.map(d=>d.minTarget||null),
+            borderColor:'#16a34a',borderWidth:2,borderDash:[5,4],
+            pointRadius:2,pointBackgroundColor:'#16a34a',
+            tension:.4,fill:false,spanGaps:false
+          },
           resultPoints.length>0&&{
             label:'Gerçekleşen',
             data:chartData.map(d=>{
               const r=resultPoints.find(p=>p.x===d.date)||
-                // En yakın tarihteki sonucu bul
                 (resultPoints.length>0?resultPoints.reduce((a,b)=>
                   Math.abs(new Date(b.x)-new Date(d.date))<Math.abs(new Date(a.x)-new Date(d.date))?b:a
                 ):null);
-              // Sadece yarış tarihine yakın günlerde göster
               if(!r)return null;
               const diff=Math.abs(new Date(r.x)-new Date(d.date));
               return diff<4*864e5?r.y:null;
             }),
-            borderColor:'#16a34a',backgroundColor:'#16a34a',
+            borderColor:'#f59e0b',backgroundColor:'#f59e0b',
             pointRadius:8,pointStyle:'star',
             showLine:false,spanGaps:false
           }
@@ -1886,10 +1915,7 @@ function ChartTargetTrend({history,race,ath,results}){
           x:{ticks:{color:tickColor,font:{size:10},maxTicksLimit:8},grid:{color:gridColor},border:{display:false}},
           y:{
             reverse:true,
-            ticks:{
-              color:tickColor,font:{size:10},
-              callback:v=>fmtHMS(v)
-            },
+            ticks:{color:tickColor,font:{size:10},callback:v=>fmtHMS(v)},
             grid:{color:gridColor},border:{display:false},
             title:{display:true,text:'↑ Hızlı (daha iyi)',color:tickColor,font:{size:10}}
           }
@@ -1900,7 +1926,14 @@ function ChartTargetTrend({history,race,ath,results}){
   },[chartData,results]);
 
   if(!chartData||chartData.length<2)return React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',padding:'16px 0',textAlign:'center'}},'Trend için en az 2 haftalik antrenman verisi gerekiyor.');
-  return React.createElement('div',{style:{position:'relative',height:200}},React.createElement('canvas',{ref}));
+  return React.createElement('div',{style:{position:'relative',height:200}},
+    React.createElement('canvas',{ref}),
+    React.createElement('div',{style:{display:'flex',gap:16,fontSize:11,color:'var(--text-secondary)',marginTop:4,justifyContent:'center'}},
+      React.createElement('span',null,React.createElement('span',{style:{color:'#7c3aed',fontWeight:700}},'━ '),'Tahmini süre'),
+      React.createElement('span',null,React.createElement('span',{style:{color:'#16a34a',fontWeight:700}},'╌ '),'Hedef (iyileştirme)'),
+      React.createElement('span',null,React.createElement('span',{style:{color:'#f59e0b',fontWeight:700}},'★ '),'Gerçekleşen')
+    )
+  );
 }
 
 // ── Haftalık Liderlik Tablosu ─────────────────────────────────────────────────
