@@ -4685,15 +4685,61 @@ function calcTestTiming(athlete, history, races, workouts){
 
 // Koşu dinamikleri analizi
 function analyzeDynamics(workouts, athleteId){
+  // Sabit tempolu antrenman tespiti — iki yol:
+  // 1. Antrenman türü bilgisi varsa onu kullan
+  // 2. Yoksa veri bazlı otomatik tespit
   const STEADY_TYPES=['kolay','aerobik','uzun'];
+  const YOĞUN_TYPES=['interval','esik','tempo','yokus_kisa','yokus_uzun','tirmanis','teknik','acici','depar','yaris'];
+
+  function isSteady(w){
+    // Tür bilgisi varsa öncelikle onu kullan
+    if(w.tur&&STEADY_TYPES.includes(w.tur)) return true;
+    if(w.tur&&YOĞUN_TYPES.includes(w.tur)) return false;
+
+    // Tür bilgisi yok — veri bazlı otomatik tespit
+    const durSec=toSec(w.sure_sa,w.sure_dk,w.sure_sn);
+    const durMin=durSec/60;
+    const avgHR=parseFloat(w.ort_nabiz)||0;
+    const maxHR=parseFloat(w.maks_nabiz)||0;
+    const rpe=parseFloat(w.rpe)||0;
+    const mesafe=parseFloat(w.mesafe)||0;
+
+    // Çok kısa antrenmanlar hariç
+    if(durMin<15) return false;
+
+    // RPE varsa: ≤6 = sabit tempo
+    if(rpe>0&&rpe>7) return false;
+    if(rpe>0&&rpe<=6) return true;
+
+    // Nabız farkı: maks-ort < 25 bpm → sabit tempo
+    if(avgHR>0&&maxHR>0){
+      const hrRange=maxHR-avgHR;
+      if(hrRange>35) return false; // Yoğun antrenman
+      if(hrRange<=25) return true;  // Sabit tempo
+    }
+
+    // Pace tutarlılığı: pace/km makul aralıkta
+    if(mesafe>2&&durMin>0){
+      const paceSecKm=(durMin*60)/mesafe;
+      // 4:00–9:00 /km arası sabit tempo koşusu
+      if(paceSecKm>=240&&paceSecKm<=540) return true;
+    }
+
+    // Yeterli sinyal yoksa dahil et — daha fazla veri daha iyi
+    return durMin>=20;
+  }
+
   const athWks=(workouts||[]).filter(w=>{
-    if(w.athleteId!==athleteId)return false;
-    if(!STEADY_TYPES.includes(w.tur))return false;
-    // Veri olan antrenmanlar
+    if(w.athleteId!==athleteId) return false;
+    if(!isSteady(w)) return false;
+    // Dinamik verisi olan antrenmanlar
     return parseFloat(w.kadans)>0||parseFloat(w.yer_kontak)>0||parseFloat(w.dikey_salinim)>0;
   }).sort((a,b)=>new Date(a.date)-new Date(b.date));
 
   if(!athWks.length)return null;
+
+  // Kaç tanesi otomatik tespit edildi vs tür bilgisiyle?
+  const autoDetected=athWks.filter(w=>!w.tur||!STEADY_TYPES.includes(w.tur)).length;
 
   const refs={
     kadans:{iyi:180,kabul:170,birim:'spm',yuksek_iyi:true},
@@ -4722,7 +4768,7 @@ function analyzeDynamics(workouts, athleteId){
     })():'yetersiz_veri';
     sonuc[k]={avg,son,seviye,trend,vals,birim:ref.birim,ref};
   });
-  return{sonuc,wkCount:athWks.length};
+  return{sonuc,wkCount:athWks.length,autoDetected};
 }
 
 function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout}){
@@ -4872,9 +4918,12 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout})
       !dinamikler&&React.createElement('div',{className:'empty'},'Sabit tempolu antrenmanlarda (kolay/aerobik/uzun) kadans, yer temas veya dikey salınım verisi bulunamadı. Bu değerleri Garmin/Wahoo gibi cihazlardan aktarın.'),
       dinamikler&&React.createElement('div',null,
         React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:12,padding:'10px 12px',background:'var(--bg-secondary)',borderRadius:'var(--radius)'}},
-          '📊 Sadece sabit tempolu antrenmanlar (Kolay/Aerobik/Uzun) dahil edildi — ',
+          '📊 Sadece sabit tempolu antrenmanlar dahil edildi — ',
           React.createElement('strong',null,dinamikler.wkCount+' antrenman'),
-          ' · İnterval, tempo ve eşik hariç'
+          dinamikler.autoDetected>0&&React.createElement('span',{style:{color:'var(--text-tertiary)'}},
+            ' ('+dinamikler.autoDetected+' tanesi antrenman türü bilgisi olmadan RPE/nabız/pace verisinden otomatik tespit edildi)'
+          ),
+          React.createElement('span',null,' · İnterval, tempo ve eşik hariç')
         ),
         // 3 metrik kart
         React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(240px,1fr))',gap:12,marginBottom:16}},
