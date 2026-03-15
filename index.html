@@ -2765,9 +2765,86 @@ function tplAcici(sure_dk){
 
 // ── Grade Adjusted Pace (GAP) ─────────────────────────────────────────────────
 
-function calcWeeklyTargets(athlete, races, workouts){
+function calcWeeklyTargets(athlete, races, workouts, optimizeMode=false){
   const {primary}=selectRaces(athlete,races);
   if(!primary||!primary.prep_weeks)return[];
+
+  // ── Optimize mod: tüm yarışları entegre et ─────────────────────────────
+  // Önce orijinal planı hesapla
+  const orijinalPlan=calcWeeklyTargetsCore(athlete,races,workouts,primary);
+
+  if(!optimizeMode)return orijinalPlan;
+
+  // Diğer yaklaşan yarışları bul
+  const today=new Date();
+  const athIds=athlete.yarıslar||[];
+  const digerYarislar=(races||[]).filter(r=>
+    athIds.includes(r.id)&&
+    r.id!==primary.id&&
+    new Date(r.tarih+'T12:00:00')>today&&
+    r.prep_weeks
+  ).sort((a,b)=>new Date(a.tarih)-new Date(b.tarih));
+
+  if(!digerYarislar.length)return orijinalPlan; // Tek yarış — optimize gerekmez
+
+  // Her yarış için plan hesapla
+  const digerPlanlar=digerYarislar.map(r=>({
+    race:r,
+    plan:calcWeeklyTargetsCore(athlete,races.map(x=>({...x,__force:x.id===r.id})),workouts,r)
+  }));
+
+  // Orijinal planın her haftasını diğer yarışlarla entegre et
+  return orijinalPlan.map(wk=>{
+    // Diğer yarışların bu haftaya ağırlıklı katkısı
+    // Ağırlık = yarışa kalan süreye ters orantılı (yakın yarış daha ağır)
+    let kmSum=wk.targetKm, dpSum=wk.targetDp, weightSum=1;
+    const daysToMain=Math.ceil((new Date(primary.tarih+'T12:00:00')-wk.weekStart)/864e5);
+    const mainWeight=Math.max(0.3,1-(daysToMain>365?1:daysToMain/365)*0.5);
+
+    digerPlanlar.forEach(({race:r,plan:dp2})=>{
+      // Bu hafta diğer yarışın planında karşılık geldiği haftayı bul
+      const match=dp2.find(w2=>{
+        const diff=Math.abs(w2.weekStart-wk.weekStart);
+        return diff<7*864e5;
+      });
+      if(!match||match.targetKm<=0)return;
+      // Uzak yarışlar daha az ağırlık
+      const daysToOther=Math.ceil((new Date(r.tarih+'T12:00:00')-wk.weekStart)/864e5);
+      if(daysToOther<0)return; // Geçmiş yarış
+      const otherWeight=Math.max(0.1,0.5*(1-(daysToOther>365?1:daysToOther/365)*0.7));
+      kmSum+=match.targetKm*otherWeight;
+      dpSum+=match.targetDp*otherWeight;
+      weightSum+=otherWeight;
+    });
+
+    const optKm=round1(kmSum/weightSum);
+    const optDp=Math.round(dpSum/weightSum);
+
+    // En kısıtlayıcı fazı seç (Taper > Zirve > Gelişme > Temel)
+    const fazOnc={Taper:4,Zirve:3,Gelişme:2,Temel:1,'Yarış Sonrası':0};
+    let enKısıtlayıcıFaz=wk.phase;
+    digerPlanlar.forEach(({plan:dp2})=>{
+      const match=dp2.find(w2=>Math.abs(w2.weekStart-wk.weekStart)<7*864e5);
+      if(match&&(fazOnc[match.phase]||0)>(fazOnc[enKısıtlayıcıFaz]||0))
+        enKısıtlayıcıFaz=match.phase;
+    });
+
+    // Faz Taper ise km'yi orijinal taper hedefine sınırla
+    const finalKm=enKısıtlayıcıFaz==='Taper'?Math.min(optKm,wk.targetKm):optKm;
+    const finalDp=enKısıtlayıcıFaz==='Taper'?Math.min(optDp,wk.targetDp):optDp;
+
+    const changed=Math.abs(finalKm-wk.targetKm)>0.5||Math.abs(finalDp-wk.targetDp)>50;
+    return{
+      ...wk,
+      targetKm:finalKm, targetDp:finalDp,
+      phase:enKısıtlayıcıFaz,
+      _optimize:changed,
+      _origKm:wk.targetKm, _origDp:wk.targetDp
+    };
+  });
+}
+
+function calcWeeklyTargetsCore(athlete, races, workouts, primary){
   const today=new Date();
   const raceDate=new Date(primary.tarih+'T12:00:00');
   const prepWeeks=parseInt(primary.prep_weeks)||16;
@@ -3315,6 +3392,7 @@ function HaftalikPlanTab({athlete,history,races,workouts}){
   const [showLoading,setShowLoading]=useState(false);
   const [selectedPrimary,setSelectedPrimary]=useState(null); // null = otomatik
   const [expandDay,setExpandDay]=useState(null); // 'date' string
+  const [planMode,setPlanMode]=useState('optimize'); // 'optimize' | 'orijinal'
 
   // Yarış seçici için mevcut upcoming yarışlar
   const athRaceIds=athlete?.yarıslar||[];
@@ -3342,8 +3420,8 @@ function HaftalikPlanTab({athlete,history,races,workouts}){
     const racesOverride=selectedPrimary
       ?races.map(r=>({...r,__force:r.id===selectedPrimary}))
       :races;
-    return calcWeeklyTargets(athlete,racesOverride,workouts||[]);
-  },[athlete,races,selectedPrimary,workouts]);
+    return calcWeeklyTargets(athlete,racesOverride,workouts||[],planMode==='optimize');
+  },[athlete,races,selectedPrimary,workouts,planMode]);
 
   // Gerçekleşen haftalık km+D+ hesapla
   const athWks=(workouts||[]).filter(w=>w.athleteId===athlete?.id);
@@ -3419,10 +3497,28 @@ function HaftalikPlanTab({athlete,history,races,workouts}){
 
     // Yükleme Planı Tablosu (tüm hazırlık dönemi)
     showLoading&&weekTargets.length>0&&React.createElement('div',{className:'card',style:{marginBottom:12}},
-      React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}},
-        React.createElement('div',{className:'card-title',style:{margin:0}},plan.primary?.ad+' — Hazırlık Yükleme Planı ('+weekTargets.length+' hafta)'),
-        React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},
-          'Hedef yarış: '+plan.primary?.mesafe+'km · D+ '+plan.primary?.d_plus+'m'
+      React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10,flexWrap:'wrap',gap:8}},
+        React.createElement('div',null,
+          React.createElement('div',{className:'card-title',style:{margin:0}},plan.primary?.ad+' — Hazırlık Yükleme Planı ('+weekTargets.length+' hafta)'),
+          React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},
+            'Hedef yarış: '+plan.primary?.mesafe+'km · D+ '+plan.primary?.d_plus+'m'
+          )
+        ),
+        React.createElement('div',{style:{display:'flex',gap:6,alignItems:'center'}},
+          React.createElement('span',{style:{fontSize:11,color:'var(--text-secondary)'}},'Plan:'),
+          React.createElement('button',{
+            className:'btn btn-sm'+(planMode==='optimize'?' btn-primary':''),
+            onClick:()=>setPlanMode('optimize'),
+            title:'Tüm yarışları optimize ederek haftalık hedef belirle'
+          },'⚡ Optimize'),
+          React.createElement('button',{
+            className:'btn btn-sm'+(planMode==='orijinal'?' btn-primary':''),
+            onClick:()=>setPlanMode('orijinal'),
+            title:'Sadece birincil yarış için orijinal yükleme planı'
+          },'📋 Orijinal'),
+          planMode==='optimize'&&React.createElement('span',{
+            style:{fontSize:10,color:'var(--info)',background:'var(--info-bg)',padding:'2px 6px',borderRadius:4}
+          },'Tüm yarışlar entegre')
         )
       ),
       React.createElement('div',{className:'table-wrap'},
@@ -3493,7 +3589,12 @@ function HaftalikPlanTab({athlete,history,races,workouts}){
                     wt.weekStart.toLocaleDateString('tr-TR',{day:'2-digit',month:'short'})
                   ),
                   wt.isRecovery&&React.createElement('span',{className:'badge badge-info',style:{marginLeft:4,fontSize:9}},wt.weekStatus==='dinlenme_otomatik'?'🔄 Otomatik Dinlenme':'Dinlenme'),
-                  wt.telafiUygulandı&&React.createElement('span',{className:'badge badge-warn',style:{marginLeft:4,fontSize:9}},'↑ Telafi +'+wt.telafiKm+'km')
+                  wt.telafiUygulandı&&React.createElement('span',{className:'badge badge-warn',style:{marginLeft:4,fontSize:9}},'↑ Telafi +'+wt.telafiKm+'km'),
+                  wt._optimize&&React.createElement('span',{
+                    className:'badge badge-info',
+                    style:{marginLeft:4,fontSize:9},
+                    title:'Optimize: Orijinal '+wt._origKm+'km / D+'+wt._origDp+'m'
+                  },'⚡')
                 ),
                 React.createElement('td',{style:{padding:'6px 8px',textAlign:'center'}},
                   React.createElement('span',{className:'badge '+(PHASE_COLORS[wt.phase]||'badge-gray'),style:{fontSize:10}},wt.phase)
@@ -5045,6 +5146,7 @@ function Gecmis({workouts,athletes,onDelete,onBulkDelete,onUpdate}){
             )
           )
         ),
+        React.createElement('div',{className:'card-title',style:{marginTop:8}},'Antrenman Türü'),
         React.createElement('div',{className:'form-grid',style:{marginBottom:8}},
           React.createElement('div',{className:'form-group'},
             React.createElement('label',null,'Spor'),
@@ -5057,6 +5159,11 @@ function Gecmis({workouts,athletes,onDelete,onBulkDelete,onUpdate}){
             React.createElement('select',{value:editForm.tur||'',onChange:e=>setF('tur',e.target.value)},
               ANTRENMAN_TURLERI.map(t=>React.createElement('option',{key:t.v,value:t.v},t.l))
             )
+          ),
+          React.createElement('div',{className:'form-group'},
+            React.createElement('label',null,'Yapı Notu'),
+            React.createElement('input',{type:'text',value:editForm.yapi_notu||'',
+              placeholder:'ör: 6×1km, 4×8dk',onChange:e=>setF('yapi_notu',e.target.value)})
           )
         ),
         React.createElement('div',{className:'card-title',style:{marginTop:8}},'Süre'),
@@ -5075,6 +5182,19 @@ function Gecmis({workouts,athletes,onDelete,onBulkDelete,onUpdate}){
           fgi('Kadans (spm)','kadans','number',{min:100,max:220}),
           fgi('Ort. Güç (W)','ort_guc','number',{min:0}),
           fgi('Maks. Güç (W)','maks_guc','number',{min:0})
+        ),
+        React.createElement('div',{className:'card-title',style:{marginTop:8}},'Koşu Dinamikleri (opsiyonel)'),
+        React.createElement('div',{className:'form-grid'},
+          fgi('Yer Kontak (ms)','yer_kontak','number',{min:0}),
+          fgi('Dikey Salınım (cm)','dikey_salinim','number',{min:0,step:.1}),
+          fgi('Zemin Dengesi (%)','zemin_dengesi','number',{min:0,step:.1}),
+          React.createElement('div',{className:'form-group'},
+            React.createElement('label',null,'Zemin Zorluğu'),
+            React.createElement('select',{value:editForm.zemin_zorluk||'1',onChange:e=>setF('zemin_zorluk',e.target.value)},
+              [{v:'1',l:'1 – Düz yol'},{v:'2',l:'2 – Hafif arazi'},{v:'3',l:'3 – Orta arazi'},{v:'4',l:'4 – Zor arazi'},{v:'5',l:'5 – Ultra zor'}]
+                .map(o=>React.createElement('option',{key:o.v,value:o.v},o.l))
+            )
+          )
         ),
         React.createElement('div',{className:'form-group',style:{marginTop:8}},
           React.createElement('label',null,'Notlar'),
