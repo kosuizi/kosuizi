@@ -538,7 +538,7 @@ function raceReadinessScore(ctl,acwr,phase,sakatlık,hrv_durum,daysLeft,race,ath
   // 8. Yükleme planı başarısı — geçmiş haftalardaki hedef tutturma oranı
   // Bu faktör en fazla +20 / -20 puan etkisi yapar
   if(workouts?.length&&race?.prep_weeks&&race?.tarih){
-    const weekTargets=calcWeeklyTargets(athlete,[race]);
+    const weekTargets=calcWeeklyTargets(athlete,[race],workouts||[]);
     if(weekTargets.length>0){
       const raceDate=new Date(race.tarih+'T12:00:00');
       const athWks=(workouts||[]).filter(w=>w.athleteId===athlete?.id);
@@ -2634,7 +2634,7 @@ function tplAcici(sure_dk){
 
 // ── Grade Adjusted Pace (GAP) ─────────────────────────────────────────────────
 
-function calcWeeklyTargets(athlete, races){
+function calcWeeklyTargets(athlete, races, workouts){
   const {primary}=selectRaces(athlete,races);
   if(!primary||!primary.prep_weeks)return[];
   const today=new Date();
@@ -2645,22 +2645,22 @@ function calcWeeklyTargets(athlete, races){
   const disiplin=athlete.disiplin||'karma';
   const isTrail=disiplin!=='yol';
 
-  // Periodizasyon oranları (haftalık kümülatif %) — Hadd/Maffetone modeli
-  // Taper hafta sayısı
   const taperW=parseInt(primary.taper_w)||(km>42?3:km>21?2:1);
   const peakW=parseInt(primary.peak_w)||(km>42?4:km>21?3:2);
   const buildW=prepWeeks-taperW-peakW;
 
-  // Dinlenme haftası sıklığı
   const siklikStr=athlete.dinlenme_siklik||'3x1';
   const [siklikBlok,siklikDin]=(siklikStr.split('x').map(Number));
 
-  const weeks=[];
+  // Geçmiş haftaların gerçekleşme durumunu hesapla — telafi için
+  const athWks=(workouts||[]).filter(w=>w.athleteId===athlete.id);
+
+  // Önce tüm haftaları hesapla (telafi için önce plan gerekli)
+  const baseWeeks=[];
   for(let w=0;w<prepWeeks;w++){
     const weekStart=new Date(raceDate);
     weekStart.setDate(raceDate.getDate()-(prepWeeks-w)*7);
-    // Her zaman Pazartesi'ye hizala
-    const dow=weekStart.getDay(); // 0=Paz,1=Pzt,...
+    const dow=weekStart.getDay();
     const diffToMon=dow===0?-6:1-dow;
     weekStart.setDate(weekStart.getDate()+diffToMon);
     weekStart.setHours(0,0,0,0);
@@ -2668,25 +2668,19 @@ function calcWeeklyTargets(athlete, races){
     const daysToRace=Math.ceil((raceDate-weekStart)/864e5);
     const isCurrent=weekStart<=today&&weekEnd>=today;
     const isPast=weekEnd<today;
-    // Mevcut hafta için bugünün tarihini kullan, diğerleri için Çarşamba
-    const refDate=isCurrent?today:new Date(weekStart);
-    if(!isCurrent)refDate.setDate(weekStart.getDate()+3);
-    const refStr=`${refDate.getFullYear()}-${String(refDate.getMonth()+1).padStart(2,'0')}-${String(refDate.getDate()).padStart(2,'0')}`;
-    // Faz — hafta indeksine göre doğrudan ata (calcPhase tarih bazlı olduğu için kenar haftalarda kayabilir)
+
     let phase;
     if(w>=prepWeeks-taperW)phase='Taper';
     else if(w>=prepWeeks-taperW-peakW)phase='Zirve';
     else if(w>=buildW*0.5)phase='Gelişme';
     else phase='Temel';
 
-    // Dinlenme haftası bu hafta geçerli mi?
     const isRecovery=(()=>{
       if(phase==='Taper'||phase==='Zirve')return false;
       const posInBlock=(w%siklikBlok);
       return posInBlock>=(siklikBlok-siklikDin);
     })();
 
-    // Haftalık mesafe hedefi (trapezoidal artış, taper'da düşüş)
     let kmPct;
     if(phase==='Taper'){
       const taperIdx=w-buildW-peakW;
@@ -2698,20 +2692,79 @@ function calcWeeklyTargets(athlete, races){
       kmPct=isRecovery?prog*0.5:0.40+prog*0.40;
     }
 
-    // Yarış mesafesini baz al
     const baseKm=km<=21?km*0.8:km<=42?km*0.7:km*0.55;
     const targetKm=round1(baseKm*kmPct);
-
-    // D+ hedefi (trail için önemli)
     const baseDp=isTrail?dp*0.6:dp*0.2;
     const targetDp=Math.round(baseDp*kmPct*(isRecovery?0.5:1));
 
-    weeks.push({
+    // Geçmiş hafta gerçekleşen km ve dp
+    let actualKm=0, actualDp=0;
+    if(isPast){
+      const wWks=athWks.filter(w=>{const d=new Date(w.date+'T12:00:00');return d>=weekStart&&d<=weekEnd;});
+      actualKm=round1(wWks.reduce((s,w)=>s+(parseFloat(w.mesafe)||0),0));
+      actualDp=Math.round(wWks.reduce((s,w)=>s+(parseFloat(w.irtifa)||0),0));
+    }
+
+    // Gerçekleşme durumu
+    const kmRatio=targetKm>0?(actualKm/targetKm):null;
+    let weekStatus='normal'; // normal | dinlenme_otomatik | eksik | yeterli
+    if(isPast&&kmRatio!==null){
+      if(kmRatio<0.40)weekStatus='dinlenme_otomatik';
+      else if(kmRatio<0.70)weekStatus='eksik';
+      else weekStatus='yeterli';
+    }
+
+    baseWeeks.push({
       weekIdx:w+1,weekStart,weekEnd,phase,isRecovery,
       targetKm,targetDp,daysToRace,
-      isPast:weekEnd<today,isCurrent:weekStart<=today&&weekEnd>=today
+      isPast,isCurrent:weekStart<=today&&weekEnd>=today,
+      actualKm,actualDp,kmRatio,weekStatus,
+      _kmPct:kmPct,_baseKm:baseKm,_baseDp:baseDp,_isRecovery:isRecovery
     });
   }
+
+  // Telafi mantığı: geçmiş haftalara göre gelecek hafta hedeflerini düzelt
+  // Kümülatif telafi faktörü — birden fazla eksik hafta birikebilir (max ±%20)
+  let telafiKm=0, telafiDp=0;
+  const weeks=baseWeeks.map((wk,i)=>{
+    if(wk.isPast){
+      // Geçmiş hafta bitti — telafi birikimini güncelle
+      if(wk.weekStatus==='dinlenme_otomatik'){
+        // Kaybedilen yükü sonraki 3 haftaya yay (%10 artış)
+        telafiKm+=wk.targetKm*0.10;
+        telafiDp+=wk.targetDp*0.10;
+      } else if(wk.weekStatus==='eksik'){
+        // Eksik yükü sonraki 2 haftaya yay (%5 artış)
+        telafiKm+=wk.targetKm*0.05;
+        telafiDp+=wk.targetDp*0.05;
+      }
+      return{...wk,telafiUygulandı:false};
+    }
+
+    // Gelecek/mevcut hafta — birikmiş telafiyi uygula
+    // Taper ve Zirve haftalarında telafi yok
+    if(wk.phase==='Taper'||wk.phase==='Zirve'||telafiKm<=0){
+      return{...wk,telafiUygulandı:false};
+    }
+
+    // Bu haftaya max %15 telafi uygula, kalanı sonraya bırak
+    const buHaftaTelafi=Math.min(telafiKm,wk.targetKm*0.15);
+    const buHaftaTelafiDp=Math.min(telafiDp,wk.targetDp*0.15);
+    telafiKm=Math.max(0,telafiKm-buHaftaTelafi);
+    telafiDp=Math.max(0,telafiDp-buHaftaTelafiDp);
+
+    return{
+      ...wk,
+      targetKm:round1(wk.targetKm+buHaftaTelafi),
+      targetDp:Math.round(wk.targetDp+buHaftaTelafiDp),
+      telafiUygulandı:buHaftaTelafi>0,
+      telafiKm:round1(buHaftaTelafi),
+      telafiDp:Math.round(buHaftaTelafiDp),
+      // Dinlenme otomatik işaretliyse planı dinlenme haftasına çevir
+      isRecovery:wk.weekStatus==='dinlenme_otomatik'?true:wk.isRecovery
+    };
+  });
+
   return weeks;
 }
 
@@ -2788,7 +2841,7 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   const ctlNearCap=ctlVo2Ratio>1.8;
 
   // ── Haftalık km hedef ─────────────────────────────────────────────────────
-  const weekTargets=calcWeeklyTargets(athlete,races);
+  const weekTargets=calcWeeklyTargets(athlete,races,allWorkouts||[]);
   const thisWeekTarget=weekTargets.find(wt=>wt.isCurrent);
   const targetKm=thisWeekTarget?.targetKm||0;
   const kmDeficit=targetKm>0&&wkKm<targetKm*0.5&&wkSessions>=2;
@@ -3060,7 +3113,7 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts){
   const kosuGunleri=athlete.kosu_gunleri||[];
   const caprazGunleri=athlete.capraz_gunleri||[];
   const athWorkouts=actualWorkouts.filter(w=>w.athleteId===athlete.id);
-  const weekTargets=calcWeeklyTargets(athlete,races);
+  const weekTargets=calcWeeklyTargets(athlete,races,actualWorkouts||[]);
 
   const weeks=[];
   let simAtl=last?.atl||0, simCtl=last?.ctl||0;
@@ -3158,8 +3211,8 @@ function HaftalikPlanTab({athlete,history,races,workouts}){
     const racesOverride=selectedPrimary
       ?races.map(r=>({...r,__force:r.id===selectedPrimary}))
       :races;
-    return calcWeeklyTargets(athlete,racesOverride);
-  },[athlete,races,selectedPrimary]);
+    return calcWeeklyTargets(athlete,racesOverride,workouts||[]);
+  },[athlete,races,selectedPrimary,workouts]);
 
   // Gerçekleşen haftalık km+D+ hesapla
   const athWks=(workouts||[]).filter(w=>w.athleteId===athlete?.id);
@@ -3308,7 +3361,8 @@ function HaftalikPlanTab({athlete,history,races,workouts}){
                   React.createElement('div',{style:{fontSize:9,color:'var(--text-tertiary)',fontWeight:400,marginTop:1}},
                     wt.weekStart.toLocaleDateString('tr-TR',{day:'2-digit',month:'short'})
                   ),
-                  wt.isRecovery&&React.createElement('span',{className:'badge badge-info',style:{marginLeft:4,fontSize:9}},'Dinlenme')
+                  wt.isRecovery&&React.createElement('span',{className:'badge badge-info',style:{marginLeft:4,fontSize:9}},wt.weekStatus==='dinlenme_otomatik'?'🔄 Otomatik Dinlenme':'Dinlenme'),
+                  wt.telafiUygulandı&&React.createElement('span',{className:'badge badge-warn',style:{marginLeft:4,fontSize:9}},'↑ Telafi +'+wt.telafiKm+'km')
                 ),
                 React.createElement('td',{style:{padding:'6px 8px',textAlign:'center'}},
                   React.createElement('span',{className:'badge '+(PHASE_COLORS[wt.phase]||'badge-gray'),style:{fontSize:10}},wt.phase)
