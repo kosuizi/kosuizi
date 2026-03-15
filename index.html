@@ -282,7 +282,63 @@ function calcMetrics(w,ath){
   };
 }
 
-// EWMA: TrainingPeaks standardı — exp(-1/τ) decay
+// ── Toparlanma Süresi Hesabı ──────────────────────────────────────────────────
+// Bilimsel referans: Kenttä & Hassmén (1998), Mujika & Padilla (2000)
+// Döner: { saatler, kategori, renk, detay }
+function calcRecovery(w, ath, yukObj){
+  const yuk=yukObj||0;
+  const tur=w.tur||'aerobik';
+  const rpe=parseFloat(w.rpe)||0;
+  const durMin=toSec(w.sure_sa,w.sure_dk,w.sure_sn)/60;
+  const irtifa=parseFloat(w.irtifa)||0;
+  const band=ctlBand(parseFloat(ath?.ctl)||0); // CTL bandı daha doğru, yoksa basit tahmin
+
+  // 1. Temel toparlanma: yük bazlı (TSS/yük)
+  // <30 → 12s, 30-60 → 18s, 60-100 → 24s, 100-150 → 36s, >150 → 48s
+  let bazSaat=yuk<30?12:yuk<60?18:yuk<100?24:yuk<150?36:48;
+
+  // 2. Tür modifikatörü
+  const turMod={
+    kolay:0.7, aerobik:1.0, uzun:1.4,
+    tempo:1.2, esik:1.3, interval:1.5,
+    yokus_kisa:1.4, yokus_uzun:1.5, tirmanis:1.4,
+    teknik:1.0, acici:0.8, capraz:0.8, dinlenme:0
+  }[tur]||1.0;
+
+  // 3. İrtifa modifikatörü (D+ > 500m → ekstra nöromüsküler stres)
+  const irtifaMod=irtifa>2000?1.3:irtifa>1000?1.15:irtifa>500?1.08:1.0;
+
+  // 4. Sporcu CTL bandı — daha deneyimli sporcu daha hızlı toparlar
+  const bandMod=[1.3,1.15,1.0,0.9,0.85][Math.min(4,Math.max(0,(band||1)-1))];
+
+  let saatler=Math.round(bazSaat*turMod*irtifaMod*bandMod);
+
+  // 5. Min/max sınırlar
+  saatler=Math.max(8,Math.min(72,saatler));
+
+  // Kategori
+  let kategori,renk;
+  if(saatler<=12){kategori='Hafif';renk='success';}
+  else if(saatler<=24){kategori='Orta';renk='info';}
+  else if(saatler<=36){kategori='Ağır';renk='warn';}
+  else{kategori='Çok Ağır';renk='danger';}
+
+  // Önerilen aktiviteler
+  const aktivite=saatler<=12
+    ?'Yürüyüş veya hafif esneme yapılabilir'
+    :saatler<=24
+    ?'Aktif toparlanma (yürüyüş, hafif bisiklet) önerilir'
+    :saatler<=36
+    ?'Tam dinlenme veya çok hafif yürüyüş'
+    :'Tam dinlenme — kas glikojeni yenilenmesi öncelik';
+
+  // Hedef zaman
+  const hedef=new Date();
+  hedef.setHours(hedef.getHours()+saatler);
+  const hedefStr=hedef.toLocaleString('tr-TR',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
+
+  return{saatler,kategori,renk,aktivite,hedefStr};
+}
 // Referans: Banister 1991, Morton 1997
 const λ_atl=1-Math.exp(-1/7);   // τ=7 gün (akut/yorgunluk)
 const λ_ctl=1-Math.exp(-1/42);  // τ=42 gün (kronik/fitness)
@@ -2387,17 +2443,6 @@ function tplYokusUzun(band, zones){
   };
 }
 
-function tplTeknikInis(band, sure_dk){
-  return{
-    tip:'teknik', sure_dk:40,
-    yapilar:[
-      {baslik:'Isınma',detay:'10 dk Z1 kolay koşu'},
-      {baslik:'Teknik İniş Antrenmanı',detay:'4×(3 dk kontrollü teknik iniş → 3 dk kolay çıkış) — nabız Z2–Z3 · Hız değil form: diz sönümleme, kısa adım, bak-karar ver-yürüt · Son turda hızı artır'},
-      {baslik:'Güçlendirme',detay:'10 dk Bulgarian squat, single-leg deadlift — 3×8 her bacak'},
-    ]
-  };
-}
-
 function tplAcici(sure_dk){
   return{
     tip:'acici', sure_dk,
@@ -2455,14 +2500,14 @@ function gapInfo(dpHedef, sure_dk, zones, zone_idx){
 function tplYokusKisa(band, zones){
   const sets=band<=2?'6×30sn':band===3?'8×30sn':band===4?'8×45sn':'10×45sn';
   const sure_dk=band<=2?40:band===3?45:50;
-  // Kısa yokuş tekrarlarında %8-12 eğim → GAP ~×1.30-1.40 → nabız bazlı hedef daha doğru
-  const zoneNote=zones?.hrZones?`Z5a nabız (${zones.hrZones[4]?.lo_bpm||''}–${zones.hrZones[4]?.hi_bpm||''} bpm)`:'maksimal efor';
+  const z5a=zoneInfo(zones,4)||'Z5a maksimal';
+  const z1=zoneInfoZ1(zones)||'Z1 kolay';
   return{
     tip:'yokus_kisa', sure_dk,
     yapilar:[
-      {baslik:'Isınma',detay:'15 dk Z1–Z2'},
-      {baslik:'Kısa Yokuş Tekrarı',detay:`${sets} maksimal efor yokuş çıkışı (eğim %8–12) — ${zoneNote}. Pace hedefi değil nabız/efor hedef alın. Tam yürüyüş inişi ile dinlenme. Hafif öne eğil, kısa adım, kolları kullan.`},
-      {baslik:'Soğuma',detay:'10 dk Z1 + quadriceps/calves germe'},
+      {baslik:'Isınma',detay:`15 dk — ${zoneInfo(zones,1)||'Z1–Z2'}`},
+      {baslik:'Kısa Yokuş Tekrarı',detay:`${sets} maksimal çıkış (eğim %8–12) — ${z5a} · Pace değil nabız/efor hedef alın · Tam yürüyüş inişi · Hafif öne eğil, kısa adım, kolları kullan`},
+      {baslik:'Soğuma',detay:`10 dk — ${z1} + quadriceps/calves germe`},
     ]
   };
 }
@@ -2470,14 +2515,14 @@ function tplYokusKisa(band, zones){
 function tplYokusUzun(band, zones){
   const sets=band<=2?'3×3 dk':band===3?'4×4 dk':band===4?'4×5 dk':'5×5 dk';
   const sure_dk=band<=2?45:band===3?55:65;
-  // Z4 efor yokuşta — flat pace değil nabız/efor bazlı
-  const hrNote=zones?.hrZones?`(nabız ${zones.hrZones[3]?.lo_bpm||''}–${zones.hrZones[3]?.hi_bpm||''} bpm, flat eşdeğer ${pzT(zones,3)||'eşik pace'})`:pzT(zones,3)||'eşik efor';
+  const z4=zoneInfo(zones,3)||'Z4 eşik eforu';
+  const z1_2=zoneInfo(zones,1)||'Z1–Z2';
   return{
     tip:'yokus_uzun', sure_dk,
     yapilar:[
-      {baslik:'Isınma',detay:'15 dk Z1–Z2'},
-      {baslik:'Uzun Yokuş Tekrarı',detay:`${sets} Z4 efor yokuş çıkışı (eğim %6–10) — ${hrNote}. Efor hissi düz koşudaki eşiğe eşdeğer — pace daha yavaş olacak, bu normal. Yürüyüş inişi.`},
-      {baslik:'Soğuma',detay:'10 dk Z1'},
+      {baslik:'Isınma',detay:`15 dk — ${z1_2}`},
+      {baslik:'Uzun Yokuş Tekrarı',detay:`${sets} çıkış (eğim %6–10) — ${z4} · Efor hissi düz koşudaki eşiğe eşdeğer, pace daha yavaş olacak · Yürüyüş inişi`},
+      {baslik:'Soğuma',detay:`10 dk — ${zoneInfoZ1(zones)||'Z1'}`},
     ]
   };
 }
@@ -2487,9 +2532,8 @@ function tplTirmanisAcik(band, sure_dk, zones, dpHedef){
   let adjustedSure=sure_dk;
   let durationNote='';
   if(dpHedef>0){
-    const climbRatePerMin=realisticClimbRate(band)/60; // m/dk
+    const climbRatePerMin=realisticClimbRate(band)/60;
     const minDkForDp=Math.ceil(dpHedef/climbRatePerMin);
-    // Tırmanış sürenin %70'ini oluşturur (ısınma+soğuma çıkınca)
     const minTotal=Math.ceil(minDkForDp/0.70);
     if(minTotal>sure_dk){
       adjustedSure=minTotal;
@@ -2497,6 +2541,12 @@ function tplTirmanisAcik(band, sure_dk, zones, dpHedef){
     }
   }
 
+  // Nabız hedefi — Z2–Z3
+  const hrZ2=zones?.hrZones?.[1];
+  const hrZ3=zones?.hrZones?.[2];
+  const hrStr=hrZ2?.lo_bpm&&hrZ3?.hi_bpm?`${hrZ2.lo_bpm}–${hrZ3.hi_bpm} bpm (Z2–Z3)`:'Z2–Z3 nabız';
+
+  // Pace hedefi (GAP ile)
   const flatPaceStr=pz(zones,2)||pz(zones,1)||'Z2–Z3 pace';
   const gap=dpHedef>0?calcGAP(dpHedef,Math.max(2,(adjustedSure||60)/9),adjustedSure):null;
   let paceDetay;
@@ -2508,7 +2558,7 @@ function tplTirmanisAcik(band, sure_dk, zones, dpHedef){
     const actAvg=actLo&&actHi?secToPace((paceToSec(actLo)+paceToSec(actHi))/2):null;
     paceDetay=actLo&&actHi
       ?`Flat eşdeğer: ${flatPaceStr} — Tırmanışta beklenen pace: ${actLo}–${actHi}${actAvg?` (${actAvg})`:''}/km (ort. %${gap.grade} eğim)`
-      :`${flatPaceStr} efor hissiyle · %${gap.grade} ort. eğimde pace daha yavaş olacak (GAP ×${gap.factor})`;
+      :`${flatPaceStr} efor hissiyle · %${gap.grade} ort. eğimde pace daha yavaş olacak`;
   } else if(dpHedef>0){
     paceDetay=`${flatPaceStr} efor hissiyle — yokuşta gerçek pace daha yavaş olacak`;
   } else {
@@ -2518,20 +2568,21 @@ function tplTirmanisAcik(band, sure_dk, zones, dpHedef){
   return{
     tip:'tirmanis', sure_dk:adjustedSure,
     yapilar:[
-      {baslik:'Isınma',detay:'10 dk Z1 düz'},
-      {baslik:'Tırmanış Koşusu',detay:`${adjustedSure-10} dk — ${paceDetay}. Hedef D+: ${dpHedef>0?'~'+dpHedef+'m':'maksimum'}. Tırmanışta güç adımı, inişte kontrollü teknik.${durationNote}`},
-      {baslik:'Soğuma',detay:'5 dk Z1'},
+      {baslik:'Isınma',detay:`10 dk — ${zoneInfoZ1(zones)||'Z1 kolay'} düz`},
+      {baslik:'Tırmanış Koşusu',detay:`${adjustedSure-10} dk — Nabız: ${hrStr} · ${paceDetay} · Hedef D+: ${dpHedef>0?'~'+dpHedef+'m':'maksimum'} · Tırmanışta güç adımı, inişte kontrollü teknik${durationNote}`},
+      {baslik:'Soğuma',detay:`5 dk — ${zoneInfoZ1(zones)||'Z1'}`},
     ],
     dpHedef, gap
   };
 }
 
-function tplTeknikInis(band, sure_dk){
+function tplTeknikInis(band, sure_dk, zones){
+  const z2_3=`${zoneInfo(zones,1)||'Z2'} tırmanışta, ${zoneInfo(zones,2)||'Z3'} inişte`;
   return{
     tip:'teknik', sure_dk:40,
     yapilar:[
-      {baslik:'Isınma',detay:'10 dk Z1'},
-      {baslik:'Teknik İniş Antrenmanı',detay:`4×(3 dk kontrollü teknik iniş → 3 dk kolay çıkış). Hız değil form — diz sönümleme, kısa adım, bak-karar ver-yürüt. Son turda hızı artır.`},
+      {baslik:'Isınma',detay:`10 dk — ${zoneInfoZ1(zones)||'Z1'} kolay koşu`},
+      {baslik:'Teknik İniş Antrenmanı',detay:`4×(3 dk kontrollü teknik iniş → 3 dk kolay çıkış) — ${z2_3} · Hız değil form: diz sönümleme, kısa adım, bak-karar ver-yürüt · Son turda hızı artır`},
       {baslik:'Güçlendirme',detay:'10 dk Bulgarian squat, single-leg deadlift — 3×8 her bacak'},
     ]
   };
@@ -2954,6 +3005,8 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
   } else if(phase==='Gelişme'){
     if(wkStats.kaliteliYok&&(tsb> -10||isSimulatedFuture)&&(acwr<1.2||isSimulatedFuture))
       tpl=isTrail&&band>=3?tplYokusKisa(band,zones):tplInterval(band,phase,zones);
+    else if(isTrail&&band>=2&&!wkStats.kaliteliYok)
+      tpl=tplTeknikInis(band,40,zones);
     else
       tpl=tplAerobik(band,Math.round(55*yMod),zones,disiplin);
   } else {
@@ -4182,6 +4235,28 @@ function Dashboard({workouts,athlete,history,races}){
   const wkKm=round1(wks.reduce((s,w)=>s+(parseFloat(w.mesafe)||0),0));
   const wkMech=round1(wks.reduce((s,w)=>s+(calcMetrics(w,athlete).mechLoad||0),0));
 
+  // Son antrenman toparlanma bilgisi
+  const athWorkouts=(workouts||[]).filter(w=>w.athleteId===athlete?.id).sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const lastWorkout=athWorkouts[0]||null;
+  const lastRecovery=React.useMemo(()=>{
+    if(!lastWorkout)return null;
+    // Kayıtlı toparlanma bilgisi varsa kullan, yoksa hesapla
+    if(lastWorkout.recovery_saatler){
+      const hedef=new Date(lastWorkout.recovery_hedef);
+      const now=new Date();
+      const kalanSaat=Math.max(0,Math.round((hedef-now)/3600000));
+      const tamamlandi=now>=hedef;
+      const rec=calcRecovery(lastWorkout,athlete,calcMetrics(lastWorkout,athlete).yukObj);
+      return{...rec,kalanSaat,tamamlandi,hedef};
+    }
+    const m=calcMetrics(lastWorkout,athlete);
+    const rec=calcRecovery(lastWorkout,athlete,m.yukObj);
+    const hedef=new Date(new Date(lastWorkout.date+'T12:00:00').getTime()+rec.saatler*3600000);
+    const now=new Date();
+    const kalanSaat=Math.max(0,Math.round((hedef-now)/3600000));
+    return{...rec,kalanSaat,tamamlandi:now>=hedef,hedef};
+  },[lastWorkout,athlete]);
+
   // Yük artış çarpanı
   const lm=calcLoadMultiplier(last?.acwr,last?.phase,athlete?.hrv_durum,athlete?.sakatlık);
   const nextWkTarget=wkLoad>0?round1(wkLoad*lm.mult):null;
@@ -4233,7 +4308,14 @@ function Dashboard({workouts,athlete,history,races}){
       React.createElement('div',{className:'metric'},React.createElement('div',{className:'metric-label'},'ACWR (EWMA)'),React.createElement('div',{className:'metric-val '+acwrS.cls},last?.acwr!=null?last.acwr.toFixed(2):'—'),React.createElement('div',{className:'metric-sub'},acwrS.label)),
       React.createElement('div',{className:'metric'},React.createElement('div',{className:'metric-label'},'CTL / Fitness'),React.createElement('div',{className:'metric-val info'},last?.ctl!=null?last.ctl.toFixed(1):'—'),React.createElement('div',{className:'metric-sub'},'Kronik yük τ=42g')),
       React.createElement('div',{className:'metric'},React.createElement('div',{className:'metric-label'},'ATL / Yorgunluk'),React.createElement('div',{className:'metric-val warn'},last?.atl!=null?last.atl.toFixed(1):'—'),React.createElement('div',{className:'metric-sub'},'Akut yük τ=7g')),
-      React.createElement('div',{className:'metric'},React.createElement('div',{className:'metric-label'},'TSB / Form'),React.createElement('div',{className:'metric-val '+tsbS.cls},last?.tsb!=null?last.tsb.toFixed(1):'—'),React.createElement('div',{className:'metric-sub'},tsbS.label))
+      React.createElement('div',{className:'metric'},React.createElement('div',{className:'metric-label'},'TSB / Form'),React.createElement('div',{className:'metric-val '+tsbS.cls},last?.tsb!=null?last.tsb.toFixed(1):'—'),React.createElement('div',{className:'metric-sub'},tsbS.label)),
+      lastRecovery&&React.createElement('div',{className:'metric',style:{borderLeft:`3px solid var(--${lastRecovery.tamamlandi?'success':'warn'})`}},
+        React.createElement('div',{className:'metric-label'},'Son Antrenman Toparlanma'),
+        React.createElement('div',{className:'metric-val '+(lastRecovery.tamamlandi?'good':lastRecovery.kalanSaat<=6?'warn':'danger')},
+          lastRecovery.tamamlandi?'✓ Tamamlandı':(lastRecovery.kalanSaat+'s kaldı')
+        ),
+        React.createElement('div',{className:'metric-sub'},lastRecovery.tamamlandi?lastRecovery.kategori+' ('+lastRecovery.saatler+'s)':lastRecovery.kategori+' · '+lastRecovery.saatler+'s önerilen')
+      )
     ),
 
     // Haftalık + Yük çarpanı
@@ -4365,14 +4447,17 @@ function Dashboard({workouts,athlete,history,races}){
 function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange}){
   const [form,setForm]=useState({...EMPTY_W});
   const [saved,setSaved]=useState(false);
+  const [lastRec,setLastRec]=useState(null);
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
   const durSec=toSec(form.sure_sa,form.sure_dk,form.sure_sn);
   const m=calcMetrics(form,athlete);
   const handleSave=()=>{
     if(!selId)return alert('Önce sporcu seçin!');
     if(durSec<=0&&!form.mesafe)return alert('Süre veya mesafe girin!');
+    const rec=calcRecovery(form,athlete,m.yukObj);
+    setLastRec(rec);
     onSave({...form,id:uid(),athleteId:selId,savedAt:new Date().toISOString()});
-    setForm({...EMPTY_W});setSaved(true);setTimeout(()=>setSaved(false),2000);
+    setForm({...EMPTY_W});setSaved(true);setTimeout(()=>setSaved(false),3000);
   };
   const fgi=(label,key,type='text',opts={})=>React.createElement('div',{className:'form-group'},React.createElement('label',null,label),React.createElement('input',{type,value:form[key],min:opts.min,max:opts.max,step:opts.step,onChange:e=>set(key,e.target.value)}));
   return React.createElement('div',null,
@@ -4442,6 +4527,24 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange}){
       React.createElement('div',{className:'flex-gap',style:{marginTop:12}},
         React.createElement('button',{className:'btn btn-primary',onClick:handleSave},saved?'✓ Kaydedildi!':'Antrenmanı Kaydet'),
         React.createElement('button',{className:'btn',onClick:()=>setForm({...EMPTY_W})},'Temizle')
+      ),
+      // Toparlanma önerisi — kayıt sonrası göster
+      saved&&lastRec&&React.createElement('div',{style:{
+        marginTop:12,padding:'14px 16px',borderRadius:'var(--radius-lg)',
+        background:`var(--${lastRec.renk}-bg)`,border:`1px solid var(--${lastRec.renk})`,
+      }},
+        React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:6}},
+          React.createElement('span',{style:{fontSize:20}},'🛌'),
+          React.createElement('div',null,
+            React.createElement('div',{style:{fontWeight:700,fontSize:14}},
+              'Önerilen Toparlanma: '+lastRec.saatler+' saat ('+lastRec.kategori+')'
+            ),
+            React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginTop:2}},
+              'Sonraki antrenman en erken: '+lastRec.hedefStr
+            )
+          )
+        ),
+        React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)'}},lastRec.aktivite)
       )
     )
   );
@@ -4539,7 +4642,7 @@ function Gecmis({workouts,athletes,onDelete,onBulkDelete,onUpdate}){
         React.createElement('table',null,
           React.createElement('thead',null,React.createElement('tr',null,
             [bulkMode&&React.createElement('th',{key:'chk'},React.createElement('input',{type:'checkbox',checked:allSel,onChange:toggleAll})),
-             'Tarih','Sporcu','Tür','Yapı','Mesafe','Süre','Ort HR','RPE','Güç (W)','Yük','İrtifa',''].filter(Boolean).map((h,i)=>
+             'Tarih','Sporcu','Tür','Yapı','Mesafe','Süre','Ort HR','RPE','Güç (W)','Yük','İrtifa','Toparlanma',''].filter(Boolean).map((h,i)=>
               typeof h==='string'?React.createElement('th',{key:i},h):h
             )
           )),
@@ -5195,7 +5298,12 @@ function App(){
       tab==='bolge'&&React.createElement(BolgeTab,{athlete,workouts:athWks,onUpdateAthlete:handleUpdateAthlete}),
       tab==='yarislar'&&React.createElement(YarislarTab,{athlete,races,history,workouts:athWks,raceResults,onAddResult:r=>setRaceResults(p=>[...p,r]),onDeleteResult:id=>setRaceResults(p=>p.filter(x=>x.id!==id))}),
       tab==='karsilastir'&&React.createElement(KarsilastirTab,{athletes,races,workouts,allHistory,raceResults}),
-      tab==='ekle'&&React.createElement(AntrenmanEkle,{onSave:w=>setWorkouts(p=>[...p,w]),athlete,athletes,selId,onSelChange:setSelId}),
+      tab==='ekle'&&React.createElement(AntrenmanEkle,{onSave:w=>{
+        const ath=athletes.find(a=>a.id===w.athleteId);
+        const m=calcMetrics(w,ath);
+        const rec=calcRecovery(w,ath,m.yukObj);
+        setWorkouts(p=>[...p,{...w,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:new Date(Date.now()+rec.saatler*3600000).toISOString()}]);
+      },athlete,athletes,selId,onSelChange:setSelId}),
       tab==='gecmis'&&React.createElement(Gecmis,{workouts,athletes,onDelete:id=>setWorkouts(p=>p.filter(x=>x.id!==id)),onBulkDelete:ids=>setWorkouts(p=>p.filter(x=>!ids.includes(x.id))),onUpdate:handleUpdateWorkout}),
       tab==='yukle'&&React.createElement(ExcelYukle,{onImport:list=>setWorkouts(p=>[...p,...list]),athletes,selId,onSelChange:setSelId,workouts}),
       tab==='sporcular'&&React.createElement(SporcularTab,{athletes,races,athHistory,allHistory,
