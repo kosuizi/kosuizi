@@ -885,6 +885,7 @@ function calcTargetTime(race, ath, ctl, acwr){
   const diff = parseInt(race.iklim_zorluk)||1;
   const gear = parseFloat(race.ekipman_kg)||0;
   const cp   = parseInt(race.kontrol_noktasi)||0;
+  const heatAdapt = parseFloat(ath.isi_aklimasyon)||0;
 
   const vo2  = parseFloat(ath.vo2max)||0;
   const rhr  = parseFloat(ath.rhr)||0;
@@ -895,40 +896,40 @@ function calcTargetTime(race, ath, ctl, acwr){
   const yas  = ath.dogum ? new Date().getFullYear()-new Date(ath.dogum).getFullYear() : 35;
   const bmi  = kilo/((boy/100)**2);
   const cinsiyet = ath.cinsiyet||'Erkek';
-  const hrv_status = {dengeli:3,dengesiz:2,düşük:1}[ath.hrv_durum]??2.5; // bilinmiyorsa orta değer
+  const hrv_status = {dengeli:3,dengesiz:2,düşük:1}[ath.hrv_durum]??2.5;
   const hrv7 = parseFloat(ath.hrv_7gun)||60;
   const sakatlık = parseInt(ath.sakatlık)||1;
   const motiv = parseInt(ath.motivasyon)||3;
+  const prepWeeks = parseInt(race.prep_weeks)||16;
+  const taperWk = parseInt(race.taper_w)||(km>42?3:km>21?2:1);
 
   if(km <= 0) return null;
 
-  // ── 1. vLT (m/s) ──────────────────────────────────────────────────────────
-  const vlt = calcVlt(ath); // gerçek vLT — doğru kaynak
+  // ── PROGRESS (Excel B78): kalan hafta oranı ────────────────────────────────
+  const daysToRace = race.tarih?Math.ceil((new Date(race.tarih+'T12:00:00')-new Date())/864e5):999;
+  const remainingWk = Math.max(0, daysToRace/7);
+  const PROGRESS = 1 - Math.min(1, Math.max(0, remainingWk/prepWeeks));
 
-  // ── 2. PROGRESS dinamik ağırlığı (Excel B45 formülü) ─────────────────────
-  const hedefSureDk = km > 0 && vlt > 0 ? km / (vlt * 60 / 1000) : 0;
-  const ultraFact   = hedefSureDk < 60 ? 0.1 : hedefSureDk < 150 ? 0.3 : hedefSureDk < 240 ? 0.6 : hedefSureDk < 480 ? 0.8 : 1.0;
-  const distFact    = km < 15 ? 0.05 : km < 30 ? 0.1 : km < 50 ? 0.2 : km < 80 ? 0.35 : 0.5;
-  const ageFact     = yas < 30 ? 0.1 : yas < 40 ? 0.3 : yas < 50 ? 0.6 : 0.8;
-  const vo2Fact     = vo2 > 60 ? 0.1 : vo2 > 55 ? 0.3 : vo2 > 50 ? 0.5 : 0.8;
-  const PROGRESS = 1 + ((ultraFact + distFact)*0.5 + ageFact*0.25 + vo2Fact*0.25);
+  // ── Taban süre bileşenleri ─────────────────────────────────────────────────
+  const lthrRatio = lthr>0&&mhr>0 ? lthr/mhr : 0.85;
+  const aerEff = Math.max(0.8, Math.min(1.2, 1-0.6*(lthrRatio-0.85)-0.4*((50-rhr)/100)));
 
-  // Ağırlıklar — PROGRESS arttıkça PB ağırlığı artar (Excel B66 mantığı)
-  const w_phys = Math.max(0.05, 0.70 - 0.20 * PROGRESS);
-  const w_pb   = Math.min(0.90, 0.20 + 0.10 * PROGRESS);
-  const w_vlt  = vlt ? 0.20 : 0;
-  const totalW = w_phys + w_pb + w_vlt;
+  // vLT hesapla (LTHR_V)
+  const vlt = calcVlt(ath);
+  const lthrV = vlt>0 ? vlt*60/1000 : 0; // m/dk
 
-  // ── 3. Taban süre bileşenleri ──────────────────────────────────────────────
-  // Fizyolojik: VO2max + LTHR verimlilik
-  const lthrRatio = lthr > 0 && mhr > 0 ? lthr/mhr : 0.85;
-  const aerEff = Math.max(0.8, Math.min(1.2, 1 - 0.6*(lthrRatio-0.85) - 0.4*((50-rhr)/100)));
-  const physBase = vo2 > 0 ? km * (300/vo2) * aerEff : null;
+  // Fizyolojik taban (Excel: RACE_DIST*(300/VO2MAX)*aerEff)
+  const physBase = vo2>0 ? km*(300/vo2)*aerEff : null;
 
-  // vLT tabanlı
-  const vltBase = vlt ? km / (vlt * 60 / 1000) : null;
+  // vLT taban (Excel: RACE_DIST*1000/LTHR_V/60) — LTHR hızı varsa
+  const vltBase = lthrV>0 ? km*1000/lthrV/60 : null;
 
-  // PB Riegel — en yakın mesafeden
+  // Ağırlıklı fizyolojik taban (Excel B66 mantığı)
+  const physBlend = physBase!==null&&vltBase!==null
+    ? (physBase+vltBase)/2
+    : physBase??vltBase??null;
+
+  // PB Riegel (Excel: TAHMİN_Y_DK * mesafe skalası)
   const pbs = [
     {dist:42.195, t:pbToMin(ath.pb_m)},
     {dist:21.0975, t:pbToMin(ath.pb_hm)},
@@ -936,25 +937,37 @@ function calcTargetTime(race, ath, ctl, acwr){
     {dist:5,  t:pbToMin(ath.pb_5k)},
   ].filter(p=>p.t&&p.t>0);
   let pbBase = null;
-  if(pbs.length > 0){
+  if(pbs.length>0){
+    // Excel B68: en yakın referans mesafeyi seç
     const sorted = [...pbs].sort((a,b)=>Math.abs(a.dist-km)-Math.abs(b.dist-km));
     pbBase = sorted[0].t * Math.pow(km/sorted[0].dist, 1.06);
   }
 
-  // Ağırlıklı taban
-  let num = 0, den = 0;
-  if(physBase && w_phys > 0){ num += physBase * w_phys; den += w_phys; }
-  if(vltBase  && w_vlt  > 0){ num += vltBase  * w_vlt;  den += w_vlt;  }
-  if(pbBase   && w_pb   > 0){ num += pbBase   * w_pb;   den += w_pb;   }
-  if(den === 0) return null;
-  const baseDk = num / den;
+  // Referans antrenman (Excel: REF_ADJ_TIME) — basitleştirilmiş
+  const refBase = null; // Firebase'de antrenman süresi tahmini yok
 
-  // ── 4. Faktörler ────────────────────────────────────────────────────────────
-  const fAge  = Math.max(0.90, Math.min(1.15, 1 + Math.max(0, yas-40)*0.004));
-  const fBmi  = Math.min(1.20, 1 + Math.max(0, bmi-22)*0.01);
-  const fRhr  = Math.min(1.20, Math.max(0.85, 1 - 0.004*(50-rhr)));
-  const mhrFormul = cinsiyet==='Kadın' ? 206-0.88*yas : 208-0.7*yas;
-  const fMhr  = Math.min(1.02, Math.max(0.98, 1+0.02*Math.max(0,Math.min(1,(21-km)/11))*(mhr/mhrFormul-1)));
+  // Ağırlıklar (Excel B66):
+  // w_phys = 0.7 - 0.2*PROGRESS
+  // w_pb   = 0.2 + 0.1*PROGRESS
+  // w_ref  = 0.05 + 0.05*PROGRESS (refBase varsa)
+  const w_phys = physBlend!==null ? Math.max(0.05, 0.70-0.20*PROGRESS) : 0;
+  const w_pb   = pbBase!==null    ? Math.min(0.90, 0.20+0.10*PROGRESS) : 0;
+  const w_ref  = refBase!==null   ? (0.05+0.05*PROGRESS) : 0;
+  const totalW = w_phys+w_pb+w_ref;
+  if(totalW===0) return null;
+
+  let num=0;
+  if(physBlend!==null) num+=physBlend*w_phys;
+  if(pbBase!==null)    num+=pbBase*w_pb;
+  if(refBase!==null)   num+=refBase*w_ref;
+  const baseDk = num/totalW;
+
+  // ── Faktörler (Excel Bilgi sayfası formülleri) ────────────────────────────
+  const fAge  = Math.max(0.90, Math.min(1.15, 1+Math.max(0,yas-40)*0.004));
+  const fBmi  = Math.min(1.20, 1+Math.max(0,bmi-22)*0.01);
+  const fRhr  = Math.min(1.20, Math.max(0.85, 1-0.004*(50-rhr)));
+  const mhrFormul = cinsiyet==='Kadın'?206-0.88*yas:208-0.7*yas;
+  const fMhr  = Math.min(1.02, Math.max(0.98, 1+0.02*Math.max(0,Math.min(1,(21-km)/11))*(mhrFormul>0?mhr/mhrFormul-1:0)));
   const fLthr = lthr>0&&mhr>0 ? Math.min(1.15, Math.max(0.85, 1-0.4*(lthrRatio-0.85))) : 1.0;
   const fVo2  = vo2>0 ? Math.min(1.10, Math.max(0.90, 1-0.006*(vo2-50))) : 1.0;
   const fHrv  = Math.min(1.05, Math.max(0.95,
@@ -965,36 +978,59 @@ function calcTargetTime(race, ath, ctl, acwr){
   const fTerrain = 1+(diff-1)*0.025;
   const avgAlt = (altMax+altMin)/2;
   const fAlt  = Math.max(1, Math.min(1.12, 1+0.015*Math.max(0,(avgAlt-800)/500)));
-  const ultraF= (1+Math.max(0,
-    km<=10?0:km<=21?0.015*(km-10)/11:km<=42?0.06*(km-21)/21:0.06+0.15*Math.pow((km-42)/42,0.7)
-  ))*(1+Math.min(1,km/42)*(dp>0?Math.min(0.2,0.006*Math.pow(dp/km,0.7)):0))*
-  Math.max(1,1+Math.min(0.15,0.1*((avgAlt-300)/1000)));
-  const fUltra= Math.min(1.5, ultraF);
-  const acwrVal= acwr||1.0;
-  const daysToRace= race.tarih?Math.ceil((new Date(race.tarih+'T12:00:00')-new Date())/864e5):999;
-  let fAcwr=1.0;
-  if(daysToRace<=14){ fAcwr=Math.max(0.96,Math.min(1.06,acwrVal<=1?1-0.02*(1-acwrVal):1+0.03*(acwrVal-1))); }
-  else { fAcwr=Math.min(1.20,1+(acwrVal<0.8?0.05*(0.8-acwrVal):acwrVal>1.2?0.08*(acwrVal-1.2):0)); }
-  const tempEffect= temp<=12?0:temp<=22?0.002*(temp-12):0.02+0.004*(temp-22);
-  const humEffect = temp>20&&nem>60?Math.min(0.03,0.0008*(nem-60)*Math.min(1,(temp-20)/10)):0;
-  const fClim = (1+tempEffect+humEffect)*(1+Math.max(0,0.02*(diff-1)));
-  const fGear = gear>0?Math.min(1.15,1+0.8*(gear/kilo)*(1+0.5*Math.min(1,km/42)+0.5*(dp/km/100||0)+0.05*(diff-1))):1.0;
 
-  // ── 5. Tırmanış + Duruş ────────────────────────────────────────────────────
+  // Ultra etkisi (Excel B60)
+  const ultraDist = km<=10?0:km<=21?0.015*(km-10)/11:km<=42?0.06*(km-21)/21:0.06+0.15*Math.pow((km-42)/42,0.7);
+  const ultraDp   = dp>0&&km>0 ? Math.min(0.2, 0.006*Math.pow(dp/km,0.7)) : 0;
+  const ultraAlt  = Math.max(1, 1+Math.min(0.15, 0.1*((avgAlt-300)/1000)));
+  const fUltra = Math.min(1.5, (1+Math.max(0,ultraDist))*(1+Math.min(1,km/42)*ultraDp)*ultraAlt);
+
+  // ACWR etkisi (Excel B61)
+  const acwrVal = acwr||1.0;
+  let fAcwr=1.0;
+  if(daysToRace<=14){
+    fAcwr = Math.max(0.96, Math.min(1.06, acwrVal<=1?1-0.02*(1-acwrVal):1+0.03*(acwrVal-1)));
+  } else {
+    fAcwr = Math.min(1.20, 1+(acwrVal<0.8?0.05*(0.8-acwrVal):acwrVal>1.2?0.08*(acwrVal-1.2):0));
+  }
+
+  // Kronik Yük etkisi (Excel B62) — ctl vs hedef CTL
+  const targetCtl = km<=10?120:km<=21?200:km<=42?300:km<=80?450:600;
+  const adjustedTargetCtl = targetCtl*(1+dp/1000*0.1)*(1+0.05*(diff-1));
+  let fChronic=1.0;
+  if(adjustedTargetCtl>0&&ctl>0){
+    const ctlRatio = (ctl-adjustedTargetCtl)/adjustedTargetCtl;
+    if(Math.abs(ctlRatio)<=0.08) fChronic=1.0;
+    else if(ctl<(1-0.08)*adjustedTargetCtl) fChronic=Math.min(1.15,1+0.2*((1-0.08)*adjustedTargetCtl-ctl)/adjustedTargetCtl);
+    else fChronic=Math.max(0.90,1-0.1*(ctl-(1+0.08)*adjustedTargetCtl)/adjustedTargetCtl);
+  }
+
+  // Hava etkisi (Excel B63)
+  const heatAdaptFactor = Math.max(0.85, Math.min(1, 1-0.15*(heatAdapt/100)));
+  const tempEff = temp<=12?0:temp<=22?0.002*(temp-12):0.02+0.004*(temp-22);
+  const humEff  = temp>20&&nem>60?Math.min(0.03,0.0008*(nem-60)*Math.min(1,(temp-20)/10)):0;
+  const fClim   = (1+heatAdaptFactor*(tempEff+humEff))*(1+Math.max(0,0.02*(diff-1)));
+
+  // Ekipman etkisi (Excel B48)
+  const fGear = gear>0 ? Math.min(1.15,1+0.8*(gear/kilo)*(1+0.5*Math.min(1,km/42)+0.5*((dp>0&&km>0)?dp/km/100:0)+0.05*(diff-1))) : 1.0;
+
+  // ── Tırmanış + Duruş ────────────────────────────────────────────────────────
   const climbMult = diff<=1?0.8:diff===2?1:diff===3?1.3:diff===4?1.6:2.0;
   const climbMin  = dp/100*climbMult;
   const idlePerCp = Math.min(3,Math.max(1,1.5*(1+0.02*(diff-1))*(1+0.05*Math.max(0,dp/1000))*(1+0.01*Math.max(0,(km-30)/30))));
   const idleMin   = cp*idlePerCp;
 
-  // ── 6. Final ───────────────────────────────────────────────────────────────
-  const total = baseDk*fAge*fBmi*fRhr*fMhr*fLthr*fVo2*fHrv*fInj*fMotiv*fTerrain*fAlt*fUltra*fAcwr*fClim*fGear + climbMin + idleMin;
+  // ── Final ─────────────────────────────────────────────────────────────────
+  const total = baseDk*fAge*fBmi*fRhr*fMhr*fLthr*fVo2*fHrv*fInj*fMotiv*fTerrain*fAlt*fUltra*fAcwr*fChronic*fClim*fGear + climbMin + idleMin;
 
   return{
     totalMin:round1(total), baseDk:round1(baseDk),
     vlt, pbBase:pbBase?round1(pbBase):null, vltBase:vltBase?round1(vltBase):null,
-    PROGRESS:round2(PROGRESS), weights:{w_phys:round2(w_phys),w_vlt:round2(w_vlt),w_pb:round2(w_pb)},
-    factors:{fAge,fBmi,fRhr,fLthr,fVo2,fHrv,fInj,fMotiv,fTerrain,fAlt,fUltra,fAcwr,fClim,fGear},
+    PROGRESS:round2(PROGRESS), remainingWk:round1(remainingWk),
+    weights:{w_phys:round2(w_phys),w_vlt:0,w_pb:round2(w_pb)},
+    factors:{fAge,fBmi,fRhr,fLthr,fVo2,fHrv,fInj,fMotiv,fTerrain,fAlt,fUltra,fAcwr,fChronic,fClim,fGear},
     climbMin:round1(climbMin), idleMin:round1(idleMin),
+    targetCtl:round1(adjustedTargetCtl),
   };
 }
 // ── Fizyolojik Tahmin Fonksiyonları ─────────────────────────────────────────
