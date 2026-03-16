@@ -875,7 +875,168 @@ function fmtPaceFromMS(ms){
 // Metodoloji: Excel Bilgi!C40 formülünün tam port'u
 // Temel fark: vLT'yi doğru hesaplıyoruz, PROGRESS ile dinamik ağırlık kullanıyoruz
 
-function calcTargetTime(race, ath, ctl, acwr){
+function calcTargetTime(race, ath, ctl, acwr, workouts){
+  const km   = parseFloat(race.mesafe)||0;
+  const dp   = parseFloat(race.d_plus)||0;
+  const altMax = parseFloat(race.maks_irtifa)||0;
+  const altMin = parseFloat(race.min_irtifa)||0;
+  const temp = parseFloat(race.sicaklik)||15;
+  const nem  = parseFloat(race.nem)||50;
+  const diff = parseInt(race.iklim_zorluk)||1;
+  const gear = parseFloat(race.ekipman_kg)||0;
+  const cp   = parseInt(race.kontrol_noktasi)||0;
+  const heatAdapt = parseFloat(ath.isi_aklimasyon)||0;
+
+  const vo2  = parseFloat(ath.vo2max)||0;
+  const rhr  = parseFloat(ath.rhr)||0;
+  const mhr  = parseFloat(ath.mhr)||0;
+  const lthr = parseFloat(ath.lthr)||0;
+  const kilo = parseFloat(ath.kilo)||70;
+  const boy  = parseFloat(ath.boy)||170;
+  const yas  = ath.dogum?new Date().getFullYear()-new Date(ath.dogum).getFullYear():35;
+  const bmi  = kilo/((boy/100)**2);
+  const hrv_status = {dengeli:3,dengesiz:2,düşük:1}[ath.hrv_durum]??2.5;
+  const sakatlık = parseInt(ath.sakatlık)||1;
+  const motiv = parseInt(ath.motivasyon)||3;
+  const prepWeeks = parseInt(race.prep_weeks)||16;
+
+  if(km<=0||vo2<=0) return null;
+
+  // ── 1. VDOT SİSTEMİ (Jack Daniels) ────────────────────────────────────────
+  // VO2 tüketimi: Daniels exact formula (ml/kg/min at v m/min)
+  const vo2AtV=(v)=>-4.60+0.182258*v+0.000104*v*v;
+  // vVO2max: binary search
+  let lo=100,hi=600;
+  for(let i=0;i<50;i++){const mid=(lo+hi)/2;vo2AtV(mid)<vo2?lo=mid:hi=mid;}
+  const vVO2max=(lo+hi)/2; // m/min
+
+  // %VO2max kullanım oranı süreye göre (Daniels performans tablosu)
+  const pctVo2=(t)=>{
+    if(t<10)  return 0.95;
+    if(t<20)  return 0.92;
+    if(t<30)  return 0.89;
+    if(t<45)  return 0.86;
+    if(t<60)  return 0.83;
+    if(t<90)  return 0.80;
+    if(t<120) return 0.77;
+    if(t<180) return 0.73;
+    if(t<240) return 0.70;
+    if(t<360) return 0.64;
+    if(t<480) return 0.59;
+    if(t<600) return 0.54;
+    if(t<900) return 0.48;
+    if(t<1200)return 0.43;
+    return 0.38;
+  };
+  // İteratif çözüm
+  const predictVo2=(distKm)=>{
+    let t=distKm*6; // başlangıç tahmini
+    for(let i=0;i<20;i++){
+      const newT=(distKm*1000)/(vVO2max*pctVo2(t));
+      if(Math.abs(newT-t)<0.1){t=newT;break;}
+      t=0.6*newT+0.4*t;
+    }
+    return t;
+  };
+
+  // ── 2. RİEGEL FORMÜLÜ (mesafe-ayarlı üs) ──────────────────────────────────
+  // Ultra mesafelerde yorgunluk etkisi üssü artırır
+  const riegelExp=(d)=>{
+    if(d<=10) return 1.06;
+    if(d<=21) return 1.07;
+    if(d<=42) return 1.08;
+    if(d<=60) return 1.10;
+    if(d<=80) return 1.12;
+    if(d<=100)return 1.15;
+    return 1.17;
+  };
+  const riegelPred=(pbDist,pbMin)=>pbMin>0?pbMin*Math.pow(km/pbDist,riegelExp(km)):null;
+
+  // PB'leri parse et
+  const pbs=[
+    {d:5,      t:pbToMin(ath.pb_5k),  w:0.10},
+    {d:10,     t:pbToMin(ath.pb_10k), w:0.15},
+    {d:21.097, t:pbToMin(ath.pb_hm),  w:0.30},
+    {d:42.195, t:pbToMin(ath.pb_m),   w:0.30},
+  ].filter(p=>p.t&&p.t>0);
+
+  // ── 3. AĞIRLIKLI BLEND ────────────────────────────────────────────────────
+  // VO2max tahmini + PB Riegel ağırlıklı ortalama
+  // PB'ler hedefe yakın olduğu ölçüde daha güvenilir
+  const vo2Pred = vo2>0 ? predictVo2(km) : null;
+  const sources = [];
+
+  pbs.forEach(p=>{
+    const pred = riegelPred(p.d, p.t);
+    if(pred) sources.push({pred, w:p.w});
+  });
+  if(vo2Pred) sources.push({pred:vo2Pred, w:0.15});
+
+  if(sources.length===0) return null;
+
+  const totalW = sources.reduce((s,x)=>s+x.w, 0);
+  const baseDk = sources.reduce((s,x)=>s+x.pred*x.w, 0) / totalW;
+
+  // ── 4. TERSİYEL FAKTÖRLER ─────────────────────────────────────────────────
+  // Fizyolojik kalitatör (küçük düzeltmeler — taban zaten VO2/PB'den geliyor)
+  const lthrRatio = lthr>0&&mhr>0 ? lthr/mhr : 0.85;
+  const fAge  = Math.max(0.92, Math.min(1.12, 1+Math.max(0,yas-40)*0.004));
+  const fBmi  = Math.min(1.15, 1+Math.max(0,bmi-22)*0.008);
+  const fRhr  = Math.min(1.15, Math.max(0.88, 1-0.003*(50-rhr)));
+  const fLthr = lthr>0&&mhr>0?Math.min(1.10,Math.max(0.90,1-0.3*(lthrRatio-0.85))):1.0;
+  const fVo2  = vo2>0?Math.min(1.06,Math.max(0.94,1-0.004*(vo2-50))):1.0;
+  const hrv_f = hrv_status===1?1.015:hrv_status===2?1.008:0.995;
+  const fHrv  = Math.min(1.03, Math.max(0.97, hrv_f));
+  const fSak  = Math.min(1.20, Math.max(0.90, 1+(sakatlık-1)*0.02));
+  const fMot  = Math.min(1.04, Math.max(0.96, 1-(motiv-3)*0.02));
+  const haf   = Math.max(0.85,1-0.15*(heatAdapt/100));
+  const tEff  = temp<=12?0:temp<=22?0.002*(temp-12):0.02+0.004*(temp-22);
+  const hEff  = temp>20&&nem>60?Math.min(0.025,0.0007*(nem-60)*Math.min(1,(temp-20)/10)):0;
+  const fClim = (1+haf*(tEff+hEff));
+  const fGear = gear>0?Math.min(1.10,1+0.6*(gear/kilo)*(1+0.3*Math.min(1,km/42))):1.0;
+
+  // CTL bazlı hazırlık düzeltmesi
+  const daysToRace = race.tarih?Math.ceil((new Date(race.tarih+'T12:00:00')-new Date())/864e5):999;
+  const remainingWk = Math.max(0,daysToRace/7);
+  const PROGRESS = 1-Math.min(1,Math.max(0,remainingWk/prepWeeks));
+  const targetCtl = km<=10?50:km<=21?70:km<=42?80:km<=80?95:110;
+  let fCtl = 1.0;
+  if(ctl>0&&targetCtl>0){
+    const ratio = ctl/targetCtl;
+    fCtl = Math.max(0.88, Math.min(1.08, 2-ratio)); // ratio=1 → 1.0, ratio=0.8 → 1.2, ratio=1.2 → 0.8
+    fCtl = Math.max(0.88, Math.min(1.08, fCtl));
+  }
+
+  // ACWR düzeltmesi
+  const acwrVal = acwr||1.0;
+  const fAcwr = daysToRace<=14
+    ? Math.max(0.97,Math.min(1.04,acwrVal<=1?1-0.015*(1-acwrVal):1+0.02*(acwrVal-1)))
+    : 1.0;
+
+  const allFactors = fAge*fBmi*fRhr*fLthr*fVo2*fHrv*fSak*fMot*fClim*fGear*fCtl*fAcwr;
+
+  // ── 5. TIRMANIŞ (Naismith revised, zemin bazlı) ───────────────────────────
+  const dn = dp * 0.9; // iniş ≈ tırmanışın %90'ı (yaklaşık)
+  const climbRate   = {1:0.8,2:1.0,3:1.3,4:1.6,5:2.0}[diff]||1.0;
+  const descentRate = {1:0.5,2:0.6,3:0.75,4:0.9,5:1.1}[diff]||0.6;
+  const climbMin = (dp/100)*climbRate + (dn/100)*descentRate;
+
+  // ── 6. KONTROL NOKTASI DURUŞLARI ──────────────────────────────────────────
+  const idlePerCp = Math.min(3,Math.max(1,1.5*(1+0.02*(diff-1))*(1+0.05*Math.max(0,dp/1000))*(1+0.01*Math.max(0,(km-30)/30))));
+  const idleMin   = cp*idlePerCp;
+
+  // ── 7. SONUÇ ──────────────────────────────────────────────────────────────
+  const total = baseDk*allFactors + climbMin + idleMin;
+
+  return{
+    totalMin:round1(total), baseDk:round1(baseDk),
+    vVO2max:round1(vVO2max), vo2Pred:vo2Pred?round1(vo2Pred):null,
+    PROGRESS:round2(PROGRESS), targetCtl,
+    factors:{fAge,fBmi,fRhr,fLthr,fVo2,fHrv,fSak,fMot,fClim,fGear,fCtl,fAcwr},
+    climbMin:round1(climbMin), idleMin:round1(idleMin),
+    pbSources:sources.filter(s=>s.pred).map(s=>round1(s.pred)),
+  };
+}
   const km  = parseFloat(race.mesafe)||0;
   const dp  = parseFloat(race.d_plus)||0;
   const altMax = parseFloat(race.maks_irtifa)||0;
@@ -906,133 +1067,7 @@ function calcTargetTime(race, ath, ctl, acwr){
   if(km <= 0) return null;
 
   // ── PROGRESS (Excel B78): kalan hafta oranı ────────────────────────────────
-  const daysToRace = race.tarih?Math.ceil((new Date(race.tarih+'T12:00:00')-new Date())/864e5):999;
-  const remainingWk = Math.max(0, daysToRace/7);
-  const PROGRESS = 1 - Math.min(1, Math.max(0, remainingWk/prepWeeks));
 
-  // ── Taban süre bileşenleri ─────────────────────────────────────────────────
-  const lthrRatio = lthr>0&&mhr>0 ? lthr/mhr : 0.85;
-  const aerEff = Math.max(0.8, Math.min(1.2, 1-0.6*(lthrRatio-0.85)-0.4*((50-rhr)/100)));
-
-  // vLT hesapla (LTHR_V)
-  const vlt = calcVlt(ath);
-  const lthrV = vlt>0 ? vlt*60/1000 : 0; // m/dk
-
-  // Fizyolojik taban (Excel: RACE_DIST*(300/VO2MAX)*aerEff)
-  const physBase = vo2>0 ? km*(300/vo2)*aerEff : null;
-
-  // vLT taban (Excel: RACE_DIST*1000/LTHR_V/60) — LTHR hızı varsa
-  const vltBase = lthrV>0 ? km*1000/lthrV/60 : null;
-
-  // Ağırlıklı fizyolojik taban (Excel B66 mantığı)
-  const physBlend = physBase!==null&&vltBase!==null
-    ? (physBase+vltBase)/2
-    : physBase??vltBase??null;
-
-  // PB Riegel (Excel: TAHMİN_Y_DK * mesafe skalası)
-  const pbs = [
-    {dist:42.195, t:pbToMin(ath.pb_m)},
-    {dist:21.0975, t:pbToMin(ath.pb_hm)},
-    {dist:10, t:pbToMin(ath.pb_10k)},
-    {dist:5,  t:pbToMin(ath.pb_5k)},
-  ].filter(p=>p.t&&p.t>0);
-  let pbBase = null;
-  if(pbs.length>0){
-    // Excel B68: en yakın referans mesafeyi seç
-    const sorted = [...pbs].sort((a,b)=>Math.abs(a.dist-km)-Math.abs(b.dist-km));
-    pbBase = sorted[0].t * Math.pow(km/sorted[0].dist, 1.06);
-  }
-
-  // Referans antrenman (Excel: REF_ADJ_TIME) — basitleştirilmiş
-  const refBase = null; // Firebase'de antrenman süresi tahmini yok
-
-  // Ağırlıklar (Excel B66):
-  // w_phys = 0.7 - 0.2*PROGRESS
-  // w_pb   = 0.2 + 0.1*PROGRESS
-  // w_ref  = 0.05 + 0.05*PROGRESS (refBase varsa)
-  const w_phys = physBlend!==null ? Math.max(0.05, 0.70-0.20*PROGRESS) : 0;
-  const w_pb   = pbBase!==null    ? Math.min(0.90, 0.20+0.10*PROGRESS) : 0;
-  const w_ref  = refBase!==null   ? (0.05+0.05*PROGRESS) : 0;
-  const totalW = w_phys+w_pb+w_ref;
-  if(totalW===0) return null;
-
-  let num=0;
-  if(physBlend!==null) num+=physBlend*w_phys;
-  if(pbBase!==null)    num+=pbBase*w_pb;
-  if(refBase!==null)   num+=refBase*w_ref;
-  const baseDk = num/totalW;
-
-  // ── Faktörler (Excel Bilgi sayfası formülleri) ────────────────────────────
-  const fAge  = Math.max(0.90, Math.min(1.15, 1+Math.max(0,yas-40)*0.004));
-  const fBmi  = Math.min(1.20, 1+Math.max(0,bmi-22)*0.01);
-  const fRhr  = Math.min(1.20, Math.max(0.85, 1-0.004*(50-rhr)));
-  const mhrFormul = cinsiyet==='Kadın'?206-0.88*yas:208-0.7*yas;
-  const fMhr  = Math.min(1.02, Math.max(0.98, 1+0.02*Math.max(0,Math.min(1,(21-km)/11))*(mhrFormul>0?mhr/mhrFormul-1:0)));
-  const fLthr = lthr>0&&mhr>0 ? Math.min(1.15, Math.max(0.85, 1-0.4*(lthrRatio-0.85))) : 1.0;
-  const fVo2  = vo2>0 ? Math.min(1.10, Math.max(0.90, 1-0.006*(vo2-50))) : 1.0;
-  const fHrv  = Math.min(1.05, Math.max(0.95,
-    Math.pow(hrv_status===1?1.02:hrv_status===2?1.01:0.99,0.6)*
-    Math.pow(Math.min(1.03,Math.max(0.97,1-0.0005*(hrv7-60))),0.4)));
-  const fInj  = Math.min(1.20, Math.max(0.85, 1+(sakatlık-1)*0.02));
-  const fMotiv= Math.min(1.05, Math.max(0.95, 1-(motiv-3)*0.02));
-  const fTerrain = 1+(diff-1)*0.025;
-  const avgAlt = (altMax+altMin)/2;
-  const fAlt  = Math.max(1, Math.min(1.12, 1+0.015*Math.max(0,(avgAlt-800)/500)));
-
-  // Ultra etkisi (Excel B60)
-  const ultraDist = km<=10?0:km<=21?0.015*(km-10)/11:km<=42?0.06*(km-21)/21:0.06+0.15*Math.pow((km-42)/42,0.7);
-  const ultraDp   = dp>0&&km>0 ? Math.min(0.2, 0.006*Math.pow(dp/km,0.7)) : 0;
-  const ultraAlt  = Math.max(1, 1+Math.min(0.15, 0.1*((avgAlt-300)/1000)));
-  const fUltra = Math.min(1.5, (1+Math.max(0,ultraDist))*(1+Math.min(1,km/42)*ultraDp)*ultraAlt);
-
-  // ACWR etkisi (Excel B61)
-  const acwrVal = acwr||1.0;
-  let fAcwr=1.0;
-  if(daysToRace<=14){
-    fAcwr = Math.max(0.96, Math.min(1.06, acwrVal<=1?1-0.02*(1-acwrVal):1+0.03*(acwrVal-1)));
-  } else {
-    fAcwr = Math.min(1.20, 1+(acwrVal<0.8?0.05*(0.8-acwrVal):acwrVal>1.2?0.08*(acwrVal-1.2):0));
-  }
-
-  // Kronik Yük etkisi (Excel B62) — ctl vs hedef CTL
-  const targetCtl = km<=10?120:km<=21?200:km<=42?300:km<=80?450:600;
-  const adjustedTargetCtl = targetCtl*(1+dp/1000*0.1)*(1+0.05*(diff-1));
-  let fChronic=1.0;
-  if(adjustedTargetCtl>0&&ctl>0){
-    const ctlRatio = (ctl-adjustedTargetCtl)/adjustedTargetCtl;
-    if(Math.abs(ctlRatio)<=0.08) fChronic=1.0;
-    else if(ctl<(1-0.08)*adjustedTargetCtl) fChronic=Math.min(1.15,1+0.2*((1-0.08)*adjustedTargetCtl-ctl)/adjustedTargetCtl);
-    else fChronic=Math.max(0.90,1-0.1*(ctl-(1+0.08)*adjustedTargetCtl)/adjustedTargetCtl);
-  }
-
-  // Hava etkisi (Excel B63)
-  const heatAdaptFactor = Math.max(0.85, Math.min(1, 1-0.15*(heatAdapt/100)));
-  const tempEff = temp<=12?0:temp<=22?0.002*(temp-12):0.02+0.004*(temp-22);
-  const humEff  = temp>20&&nem>60?Math.min(0.03,0.0008*(nem-60)*Math.min(1,(temp-20)/10)):0;
-  const fClim   = (1+heatAdaptFactor*(tempEff+humEff))*(1+Math.max(0,0.02*(diff-1)));
-
-  // Ekipman etkisi (Excel B48)
-  const fGear = gear>0 ? Math.min(1.15,1+0.8*(gear/kilo)*(1+0.5*Math.min(1,km/42)+0.5*((dp>0&&km>0)?dp/km/100:0)+0.05*(diff-1))) : 1.0;
-
-  // ── Tırmanış + Duruş ────────────────────────────────────────────────────────
-  const climbMult = diff<=1?0.8:diff===2?1:diff===3?1.3:diff===4?1.6:2.0;
-  const climbMin  = dp/100*climbMult;
-  const idlePerCp = Math.min(3,Math.max(1,1.5*(1+0.02*(diff-1))*(1+0.05*Math.max(0,dp/1000))*(1+0.01*Math.max(0,(km-30)/30))));
-  const idleMin   = cp*idlePerCp;
-
-  // ── Final ─────────────────────────────────────────────────────────────────
-  const total = baseDk*fAge*fBmi*fRhr*fMhr*fLthr*fVo2*fHrv*fInj*fMotiv*fTerrain*fAlt*fUltra*fAcwr*fChronic*fClim*fGear + climbMin + idleMin;
-
-  return{
-    totalMin:round1(total), baseDk:round1(baseDk),
-    vlt, pbBase:pbBase?round1(pbBase):null, vltBase:vltBase?round1(vltBase):null,
-    PROGRESS:round2(PROGRESS), remainingWk:round1(remainingWk),
-    weights:{w_phys:round2(w_phys),w_vlt:0,w_pb:round2(w_pb)},
-    factors:{fAge,fBmi,fRhr,fLthr,fVo2,fHrv,fInj,fMotiv,fTerrain,fAlt,fUltra,fAcwr,fChronic,fClim,fGear},
-    climbMin:round1(climbMin), idleMin:round1(idleMin),
-    targetCtl:round1(adjustedTargetCtl),
-  };
-}
 // ── Fizyolojik Tahmin Fonksiyonları ─────────────────────────────────────────
 
 // MHR tahminleri — birden fazla formül
@@ -1905,13 +1940,13 @@ function ChartTargetTrend({history,race,ath,results}){
     for(let i=0;i<history.length;i+=7){
       const day=history[i];
       if(!day.ctl||day.ctl<1)continue;
-      const t=calcTargetTime(race,ath,day.ctl,day.acwr);
+      const t=calcTargetTime(race,ath,day.ctl,day.acwr,workouts);
       if(t&&t.totalMin>0)points.push({date:day.date,min:round1(t.totalMin)});
     }
     // Son günü de ekle
     const last=history[history.length-1];
     if(last&&last.ctl>1){
-      const t=calcTargetTime(race,ath,last.ctl,last.acwr);
+      const t=calcTargetTime(race,ath,last.ctl,last.acwr,workouts);
       if(t&&t.totalMin>0){
         const already=points.find(p=>p.date===last.date);
         if(!already)points.push({date:last.date,min:round1(t.totalMin)});
@@ -4731,7 +4766,7 @@ function YarislarTab({athlete,races,history,workouts,raceResults,onAddResult,onD
     athRaces.map(race=>{
       const daysLeft=race.tarih?Math.ceil((new Date(race.tarih+'T12:00:00')-today)/864e5):null;
       const readiness=raceReadinessScore(last?.ctl,last?.acwr,last?.phase,athlete.sakatlık,athlete.hrv_durum,daysLeft,race,athlete,workouts);
-      const target=calcTargetTime(race,athlete,last?.ctl,last?.acwr);
+      const target=calcTargetTime(race,athlete,last?.ctl,last?.acwr,workouts);
       const isPast=daysLeft!==null&&daysLeft<0;
       // Bu yarışa ait sonuçlar
       const results=(raceResults||[]).filter(r=>r.raceId===race.id&&r.athleteId===athlete.id)
@@ -5693,7 +5728,7 @@ function KarsilastirTab({athletes,races,workouts,allHistory}){
               const acwrS=acwrStatus(last?.acwr);
               const daysLeft=filteredRace?.tarih?Math.ceil((new Date(filteredRace.tarih+'T12:00:00')-today)/864e5):null;
               const readiness=filteredRace?raceReadinessScore(last?.ctl,last?.acwr,last?.phase,ath.sakatlık,ath.hrv_durum,daysLeft,filteredRace,ath,workouts):null;
-              const target=filteredRace?calcTargetTime(filteredRace,ath,last?.ctl,last?.acwr):null;
+              const target=filteredRace?calcTargetTime(filteredRace,ath,last?.ctl,last?.acwr,workouts):null;
 
               // Sporcunun yaklaşan yarışları için hazırlık skorları
               const athUpcoming=upcomingRaces.filter(r=>(ath.yarıslar||[]).includes(r.id));
