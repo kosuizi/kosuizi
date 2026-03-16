@@ -2051,6 +2051,11 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo}){
   const cardRef=React.useRef();
   const athCardRefs=React.useRef({});
   const stats=React.useMemo(()=>calcWeeklyStats(workouts,athletes,weekOffset),[workouts,athletes,weekOffset]);
+  // Bir önceki haftanın sıralaması — değişim okları için
+  const prevStats=React.useMemo(()=>calcWeeklyStats(workouts,athletes,weekOffset-1),[workouts,athletes,weekOffset]);
+  const prevRankMap=React.useMemo(()=>{
+    const m={};prevStats.forEach((r,i)=>{m[r.ath.id]=i+1;});return m;
+  },[prevStats]);
   const totalKm=round1(stats.reduce((s,r)=>s+r.mesafe,0));
   const totalDp=Math.round(stats.reduce((s,r)=>s+r.irtifa,0));
   const totalSessions=stats.reduce((s,r)=>s+r.count,0);
@@ -2230,9 +2235,19 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo}){
             background:i===0?'rgba(255,215,0,.08)':i===1?'rgba(192,192,192,.06)':i===2?'rgba(205,127,50,.06)':'rgba(255,255,255,.03)',
             borderRadius:10,border:i<3?'1px solid '+(i===0?'rgba(255,215,0,.3)':i===1?'rgba(192,192,192,.2)':'rgba(205,127,50,.2)'):'1px solid rgba(255,255,255,.04)'
           }},
-            // Sıra / madalya
-            React.createElement('div',{style:{width:28,textAlign:'center',fontSize:i<3?20:13,fontWeight:700,color:i<3?medalColors[i]:'#475569',flexShrink:0}},
-              i<3?medals[i]:i+1
+            // Sıra / madalya + değişim oku
+            React.createElement('div',{style:{width:36,textAlign:'center',flexShrink:0}},
+              React.createElement('div',{style:{fontSize:i<3?20:13,fontWeight:700,color:i<3?medalColors[i]:'#475569'}},
+                i<3?medals[i]:i+1
+              ),
+              (()=>{
+                const prevRank=prevRankMap[row.ath.id];
+                const curRank=i+1;
+                if(!prevRank||prevRank===curRank)return React.createElement('div',{style:{fontSize:9,color:'#475569'}},'—');
+                const diff=prevRank-curRank;
+                if(diff>0)return React.createElement('div',{style:{fontSize:9,color:'#4ade80',fontWeight:700}},`↑${diff}`);
+                return React.createElement('div',{style:{fontSize:9,color:'#f87171',fontWeight:700}},`↓${Math.abs(diff)}`);
+              })()
             ),
             // Fotoğraf
             row.ath.foto
@@ -3306,53 +3321,88 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
   const yMod=Math.min(hrvMod(hrv),inj>=5?0.80:tsb< -15?0.85:acwr>1.3?0.85:1.0);
 
   const REST={date,dayTR,dayShort,tip:'dinlenme',baslik:'Dinlenme',sure_dk:0,yukHedef:0,yapilar:[],isPast,isToday,simState,phase};
+  // Seçili antrenman günü değilse kesinlikle dinlenme
   if(!isAntrenman) return REST;
-  // Simüle edilmiş gelecek değerlere göre ACWR blokerini uygulama — tahmin değerlerini blok olarak kullanmak yanlış
+
   const isSimulatedFuture=!isPast&&wkStats.weekOff>0;
-  // Çapraz günler ACWR bloğundan muaf — düşük yoğunluklu, toparlanmaya yardımcı
-  // Mevcut haftada ACWR eşiğini biraz yükselt (simülasyon hataları için)
-  const acwrEsik=isCapraz?99:(isSimulatedFuture?99:1.5);
-  if(inj>=8||(acwr>acwrEsik&&!isSimulatedFuture)) return{...REST,baslik:'Zorunlu Dinlenme',yapilar:[{baslik:'Dinlenme',detay:acwr>acwrEsik?'ACWR > '+acwrEsik:'Sakatlık'}]};
+  // Çapraz günler ACWR bloğundan muaf
+  const acwrEsik=isCapraz&&!isKosu?99:(isSimulatedFuture?99:1.5);
 
-  // uzun_gun tanımlıysa uzunu sadece o güne sakla
+  // Sakatlık >=8 durumu — gün seçimine bakılmaksızın dinlenme, ama uyarı ile
+  if(inj>=8) return{...REST,baslik:'Zorunlu Dinlenme',uyari:'Sakatlık puanı yüksek ('+inj+'/10)',yapilar:[{baslik:'Dinlenme',detay:'Sakatlık nedeniyle zorunlu dinlenme'}]};
+  // ACWR >1.5 — sadece koşu günlerinde dinlenmeye zorla, uyarı ver
+  if(acwr>1.5&&!isSimulatedFuture&&!isCapraz) return{...REST,baslik:'Aktif Dinlenme',uyari:'ACWR '+acwr.toFixed(2)+' — yük yüksek, koşu yerine dinlenme önerilir',yapilar:[{baslik:'Aktif Dinlenme',detay:'ACWR > 1.5 — hafif yürüyüş veya esneme yapılabilir'}]};
+
   const uzunGunTanimli=(athlete.uzun_gun||'')!=='';
-
-  // D+ günlük hedef
   const dpGun=wkStats.uzunYapildi?0:Math.round((wkStats.dpHedefHafta||0)*0.6);
 
-  let tpl;
-  if(isCapraz&&!isKosu){
-    tpl={tip:'capraz',sure_dk:Math.round(45*yMod),yapilar:[{baslik:'Çapraz Antrenman',detay:Math.round(45*yMod)+' dk bisiklet/yüzme/kürek — Z2'}]};
-  } else if(daysToIntermediate!==null&&daysToIntermediate<=2){
-    tpl=tplAcici(25);
-  } else if(daysToIntermediate!==null&&daysToIntermediate<=7){
-    tpl=tplKolay(band,Math.round(35*yMod),zones);
-  } else if(phase==='Taper'||(daysToRace!==null&&daysToRace<=7)){
-    tpl=daysToRace<=3?tplAcici(25):tplTempo(band,Math.round(40*yMod),zones);
-  } else if(isUzunGun&&!wkStats.uzunYapildi&&(tsb> -15||isSimulatedFuture)){
-    tpl=isTrail&&dpGun>200?tplTirmanisAcik(band,Math.round(70*yMod),zones,dpGun):tplUzun(band,simState.ctl||0,zones,disiplin,dpGun);
-  } else if(daysToRace!==null&&daysToRace<=14){
-    tpl=tplTempo(band,Math.round(40*yMod),zones);
-  } else if(phase==='Zirve'){
-    if(!wkStats.kaliteliYok) tpl=isTrail&&band>=2?tplYokusKisa(band,zones):tplEsik(band,Math.round(55*yMod),zones);
-    else if(!wkStats.uzunYapildi&&(!uzunGunTanimli||isUzunGun)) tpl=isTrail?tplTirmanisAcik(band,Math.round(75*yMod),zones,dpGun):tplUzun(band,simState.ctl||0,zones,disiplin,dpGun);
-    else if(tsb> -10&&acwr<1.2||isSimulatedFuture) tpl=isTrail&&band>=3?tplYokusUzun(band,zones):tplInterval(band,phase,zones);
-    else tpl=tplAerobik(band,Math.round(55*yMod),zones,disiplin);
-  } else if(phase==='Gelişme'){
-    if(wkStats.kaliteliYok&&(tsb> -10||isSimulatedFuture)&&(acwr<1.2||isSimulatedFuture))
-      tpl=isTrail&&band>=3?tplYokusKisa(band,zones):tplInterval(band,phase,zones);
-    else if(isTrail&&band>=2&&!wkStats.kaliteliYok)
-      tpl=tplTeknikInis(band,40,zones);
-    else
-      tpl=tplAerobik(band,Math.round(55*yMod),zones,disiplin);
-  } else {
-    tpl=tplAerobik(band,Math.round(55*yMod),zones,disiplin);
+  // ── Koşu antrenmanı planla ──────────────────────────────────────────────
+  let kosuTpl=null;
+  if(isKosu){
+    if(daysToIntermediate!==null&&daysToIntermediate<=2){
+      kosuTpl=tplAcici(25);
+    } else if(daysToIntermediate!==null&&daysToIntermediate<=7){
+      kosuTpl=tplKolay(band,Math.round(35*yMod),zones);
+    } else if(phase==='Taper'||(daysToRace!==null&&daysToRace<=7)){
+      kosuTpl=daysToRace<=3?tplAcici(25):tplTempo(band,Math.round(40*yMod),zones);
+    } else if(isUzunGun&&!wkStats.uzunYapildi&&(tsb> -15||isSimulatedFuture)){
+      kosuTpl=isTrail&&dpGun>200?tplTirmanisAcik(band,Math.round(70*yMod),zones,dpGun):tplUzun(band,simState.ctl||0,zones,disiplin,dpGun);
+    } else if(daysToRace!==null&&daysToRace<=14){
+      kosuTpl=tplTempo(band,Math.round(40*yMod),zones);
+    } else if(phase==='Zirve'){
+      if(!wkStats.kaliteliYok) kosuTpl=isTrail&&band>=2?tplYokusKisa(band,zones):tplEsik(band,Math.round(55*yMod),zones);
+      else if(!wkStats.uzunYapildi&&(!uzunGunTanimli||isUzunGun)) kosuTpl=isTrail?tplTirmanisAcik(band,Math.round(75*yMod),zones,dpGun):tplUzun(band,simState.ctl||0,zones,disiplin,dpGun);
+      else if(tsb> -10&&acwr<1.2||isSimulatedFuture) kosuTpl=isTrail&&band>=3?tplYokusUzun(band,zones):tplInterval(band,phase,zones);
+      else kosuTpl=tplAerobik(band,Math.round(55*yMod),zones,disiplin);
+    } else if(phase==='Gelişme'){
+      if(wkStats.kaliteliYok&&(tsb> -10||isSimulatedFuture)&&(acwr<1.2||isSimulatedFuture))
+        kosuTpl=isTrail&&band>=3?tplYokusKisa(band,zones):tplInterval(band,phase,zones);
+      else if(isTrail&&band>=2&&!wkStats.kaliteliYok)
+        kosuTpl=tplTeknikInis(band,40,zones);
+      else
+        kosuTpl=tplAerobik(band,Math.round(55*yMod),zones,disiplin);
+    } else {
+      kosuTpl=tplAerobik(band,Math.round(55*yMod),zones,disiplin);
+    }
+    kosuTpl.sure_dk=Math.round((kosuTpl.sure_dk||45)*yMod);
+    // ACWR uyarısı — koşu günü ama yük biraz yüksek
+    if(acwr>1.3&&acwr<=1.5&&!isSimulatedFuture)
+      kosuTpl.uyari='ACWR '+acwr.toFixed(2)+' — yük biraz yüksek, süre %15 kısaltıldı';
   }
 
-  tpl.sure_dk=Math.round((tpl.sure_dk||45)*yMod);
+  // ── Çapraz antrenman planla ─────────────────────────────────────────────
+  let caprazTpl=null;
+  if(isCapraz){
+    const caprazSure=Math.round(45*yMod);
+    caprazTpl={
+      tip:'capraz',sure_dk:caprazSure,
+      yapilar:[{baslik:'Çapraz Antrenman',detay:caprazSure+' dk bisiklet/yüzme/kürek — '+zoneInfoZ1(zones)}]
+    };
+  }
+
+  // ── Sonuç ───────────────────────────────────────────────────────────────
   const TIP_LABELS={kolay:'Kolay Koşu',aerobik:'Aerobik Koşu',uzun:'Uzun Koşu',tempo:'Tempo',esik:'Eşik',interval:'İnterval',yokus_kisa:'Kısa Yokuş',yokus_uzun:'Uzun Yokuş',tirmanis:'Tırmanış',teknik:'Teknik İniş',acici:'Açıcı',capraz:'Çapraz',dinlenme:'Dinlenme'};
-  const yukHedef=tpl.tip==='dinlenme'?0:Math.round((tpl.sure_dk||45)*({kolay:4,aerobik:6,uzun:7,tempo:8,esik:9,interval:10,yokus_kisa:9,yokus_uzun:9,tirmanis:8,teknik:6,acici:5,capraz:4}[tpl.tip]||6));
-  return{...tpl,baslik:TIP_LABELS[tpl.tip]||tpl.tip,yukHedef,isPast,isToday,simState,phase,yMod,date,dayTR,dayShort};
+  const yukHesapla=(tpl)=>tpl?Math.round((tpl.sure_dk||45)*({kolay:4,aerobik:6,uzun:7,tempo:8,esik:9,interval:10,yokus_kisa:9,yokus_uzun:9,tirmanis:8,teknik:6,acici:5,capraz:4}[tpl.tip]||6)):0;
+
+  if(kosuTpl&&caprazTpl){
+    // Hem koşu hem çapraz — birleşik gün
+    const yapilar=[
+      {baslik:'🏃 '+TIP_LABELS[kosuTpl.tip],detay:''},
+      ...kosuTpl.yapilar,
+      {baslik:'🚴 Çapraz Antrenman',detay:''},
+      ...caprazTpl.yapilar
+    ];
+    const yukHedef=yukHesapla(kosuTpl)+yukHesapla(caprazTpl);
+    return{...kosuTpl,baslik:TIP_LABELS[kosuTpl.tip]+' + Çapraz',yapilar,yukHedef,
+      caprazTpl,isKosuCapraz:true,isPast,isToday,simState,phase,yMod,date,dayTR,dayShort};
+  } else if(kosuTpl){
+    const yukHedef=yukHesapla(kosuTpl);
+    return{...kosuTpl,baslik:TIP_LABELS[kosuTpl.tip]||kosuTpl.tip,yukHedef,isPast,isToday,simState,phase,yMod,date,dayTR,dayShort};
+  } else if(caprazTpl){
+    const yukHedef=yukHesapla(caprazTpl);
+    return{...caprazTpl,baslik:'Çapraz Antrenman',yukHedef,isPast,isToday,simState,phase,yMod,date,dayTR,dayShort};
+  }
+  return REST;
 }
 
 // 2 haftalık plan üret
@@ -3708,9 +3758,12 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
                     fontSize:9,fontWeight:700,color:'var(--warn)',textAlign:'center',
                     marginBottom:3,padding:'2px 4px',background:'var(--warn-bg)',borderRadius:3
                   }},'🧪 '+testPlan.testAd.split('(')[0].trim()),
-                  React.createElement('div',{style:{fontSize:18,textAlign:'center'}},tipEmoji(day.tip)),
+                  React.createElement('div',{style:{fontSize:18,textAlign:'center'}},
+                    day.isKosuCapraz?'🏃🚴':tipEmoji(day.tip)
+                  ),
                   React.createElement('div',{style:{fontSize:10,fontWeight:600,textAlign:'center',color:tipColor(day.tip),marginTop:2}},day.baslik),
                   day.sure_dk>0&&React.createElement('div',{style:{fontSize:9,color:'var(--text-tertiary)',textAlign:'center'}},day.sure_dk+' dk'),
+                  day.uyari&&React.createElement('div',{style:{fontSize:8,color:'var(--warn)',textAlign:'center',marginTop:2}},'⚠'),
                   day.comparison&&React.createElement('div',{style:{textAlign:'center',marginTop:3}},compBadge(day.comparison)),
                   day.actual?.length>0&&React.createElement('div',{style:{fontSize:9,color:'var(--success)',textAlign:'center'}},
                     '✓ '+(round1(day.actualKm)||'')+'km'+(day.actualDp>0?' +'+day.actualDp:'')
@@ -3737,6 +3790,9 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
               React.createElement('button',{className:'btn btn-sm',onClick:()=>setExpandDay(null)},'Kapat')
             ),
             day.aciklama&&React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:10}},day.aciklama),
+            day.uyari&&React.createElement('div',{style:{fontSize:12,color:'var(--warn)',padding:'8px 12px',background:'var(--warn-bg)',borderRadius:'var(--radius)',marginBottom:8,display:'flex',gap:6,alignItems:'center'}},
+              React.createElement('span',null,'⚠'),React.createElement('span',null,day.uyari)
+            ),
             day.yapilar?.length>0&&React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:8}},
               day.yapilar.map((y,i)=>React.createElement('div',{key:i,style:{display:'flex',gap:12,padding:'10px 12px',background:'var(--bg-secondary)',borderRadius:'var(--radius)'}},
                 React.createElement('div',{style:{minWidth:22,height:22,borderRadius:'50%',background:tipColor(day.tip),display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,color:'#fff',flexShrink:0}},i+1),
