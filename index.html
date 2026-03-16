@@ -3887,16 +3887,25 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
             (()=>{
               const tp=(testPlanlar||[]).find(p=>p.athId===athlete?.id&&p.date===day.date);
               if(!tp)return null;
-              const uy=calcTestDayUygunluk(day.date,athlete,history,races,workouts);
-              if(!uy||uy.uygun)return null;
+              // Haftalık plandaki önceki günün tipini de kontrol et
+              const bugunIdx=week.days.findIndex(d=>d.date===day.date);
+              const dunkuPlanlanan=bugunIdx>0?week.days[bugunIdx-1]:null;
+              const dunkuYogunPlanlanan=dunkuPlanlanan&&['interval','esik','yokus_kisa','yokus_uzun','tirmanis'].includes(dunkuPlanlanan.tip);
+              const uy=calcTestDayUygunluk(day.date,athlete,history,races,workouts,dunkuYogunPlanlanan);
+              // day.uyari da sorun sayılsın
+              if(!uy)return null;
+              const tumSorunlar=[...uy.sorunlar];
+              if(day.uyari&&!tumSorunlar.some(s=>s.includes('yoğun')))
+                tumSorunlar.unshift(day.uyari);
+              if(tumSorunlar.length===0)return null;
               return React.createElement('div',{style:{
                 padding:'10px 12px',marginBottom:8,borderRadius:'var(--radius)',
                 background:'var(--warn-bg)',border:'1px solid var(--warn)'
               }},
                 React.createElement('div',{style:{fontWeight:700,fontSize:13,color:'var(--warn)',marginBottom:6}},
-                  '🧪 Test Koşusu — Bugün Uygun Değil'
+                  '🧪 Test Koşusu — Uygun Değil'
                 ),
-                uy.sorunlar.map((s,i)=>React.createElement('div',{key:i,style:{fontSize:12,color:'var(--warn)',display:'flex',gap:6,marginBottom:3}},
+                tumSorunlar.map((s,i)=>React.createElement('div',{key:i,style:{fontSize:12,color:'var(--warn)',display:'flex',gap:6,marginBottom:3}},
                   React.createElement('span',null,'⚠'),React.createElement('span',null,s)
                 )),
                 uy.oneriler.length>0&&React.createElement('div',{style:{marginTop:8}},
@@ -4976,18 +4985,19 @@ const TEST_TURLERI={
 
 // Test zamanlama: Bu sporcu için şu an test önerilmeli mi?
 // Belirli bir tarih için test uygunluğunu değerlendir
-function calcTestDayUygunluk(testDate, athlete, history, races, workouts){
+function calcTestDayUygunluk(testDate, athlete, history, races, workouts, dunkuYogunPlanlanan=false){
   if(!testDate||!athlete)return null;
   const testD=new Date(testDate+'T12:00:00');
   const {primary}=selectRaces(athlete,races);
   const daysToRace=primary?Math.ceil((new Date(primary.tarih+'T12:00:00')-testD)/864e5):999;
 
-  // O güne kadarki geçmiş antrenmanlara bak
+  // Önceki günü kontrol et — kayıtlı antrenman
   const oncekiGun=new Date(testD);oncekiGun.setDate(testD.getDate()-1);
   const oncekiGunStr=`${oncekiGun.getFullYear()}-${String(oncekiGun.getMonth()+1).padStart(2,'0')}-${String(oncekiGun.getDate()).padStart(2,'0')}`;
   const athWks=(workouts||[]).filter(w=>w.athleteId===athlete.id);
   const oncekiAntrenman=athWks.find(w=>w.date===oncekiGunStr);
-  const dunkuYogun=oncekiAntrenman&&['interval','esik','yokus_kisa','yokus_uzun','tirmanis'].includes(oncekiAntrenman.tur);
+  const dunkuYogunKayitli=oncekiAntrenman&&['interval','esik','yokus_kisa','yokus_uzun','tirmanis'].includes(oncekiAntrenman.tur);
+  const dunkuYogun=dunkuYogunKayitli||dunkuYogunPlanlanan;
 
   // O güne yakın geçmişteki TSB tahmini
   const last=history[history.length-1];
@@ -5014,7 +5024,7 @@ function calcTestDayUygunluk(testDate, athlete, history, races, workouts){
     if(dr<7)continue;
     const phase=primary?calcPhase(ds,primary.tarih,primary.prep_weeks,primary):'Temel';
     if(phase==='Taper')continue;
-    // Önceki günü kontrol et
+    // Önceki günü kontrol et — kayıtlı veya planlı
     const prevD=new Date(d);prevD.setDate(d.getDate()-1);
     const prevDs=`${prevD.getFullYear()}-${String(prevD.getMonth()+1).padStart(2,'0')}-${String(prevD.getDate()).padStart(2,'0')}`;
     const prevYogun=athWks.some(w=>w.date===prevDs&&['interval','esik','yokus_kisa','yokus_uzun'].includes(w.tur));
