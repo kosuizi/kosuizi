@@ -3770,23 +3770,55 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
         ?tplStrides(band,Math.round(50*yMod),zones,phase)
         :tplAerobik(band,Math.round(55*yMod),zones,disiplin);
     } else {
-      // Varsayılan faz mantığı
+      // Varsayılan faz mantığı — haftaGunTipi atanmamış veya kaliteli koşul sağlanmadı
+      const wk=wkStats.weekOff||0;
       if(daysToRace!==null&&daysToRace<=14){
         kosuTpl=tplTempo(band,Math.round(40*yMod),zones,phase);
       } else if(phase==='Zirve'){
-        if(!wkStats.kaliteliYok) kosuTpl=isTrail&&band>=2?tplYokusKisa(band,zones,phase):tplEsik(band,Math.round(55*yMod),zones,phase);
-        else if(!wkStats.uzunYapildi&&(!uzunGunTanimli||isUzunGun)) kosuTpl=isTrail?tplTirmanisAcik(band,Math.round(75*yMod),zones,dpGun):tplUzun(band,simState.ctl||0,zones,disiplin,dpGun);
-        else if(tsb> -10&&acwr<1.2||isSimulatedFuture) kosuTpl=isTrail&&band>=3?tplYokusUzun(band,zones,phase):tplInterval(band,phase,zones);
-        else kosuTpl=tplAerobik(band,Math.round(55*yMod),zones,disiplin);
+        if(wkStats.kaliteliYok&&(tsb> -10||isSimulatedFuture)&&(acwr<1.2||isSimulatedFuture)){
+          // Kaliteli henüz yapılmadıysa — rotasyonlu kaliteli ver
+          const zirveSeq=[
+            ()=>isTrail&&band>=3?tplYokusUzun(band,zones,phase):tplInterval(band,phase,zones),
+            ()=>tplPiramit(band,zones,phase),
+            ()=>tplCruise(band,Math.round(55*yMod),zones,phase),
+            ()=>isTrail?tplHillSprint(band,zones,phase):tplOnOff(band,zones,phase),
+          ];
+          kosuTpl=zirveSeq[wk%zirveSeq.length]();
+        } else if(!wkStats.uzunYapildi&&(!uzunGunTanimli||isUzunGun)){
+          kosuTpl=isTrail?tplTirmanisAcik(band,Math.round(75*yMod),zones,dpGun):tplUzun(band,simState.ctl||0,zones,disiplin,dpGun);
+        } else {
+          kosuTpl=tplEsik(band,Math.round(55*yMod),zones,phase);
+        }
       } else if(phase==='Gelişme'){
-        if(wkStats.kaliteliYok&&(tsb> -10||isSimulatedFuture)&&(acwr<1.2||isSimulatedFuture))
-          kosuTpl=isTrail&&band>=3?tplYokusKisa(band,zones,phase):tplInterval(band,phase,zones);
-        else if(isTrail&&band>=2&&!wkStats.kaliteliYok)
+        if(wkStats.kaliteliYok&&(tsb> -10||isSimulatedFuture)&&(acwr<1.2||isSimulatedFuture)){
+          // Kaliteli henüz yapılmadıysa — rotasyonlu kaliteli ver
+          const gelismeSeq=[
+            ()=>isTrail&&band>=3?tplYokusKisa(band,zones,phase):tplInterval(band,phase,zones),
+            ()=>tplTempoInterval(band,Math.round(50*yMod),zones,phase),
+            ()=>tplPiramit(band,zones,phase),
+            ()=>tplCruise(band,Math.round(50*yMod),zones,phase),
+            ()=>tplOnOff(band,zones,phase),
+            ()=>isTrail?tplHillSprint(band,zones,phase):tplYarisTempo(band,Math.round(48*yMod),zones,phase),
+          ];
+          kosuTpl=gelismeSeq[wk%gelismeSeq.length]();
+        } else if(isTrail&&band>=2&&!wkStats.kaliteliYok){
           kosuTpl=tplTeknikInis(band,40,zones);
-        else
+        } else {
           kosuTpl=tplAerobik(band,Math.round(55*yMod),zones,disiplin);
+        }
       } else {
-        kosuTpl=tplAerobik(band,Math.round(55*yMod),zones,disiplin);
+        // Temel faz
+        if(wkStats.kaliteliYok&&(tsb> -10||isSimulatedFuture)){
+          const temelSeq=[
+            ()=>tplTempo(band,Math.round(45*yMod),zones,phase),
+            ()=>tplProgressive(band,Math.round(50*yMod),zones,phase),
+            ()=>tplStrides(band,Math.round(50*yMod),zones,phase),
+            ()=>tplCruise(band,Math.round(45*yMod),zones,phase),
+          ];
+          kosuTpl=temelSeq[wk%temelSeq.length]();
+        } else {
+          kosuTpl=tplAerobik(band,Math.round(55*yMod),zones,disiplin);
+        }
       }
     }
     kosuTpl.sure_dk=Math.round((kosuTpl.sure_dk||45)*yMod);
@@ -3885,9 +3917,15 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       // Kalan günleri TSB'ye göre sırala — en yüksek TSB → kaliteli
       const kalanlar=kosuGunleriHafta.filter(g=>!haftaIskeleti[g.ds]);
       kalanlar.sort((a,b)=>b.estTsb-a.estTsb);
-      // Haftada 1 kaliteli antrenman (TSB > -10 olması şartıyla)
-      if(kalanlar.length>0&&kalanlar[0].estTsb>-10){
+      // Haftada en az 1 kaliteli antrenman — TSB eşiği yok, planDay zaten kontrol eder
+      if(kalanlar.length>0){
         haftaIskeleti[kalanlar[0].ds]='kaliteli';
+        // Gelişme/Zirve fazında 2. en iyi günde de kaliteli olabilir
+        if(kalanlar.length>2&&['Gelişme','Zirve'].includes(
+          calcPhase(kalanlar[1].ds, primary?.tarih||'', parseInt(primary?.prep_weeks||16), primary)
+        )){
+          haftaIskeleti[kalanlar[1].ds]='kaliteli';
+        }
       }
       // Geri kalanlar aerobik
       kalanlar.slice(1).forEach(g=>{if(!haftaIskeleti[g.ds])haftaIskeleti[g.ds]='aerobik';});
