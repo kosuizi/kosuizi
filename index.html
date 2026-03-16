@@ -3796,14 +3796,75 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
 
 const ZONE_COLORS={Z1:'#6ee7b7',Z2:'#34d399',Z3:'#fbbf24',Z4:'#f97316',Z5a:'#ef4444',Z5b:'#dc2626',Z5c:'#991b1b'};
 
-function GununAntrenmanTab({athlete,history,races,workouts,planMode,testPlanlar}){
+function GununAntrenmanTab({athlete,history,races,workouts,planMode,testPlanlar,onSaveTestPlan,onDeleteTestPlan}){
   const today=new Date();
   const {start:wStart}=getWeekBounds(0);
   const athWks=(workouts||[]).filter(w=>w.athleteId===athlete?.id);
   const wkWorkouts=athWks.filter(w=>new Date(w.date+'T12:00:00')>=wStart);
 
-  // generateTwoWeekPlan'dan bugünün gününü al — haftalık planla tutarlı tek kaynak
   const todayStr=(()=>{const t=today;return`${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;})();
+  const [showOteleme,setShowOteleme]=useState(false);
+  const [otelemeGun,setOtelemeGun]=useState(null);
+
+  // Bugün planlı test var mı?
+  const bugunTestPlan=(testPlanlar||[]).find(p=>p.athId===athlete?.id&&p.date===todayStr);
+
+  // Planlı test uygunluk kontrolü
+  const testUygunluk=React.useMemo(()=>{
+    if(!bugunTestPlan||!athlete)return null;
+    const last=history[history.length-1];
+    const {primary}=selectRaces(athlete,races);
+    const daysToRace=primary?Math.ceil((new Date(primary.tarih+'T12:00:00')-today)/864e5):999;
+    const tsb=last?.tsb||0;
+    const acwr=last?.acwr||1;
+    const sorunlar=[];
+    if(daysToRace<14)sorunlar.push('Yarışa '+daysToRace+' gün kaldı — test yorgunluğu yarışı etkileyebilir');
+    if(acwr>1.3)sorunlar.push('ACWR '+acwr.toFixed(2)+' — yük birikimi yüksek, test yanıtı güvenilmez olabilir');
+    if(tsb< -15)sorunlar.push('TSB '+tsb.toFixed(1)+' — yorgunluk fazla, test sonuçları gerçeği yansıtmaz');
+    if(athlete.hrv_durum==='düşük')sorunlar.push('HRV düşük — toparlanma yetersiz');
+    return{uygun:sorunlar.length===0,sorunlar};
+  },[bugunTestPlan,athlete,history,races]);
+
+  // Öteleme takvimi — önümüzdeki 14 gün
+  const otelemeGunleri=React.useMemo(()=>{
+    if(!showOteleme||!athlete||!bugunTestPlan)return[];
+    const last=history[history.length-1];
+    const {primary}=selectRaces(athlete,races);
+    const kosuGunleri=athlete.kosu_gunleri||[];
+    const caprazGunleri=athlete.capraz_gunleri||[];
+    const gunler=[];
+    for(let i=1;i<=14;i++){
+      const d=new Date(today);d.setDate(today.getDate()+i);
+      const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),dd=String(d.getDate()).padStart(2,'0');
+      const dateStr=`${y}-${m}-${dd}`;
+      const dayShort=DAYS_SHORT[d.getDay()];
+      const daysToRace=primary?Math.ceil((new Date(primary.tarih+'T12:00:00')-d)/864e5):999;
+      const isKosuGunu=kosuGunleri.includes(dayShort);
+      const isCapraz=caprazGunleri.includes(dayShort);
+      const phase=primary?calcPhase(dateStr,primary.tarih,primary.prep_weeks,primary):'Temel';
+      const tsb=last?.tsb||0;const acwr=last?.acwr||1;
+      let uygunluk='orta';const neden=[];
+      if(!isKosuGunu&&!isCapraz){uygunluk='uygunsuz';neden.push('Antrenman günü değil');}
+      else if(daysToRace<7){uygunluk='uygunsuz';neden.push('Yarışa '+daysToRace+' gün kaldı');}
+      else if(phase==='Taper'){uygunluk='uygunsuz';neden.push('Taper haftası');}
+      else if(tsb>5&&acwr<1.2){uygunluk='ideal';neden.push('Form iyi, yük dengeli');}
+      else if(tsb>-5&&acwr<1.3){uygunluk='uygun';neden.push('Makul form');}
+      else{neden.push(acwr>1.3?'Yük birikmesi':'Yorgunluk var');}
+      const renkMap={ideal:'var(--success)',uygun:'var(--info)',orta:'var(--warn)',uygunsuz:'var(--border)'};
+      const bgMap={ideal:'var(--success-bg)',uygun:'var(--info-bg)',orta:'var(--warn-bg)',uygunsuz:'var(--bg-secondary)'};
+      const labelMap={ideal:'⭐ İdeal',uygun:'✓ Uygun',orta:'~ Orta',uygunsuz:'✗ Uygunsuz'};
+      gunler.push({dateStr,uygunluk,neden,renk:renkMap[uygunluk],bg:bgMap[uygunluk],label:labelMap[uygunluk],formatted:d.toLocaleDateString('tr-TR',{weekday:'short',day:'numeric',month:'short'})});
+    }
+    return gunler;
+  },[showOteleme,athlete,history,races,bugunTestPlan]);
+
+  const handleOtelemeKaydet=()=>{
+    if(!otelemeGun||!bugunTestPlan)return;
+    onSaveTestPlan({...bugunTestPlan,date:otelemeGun,id:bugunTestPlan.id});
+    setShowOteleme(false);setOtelemeGun(null);
+  };
+
+  // generateTwoWeekPlan'dan bugünün gününü al — haftalık planla tutarlı tek kaynak
   const planTodayDay=React.useMemo(()=>{
     if(!athlete)return null;
     const racesOverride=planMode==='optimize'?races:races;
@@ -3828,7 +3889,69 @@ function GununAntrenmanTab({athlete,history,races,workouts,planMode,testPlanlar}
 
   return React.createElement('div',null,
 
-    // Üst bilgi şeridi
+    // ── Planlı test uygunluk uyarısı ─────────────────────────────────────────
+    bugunTestPlan&&testUygunluk&&React.createElement('div',{className:'card',style:{
+      marginBottom:12,
+      background:testUygunluk.uygun?'var(--success-bg)':'var(--warn-bg)',
+      border:'1px solid '+(testUygunluk.uygun?'var(--success)':'var(--warn)')
+    }},
+      React.createElement('div',{style:{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:12}},
+        React.createElement('div',{style:{flex:1}},
+          React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:4}},
+            React.createElement('span',{style:{fontSize:18}},'🧪'),
+            React.createElement('span',{style:{fontWeight:700,fontSize:14}},
+              testUygunluk.uygun?'Bugün Test Günü — Koşullar Uygun!':'Bugün Test Günü — Dikkat!'
+            )
+          ),
+          React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:4}},bugunTestPlan.testAd),
+          testUygunluk.sorunlar.length>0&&React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:3}},
+            testUygunluk.sorunlar.map((s,i)=>React.createElement('div',{key:i,style:{fontSize:12,color:'var(--warn)',display:'flex',gap:6}},
+              React.createElement('span',null,'⚠'),React.createElement('span',null,s)
+            ))
+          )
+        ),
+        !testUygunluk.uygun&&React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:6,flexShrink:0}},
+          React.createElement('button',{
+            className:'btn btn-sm btn-primary',
+            onClick:()=>{setShowOteleme(true);setOtelemeGun(null);}
+          },'📅 Ötelemek İster misin?'),
+          React.createElement('button',{
+            className:'btn btn-sm',
+            onClick:()=>onDeleteTestPlan&&onDeleteTestPlan(bugunTestPlan.id),
+            style:{fontSize:11}
+          },'İptal Et')
+        )
+      ),
+      // Öteleme takvimi
+      showOteleme&&React.createElement('div',{style:{marginTop:12,paddingTop:12,borderTop:'1px solid var(--border)'}},
+        React.createElement('div',{style:{fontSize:12,fontWeight:600,marginBottom:8}},'Uygun gün seç:'),
+        React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:5,marginBottom:10}},
+          otelemeGunleri.map(g=>React.createElement('div',{
+            key:g.dateStr,
+            onClick:()=>g.uygunluk!=='uygunsuz'&&setOtelemeGun(g.dateStr),
+            style:{
+              padding:'7px 9px',borderRadius:'var(--radius)',cursor:g.uygunluk==='uygunsuz'?'not-allowed':'pointer',
+              border:otelemeGun===g.dateStr?'2px solid var(--info)':'1px solid var(--border)',
+              background:otelemeGun===g.dateStr?'var(--info-bg)':g.bg,
+              opacity:g.uygunluk==='uygunsuz'?0.4:1,fontSize:12
+            }
+          },
+            React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center'}},
+              React.createElement('span',{style:{fontWeight:600}},g.formatted),
+              React.createElement('span',{style:{fontSize:10,color:g.renk,fontWeight:600}},g.label)
+            ),
+            g.neden.length>0&&React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',marginTop:2}},g.neden.join(' · '))
+          ))
+        ),
+        otelemeGun&&React.createElement('div',{style:{fontSize:12,fontWeight:600,color:'var(--success)',marginBottom:8}},
+          '✓ Seçilen: '+new Date(otelemeGun+'T12:00:00').toLocaleDateString('tr-TR',{weekday:'long',day:'numeric',month:'long'})
+        ),
+        React.createElement('div',{className:'flex-gap'},
+          React.createElement('button',{className:'btn btn-primary btn-sm',disabled:!otelemeGun,onClick:handleOtelemeKaydet},'Kaydet'),
+          React.createElement('button',{className:'btn btn-sm',onClick:()=>{setShowOteleme(false);setOtelemeGun(null);}},'Vazgeç')
+        )
+      )
+    ),
     React.createElement('div',{className:'card',style:{
       background:'linear-gradient(135deg,var(--bg-secondary),var(--bg-primary))',
       marginBottom:12,padding:'14px 16px'
@@ -6390,7 +6513,7 @@ function App(){
     ),
     React.createElement('div',{className:'content'},
       tab==='dashboard'&&React.createElement(Dashboard,{workouts:athWks,athlete,history,races}),
-      tab==='gunun'&&React.createElement(GununAntrenmanTab,{athlete,history,races,workouts,planMode,testPlanlar}),
+      tab==='gunun'&&React.createElement(GununAntrenmanTab,{athlete,history,races,workouts,planMode,testPlanlar,onSaveTestPlan:p=>setTestPlanlar(prev=>[...prev.filter(x=>!(x.athId===p.athId&&x.testTur===p.testTur)),p]),onDeleteTestPlan:id=>setTestPlanlar(p=>p.filter(x=>x.id!==id))}),
       tab==='plan'&&React.createElement(HaftalikPlanTab,{athlete,history,races,workouts,planMode,setPlanMode,testPlanlar}),
       tab==='lider'&&React.createElement(LiderlikTab,{athletes,workouts,teamName,teamLogo}),
       tab==='bolge'&&React.createElement(BolgeTab,{athlete,workouts:athWks,onUpdateAthlete:handleUpdateAthlete}),
