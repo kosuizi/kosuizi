@@ -5801,6 +5801,279 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,t
 // ── Haftalık Plan Excel Dışa Aktarma (ExcelJS) ──────────────────────────────
 
 async function exportHaftalikPlanXLSX(plan, athlete){
+  // ── YENİ FORMAT: Tek sayfada haftalık takvim ──────────────────────────────
+  // Sol (A-F): Pzt/Çar/Cum/Paz  |  Sağ (I-N): Sal/Per/Cmt
+  // Satır rengi = pace değerine göre zone rengi
+  // Süre hücreleri = formülle (mesafe + pace'den)
+  // Toplam satırları = formülle
+  if(!plan||!plan.weeks)return;
+  if(typeof ExcelJS==='undefined'){alert('ExcelJS yüklenmedi.');return;}
+
+  const wb=new ExcelJS.Workbook();
+  wb.creator='Antrenman Takip'; wb.created=new Date();
+  const ws=wb.addWorksheet('Haftalık Plan');
+
+  // Sütun genişlikleri: A-F sol, G-H boşluk, I-N sağ
+  ws.columns=[
+    {width:6},{width:7},{width:7},{width:9},{width:7},{width:7},
+    {width:2},{width:2},
+    {width:6},{width:7},{width:7},{width:9},{width:7},{width:7},
+  ];
+
+  // ── Renkler ─────────────────────────────────────────────────────────────
+  const ZONE_BG={Z1:'B6F5DC',Z2:'34D399',Z3:'FBBF24',Z4:'F97316',Z5a:'EF4444',Z5b:'DC2626',Z5c:'991B1B'};
+  const ZONE_FG={Z1:'000000',Z2:'000000',Z3:'000000',Z4:'FFFFFF',Z5a:'FFFFFF',Z5b:'FFFFFF',Z5c:'FFFFFF'};
+  const REST_BG='B0A8D8',HBDR='E8E8E8',SUBHDR='BFBFBF',TOTAL='FFD966',OK='70AD47',NO='D9D9D9',TEK='D0D0D0';
+  const thin={style:'thin',color:{argb:'FF000000'}};
+  const brd={top:thin,left:thin,bottom:thin,right:thin};
+
+  const flFn=(hex)=>({type:'pattern',pattern:'solid',fgColor:{argb:'FF'+hex}});
+  const fnFn=(bold,sz,color)=>({name:'Arial',bold:!!bold,size:sz||10,color:{argb:'FF'+(color||'000000')}});
+  const alFn=(h,wrap)=>({horizontal:h||'center',vertical:'middle',wrapText:!!wrap});
+
+  function apC(ws,r,c,opts={}){
+    const cell=ws.getCell(r,c);
+    if(opts.value!==undefined)cell.value=opts.value;
+    if(opts.bg)cell.fill=flFn(opts.bg);
+    cell.font=fnFn(opts.bold,opts.sz||10,opts.fg);
+    cell.alignment=alFn(opts.h,opts.wrap);
+    cell.border=brd;
+    return cell;
+  }
+  function mgC(ws,r1,c1,r2,c2,opts={}){
+    ws.mergeCells(r1,c1,r2,c2);
+    apC(ws,r1,c1,opts);
+    for(let r=r1;r<=r2;r++)for(let c=c1;c<=c2;c++){
+      const cell=ws.getCell(r,c);
+      if(opts.bg)cell.fill=flFn(opts.bg);
+      cell.border=brd;
+    }
+  }
+
+  // ── Pace → Zone ─────────────────────────────────────────────────────────
+  // Sporcu bölge verisi varsa kullan, yoksa genel eşik değerleri
+  const paceToZone=(paceDk,paceSn,ath)=>{
+    const sec=(parseInt(paceDk)||0)*60+(parseInt(paceSn)||0);
+    if(sec===0)return 'Z2';
+    // Sporcu bölgeleri varsa
+    if(ath&&ath.zones&&ath.zones.paceZones&&ath.zones.paceZones.length>=5){
+      const pz=ath.zones.paceZones;
+      // paceZones: [{min,max,avg},...] sn/km, Z1=0, Z5=4
+      for(let i=pz.length-1;i>=0;i--){
+        if(sec<=(pz[i].max||999))return ['Z1','Z2','Z3','Z4','Z5a'][i]||'Z5a';
+      }
+      return 'Z1';
+    }
+    // Genel eşikler
+    if(sec<270)return 'Z5c';
+    if(sec<300)return 'Z5b';
+    if(sec<330)return 'Z5a';
+    if(sec<360)return 'Z4';
+    if(sec<420)return 'Z3';
+    if(sec<480)return 'Z2';
+    return 'Z1';
+  };
+
+  // ── Bir günü yaz ─────────────────────────────────────────────────────────
+  // c0: 1=sol, 9=sağ
+  // Döner: son satır numarası
+  const writeDay=(day,c0,baseRow)=>{
+    let r=baseRow;
+    const letter=(n)=>ws.getColumn(n).letter;
+    const isRest=day.tip==='dinlenme';
+
+    // Satır 1: Tarih | Gün
+    const dateStr=day.date?new Date(day.date+'T12:00:00').toLocaleDateString('tr-TR',{day:'numeric',month:'numeric',year:'numeric'}):day.dayTR||'';
+    mgC(ws,r,c0,r,c0+2,{value:dateStr,bg:HBDR,bold:true,sz:10});
+    mgC(ws,r,c0+3,r,c0+5,{value:day.dayTR||'',bg:HBDR,bold:true,sz:10});
+    ws.getRow(r).height=16; r++;
+
+    if(isRest){
+      mgC(ws,r,c0,r+1,c0+5,{value:'Dinlenme',bg:REST_BG,bold:true,sz:11,fg:'FFFFFF'});
+      ws.getRow(r).height=18; ws.getRow(r+1).height=14;
+      return r+2;
+    }
+
+    // Satır 2: Ad (2 sütun) | Durum (2 sütun) | Parkur (2 sütun)
+    const terrain=athlete?.disiplin==='yol'?'Düzde':athlete?.disiplin==='patika'||athlete?.disiplin==='ultra'?'Patika':'Karma';
+    const durum=day.isPast?'Tamamlandı':'Planlandı';
+    mgC(ws,r,c0,  r,c0+1,{value:day.baslik||'',bg:SUBHDR,bold:true,sz:9,h:'left'});
+    mgC(ws,r,c0+2,r,c0+3,{value:durum,bg:durum==='Tamamlandı'?OK:NO,bold:true,sz:9,fg:durum==='Tamamlandı'?'FFFFFF':'000000'});
+    mgC(ws,r,c0+4,r,c0+5,{value:terrain,bg:SUBHDR,bold:true,sz:9});
+    ws.getRow(r).height=15; r++;
+
+    // Satır 3: Grup başlıkları
+    mgC(ws,r,c0,  r,c0+2,{value:'Süre',bg:SUBHDR,bold:true,sz:9});
+    apC(ws,r,c0+3,{value:'Mesafe',bg:SUBHDR,bold:true,sz:9});
+    mgC(ws,r,c0+4,r,c0+5,{value:'Koşu Hızı (Pace)',bg:SUBHDR,bold:true,sz:9});
+    ws.getRow(r).height=14; r++;
+
+    // Satır 4: Alt başlıklar
+    ['saat','dakika','saniye','metre','dakika','saniye'].forEach((lbl,i)=>{
+      apC(ws,r,c0+i,{value:lbl,bg:SUBHDR,sz:8});
+    });
+    ws.getRow(r).height=13; r++;
+
+    // Veri satırları — yapilar'ı parse et
+    const dataRows=[]; let tekrarRow=null;
+    (day.yapilar||[]).forEach(y=>{
+      // Tekrar satırı tespiti: baslik 'X tekrar' veya detay'da tekrar bilgisi
+      const detay=y.detay||'';
+      const tekrarMatch=detay.match(/^(\d+)[×x]/);
+
+      if(tekrarMatch){
+        // Gri tekrar satırı
+        for(let i=0;i<6;i++)apC(ws,r,c0+i,{value:null,bg:TEK,sz:9});
+        const tek=parseInt(tekrarMatch[1]);
+        ws.getCell(r,c0+2).value=tek;
+        ws.getCell(r,c0+2).font=fnFn(true,9);
+        ws.getCell(r,c0+2).fill=flFn(TEK);
+        ws.getCell(r,c0+2).border=brd;
+        ws.getCell(r,c0+3).value='X';
+        ws.getCell(r,c0+3).font=fnFn(true,9);
+        ws.getCell(r,c0+3).fill=flFn(TEK);
+        ws.getCell(r,c0+3).border=brd;
+        ws.getRow(r).height=13;
+        tekrarRow=r; r++;
+        return;
+      }
+
+      // Normal veri satırı — pace'i detay'dan çıkar
+      let paceDk=null,paceSn=null,metreVal=null;
+      const paceAvg=detay.match(/\((\d+):(\d+)\)\s*\/km/);
+      const paceRng=detay.match(/(\d+):(\d+)[–\-](\d+):(\d+)\s*\/km/);
+      const metreM=detay.match(/(\d+)\s*m(?:[^\/]|$)/i);
+      const kmM=detay.match(/([\d.]+)\s*km/);
+      const durM=detay.match(/(\d+)\s*dk/);
+
+      if(paceAvg){paceDk=parseInt(paceAvg[1]);paceSn=parseInt(paceAvg[2]);}
+      else if(paceRng){
+        const avg=Math.round(((parseInt(paceRng[1])*60+parseInt(paceRng[2]))+(parseInt(paceRng[3])*60+parseInt(paceRng[4])))/2);
+        paceDk=Math.floor(avg/60);paceSn=avg%60;
+      }
+      // mesafe: önce metre, sonra km
+      if(metreM)metreVal=parseInt(metreM[1]);
+      else if(kmM)metreVal=Math.round(parseFloat(kmM[1])*1000);
+      else if(durM&&paceDk){
+        const durSn=parseInt(durM[1])*60;
+        const pSec=paceDk*60+(paceSn||0);
+        if(pSec>0)metreVal=Math.round(durSn/pSec*1000);
+      }
+
+      // Zone ve renk
+      const zone=paceToZone(paceDk,paceSn,athlete);
+      const bg=ZONE_BG[zone]||'34D399';
+      const fg=ZONE_FG[zone]||'000000';
+
+      // Sütun harfleri
+      const mCol=letter(c0+3),pdCol=letter(c0+4),psCol=letter(c0+5);
+      const saCol=letter(c0),daCol=letter(c0+1),snCol=letter(c0+2);
+
+      // INPUT: mesafe + pace
+      apC(ws,r,c0+3,{value:metreVal,bg,fg,sz:9});
+      apC(ws,r,c0+4,{value:paceDk,bg,fg,sz:9,bold:true});
+      apC(ws,r,c0+5,{value:paceSn,bg,fg,sz:9,bold:true});
+
+      // HESAPLANAN: saat/dk/sn formülle
+      const tot=`(${mCol}${r}/1000)*(${pdCol}${r}*60+${psCol}${r})`;
+      [{col:c0,  f:`=INT((${tot})/3600)`},
+       {col:c0+1,f:`=INT(MOD((${tot}),3600)/60)`},
+       {col:c0+2,f:`=ROUND(MOD((${tot}),60),0)`}
+      ].forEach(({col,f})=>{
+        const cell=ws.getCell(r,col);
+        cell.value=f; cell.fill=flFn(bg);
+        cell.font=fnFn(false,9,fg); cell.alignment=alFn(); cell.border=brd;
+      });
+
+      ws.getRow(r).height=15;
+      dataRows.push({row:r,tekrarRow,mCol,pdCol,psCol,c0});
+      tekrarRow=null; r++;
+    });
+
+    // Toplam başlık
+    mgC(ws,r,c0,  r,c0+2,{value:'Toplam Süre',bg:SUBHDR,bold:true,sz:9});
+    apC(ws,r,c0+3,{value:'Toplam Mesafe',bg:SUBHDR,bold:true,sz:9});
+    mgC(ws,r,c0+4,r,c0+5,{value:'Ort. Koşu Hızı (Pace)',bg:SUBHDR,bold:true,sz:9});
+    ws.getRow(r).height=14; r++;
+
+    // Toplam değerler — formülle
+    if(dataRows.length>0){
+      const snParts=[],mParts=[];
+      dataRows.forEach(d=>{
+        let snE=`(${d.mCol}${d.row}/1000)*(${d.pdCol}${d.row}*60+${d.psCol}${d.row})`;
+        let mE=`${d.mCol}${d.row}`;
+        if(d.tekrarRow){
+          const tekC=ws.getColumn(d.c0+2).letter;
+          snE=`${tekC}${d.tekrarRow}*(${snE})`;
+          mE=`${tekC}${d.tekrarRow}*${mE}`;
+        }
+        snParts.push(snE); mParts.push(mE);
+      });
+      const totSn=snParts.join('+'),totM=mParts.join('+');
+      const avgP=`IF((${totM})>0,(${totSn})/((${totM})/1000),0)`;
+      [
+        {col:c0,  f:`=INT((${totSn})/3600)`},
+        {col:c0+1,f:`=INT(MOD((${totSn}),3600)/60)`},
+        {col:c0+2,f:`=ROUND(MOD((${totSn}),60),0)`},
+        {col:c0+3,f:`=${totM}`},
+        {col:c0+4,f:`=INT((${avgP})/60)`},
+        {col:c0+5,f:`=ROUND(MOD((${avgP}),60),0)`},
+      ].forEach(({col,f})=>{
+        const cell=ws.getCell(r,col);
+        cell.value=f; cell.fill=flFn(TOTAL);
+        cell.font=fnFn(true,9,'000000'); cell.alignment=alFn(); cell.border=brd;
+      });
+    } else {
+      for(let i=0;i<6;i++)apC(ws,r,c0+i,{value:0,bg:TOTAL,bold:true,sz:9});
+    }
+    ws.getRow(r).height=15; r++;
+    return r;
+  };
+
+  // ── Günleri çiftler halinde yaz ─────────────────────────────────────────
+  // Sol: Pzt/Çar/Cum/Paz, Sağ: Sal/Per/Cmt
+  const allDays=[];
+  plan.weeks.forEach(wk=>wk.days.forEach(d=>allDays.push(d)));
+
+  const byDayName={};
+  allDays.forEach(d=>{if(d.dayTR)byDayName[d.dayTR]=d;});
+
+  const LEFT_DAYS=['Pazartesi','Çarşamba','Cuma','Pazar'];
+  const RIGHT_DAYS=['Salı','Perşembe','Cumartesi',''];
+
+  // blok yüksekliği: en uzun günü baz al
+  const blockH=(day)=>{
+    if(!day||day.tip==='dinlenme')return 4;
+    return 5+(day.yapilar||[]).length+2; // başlıklar + veri + toplam
+  };
+
+  let currentRow=1;
+  for(let i=0;i<LEFT_DAYS.length;i++){
+    const lDay=byDayName[LEFT_DAYS[i]];
+    const rDay=byDayName[RIGHT_DAYS[i]];
+    const base=currentRow;
+    const h=Math.max(blockH(lDay),blockH(rDay))+1;
+
+    if(lDay)writeDay(lDay,1,base);
+    if(rDay)writeDay(rDay,9,base);
+
+    currentRow=base+h;
+  }
+
+  if(wb.worksheets.length===0){alert('Plan verisi bulunamadı.');return;}
+  ws.pageSetup={orientation:'landscape',paperSize:9};
+  ws.pageMargins={left:0.5,right:0.5,top:0.5,bottom:0.5};
+
+  const buf=await wb.xlsx.writeBuffer();
+  const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  const dateStr=new Date().toISOString().slice(0,10);
+  a.href=url; a.download=`haftalik_plan_${dateStr}.xlsx`; a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function exportHaftalikPlanXLSX_LEGACY(plan, athlete){
   if(!plan||!plan.weeks)return;
   if(typeof ExcelJS==='undefined'){alert('ExcelJS yüklenmedi, lütfen sayfayı yenileyin.');return;}
 
