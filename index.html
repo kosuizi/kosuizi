@@ -3328,52 +3328,86 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
   // Çapraz günler ACWR bloğundan muaf
   const acwrEsik=isCapraz&&!isKosu?99:(isSimulatedFuture?99:1.5);
 
-  // Sakatlık >=8 durumu — gün seçimine bakılmaksızın dinlenme, ama uyarı ile
+  // Sakatlık >=8 — tek zorunlu dinlenme durumu
   if(inj>=8) return{...REST,baslik:'Zorunlu Dinlenme',uyari:'Sakatlık puanı yüksek ('+inj+'/10)',yapilar:[{baslik:'Dinlenme',detay:'Sakatlık nedeniyle zorunlu dinlenme'}]};
-  // ACWR >1.5 — sadece koşu günlerinde dinlenmeye zorla, uyarı ver
-  if(acwr>1.5&&!isSimulatedFuture&&!isCapraz) return{...REST,baslik:'Aktif Dinlenme',uyari:'ACWR '+acwr.toFixed(2)+' — yük yüksek, koşu yerine dinlenme önerilir',yapilar:[{baslik:'Aktif Dinlenme',detay:'ACWR > 1.5 — hafif yürüyüş veya esneme yapılabilir'}]};
 
   const uzunGunTanimli=(athlete.uzun_gun||'')!=='';
   const dpGun=wkStats.uzunYapildi?0:Math.round((wkStats.dpHedefHafta||0)*0.6);
-  // Dün yoğun antrenman varsa bugün yoğun antrenman verme
   const sonYogunGun=wkStats.sonYogunGun||false;
+  const haftaGunTipi=wkStats.haftaGunTipi||null; // 'kaliteli'|'uzun'|'aerobik'|null
+
+  // TSB/ACWR durumuna göre zorunlu indirim flag'leri
+  const cokYorgun=tsb< -25;
+  const yorgun=tsb< -15;
+  const yukYuksek=acwr>1.5&&!isSimulatedFuture;
 
   // ── Koşu antrenmanı planla ──────────────────────────────────────────────
   let kosuTpl=null;
+  let kosuUyari=null;
   if(isKosu){
-    if(daysToIntermediate!==null&&daysToIntermediate<=2){
+    // Hafta iskeleti: 'aerobik' günse yoğun antrenman verme
+    const iskeleteGoreAerobik=haftaGunTipi==='aerobik'&&!isUzunGun;
+
+    // Çok yorgun veya yük çok yüksekse → kolay koşuya indir
+    if((cokYorgun||yukYuksek)&&!isSimulatedFuture){
+      const sure=Math.round((cokYorgun?30:40)*yMod);
+      kosuTpl=tplKolay(band,sure,zones);
+      kosuUyari=yukYuksek?'ACWR '+acwr.toFixed(2)+' — yük yüksek, kolay koşuya indirildi':
+        'TSB '+tsb.toFixed(1)+' — çok yorgun, kolay koşuya indirildi';
+    } else if(daysToIntermediate!==null&&daysToIntermediate<=2){
       kosuTpl=tplAcici(25);
     } else if(daysToIntermediate!==null&&daysToIntermediate<=7){
       kosuTpl=tplKolay(band,Math.round(35*yMod),zones);
     } else if(phase==='Taper'||(daysToRace!==null&&daysToRace<=7)){
       kosuTpl=daysToRace<=3?tplAcici(25):tplTempo(band,Math.round(40*yMod),zones);
-    } else if(isUzunGun&&!wkStats.uzunYapildi&&(tsb> -15||isSimulatedFuture)){
-      kosuTpl=isTrail&&dpGun>200?tplTirmanisAcik(band,Math.round(70*yMod),zones,dpGun):tplUzun(band,simState.ctl||0,zones,disiplin,dpGun);
-    } else if(daysToRace!==null&&daysToRace<=14){
-      kosuTpl=sonYogunGun?tplAerobik(band,Math.round(50*yMod),zones,disiplin):tplTempo(band,Math.round(40*yMod),zones);
-    } else if(phase==='Zirve'){
-      if(!wkStats.kaliteliYok) kosuTpl=isTrail&&band>=2?tplYokusKisa(band,zones):tplEsik(band,Math.round(55*yMod),zones);
-      else if(!wkStats.uzunYapildi&&(!uzunGunTanimli||isUzunGun)) kosuTpl=isTrail?tplTirmanisAcik(band,Math.round(75*yMod),zones,dpGun):tplUzun(band,simState.ctl||0,zones,disiplin,dpGun);
-      else if((tsb> -10&&acwr<1.2||isSimulatedFuture)&&!sonYogunGun) kosuTpl=isTrail&&band>=3?tplYokusUzun(band,zones):tplInterval(band,phase,zones);
-      else kosuTpl=tplAerobik(band,Math.round(55*yMod),zones,disiplin);
-    } else if(phase==='Gelişme'){
-      if(wkStats.kaliteliYok&&(tsb> -10||isSimulatedFuture)&&(acwr<1.2||isSimulatedFuture)&&!sonYogunGun)
-        kosuTpl=isTrail&&band>=3?tplYokusKisa(band,zones):tplInterval(band,phase,zones);
-      else if(isTrail&&band>=2&&!wkStats.kaliteliYok&&!sonYogunGun)
-        kosuTpl=tplTeknikInis(band,40,zones);
-      else
+    } else if((isUzunGun||haftaGunTipi==='uzun')&&!wkStats.uzunYapildi){
+      if(yorgun){
         kosuTpl=tplAerobik(band,Math.round(55*yMod),zones,disiplin);
-    } else {
+        kosuUyari='TSB '+tsb.toFixed(1)+' — yorgun, uzun koşu yerine aerobik önerildi';
+      } else {
+        kosuTpl=isTrail&&dpGun>200?tplTirmanisAcik(band,Math.round(70*yMod),zones,dpGun):tplUzun(band,simState.ctl||0,zones,disiplin,dpGun);
+      }
+    } else if(iskeleteGoreAerobik||sonYogunGun){
+      // İskelet bu günü aerobik olarak atadı VEYA dün yoğundu
       kosuTpl=tplAerobik(band,Math.round(55*yMod),zones,disiplin);
+      if(sonYogunGun)kosuUyari='Dün yoğun antrenman vardı — bugün aerobik';
+    } else if(haftaGunTipi==='kaliteli'&&!yorgun){
+      // İskelet kaliteli atadı — faz bazlı yoğun antrenman ver
+      if(daysToRace!==null&&daysToRace<=14){
+        kosuTpl=tplTempo(band,Math.round(40*yMod),zones);
+      } else if(phase==='Zirve'){
+        kosuTpl=!wkStats.kaliteliYok?
+          (isTrail&&band>=2?tplYokusKisa(band,zones):tplEsik(band,Math.round(55*yMod),zones)):
+          (isTrail&&band>=3?tplYokusUzun(band,zones):tplInterval(band,phase,zones));
+      } else if(phase==='Gelişme'){
+        kosuTpl=isTrail&&band>=3?tplYokusKisa(band,zones):tplInterval(band,phase,zones);
+      } else {
+        kosuTpl=tplTempo(band,Math.round(45*yMod),zones);
+      }
+    } else {
+      // Varsayılan faz mantığı
+      if(daysToRace!==null&&daysToRace<=14){
+        kosuTpl=tplTempo(band,Math.round(40*yMod),zones);
+      } else if(phase==='Zirve'){
+        if(!wkStats.kaliteliYok) kosuTpl=isTrail&&band>=2?tplYokusKisa(band,zones):tplEsik(band,Math.round(55*yMod),zones);
+        else if(!wkStats.uzunYapildi&&(!uzunGunTanimli||isUzunGun)) kosuTpl=isTrail?tplTirmanisAcik(band,Math.round(75*yMod),zones,dpGun):tplUzun(band,simState.ctl||0,zones,disiplin,dpGun);
+        else if(tsb> -10&&acwr<1.2||isSimulatedFuture) kosuTpl=isTrail&&band>=3?tplYokusUzun(band,zones):tplInterval(band,phase,zones);
+        else kosuTpl=tplAerobik(band,Math.round(55*yMod),zones,disiplin);
+      } else if(phase==='Gelişme'){
+        if(wkStats.kaliteliYok&&(tsb> -10||isSimulatedFuture)&&(acwr<1.2||isSimulatedFuture))
+          kosuTpl=isTrail&&band>=3?tplYokusKisa(band,zones):tplInterval(band,phase,zones);
+        else if(isTrail&&band>=2&&!wkStats.kaliteliYok)
+          kosuTpl=tplTeknikInis(band,40,zones);
+        else
+          kosuTpl=tplAerobik(band,Math.round(55*yMod),zones,disiplin);
+      } else {
+        kosuTpl=tplAerobik(band,Math.round(55*yMod),zones,disiplin);
+      }
     }
     kosuTpl.sure_dk=Math.round((kosuTpl.sure_dk||45)*yMod);
-    if(acwr>1.3&&acwr<=1.5&&!isSimulatedFuture)
-      kosuTpl.uyari='ACWR '+acwr.toFixed(2)+' — yük biraz yüksek, süre kısaltıldı';
-    if(sonYogunGun&&['interval','esik','yokus_kisa','yokus_uzun','tirmanis'].includes(kosuTpl.tip)){
-      kosuTpl=tplAerobik(band,Math.round(50*yMod),zones,disiplin);
-      kosuTpl.sure_dk=Math.round((kosuTpl.sure_dk||45)*yMod);
-      kosuTpl.uyari='Dün yoğun antrenman vardı — bugün aerobik';
-    }
+    if(!kosuUyari&&acwr>1.3&&acwr<=1.5&&!isSimulatedFuture)
+      kosuUyari='ACWR '+acwr.toFixed(2)+' — yük biraz yüksek, süre kısaltıldı';
+    if(kosuUyari)kosuTpl.uyari=kosuUyari;
   }
 
   // ── Çapraz antrenman planla ─────────────────────────────────────────────
@@ -3434,6 +3468,44 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
     });
     let wkStats={count:0,kaliteliYok:true,uzunYapildi:false,wkLoad:0,dpHedefHafta:wt?.targetDp||0,weekOff,sonYogunGun:sonYogunGunGlobal};
 
+    // ── Hafta İskeleti: Kaliteli antrenmanı en iyi TSB gününe ata ────────────
+    // Sadece gelecek/mevcut haftalar için (geçmiş haftada gerçek veri var)
+    // 1. Her koşu gününün tahmini TSB'sini hesapla
+    // 2. En yüksek TSB → kaliteli antrenman günü
+    // 3. uzun_gun → uzun koşu (eğer varsa)
+    // 4. Geri kalanlar → aerobik
+    const haftaIskeleti={}; // dateStr → 'kaliteli'|'uzun'|'aerobik'|null
+    if(weekOff===0||weekOff===1){
+      const kosuGunleriHafta=[];
+      let tmpAtl=simAtl, tmpCtl=simCtl;
+      for(let di=0;di<7;di++){
+        const d=new Date(start);d.setDate(start.getDate()+di);
+        const y=d.getFullYear(),mo=String(d.getMonth()+1).padStart(2,'0'),dd2=String(d.getDate()).padStart(2,'0');
+        const ds=`${y}-${mo}-${dd2}`;
+        const dShort=DAYS_SHORT[d.getDay()];
+        const isPastDay=d<today;
+        const isKosuDay=kosuGunleri.includes(dShort);
+        const isUzunDay=(athlete.uzun_gun||'')===dShort;
+        const estTsb=round1(tmpCtl-tmpAtl);
+        if(isKosuDay&&!isPastDay)kosuGunleriHafta.push({ds,di,estTsb,isUzunDay});
+        // Tahmini yük: aerobik varsayımıyla simüle et
+        const estLoad=isKosuDay?80:20;
+        tmpAtl=estLoad*λ_atl+tmpAtl*(1-λ_atl);
+        tmpCtl=estLoad*λ_ctl+tmpCtl*(1-λ_ctl);
+      }
+      // uzun_gun'u kilitle
+      kosuGunleriHafta.forEach(g=>{if(g.isUzunDay)haftaIskeleti[g.ds]='uzun';});
+      // Kalan günleri TSB'ye göre sırala — en yüksek TSB → kaliteli
+      const kalanlar=kosuGunleriHafta.filter(g=>!haftaIskeleti[g.ds]);
+      kalanlar.sort((a,b)=>b.estTsb-a.estTsb);
+      // Haftada 1 kaliteli antrenman (TSB > -10 olması şartıyla)
+      if(kalanlar.length>0&&kalanlar[0].estTsb>-10){
+        haftaIskeleti[kalanlar[0].ds]='kaliteli';
+      }
+      // Geri kalanlar aerobik
+      kalanlar.slice(1).forEach(g=>{if(!haftaIskeleti[g.ds])haftaIskeleti[g.ds]='aerobik';});
+    }
+
     for(let di=0;di<7;di++){
       const d=new Date(start);d.setDate(start.getDate()+di);
       // toISOString() UTC kullanır — yerel tarih bileşenlerini al
@@ -3455,7 +3527,9 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
         actualKm+=parseFloat(w.mesafe)||0;
         actualDp+=parseFloat(w.irtifa)||0;
       });
-      const planned=planDay(dateStr,athlete,simState,phase,dtR,dtInt,wkStats,kosuGunleri,caprazGunleri);
+      const planned=planDay(dateStr,athlete,simState,phase,dtR,dtInt,
+        {...wkStats, haftaGunTipi:haftaIskeleti[dateStr]||null},
+        kosuGunleri,caprazGunleri);
       // wkStats güncelleme — geçmiş günlerde gerçek antrenman varsa onu kullan
       const isTestDay=(testPlanlar||[]).some(p=>p.athId===athlete.id&&p.date===dateStr);
       const effectiveTip=isPast&&actual.length>0?(actual[0].tur||'aerobik'):planned.tip;
