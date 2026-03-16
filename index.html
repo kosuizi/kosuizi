@@ -3373,7 +3373,27 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
   const uzunGunTanimli=(athlete.uzun_gun||'')!=='';
   const dpGun=wkStats.uzunYapildi?0:Math.round((wkStats.dpHedefHafta||0)*0.6);
   const sonYogunGun=wkStats.sonYogunGun||false;
-  const haftaGunTipi=wkStats.haftaGunTipi||null; // 'kaliteli'|'uzun'|'aerobik'|null
+  const haftaGunTipi=wkStats.haftaGunTipi||null;
+
+  // ── Test günü kontrolü — test planlanmışsa test antrenmanını ver ──────────
+  const testPlan=wkStats.testPlanlar&&wkStats.testPlanlar.find(p=>p.athId===athlete.id&&p.date===date);
+  if(testPlan&&isKosu){
+    const testTur=TEST_TURLERI[testPlan.testTur];
+    if(testTur){
+      const yukFactor={interval:2.1,esik:1.7,aerobik:1.1,kolay:0.8}[testTur.tip]||1.1;
+      const sure=Math.round((testTur.sure_dk||45)*yMod);
+      const yukHedef=Math.round(sure*yukFactor);
+      return{
+        tip:testTur.tip,
+        baslik:testTur.icon+' '+testTur.ad,
+        sure_dk:sure,yukHedef,
+        yapilar:testTur.yapilar||[],
+        aciklama:testTur.amac,
+        isTest:true, testTur:testPlan.testTur,
+        isPast,isToday,simState,phase,yMod,date,dayTR,dayShort
+      };
+    }
+  }
 
   // TSB/ACWR durumuna göre zorunlu indirim flag'leri
   const cokYorgun=tsb< -25;
@@ -3506,7 +3526,7 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       const ws=new Date(start);
       return t.weekStart.toDateString()===ws.toDateString();
     });
-    let wkStats={count:0,kaliteliYok:true,uzunYapildi:false,wkLoad:0,dpHedefHafta:wt?.targetDp||0,weekOff,sonYogunGun:sonYogunGunGlobal};
+    let wkStats={count:0,kaliteliYok:true,uzunYapildi:false,wkLoad:0,dpHedefHafta:wt?.targetDp||0,weekOff,sonYogunGun:sonYogunGunGlobal,testPlanlar:testPlanlar||[]};
 
     // ── Hafta İskeleti: Kaliteli antrenmanı en iyi TSB gününe ata ────────────
     // Sadece gelecek/mevcut haftalar için (geçmiş haftada gerçek veri var)
@@ -3664,6 +3684,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
 
   const tipColor=(tip)=>({dinlenme:'var(--border)',kolay:'var(--success)',aerobik:'var(--success)',uzun:'var(--info)',tempo:'var(--warn)',esik:'var(--warn)',interval:'var(--danger)',acici:'var(--warn)',capraz:'var(--success)',yokus_kisa:'var(--warn)',yokus_uzun:'var(--warn)',tirmanis:'var(--info)',teknik:'var(--info)'}[tip]||'var(--text-tertiary)');
   const tipEmoji=(tip)=>({kolay:'🚶',aerobik:'🏃',uzun:'🛤',tempo:'💨',esik:'🔥',interval:'⚡',acici:'🎯',capraz:'🚴',dinlenme:'😴',yokus_kisa:'⛰',yokus_uzun:'🏔',tirmanis:'📈',teknik:'🎯'}[tip]||'🏅');
+  const dayEmoji=(day)=>day.isTest?(TEST_TURLERI[day.testTur]?.icon||'🧪'):day.isKosuCapraz?'🏃🚴':tipEmoji(day.tip);
   const compBadge=(c)=>{
     if(!c)return null;
     const cls={ok:'badge-good',eksik:'badge-warn',fazla:'badge-warn',atlandı:'badge-danger'}[c.status]||'badge-gray';
@@ -3886,7 +3907,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
                     marginBottom:3,padding:'2px 4px',background:'var(--warn-bg)',borderRadius:3
                   }},'🧪 '+testPlan.testAd.split('(')[0].trim()),
                   React.createElement('div',{style:{fontSize:18,textAlign:'center'}},
-                    day.isKosuCapraz?'🏃🚴':tipEmoji(day.tip)
+                    dayEmoji(day)
                   ),
                   React.createElement('div',{style:{fontSize:10,fontWeight:600,textAlign:'center',color:tipColor(day.tip),marginTop:2}},day.baslik),
                   day.sure_dk>0&&React.createElement('div',{style:{fontSize:9,color:'var(--text-tertiary)',textAlign:'center'}},day.sure_dk+' dk'),
@@ -3913,7 +3934,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
           day.tip==='dinlenme'?null:
           React.createElement('div',{key:day.date,className:'card',style:{borderLeft:'4px solid '+tipColor(day.tip)}},
             React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}},
-              React.createElement('div',{style:{fontWeight:700,fontSize:14}},tipEmoji(day.tip)+' '+day.baslik+' — '+day.dayTR+' · '+day.sure_dk+' dk'),
+              React.createElement('div',{style:{fontWeight:700,fontSize:14}},dayEmoji(day)+' '+day.baslik+' — '+day.dayTR+' · '+day.sure_dk+' dk'),
               React.createElement('button',{className:'btn btn-sm',onClick:()=>setExpandDay(null)},'Kapat')
             ),
             day.aciklama&&React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:10}},day.aciklama),
@@ -4942,6 +4963,12 @@ const TEST_TURLERI={
     id:'cooper', ad:'Cooper Testi (12 dk)',
     icon:'⏱',
     amac:'VO₂max tahmini',
+    tip:'interval', sure_dk:35,
+    yapilar:[
+      {baslik:'Isınma',detay:'10 dk — hafif koşu Z1'},
+      {baslik:'Cooper Testi',detay:'12 dk — mümkün olan maksimum mesafeyi koş · Düz, ölçülü parkur · Durmadan, sabit tempo'},
+      {baslik:'Soğuma',detay:'10 dk — yürüyüş + esneme · Koşulan mesafeyi not al'},
+    ],
     protokol:'Düz, ölçülü bir parkurda tam 12 dakika boyunca mümkün olan en uzun mesafeyi koş. Saat başladığında dur ve mesafeyi ölç.',
     protocol_steps:['Isınma: 10 dk hafif koşu','12 dakika boyunca mümkün olan maksimum mesafeyi koş','Mesafeyi metreler cinsinden kaydet','Soğuma: 5 dk yürüyüş'],
     girdi:[{k:'mesafe_m',l:'Koşulan Mesafe (m)',type:'number',min:800,max:5000,ph:'ör: 2800'}],
@@ -4960,6 +4987,12 @@ const TEST_TURLERI={
     id:'zaman_5k', ad:'5K Zaman Denemesi',
     icon:'🏁',
     amac:'vLT ve pace bölgesi kalibrasyonu',
+    tip:'esik', sure_dk:50,
+    yapilar:[
+      {baslik:'Isınma',detay:'15 dk — hafif koşu Z1 + 2×200m hızlı (tam dinlenme)'},
+      {baslik:'5K Zaman Denemesi',detay:'5000m — mümkün olan en hızlı tempoda · Eşit tempo · GPS saatiyle ölç'},
+      {baslik:'Soğuma',detay:'10 dk — kolay koşu Z1 · Süreyi kaydet'},
+    ],
     protokol:'Düz parkurda veya pistte 5K\'yı tam yarış temposunda koş. Mümkünse GPS saatinle ölç. Öncesinde iyi bir ısınma yap.',
     protocol_steps:['Isınma: 15 dk (son 2×200m hızlı)','5000m\'yi mümkün olan en hızlı tempoda koş','Süreyi saat:dakika:saniye olarak kaydet','Soğuma: 10 dk kolay koşu'],
     girdi:[{k:'sure_sa',l:'Saat',type:'number',min:0,max:1,ph:'0'},{k:'sure_dk',l:'Dakika',type:'number',min:0,max:59,ph:'25'},{k:'sure_sn',l:'Saniye',type:'number',min:0,max:59,ph:'00'}],
@@ -4967,7 +5000,7 @@ const TEST_TURLERI={
       const sec=toSec(r.sure_sa||0,r.sure_dk||0,r.sure_sn||0);
       if(!sec||sec<600)return null;
       const paceSecKm=sec/5;
-      const vlt=5000/sec; // m/s
+      const vlt=5000/sec;
       const pb=secToPace(paceSecKm);
       return{vlt:Math.round(vlt*1000)/1000,pb_5k:pb,label:'5K Pace: '+pb+' /km · vLT: '+(Math.round(vlt*100)/100)+' m/s'};
     },
@@ -4980,6 +5013,12 @@ const TEST_TURLERI={
     id:'maf', ad:'MAF Testi (Maffetone)',
     icon:'❤️',
     amac:'Aerobik verimlilik baseline ve gelişim takibi',
+    tip:'aerobik', sure_dk:55,
+    yapilar:[
+      {baslik:'Isınma',detay:'10 dk — yürüyüş/çok hafif koşu · MAF nabzının altında kal'},
+      {baslik:'MAF Test Koşusu',detay:'5–10 km — MAF nabzında (180 − yaş) sabit tut · Nabız hiçbir zaman MAF\'ı aşmamalı · Her km pace\'ini not al'},
+      {baslik:'Soğuma',detay:'5 dk yürüyüş · 1. ve son km pace farkını kaydet'},
+    ],
     protokol:'MAF nabzında (180 − yaş) en az 5km\'yi sabit tutarak koş. Nabzın hiçbir zaman MAF\'ı aşmamalı. Her km\'nin pace\'ini kaydet.',
     protocol_steps:['MAF nabzını hesapla: 180 − yaş (±düzeltme)','Isınma: 10 dk yürüyüş/çok hafif koşu','5–10 km boyunca MAF nabzını (±5 bpm) sabit tut','Her km\'nin pace\'ini not al','İlk ve son km pace farkı aerobik kapasiteni gösterir'],
     girdi:[{k:'maf_nabiz',l:'MAF Nabzı (bpm)',type:'number',min:110,max:175,ph:'145'},{k:'km1_pace',l:'1. km Pace (dk:sn)',type:'text',ph:'6:30'},{k:'km3_pace',l:'3. km Pace (dk:sn)',type:'text',ph:'6:45'},{k:'km5_pace',l:'5. km Pace (dk:sn)',type:'text',ph:'7:00'}],
@@ -4988,11 +5027,7 @@ const TEST_TURLERI={
       const p5=paceToSec(r.km5_pace)||paceToSec(r.km3_pace);
       if(!p1)return null;
       const fark=p5?Math.round(p5-p1):null;
-      return{
-        maf_nabiz:parseInt(r.maf_nabiz)||0,
-        maf_pace:r.km1_pace,
-        label:'1. km: '+r.km1_pace+(p5?' → 5. km: '+r.km5_pace+(fark?' ('+( fark>0?'+':'')+fark+'sn/km)':''):'')
-      };
+      return{maf_nabiz:parseInt(r.maf_nabiz)||0,maf_pace:r.km1_pace,label:'1. km: '+r.km1_pace+(p5?' → 5. km: '+r.km5_pace+(fark?' ('+( fark>0?'+':'')+fark+'sn/km)':''):'')};
     },
     guncelle:['aerobik_baseline'],
     freq_hafta:4,
@@ -5003,13 +5038,19 @@ const TEST_TURLERI={
     id:'lthr_test', ad:'Laktat Eşiği Testi (1600m)',
     icon:'🔥',
     amac:'LTHR ve nabız bölgesi kalibrasyonu',
+    tip:'interval', sure_dk:60,
+    yapilar:[
+      {baslik:'Isınma',detay:'15 dk — hafif koşu Z1 + 3×100m hızlı (tam dinlenme)'},
+      {baslik:'4×1600m Merdiven',detay:'1. tekrar: rahat tempo → 2. tekrar: biraz hızlı → 3. tekrar: yarış temposu → 4. tekrar: maksimal · Her tekrarda ort. nabzı kaydet · 3 dk aktif dinlenme arası'},
+      {baslik:'Soğuma',detay:'10 dk — kolay koşu Z1 · 4. tekrar ort. nabzı = tahmini LTHR'},
+    ],
     protokol:'4×1600m koşusu. Her tekrarda hız biraz artar. Son tekrar maksimal olmalı. Her tekrarda ortalama nabzı kaydet. Son tekrardaki nabız LTHR tahmini verir.',
     protocol_steps:['Isınma: 15 dk (son 3×100m hızlı)','1. tekrar: rahat tempo — nabzı kaydet','2. tekrar: biraz daha hızlı — nabzı kaydet','3. tekrar: yarış temposu — nabzı kaydet','4. tekrar: maksimal — nabzı kaydet','4. tekrardaki ort. nabız = tahmini LTHR','3 dk aktif dinlenme tekrarlar arası','Soğuma: 10 dk'],
     girdi:[{k:'tekrar1_nabiz',l:'1. Tekrar Ort. Nabız',type:'number',min:100,max:200,ph:'145'},{k:'tekrar2_nabiz',l:'2. Tekrar Ort. Nabız',type:'number',min:110,max:210,ph:'155'},{k:'tekrar3_nabiz',l:'3. Tekrar Ort. Nabız',type:'number',min:120,max:220,ph:'165'},{k:'tekrar4_nabiz',l:'4. Tekrar Ort. Nabız',type:'number',min:130,max:230,ph:'175'}],
     hesapla:(r)=>{
       const n4=parseInt(r.tekrar4_nabiz)||0;
       if(!n4)return null;
-      const lthr=Math.round(n4*0.98); // Son tekrar nabzının %98'i
+      const lthr=Math.round(n4*0.98);
       return{lthr,label:'Tahmini LTHR: '+lthr+' bpm'};
     },
     guncelle:['lthr'],
