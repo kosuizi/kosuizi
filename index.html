@@ -542,62 +542,128 @@ function pbToMin(pbStr){
 function raceReadinessScore(ctl,acwr,phase,sakatlık,hrv_durum,daysLeft,race,athlete,workouts){
   if(!ctl||!acwr||!athlete)return null;
   let score=50;
+  const detaylar=[]; // {baslik, puan, yon:'iyi'|'kotu'|'nötr', aciklama}
 
-  // 1. CTL katkısı — yarışın zorluğuna göre gereken CTL tahmini
   const km=parseFloat(race?.mesafe)||0;
   const dp=parseFloat(race?.d_plus)||0;
   const targetCTL=km<=5?25:km<=10?35:km<=21?45:km<=42?60:km<=60?75:km<=90?90:105;
   const ctlRatio=ctl/targetCTL;
-  score+=Math.round(Math.min(25,ctlRatio*25)); // max 25 puan
 
-  // 2. ACWR katkısı — 0.8-1.3 ideal
-  if(acwr>=0.8&&acwr<=1.3)score+=15;
-  else if(acwr<0.8)score+=Math.round(acwr/0.8*10);
-  else score+=Math.max(0,Math.round(15-20*(acwr-1.3)));
+  // 1. CTL katkısı
+  const ctlPuan=Math.round(Math.min(25,ctlRatio*25));
+  score+=ctlPuan;
+  const ctlPct=Math.round(ctlRatio*100);
+  detaylar.push({
+    baslik:'Aerobik Kondisyon (CTL)',
+    puan:ctlPuan,
+    yon:ctlPuan>=20?'iyi':ctlPuan>=10?'nötr':'kotu',
+    aciklama:`CTL ${round1(ctl)} / Hedef ${targetCTL} (${ctlPct}%)${ctlPct>=100?' — Hedefin üzerinde 💪':ctlPct>=80?' — İyi seviye':ctlPct>=60?' — Gelişiyor':' — Hedefin altında, antrenman yük artışı önerilir'}`
+  });
 
-  // 3. Yarışa özgü faz
+  // 2. ACWR katkısı
+  let acwrPuan;
+  if(acwr>=0.8&&acwr<=1.3){acwrPuan=15;}
+  else if(acwr<0.8){acwrPuan=Math.round(acwr/0.8*10);}
+  else{acwrPuan=Math.max(0,Math.round(15-20*(acwr-1.3)));}
+  score+=acwrPuan;
+  detaylar.push({
+    baslik:'Yük Dengesi (ACWR)',
+    puan:acwrPuan,
+    yon:acwrPuan>=15?'iyi':acwrPuan>=8?'nötr':'kotu',
+    aciklama:`ACWR ${acwr.toFixed(2)} — ${acwr>=0.8&&acwr<=1.3?'İdeal aralıkta (0.8-1.3) ✓':acwr<0.8?`Düşük (${acwr.toFixed(2)}) — Antrenman hacmi yetersiz, form kaybı riski`:`Yüksek (${acwr.toFixed(2)}) — Aşırı yüklenme riski, toparlanma önerilir`}`
+  });
+
+  // 3. Hazırlık fazı
   const racePhase=race?.tarih&&race?.prep_weeks
     ?calcPhase(new Date().toISOString().split('T')[0],race.tarih,race.prep_weeks,race)
     :phase;
   const phaseScore={Temel:-5,Gelişme:5,Zirve:10,Taper:15,'Yarış Sonrası':-10}[racePhase]||0;
   score+=phaseScore;
+  detaylar.push({
+    baslik:'Hazırlık Fazı',
+    puan:phaseScore,
+    yon:phaseScore>=10?'iyi':phaseScore>=0?'nötr':'kotu',
+    aciklama:`${racePhase} fazı ${phaseScore>0?'(+'+phaseScore+' puan)':phaseScore<0?'('+phaseScore+' puan)':'(nötr)'} — ${
+      racePhase==='Taper'?'Taper — Mükemmel zamanlama, form zirvede ✓':
+      racePhase==='Zirve'?'Zirve fazı — Yüksek kondisyon, hazırlık tamamlanıyor':
+      racePhase==='Gelişme'?'Gelişme fazı — İyi ilerleme, devam edin':
+      racePhase==='Temel'?'Temel faz — Hazırlığın başında, uzun süreç var':
+      'Yarış sonrası — Toparlanma döneminde'}`
+  });
 
-  // 4. Yarışın zorluğu vs CTL uyumu
+  // 4. Yarış zorluğu uyumu
   const diffScore=raceDiffScore(race||{});
+  let diffPuan=0;
   if(diffScore>0){
     const diffRatio=ctlRatio/Math.max(1,diffScore/50);
-    if(diffRatio<0.6)score-=15;
-    else if(diffRatio<0.8)score-=8;
-    else if(diffRatio>=1.1)score+=5;
+    if(diffRatio<0.6){diffPuan=-15;}
+    else if(diffRatio<0.8){diffPuan=-8;}
+    else if(diffRatio>=1.1){diffPuan=5;}
   }
+  score+=diffPuan;
+  if(diffPuan!==0)detaylar.push({
+    baslik:'Yarış Zorluğu Uyumu',
+    puan:diffPuan,
+    yon:diffPuan>0?'iyi':diffPuan<=-10?'kotu':'nötr',
+    aciklama:`${diffPuan<0?`Kondisyon yarışın zorluğuna göre ${diffPuan<=-15?'yetersiz':'biraz düşük'} — daha fazla hazırlık gerekli`:'Kondisyon yarışın zorluğuyla uyumlu ✓'}`
+  });
 
-  // 5. Kalan hazırlık süresi
+  // 5. Hazırlık tamamlanma oranı
+  let prepPuan=0;
+  let prepAciklama='';
   if(daysLeft>0){
     const prepWeeks=parseInt(race?.prep_weeks)||12;
     const taperW=parseInt(race?.taper_w)||(km>42?3:km>21?2:1);
     const trainingDaysLeft=Math.max(0,daysLeft-taperW*7);
     const totalTrainingDays=Math.max(1,(prepWeeks-taperW)*7);
     const prepPct=Math.min(1,(totalTrainingDays-trainingDaysLeft)/totalTrainingDays);
-    if(prepPct>=0.9)score+=8;
-    else if(prepPct>=0.7)score+=4;
-    else if(prepPct<0.4)score-=8;
+    const prepPctR=Math.round(prepPct*100);
+    if(prepPct>=0.9){prepPuan=8;prepAciklama=`Hazırlık %${prepPctR} tamamlandı — Final aşama ✓`;}
+    else if(prepPct>=0.7){prepPuan=4;prepAciklama=`Hazırlık %${prepPctR} tamamlandı — İyi ilerleme`;}
+    else if(prepPct<0.4){prepPuan=-8;prepAciklama=`Hazırlık %${prepPctR} tamamlandı — Erkenden skorlanıyor`;}
+    else{prepAciklama=`Hazırlık %${prepPctR} tamamlandı — Orta aşama`;}
   }
+  score+=prepPuan;
+  if(daysLeft>0)detaylar.push({
+    baslik:'Hazırlık Tamamlanma',
+    puan:prepPuan,
+    yon:prepPuan>0?'iyi':prepPuan<0?'nötr':'nötr',
+    aciklama:prepAciklama||(daysLeft<=0?'Yarış geçti':'Yarışa '+daysLeft+' gün kaldı')
+  });
 
   // 6. Sakatlık
   const inj=parseInt(sakatlık)||1;
-  score-=(inj-1)*3;
+  const injPuan=-((inj-1)*3);
+  score+=injPuan;
+  if(inj>1)detaylar.push({
+    baslik:'Sakatlık / Sağlık',
+    puan:injPuan,
+    yon:inj<=2?'nötr':inj<=5?'kotu':'kotu',
+    aciklama:`Sakatlık puanı ${inj}/10 — ${inj<=2?'İyi durumda':inj<=4?'Hafif şikayet, dikkatli olun':inj<=6?'Ciddi şikayet, yükü azaltın':'Yüksek sakatlık riski, dinlenin'}`
+  });
+  else detaylar.push({baslik:'Sakatlık / Sağlık',puan:0,yon:'iyi',aciklama:'Sağlık durumu iyi ('+inj+'/10) ✓'});
 
   // 7. HRV
-  score+=hrvReadinessBonus(hrv_durum);
+  const hrvPuan=hrvReadinessBonus(hrv_durum);
+  score+=hrvPuan;
+  detaylar.push({
+    baslik:'HRV / Toparlanma',
+    puan:hrvPuan,
+    yon:hrvPuan>0?'iyi':hrvPuan<0?'kotu':'nötr',
+    aciklama:`HRV durumu: ${hrv_durum||'bilinmiyor'} ${
+      hrv_durum==='dengeli'?'— Sinir sistemi dinlenmiş, hazır ✓':
+      hrv_durum==='dengesiz'?'— Orta toparlanma, dikkatli olun':
+      hrv_durum==='düşük'?'— Yorgunluk yüksek, iyileşme gerekli':
+      '— Veri yok'}`
+  });
 
-  // 8. Yükleme planı başarısı — geçmiş haftalardaki hedef tutturma oranı
-  // Bu faktör en fazla +20 / -20 puan etkisi yapar
+  // 8. Yükleme planı başarısı
+  let planPuan=0;
+  let planAciklama='';
   if(workouts?.length&&race?.prep_weeks&&race?.tarih){
     const weekTargets=calcWeeklyTargets(athlete,[race],workouts||[]);
     if(weekTargets.length>0){
-      const raceDate=new Date(race.tarih+'T12:00:00');
       const athWks=(workouts||[]).filter(w=>w.athleteId===athlete?.id);
-      // Sadece geçmiş haftaları değerlendir
       const pastTargets=weekTargets.filter(wt=>wt.isPast&&(wt.targetKm>0||wt.targetDp>0));
       if(pastTargets.length>0){
         let totalScore=0;
@@ -606,28 +672,34 @@ function raceReadinessScore(ctl,acwr,phase,sakatlık,hrv_durum,daysLeft,race,ath
           const wWks=athWks.filter(w=>{const d=new Date(w.date+'T12:00:00');return d>=ws&&d<=we;});
           const actKm=round1(wWks.reduce((s,w)=>s+(parseFloat(w.mesafe)||0),0));
           const actDp=Math.round(wWks.reduce((s,w)=>s+(parseFloat(w.irtifa)||0),0));
-          // Km başarı oranı (ağırlık 0.6) + D+ başarı oranı (ağırlık 0.4)
           const kmRatio=wt.targetKm>0?Math.min(1.1,actKm/wt.targetKm):1;
           const dpRatio=wt.targetDp>0?Math.min(1.1,actDp/wt.targetDp):kmRatio;
-          const weekScore=kmRatio*0.6+dpRatio*0.4;
-          totalScore+=weekScore;
+          totalScore+=kmRatio*0.6+dpRatio*0.4;
         });
-        const avgAchievement=totalScore/pastTargets.length; // 0–1.1 arası
-        // %90+ ortalama → +20, %70-90 → +10, %50-70 → 0, %30-50 → -10, <%30 → -20
-        if(avgAchievement>=0.90)score+=20;
-        else if(avgAchievement>=0.70)score+=10;
-        else if(avgAchievement>=0.50)score+=0;
-        else if(avgAchievement>=0.30)score-=10;
-        else score-=20;
+        const avg=totalScore/pastTargets.length;
+        const avgPct=Math.round(avg*100);
+        if(avg>=0.90){planPuan=20;planAciklama=`Haftalık hedeflere ortalama %${avgPct} uyum — Mükemmel disiplin ✓`;}
+        else if(avg>=0.70){planPuan=10;planAciklama=`Haftalık hedeflere ortalama %${avgPct} uyum — İyi tutarlılık`;}
+        else if(avg>=0.50){planPuan=0;planAciklama=`Haftalık hedeflere ortalama %${avgPct} uyum — Orta düzey`;}
+        else if(avg>=0.30){planPuan=-10;planAciklama=`Haftalık hedeflere ortalama %${avgPct} uyum — Tutarsız antrenman`;}
+        else{planPuan=-20;planAciklama=`Haftalık hedeflere ortalama %${avgPct} uyum — Ciddi eksiklik`;}
+        score+=planPuan;
+        detaylar.push({
+          baslik:'Plan Tutarlılığı',
+          puan:planPuan,
+          yon:planPuan>=10?'iyi':planPuan>=0?'nötr':'kotu',
+          aciklama:planAciklama+` (${pastTargets.length} hafta değerlendirildi)`
+        });
       }
     }
   }
 
-  // 9. Yarışa çok az kaldıysa tavan
+  // 9. Tavan — yarışa çok yakınsa
   if(daysLeft>0&&daysLeft<7)score=Math.min(score,80);
   else if(daysLeft>0&&daysLeft<14)score=Math.min(score,75);
 
-  return Math.round(Math.max(0,Math.min(100,score)));
+  const finalScore=Math.round(Math.max(0,Math.min(100,score)));
+  return{score:finalScore, detaylar};
 }
 // ── Bölgeler Motoru (Friel + Daniels) ────────────────────────────────────────
 
@@ -5107,14 +5179,49 @@ function ChartAerEff({history}){
   return React.createElement('div',{style:{position:'relative',height:180}},React.createElement('canvas',{ref}));
 }
 
-function ReadinessBar({score}){
-  if(score===null)return React.createElement('span',{style:{color:'var(--text-tertiary)',fontSize:12}},'Veri yetersiz');
-  const color=score>=75?'var(--success)':score>=50?'var(--warn)':'var(--danger)';
-  return React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8}},
-    React.createElement('div',{style:{flex:1,height:8,background:'var(--bg-secondary)',borderRadius:4,overflow:'hidden'}},
-      React.createElement('div',{style:{width:score+'%',height:'100%',background:color,borderRadius:4,transition:'width .3s'}})
+function ReadinessBar({score,detaylar}){
+  const [acik,setAcik]=useState(false);
+  if(score===null||score===undefined)
+    return React.createElement('span',{style:{color:'var(--text-tertiary)',fontSize:12}},'Veri yetersiz');
+  const s=typeof score==='object'?score.score:score;
+  const dd=detaylar||(typeof score==='object'?score.detaylar:null)||[];
+  const color=s>=75?'var(--success)':s>=50?'var(--warn)':'var(--danger)';
+  const label=s>=80?'Hazır 💪':s>=65?'İyi durumda':s>=50?'Gelişiyor':s>=35?'Eksik var':'Hazır değil';
+  return React.createElement('div',null,
+    React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8,cursor:dd.length?'pointer':'default'},
+      onClick:()=>dd.length&&setAcik(a=>!a)},
+      React.createElement('div',{style:{flex:1,height:8,background:'var(--bg-secondary)',borderRadius:4,overflow:'hidden'}},
+        React.createElement('div',{style:{width:s+'%',height:'100%',background:color,borderRadius:4,transition:'width .3s'}})
+      ),
+      React.createElement('span',{style:{fontSize:13,fontWeight:700,color,minWidth:28}},s),
+      React.createElement('span',{style:{fontSize:11,color:'var(--text-secondary)',minWidth:72}},label),
+      dd.length>0&&React.createElement('span',{style:{fontSize:10,color:'var(--text-tertiary)'}},acik?'▲':'▼ detay')
     ),
-    React.createElement('span',{style:{fontSize:13,fontWeight:600,color,minWidth:32}},score)
+    acik&&dd.length>0&&React.createElement('div',{style:{
+      marginTop:8,padding:'10px 12px',
+      background:'var(--bg-secondary)',borderRadius:'var(--radius)',
+      display:'flex',flexDirection:'column',gap:6
+    }},
+      dd.map((d,i)=>{
+        const yon=d.yon==='iyi'?'var(--success)':d.yon==='kotu'?'var(--danger)':'var(--text-secondary)';
+        const icon=d.yon==='iyi'?'✅':d.yon==='kotu'?'⚠️':'➡️';
+        const puanStr=d.puan>0?'+'+d.puan:d.puan===0?'±0':String(d.puan);
+        return React.createElement('div',{key:i,style:{
+          display:'flex',gap:8,alignItems:'flex-start',
+          padding:'6px 8px',borderRadius:6,
+          background:d.yon==='iyi'?'var(--success-bg)':d.yon==='kotu'?'var(--danger-bg)':'var(--bg-primary)'
+        }},
+          React.createElement('span',{style:{fontSize:14,flexShrink:0,marginTop:1}},icon),
+          React.createElement('div',{style:{flex:1}},
+            React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:2}},
+              React.createElement('span',{style:{fontSize:12,fontWeight:600}},d.baslik),
+              React.createElement('span',{style:{fontSize:12,fontWeight:700,color:yon,minWidth:28,textAlign:'right'}},puanStr)
+            ),
+            React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',lineHeight:1.4}},d.aciklama)
+          )
+        );
+      })
+    )
   );
 }
 
@@ -5178,7 +5285,7 @@ function YarislarTab({athlete,races,history,workouts,raceResults,onAddResult,onD
           ),
           !isPast&&readiness!==null&&React.createElement('div',{style:{textAlign:'right',minWidth:180}},
             React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',marginBottom:4}},'Yarış Hazırlık Skoru'),
-            React.createElement(ReadinessBar,{score:readiness})
+            React.createElement(ReadinessBar,{score:readiness?.score??readiness,detaylar:readiness?.detaylar})
           )
         ),
 
@@ -6329,8 +6436,8 @@ function KarsilastirTab({athletes,races,workouts,allHistory}){
               const athUpcoming=upcomingRaces.filter(r=>(ath.yarıslar||[]).includes(r.id));
               const athReadinessScores=athUpcoming.map(r=>{
                 const dl=Math.ceil((new Date(r.tarih+'T12:00:00')-today)/864e5);
-                const sc=raceReadinessScore(last?.ctl,last?.acwr,last?.phase,ath.sakatlık,ath.hrv_durum,dl,r,ath,workouts);
-                return{race:r,daysLeft:dl,score:sc};
+                const scObj=raceReadinessScore(last?.ctl,last?.acwr,last?.phase,ath.sakatlık,ath.hrv_durum,dl,r,ath,workouts);
+                return{race:r,daysLeft:dl,score:scObj?.score??scObj};
               });
 
               return React.createElement('tr',{key:ath.id},
@@ -6345,7 +6452,7 @@ function KarsilastirTab({athletes,races,workouts,allHistory}){
                 React.createElement('td',null,ath.motivasyon?React.createElement('span',{className:'badge '+(parseInt(ath.motivasyon)>=4?'badge-good':parseInt(ath.motivasyon)<=2?'badge-warn':'badge-info')},ath.motivasyon+'/5'):'—'),
                 ...(filteredRace?[
                   React.createElement('td',null,target?React.createElement('span',{style:{fontWeight:600,color:'var(--info)'}},fmtHMS(target.totalMin)):'—'),
-                  React.createElement('td',null,readiness!==null?React.createElement(ReadinessBar,{score:readiness}):'—'),
+                  React.createElement('td',null,readiness!==null?React.createElement(ReadinessBar,{score:readiness?.score??readiness,detaylar:readiness?.detaylar}):'—'),
                 ]:[]),
                 ...(!filteredRace?[
                   React.createElement('td',{style:{minWidth:260}},
@@ -6454,7 +6561,7 @@ function Dashboard({workouts,athlete,history,races}){
         ),
         readiness!==null&&React.createElement('div',{style:{minWidth:200}},
           React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',marginBottom:4}},'Yarış Hazırlık Skoru — '+nextRace.ad),
-          React.createElement(ReadinessBar,{score:readiness})
+          React.createElement(ReadinessBar,{score:readiness?.score??readiness,detaylar:readiness?.detaylar})
         )
       )
     ),
