@@ -3335,6 +3335,8 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
 
   const uzunGunTanimli=(athlete.uzun_gun||'')!=='';
   const dpGun=wkStats.uzunYapildi?0:Math.round((wkStats.dpHedefHafta||0)*0.6);
+  // Dün yoğun antrenman varsa bugün yoğun antrenman verme
+  const sonYogunGun=wkStats.sonYogunGun||false;
 
   // ── Koşu antrenmanı planla ──────────────────────────────────────────────
   let kosuTpl=null;
@@ -3348,16 +3350,16 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
     } else if(isUzunGun&&!wkStats.uzunYapildi&&(tsb> -15||isSimulatedFuture)){
       kosuTpl=isTrail&&dpGun>200?tplTirmanisAcik(band,Math.round(70*yMod),zones,dpGun):tplUzun(band,simState.ctl||0,zones,disiplin,dpGun);
     } else if(daysToRace!==null&&daysToRace<=14){
-      kosuTpl=tplTempo(band,Math.round(40*yMod),zones);
+      kosuTpl=sonYogunGun?tplAerobik(band,Math.round(50*yMod),zones,disiplin):tplTempo(band,Math.round(40*yMod),zones);
     } else if(phase==='Zirve'){
       if(!wkStats.kaliteliYok) kosuTpl=isTrail&&band>=2?tplYokusKisa(band,zones):tplEsik(band,Math.round(55*yMod),zones);
       else if(!wkStats.uzunYapildi&&(!uzunGunTanimli||isUzunGun)) kosuTpl=isTrail?tplTirmanisAcik(band,Math.round(75*yMod),zones,dpGun):tplUzun(band,simState.ctl||0,zones,disiplin,dpGun);
-      else if(tsb> -10&&acwr<1.2||isSimulatedFuture) kosuTpl=isTrail&&band>=3?tplYokusUzun(band,zones):tplInterval(band,phase,zones);
+      else if((tsb> -10&&acwr<1.2||isSimulatedFuture)&&!sonYogunGun) kosuTpl=isTrail&&band>=3?tplYokusUzun(band,zones):tplInterval(band,phase,zones);
       else kosuTpl=tplAerobik(band,Math.round(55*yMod),zones,disiplin);
     } else if(phase==='Gelişme'){
-      if(wkStats.kaliteliYok&&(tsb> -10||isSimulatedFuture)&&(acwr<1.2||isSimulatedFuture))
+      if(wkStats.kaliteliYok&&(tsb> -10||isSimulatedFuture)&&(acwr<1.2||isSimulatedFuture)&&!sonYogunGun)
         kosuTpl=isTrail&&band>=3?tplYokusKisa(band,zones):tplInterval(band,phase,zones);
-      else if(isTrail&&band>=2&&!wkStats.kaliteliYok)
+      else if(isTrail&&band>=2&&!wkStats.kaliteliYok&&!sonYogunGun)
         kosuTpl=tplTeknikInis(band,40,zones);
       else
         kosuTpl=tplAerobik(band,Math.round(55*yMod),zones,disiplin);
@@ -3365,9 +3367,13 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
       kosuTpl=tplAerobik(band,Math.round(55*yMod),zones,disiplin);
     }
     kosuTpl.sure_dk=Math.round((kosuTpl.sure_dk||45)*yMod);
-    // ACWR uyarısı — koşu günü ama yük biraz yüksek
     if(acwr>1.3&&acwr<=1.5&&!isSimulatedFuture)
-      kosuTpl.uyari='ACWR '+acwr.toFixed(2)+' — yük biraz yüksek, süre %15 kısaltıldı';
+      kosuTpl.uyari='ACWR '+acwr.toFixed(2)+' — yük biraz yüksek, süre kısaltıldı';
+    if(sonYogunGun&&['interval','esik','yokus_kisa','yokus_uzun','tirmanis'].includes(kosuTpl.tip)){
+      kosuTpl=tplAerobik(band,Math.round(50*yMod),zones,disiplin);
+      kosuTpl.sure_dk=Math.round((kosuTpl.sure_dk||45)*yMod);
+      kosuTpl.uyari='Dün yoğun antrenman vardı — bugün aerobik';
+    }
   }
 
   // ── Çapraz antrenman planla ─────────────────────────────────────────────
@@ -3417,16 +3423,16 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
 
   const weeks=[];
   let simAtl=last?.atl||0, simCtl=last?.ctl||0;
+  let sonYogunGunGlobal=false; // Haftalar arası korunur
 
   for(let weekOff=0;weekOff<2;weekOff++){
     const {start}=getWeekBounds(weekOff);
     const days=[];
-    // Bu haftanın yükleme hedefi
     const wt=weekTargets.find(t=>{
       const ws=new Date(start);
       return t.weekStart.toDateString()===ws.toDateString();
     });
-    let wkStats={count:0,kaliteliYok:true,uzunYapildi:false,wkLoad:0,dpHedefHafta:wt?.targetDp||0,weekOff};
+    let wkStats={count:0,kaliteliYok:true,uzunYapildi:false,wkLoad:0,dpHedefHafta:wt?.targetDp||0,weekOff,sonYogunGun:sonYogunGunGlobal};
 
     for(let di=0;di<7;di++){
       const d=new Date(start);d.setDate(start.getDate()+di);
@@ -3453,12 +3459,16 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       // wkStats güncelleme — geçmiş günlerde gerçek antrenman varsa onu kullan
       const isTestDay=(testPlanlar||[]).some(p=>p.athId===athlete.id&&p.date===dateStr);
       const effectiveTip=isPast&&actual.length>0?(actual[0].tur||'aerobik'):planned.tip;
+      const isYogunTip=['interval','esik','yokus_kisa','yokus_uzun','tirmanis'].includes(effectiveTip);
       if(effectiveTip!=='dinlenme'&&effectiveTip!=='capraz'&&(isPast?actual.length>0:true)){
         wkStats.count++;
         if(['interval','esik','tempo','yokus_kisa','yokus_uzun'].includes(effectiveTip)) wkStats.kaliteliYok=false;
         if(['uzun','tirmanis'].includes(effectiveTip)) wkStats.uzunYapildi=true;
         wkStats.wkLoad+=planned.yukHedef||0;
       }
+      // Ard arda yoğun gün takibi — haftalar arası korunur
+      wkStats.sonYogunGun=isYogunTip;
+      sonYogunGunGlobal=isYogunTip;
       // Test günü simülasyon yükünü %60 azalt — ACWR patlamasını önle
       const rawLoad=isPast?(actualLoad||0):(planned.yukHedef||0);
       const loadForSim=isTestDay?Math.round(rawLoad*0.4):rawLoad;
