@@ -3540,7 +3540,12 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
           weekTargets.length>0&&React.createElement('button',{
             className:'btn btn-sm'+(showLoading?' btn-primary':''),
             onClick:()=>setShowLoading(s=>!s)
-          },showLoading?'Planı Gizle':'📊 Yükleme Planı')
+          },showLoading?'Planı Gizle':'📊 Yükleme Planı'),
+          plan&&React.createElement('button',{
+            className:'btn btn-sm',
+            onClick:()=>exportHaftalikPlanXLSX(plan,athlete),
+            title:'Haftalık antrenman planını Excel formatında indir'
+          },'⬇ Excel İndir')
         )
       )
     ),
@@ -5158,6 +5163,124 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,t
       )
     )
   );
+}
+
+// ── Haftalık Plan Excel Dışa Aktarma ─────────────────────────────────────────
+
+function exportHaftalikPlanXLSX(plan, athlete){
+  if(!plan||!plan.weeks)return;
+
+  // detay string'inden süre (dakika) çıkar
+  const parseDurMin=(detay='')=>{
+    const repMatch=detay.match(/(\d+)\s*[×x]\s*(\d+)\s*dk/);
+    if(repMatch)return{dk:parseInt(repMatch[2]),tekrar:parseInt(repMatch[1])};
+    const simMatch=detay.match(/(\d+)\s*dk/);
+    if(simMatch)return{dk:parseInt(simMatch[1]),tekrar:1};
+    return{dk:0,tekrar:1};
+  };
+
+  // detay string'inden pace (sn/km) çıkar
+  const parsePaceSec=(detay='')=>{
+    // "(5:52) /km" formatındaki ortalama pace
+    const avgMatch=detay.match(/\((\d+):(\d+)\)\s*\/km/);
+    if(avgMatch)return parseInt(avgMatch[1])*60+parseInt(avgMatch[2]);
+    // "5:30–6:15 /km" formatı
+    const rangeMatch=detay.match(/(\d+):(\d+)[–\-](\d+):(\d+)\s*\/km/);
+    if(rangeMatch){
+      const lo=parseInt(rangeMatch[1])*60+parseInt(rangeMatch[2]);
+      const hi=parseInt(rangeMatch[3])*60+parseInt(rangeMatch[4]);
+      return Math.round((lo+hi)/2);
+    }
+    return 0;
+  };
+
+  // saniyeyi saat/dk/sn'ye çevir
+  const secToHMS=(sec)=>({
+    saat:Math.floor(sec/3600),
+    dk:Math.floor((sec%3600)/60),
+    sn:Math.round(sec%60)
+  });
+
+  const wb=XLSX.utils.book_new();
+  const terrain=athlete?.disiplin==='yol'?'Düzde':athlete?.disiplin==='patika'||athlete?.disiplin==='ultra'?'Arazi':'Karma';
+
+  plan.weeks.forEach((week)=>{
+    week.days.forEach(day=>{
+      if(day.tip==='dinlenme'||!day.yapilar||day.yapilar.length===0)return;
+
+      const rows=[];
+      const merges=[];
+      let r=0; // row index (0-based)
+
+      // Satır 0: Tarih | Gün adı
+      const dateFormatted=day.date?new Date(day.date+'T12:00:00').toLocaleDateString('tr-TR',{day:'numeric',month:'numeric',year:'numeric'}):'';
+      rows.push([dateFormatted,'','',day.dayTR||'','','']);
+      merges.push({s:{r,c:0},e:{r,c:2}},{s:{r,c:3},e:{r,c:5}});r++;
+
+      // Satır 1: Antrenman adı | Durum | Zemin
+      const durumStr=day.isPast?'Tamamlandı':'Planlandı';
+      rows.push([day.baslik||'','','',durumStr,'',terrain]);
+      merges.push({s:{r,c:0},e:{r,c:2}},{s:{r,c:3},e:{r,c:4}},{s:{r,c:5},e:{r,c:5}});r++;
+
+      // Satır 2: Başlık grubu
+      rows.push(['Süre','','','Mesafe','Koşu Hızı (Pace)','']);
+      merges.push({s:{r,c:0},e:{r,c:2}},{s:{r,c:4},e:{r,c:5}});r++;
+
+      // Satır 3: Alt başlıklar
+      rows.push(['saat','dakika','saniye','metre','dakika','saniye']);r++;
+
+      // Veri satırları
+      let totalSec=0, totalMetre=0;
+      let paceSum=0, paceCount=0;
+      const dataStartR=r;
+
+      day.yapilar.forEach(y=>{
+        const {dk,tekrar}=parseDurMin(y.detay||'');
+        const paceSec=parsePaceSec(y.detay||'');
+        const durSec=dk*60;
+        const metre=paceSec>0?Math.round(durSec/paceSec*1000):0;
+
+        // Tekrar satırı (gri): N tekrar ise
+        if(tekrar>1){
+          rows.push(['','',tekrar,'X','','']);r++;
+        }
+
+        const hms=secToHMS(durSec);
+        const paceDk=paceSec>0?Math.floor(paceSec/60):0;
+        const paceSn=paceSec>0?Math.round(paceSec%60):0;
+        rows.push([hms.saat,hms.dk,hms.sn,metre,paceDk,paceSn]);r++;
+
+        totalSec+=durSec*(tekrar>1?tekrar:1);
+        totalMetre+=metre*(tekrar>1?tekrar:1);
+        if(paceSec>0){paceSum+=paceSec;paceCount++;}
+      });
+
+      // Toplam satır başlığı
+      rows.push(['Toplam Süre','','','Toplam Mesafe','Ortalama Koşu Hızı (Pace)','']);
+      merges.push({s:{r,c:0},e:{r,c:2}},{s:{r,c:4},e:{r,c:5}});r++;
+
+      // Toplam değerler
+      const totHms=secToHMS(totalSec);
+      const avgPaceSec=paceCount>0?Math.round(paceSum/paceCount):0;
+      const avgPaceDk=avgPaceSec>0?Math.floor(avgPaceSec/60):0;
+      const avgPaceSn=avgPaceSec>0?Math.round(avgPaceSec%60):0;
+      rows.push([totHms.saat,totHms.dk,totHms.sn,totalMetre,avgPaceDk,avgPaceSn]);r++;
+
+      const ws=XLSX.utils.aoa_to_sheet(rows);
+      ws['!merges']=merges;
+
+      // Sütun genişlikleri
+      ws['!cols']=[{wch:8},{wch:8},{wch:8},{wch:10},{wch:8},{wch:8}];
+
+      // Sayfa adı: "Pzt 16.03" gibi
+      const sheetName=(day.dayTR||'').slice(0,3)+' '+(day.date||'').slice(5).replace('-','.');
+      XLSX.utils.book_append_sheet(wb,ws,sheetName);
+    });
+  });
+
+  if(wb.SheetNames.length===0){alert('Haftalık planda antrenman verisi bulunamadı.');return;}
+  const dateStr=new Date().toISOString().slice(0,10);
+  XLSX.writeFile(wb,`haftalik_plan_${dateStr}.xlsx`);
 }
 
 function KarsilastirTab({athletes,races,workouts,allHistory}){
