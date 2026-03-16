@@ -1214,7 +1214,7 @@ function compressImage(file,{maxW=800,maxH=800,quality=0.75,onDone,onError}){
   reader.readAsDataURL(file);
 }
 
-const TABS=[{id:'dashboard',label:'Pano'},{id:'gunun',label:'💡 Günün Antrenmanı'},{id:'plan',label:'📅 Haftalık Plan'},{id:'lider',label:'🏆 Liderlik'},{id:'bolge',label:'Bölgeler'},{id:'test',label:'🧪 Testler'},{id:'yarislar',label:'Yarış Durumu'},{id:'karsilastir',label:'Karşılaştır'},{id:'ekle',label:'Antrenman Ekle'},{id:'gecmis',label:'Geçmiş'},{id:'yukle',label:'Excel Yükle'},{id:'sporcular',label:'Sporcular ve Yarışlar'}];
+const TABS=[{id:'dashboard',label:'Pano'},{id:'gunun',label:'💡 Günün Antrenmanı'},{id:'plan',label:'📅 Haftalık Plan'},{id:'lider',label:'🏆 Liderlik'},{id:'bolge',label:'Bölgeler'},{id:'test',label:'🧪 Testler'},{id:'yarislar',label:'Yarış Durumu'},{id:'karsilastir',label:'Karşılaştır'},{id:'ekle',label:'Antrenman Ekle'},{id:'gecmis',label:'Geçmiş'},{id:'analiz',label:'📊 Antrenman Analizi'},{id:'yukle',label:'Excel Yükle'},{id:'sporcular',label:'Sporcular ve Yarışlar'}];
 
 const SPOR_TURLERI=[
   {v:'kosu',     l:'Koşu',       k:1.00, emoji:'🏃'},
@@ -6666,22 +6666,32 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,wor
 
   // Sporcu veya tarih değişince → planı oku ve öneri oluştur
   React.useEffect(()=>{
-    if(!selId||!form.date)return;
+    if(!selId||!form.date||!selectedAth)return;
     try{
-      const athRaces=races||(athlete?[]:[]); 
+      // Sporcunun yarışları — races prop'tan filtrele
+      const athRaceIds=selectedAth.yarıslar||[];
+      const athRaces=(races||[]).filter(r=>athRaceIds.includes(r.id));
       const athWorkouts=(workouts||[]).filter(w=>w.athleteId===selId);
-      const plan=generateTwoWeekPlan(selectedAth,history,athRaces,athWorkouts,testPlanlar||[]);
-      if(!plan||!plan.weeks)return;
+      // history boşsa plan üretilemez — en az 1 element lazım
+      const athHistory=allHistory?.[selId]||history;
+      if(!selectedAth.kosu_gunleri||selectedAth.kosu_gunleri.length===0){
+        setPlanOneri(null); return;
+      }
+      const plan=generateTwoWeekPlan(selectedAth,athHistory,athRaces,athWorkouts,testPlanlar||[]);
+      if(!plan||!plan.weeks){setPlanOneri(null);return;}
       const allDays=plan.weeks.flatMap(w=>w.days);
       const dayPlan=allDays.find(d=>d.date===form.date);
-      if(dayPlan&&dayPlan.tip!=='dinlenme'){
+      if(dayPlan&&dayPlan.tip&&dayPlan.tip!=='dinlenme'){
         const oneri=planDayToForm(dayPlan);
         setPlanOneri({...oneri, baslik:dayPlan.baslik, tip:dayPlan.tip});
       } else {
         setPlanOneri(null);
       }
-    }catch(e){setPlanOneri(null);}
-  },[selId,form.date]);
+    }catch(e){
+      console.warn('Plan önerisi üretilemedi:',e.message);
+      setPlanOneri(null);
+    }
+  },[selId,form.date,selectedAth]);
 
   // Öneri uygula
   const applyOneri=()=>{
@@ -6828,6 +6838,233 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,wor
           )
         ),
         React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)'}},lastRec.aktivite)
+      )
+    )
+  );
+}
+
+// ── Antrenman Analizi: Aynı yapıdaki antrenmanları zaman içinde karşılaştır ──
+function AntrenmanAnalizTab({workouts,athletes}){
+  const [selAth,setSelAth]=useState('');
+  const [selTur,setSelTur]=useState('');
+  const [selYapi,setSelYapi]=useState('');
+  const chartRef=useRef();
+  const chartInst=useRef();
+
+  // Seçili sporcunun antrenmanları
+  const athWorkouts=useMemo(()=>{
+    if(!selAth)return[];
+    return (workouts||[]).filter(w=>w.athleteId===selAth&&w.date).sort((a,b)=>new Date(a.date)-new Date(b.date));
+  },[workouts,selAth]);
+
+  // Mevcut tur seçenekleri — sporcunun gerçek antrenmanlarından
+  const turSecenekleri=useMemo(()=>{
+    const set=new Set(athWorkouts.map(w=>w.tur).filter(Boolean));
+    return [...set].map(v=>({v,l:TUR_LABELS[v]||v}));
+  },[athWorkouts]);
+
+  // Seçili tur için yapi_notu seçenekleri
+  const yapiSecenekleri=useMemo(()=>{
+    const set=new Set(athWorkouts.filter(w=>w.tur===selTur).map(w=>w.yapi_notu).filter(Boolean));
+    return [...set];
+  },[athWorkouts,selTur]);
+
+  // Filtrelenmiş antrenmanlar
+  const filtered=useMemo(()=>{
+    return athWorkouts.filter(w=>
+      w.tur===selTur&&
+      (!selYapi||w.yapi_notu===selYapi)
+    );
+  },[athWorkouts,selTur,selYapi]);
+
+  // Metrik hesapla — her antrenman için
+  const ath=athletes.find(a=>a.id===selAth);
+  const dataPoints=useMemo(()=>{
+    return filtered.map(w=>{
+      const m=calcMetrics(w,ath);
+      const durMin=(toSec(w.sure_sa,w.sure_dk,w.sure_sn)/60)||0;
+      const km=parseFloat(w.mesafe)||0;
+      const paceSecKm=durMin>0&&km>0?Math.round(durMin/km*60):0;
+      return{
+        date:w.date,
+        label:new Date(w.date+'T12:00:00').toLocaleDateString('tr-TR',{day:'numeric',month:'short'}),
+        durMin:round1(durMin),
+        km:round1(km),
+        pace:paceSecKm>0?secToPace(paceSecKm):null,
+        paceSec:paceSecKm,
+        ort_nabiz:parseInt(w.ort_nabiz)||null,
+        rpe:parseInt(w.rpe)||null,
+        trimp:m.trimp||null,
+        yuk:m.yukObj||null,
+        kadans:parseInt(w.kadans)||null,
+        irtifa:parseInt(w.irtifa)||null,
+      };
+    });
+  },[filtered,ath]);
+
+  // Grafik
+  useEffect(()=>{
+    if(!chartRef.current||dataPoints.length<2)return;
+    if(chartInst.current)chartInst.current.destroy();
+    const labels=dataPoints.map(d=>d.label);
+    const datasets=[
+      dataPoints[0].paceSec>0&&{
+        label:'Pace (sn/km)',yAxisID:'y',
+        data:dataPoints.map(d=>d.paceSec),
+        borderColor:'#3b82f6',backgroundColor:'#3b82f620',
+        tension:.3,fill:true,pointRadius:5,
+      },
+      dataPoints[0].ort_nabiz&&{
+        label:'Ort. Nabız (bpm)',yAxisID:'y2',
+        data:dataPoints.map(d=>d.ort_nabiz),
+        borderColor:'#ef4444',backgroundColor:'transparent',
+        tension:.3,borderDash:[5,3],pointRadius:5,
+      },
+      {
+        label:'Süre (dk)',yAxisID:'y3',
+        data:dataPoints.map(d=>d.durMin),
+        borderColor:'#10b981',backgroundColor:'transparent',
+        tension:.3,borderDash:[3,3],pointRadius:5,
+      },
+    ].filter(Boolean);
+
+    chartInst.current=new Chart(chartRef.current,{
+      type:'line',
+      data:{labels,datasets},
+      options:{
+        responsive:true,maintainAspectRatio:false,
+        interaction:{mode:'index',intersect:false},
+        plugins:{legend:{position:'top'},tooltip:{
+          callbacks:{label:(ctx)=>{
+            const d=dataPoints[ctx.dataIndex];
+            if(ctx.dataset.label.includes('Pace'))return 'Pace: '+(d.pace||'—');
+            return ctx.dataset.label+': '+ctx.parsed.y;
+          }}
+        }},
+        scales:{
+          y:{position:'left',title:{display:true,text:'Pace (sn/km)'},reverse:true},
+          y2:{position:'right',title:{display:true,text:'Nabız (bpm)'},grid:{drawOnChartArea:false}},
+          y3:{display:false},
+        }
+      }
+    });
+    return()=>{if(chartInst.current)chartInst.current.destroy();};
+  },[dataPoints]);
+
+  // Trend hesabı — ilk vs son
+  const trend=(key)=>{
+    const vals=dataPoints.map(d=>d[key]).filter(v=>v!=null);
+    if(vals.length<2)return null;
+    const diff=vals[vals.length-1]-vals[0];
+    const pct=round1(diff/vals[0]*100);
+    return{first:vals[0],last:vals[vals.length-1],diff:round1(diff),pct};
+  };
+
+  const metrikler=[
+    {k:'paceSec',l:'Pace',fmt:(v)=>v?secToPace(v):'—',iyi:'azalma'},
+    {k:'ort_nabiz',l:'Ort. Nabız',fmt:(v)=>v?v+' bpm':'—',iyi:'azalma'},
+    {k:'durMin',l:'Süre',fmt:(v)=>v?v+' dk':'—',iyi:'artma'},
+    {k:'km',l:'Mesafe',fmt:(v)=>v?v+' km':'—',iyi:'artma'},
+    {k:'rpe',l:'RPE',fmt:(v)=>v?v+'/10':'—',iyi:'azalma'},
+    {k:'yuk',l:'Yük',fmt:(v)=>v?String(v):'—',iyi:'artma'},
+  ];
+
+  if(!athletes.length)return React.createElement('div',{className:'empty'},'Henüz sporcu eklenmedi.');
+
+  return React.createElement('div',null,
+    React.createElement('div',{className:'card',style:{marginBottom:12}},
+      React.createElement('div',{className:'card-title'},'Antrenman Karşılaştırma Analizi'),
+      React.createElement('div',{className:'form-grid'},
+        React.createElement('div',{className:'form-group'},
+          React.createElement('label',null,'Sporcu'),
+          React.createElement('select',{value:selAth,onChange:e=>{setSelAth(e.target.value);setSelTur('');setSelYapi('');}},
+            React.createElement('option',{value:''},'— Seçin —'),
+            athletes.map(a=>React.createElement('option',{key:a.id,value:a.id},(a.ad||'')+' '+(a.soyad||'')))
+          )
+        ),
+        React.createElement('div',{className:'form-group'},
+          React.createElement('label',null,'Antrenman Türü'),
+          React.createElement('select',{value:selTur,onChange:e=>{setSelTur(e.target.value);setSelYapi('');}},
+            React.createElement('option',{value:''},'— Seçin —'),
+            turSecenekleri.map(t=>React.createElement('option',{key:t.v,value:t.v},t.l))
+          )
+        ),
+        React.createElement('div',{className:'form-group'},
+          React.createElement('label',null,'Yapı Notu (opsiyonel filtre)'),
+          React.createElement('select',{value:selYapi,onChange:e=>setSelYapi(e.target.value)},
+            React.createElement('option',{value:''},'Tümü'),
+            yapiSecenekleri.map((y,i)=>React.createElement('option',{key:i,value:y},y))
+          )
+        )
+      )
+    ),
+
+    !selTur&&React.createElement('div',{className:'empty'},'Sporcu ve antrenman türü seçin.'),
+
+    selTur&&filtered.length===0&&React.createElement('div',{className:'empty'},
+      'Bu türde kayıtlı antrenman bulunamadı.'+(selYapi?' Yapı notu filtresini kaldırın.':'')
+    ),
+
+    selTur&&filtered.length>0&&React.createElement('div',null,
+
+      // Trend özet kartları
+      React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(130px,1fr))',gap:8,marginBottom:12}},
+        metrikler.map(({k,l,fmt,iyi})=>{
+          const t=trend(k);
+          if(!t)return null;
+          const better=(iyi==='azalma'?t.diff<0:t.diff>0);
+          const worse=(iyi==='azalma'?t.diff>0:t.diff<0);
+          const cls=better?'success':worse?'danger':'text-secondary';
+          return React.createElement('div',{key:k,className:'metric',style:{padding:'10px 12px'}},
+            React.createElement('div',{className:'metric-label'},l),
+            React.createElement('div',{style:{fontSize:13,fontWeight:700}},fmt(t.last)),
+            React.createElement('div',{style:{fontSize:11,color:`var(--${cls})`,marginTop:2}},
+              (t.diff>0?'+':'')+fmt(t.diff)+' ('+t.pct+'%)'
+            ),
+            React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)'}},
+              fmt(t.first)+' → '+fmt(t.last)
+            )
+          );
+        }).filter(Boolean)
+      ),
+
+      // Grafik
+      dataPoints.length>=2&&React.createElement('div',{className:'card',style:{marginBottom:12}},
+        React.createElement('div',{className:'card-title'},
+          (TUR_LABELS[selTur]||selTur)+(selYapi?' — '+selYapi:'')+ ' · '+filtered.length+' antrenman'
+        ),
+        React.createElement('div',{style:{height:280,position:'relative'}},
+          React.createElement('canvas',{ref:chartRef})
+        )
+      ),
+
+      // Tablo
+      React.createElement('div',{className:'card'},
+        React.createElement('div',{className:'card-title'},'Detay Tablosu'),
+        React.createElement('div',{style:{overflowX:'auto'}},
+          React.createElement('table',{className:'table'},
+            React.createElement('thead',null,
+              React.createElement('tr',null,
+                ['Tarih','Süre','Km','Pace','Ort. Nabız','RPE','Yük','Kadans','İrtifa'].map(h=>
+                  React.createElement('th',{key:h},h)
+                )
+              )
+            ),
+            React.createElement('tbody',null,
+              dataPoints.map((d,i)=>React.createElement('tr',{key:i},
+                React.createElement('td',null,d.date),
+                React.createElement('td',null,d.durMin?d.durMin+' dk':'—'),
+                React.createElement('td',null,d.km?d.km+' km':'—'),
+                React.createElement('td',null,d.pace||'—'),
+                React.createElement('td',null,d.ort_nabiz?d.ort_nabiz+' bpm':'—'),
+                React.createElement('td',null,d.rpe?d.rpe+'/10':'—'),
+                React.createElement('td',null,d.yuk||'—'),
+                React.createElement('td',null,d.kadans?d.kadans+' spm':'—'),
+                React.createElement('td',null,d.irtifa?d.irtifa+' m':'—')
+              ))
+            )
+          )
+        )
       )
     )
   );
@@ -7756,6 +7993,7 @@ function App(){
         setWorkouts(p=>[...p,{...w,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:new Date(Date.now()+rec.saatler*3600000).toISOString()}]);
       },athlete,athletes,selId,onSelChange:setSelId,allHistory,workouts,races,testPlanlar}),
       tab==='gecmis'&&React.createElement(Gecmis,{workouts,athletes,onDelete:id=>setWorkouts(p=>p.filter(x=>x.id!==id)),onBulkDelete:ids=>setWorkouts(p=>p.filter(x=>!ids.includes(x.id))),onUpdate:handleUpdateWorkout}),
+      tab==='analiz'&&React.createElement(AntrenmanAnalizTab,{workouts,athletes}),
       tab==='yukle'&&React.createElement(ExcelYukle,{onImport:list=>setWorkouts(p=>[...p,...list]),athletes,selId,onSelChange:setSelId,workouts}),
       tab==='sporcular'&&React.createElement(SporcularTab,{athletes,races,athHistory,allHistory,
         onAdd:a=>setAthletes(p=>[...p,a]),
