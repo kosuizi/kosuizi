@@ -3883,6 +3883,37 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
             day.uyari&&React.createElement('div',{style:{fontSize:12,color:'var(--warn)',padding:'8px 12px',background:'var(--warn-bg)',borderRadius:'var(--radius)',marginBottom:8,display:'flex',gap:6,alignItems:'center'}},
               React.createElement('span',null,'⚠'),React.createElement('span',null,day.uyari)
             ),
+            // Test uygunluk uyarısı
+            (()=>{
+              const tp=(testPlanlar||[]).find(p=>p.athId===athlete?.id&&p.date===day.date);
+              if(!tp)return null;
+              const uy=calcTestDayUygunluk(day.date,athlete,history,races,workouts);
+              if(!uy||uy.uygun)return null;
+              return React.createElement('div',{style:{
+                padding:'10px 12px',marginBottom:8,borderRadius:'var(--radius)',
+                background:'var(--warn-bg)',border:'1px solid var(--warn)'
+              }},
+                React.createElement('div',{style:{fontWeight:700,fontSize:13,color:'var(--warn)',marginBottom:6}},
+                  '🧪 Test Koşusu — Bugün Uygun Değil'
+                ),
+                uy.sorunlar.map((s,i)=>React.createElement('div',{key:i,style:{fontSize:12,color:'var(--warn)',display:'flex',gap:6,marginBottom:3}},
+                  React.createElement('span',null,'⚠'),React.createElement('span',null,s)
+                )),
+                uy.oneriler.length>0&&React.createElement('div',{style:{marginTop:8}},
+                  React.createElement('div',{style:{fontSize:12,fontWeight:600,color:'var(--text-secondary)',marginBottom:4}},'📅 Önerilen alternatif günler:'),
+                  uy.oneriler.map((o,i)=>React.createElement('div',{key:i,style:{
+                    fontSize:12,padding:'5px 10px',marginBottom:3,borderRadius:4,
+                    background:'var(--success-bg)',color:'var(--success)',
+                    display:'flex',justifyContent:'space-between',alignItems:'center'
+                  }},
+                    React.createElement('span',{style:{fontWeight:600}},o.label),
+                    o.dr<999&&React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)'}},
+                      'Yarışa '+o.dr+' gün'
+                    )
+                  ))
+                )
+              );
+            })(),
             day.yapilar?.length>0&&React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:8}},
               day.yapilar.map((y,i)=>React.createElement('div',{key:i,style:{display:'flex',gap:12,padding:'10px 12px',background:'var(--bg-secondary)',borderRadius:'var(--radius)'}},
                 React.createElement('div',{style:{minWidth:22,height:22,borderRadius:'50%',background:tipColor(day.tip),display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,color:'#fff',flexShrink:0}},i+1),
@@ -4944,6 +4975,58 @@ const TEST_TURLERI={
 };
 
 // Test zamanlama: Bu sporcu için şu an test önerilmeli mi?
+// Belirli bir tarih için test uygunluğunu değerlendir
+function calcTestDayUygunluk(testDate, athlete, history, races, workouts){
+  if(!testDate||!athlete)return null;
+  const testD=new Date(testDate+'T12:00:00');
+  const {primary}=selectRaces(athlete,races);
+  const daysToRace=primary?Math.ceil((new Date(primary.tarih+'T12:00:00')-testD)/864e5):999;
+
+  // O güne kadarki geçmiş antrenmanlara bak
+  const oncekiGun=new Date(testD);oncekiGun.setDate(testD.getDate()-1);
+  const oncekiGunStr=`${oncekiGun.getFullYear()}-${String(oncekiGun.getMonth()+1).padStart(2,'0')}-${String(oncekiGun.getDate()).padStart(2,'0')}`;
+  const athWks=(workouts||[]).filter(w=>w.athleteId===athlete.id);
+  const oncekiAntrenman=athWks.find(w=>w.date===oncekiGunStr);
+  const dunkuYogun=oncekiAntrenman&&['interval','esik','yokus_kisa','yokus_uzun','tirmanis'].includes(oncekiAntrenman.tur);
+
+  // O güne yakın geçmişteki TSB tahmini
+  const last=history[history.length-1];
+  const tsb=last?.tsb||0;
+  const acwr=last?.acwr||1;
+
+  const sorunlar=[];
+  if(dunkuYogun)sorunlar.push('Önceki gün yoğun antrenman var ('+oncekiAntrenman.tur+') — toparlanma yetersiz');
+  if(daysToRace<14)sorunlar.push('Yarışa '+daysToRace+' gün kaldı — test yorgunluğu yarışı etkileyebilir');
+  if(acwr>1.3)sorunlar.push('ACWR '+acwr.toFixed(2)+' — yük birikimi yüksek');
+  if(tsb< -15)sorunlar.push('TSB '+tsb.toFixed(1)+' — yorgunluk fazla, test sonuçları güvenilmez');
+  if(athlete.hrv_durum==='düşük')sorunlar.push('HRV düşük — toparlanma yetersiz');
+
+  // Önerilen alternatif günler (önümüzdeki 14 gün, uygunluk sırasıyla)
+  const oneriler=[];
+  const kosuGunleri=athlete.kosu_gunleri||[];
+  for(let i=1;i<=14;i++){
+    const d=new Date(testD);d.setDate(testD.getDate()+i);
+    const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),dd=String(d.getDate()).padStart(2,'0');
+    const ds=`${y}-${m}-${dd}`;
+    const dayShort=DAYS_SHORT[d.getDay()];
+    if(!kosuGunleri.includes(dayShort))continue;
+    const dr=primary?Math.ceil((new Date(primary.tarih+'T12:00:00')-d)/864e5):999;
+    if(dr<7)continue;
+    const phase=primary?calcPhase(ds,primary.tarih,primary.prep_weeks,primary):'Temel';
+    if(phase==='Taper')continue;
+    // Önceki günü kontrol et
+    const prevD=new Date(d);prevD.setDate(d.getDate()-1);
+    const prevDs=`${prevD.getFullYear()}-${String(prevD.getMonth()+1).padStart(2,'0')}-${String(prevD.getDate()).padStart(2,'0')}`;
+    const prevYogun=athWks.some(w=>w.date===prevDs&&['interval','esik','yokus_kisa','yokus_uzun'].includes(w.tur));
+    if(prevYogun)continue;
+    const label=d.toLocaleDateString('tr-TR',{weekday:'long',day:'numeric',month:'long'});
+    oneriler.push({dateStr:ds,label,dr});
+    if(oneriler.length>=3)break;
+  }
+
+  return{uygun:sorunlar.length===0,sorunlar,oneriler};
+}
+
 function calcTestTiming(athlete, history, races, workouts){
   if(!athlete)return[];
   const last=history[history.length-1];
