@@ -2598,7 +2598,9 @@ function tplEsik(band, sure_dk, zones){
 
 function tplInterval(band, phase, zones){
   const blocks=blockCount(band,phase);
-  const sure_dk=band<=2?50:band===3?55:band===4?65:75;
+  // Bilimsel max: ısınma 15dk + interval blok + soğuma 10dk
+  // Toplam interval zamanı: Band 1-2 → 20dk, Band 3 → 25dk, Band 4 → 30dk, Band 5 → 35dk
+  const sure_dk=band<=2?45:band===3?50:band===4?55:60;
   const z5a=zoneInfo(zones,4)||'Z5a VO₂max';
   const z5b=zoneInfo(zones,5)||'Z5b Anaerobik';
   let blokDetay;
@@ -2606,16 +2608,16 @@ function tplInterval(band, phase, zones){
     blokDetay=`4×3 dk — ${z5a} · 3 dk aktif dinlenme`;
   } else if(band===3){
     blokDetay=blocks===1
-      ?`6×4 dk — ${z5a} · 3 dk dinlenme`
-      :`1. Blok: 6×4 dk — ${z5a} · 3 dk dinlenme → 5 dk toparlanma → 2. Blok: 4×3 dk — ${z5a} · 2 dk dinlenme`;
+      ?`5×4 dk — ${z5a} · 3 dk dinlenme`
+      :`1. Blok: 5×4 dk — ${z5a} · 3 dk dinlenme → 5 dk toparlanma → 2. Blok: 4×3 dk — ${z5a} · 2 dk dinlenme`;
   } else if(band===4){
     blokDetay=blocks===2
-      ?`1. Blok: 6×4 dk — ${z5a} · 2.5 dk → 5 dk → 2. Blok: 6×3 dk — ${z5a} · 2 dk`
-      :`1. Blok: 6×4 dk — ${z5a} → 5 dk → 2. Blok: 6×3 dk — ${z5a} → 5 dk → 3. Blok: 4×2 dk — ${z5b}`;
+      ?`1. Blok: 5×4 dk — ${z5a} · 2.5 dk → 5 dk → 2. Blok: 5×3 dk — ${z5a} · 2 dk`
+      :`1. Blok: 5×4 dk — ${z5a} → 5 dk → 2. Blok: 5×3 dk — ${z5a} → 5 dk → 3. Blok: 4×2 dk — ${z5b}`;
   } else {
     blokDetay=blocks===2
-      ?`1. Blok: 6×5 dk — ${z5a} · 2.5 dk → 6 dk → 2. Blok: 6×4 dk — ${z5a} · 2 dk`
-      :`1. Blok: 6×5 dk — ${z5a} → 6 dk → 2. Blok: 6×4 dk — ${z5a} → 5 dk → 3. Blok: 4×3 dk — ${z5b}`;
+      ?`1. Blok: 6×4 dk — ${z5a} · 2.5 dk → 5 dk → 2. Blok: 5×3 dk — ${z5a} · 2 dk`
+      :`1. Blok: 6×4 dk — ${z5a} → 5 dk → 2. Blok: 5×3 dk — ${z5a} → 5 dk → 3. Blok: 4×2 dk — ${z5b}`;
   }
   const strides=band<=2?'4×80m':band===3?'4×100m':band===4?'6×100m':'6×120m';
   return{
@@ -3361,12 +3363,13 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
     } else if(phase==='Taper'||(daysToRace!==null&&daysToRace<=7)){
       kosuTpl=daysToRace<=3?tplAcici(25):tplTempo(band,Math.round(40*yMod),zones);
     } else if((isUzunGun||haftaGunTipi==='uzun')&&!wkStats.uzunYapildi){
-      if(yorgun){
-        kosuTpl=tplAerobik(band,Math.round(55*yMod),zones,disiplin);
-        kosuUyari='TSB '+tsb.toFixed(1)+' — yorgun, uzun koşu yerine aerobik önerildi';
-      } else {
-        kosuTpl=isTrail&&dpGun>200?tplTirmanisAcik(band,Math.round(70*yMod),zones,dpGun):tplUzun(band,simState.ctl||0,zones,disiplin,dpGun);
-      }
+      // Uzun koşu TSB'den bağımsız — her koşulda uzun koşu ver, sadece süre kısalır
+      const uzunYMod=cokYorgun?0.65:yorgun?0.80:yMod;
+      kosuTpl=isTrail&&dpGun>200
+        ?tplTirmanisAcik(band,Math.round(70*uzunYMod),zones,dpGun)
+        :tplUzun(band,simState.ctl||0,zones,disiplin,dpGun);
+      if(cokYorgun)kosuUyari='TSB '+tsb.toFixed(1)+' — çok yorgun, uzun koşu süresi %35 kısaltıldı';
+      else if(yorgun)kosuUyari='TSB '+tsb.toFixed(1)+' — yorgun, uzun koşu süresi %20 kısaltıldı';
     } else if(iskeleteGoreAerobik||sonYogunGun){
       // İskelet bu günü aerobik olarak atadı VEYA dün yoğundu
       kosuTpl=tplAerobik(band,Math.round(55*yMod),zones,disiplin);
@@ -3543,9 +3546,12 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       // Ard arda yoğun gün takibi — haftalar arası korunur
       wkStats.sonYogunGun=isYogunTip;
       sonYogunGunGlobal=isYogunTip;
-      // Test günü simülasyon yükünü %60 azalt — ACWR patlamasını önle
+      // Kaliteli antrenman simülasyon yükünü yumuşat — ATL'yi gereğinden fazla etkilemesin
+      // Gerçek yük hesaplamada kullanılır, simülasyonda daha konservatif
       const rawLoad=isPast?(actualLoad||0):(planned.yukHedef||0);
-      const loadForSim=isTestDay?Math.round(rawLoad*0.4):rawLoad;
+      const isKaliteliTip=['interval','esik','yokus_kisa','yokus_uzun'].includes(effectiveTip);
+      const simFactor=isTestDay?0.4:isKaliteliTip?0.75:1.0; // kaliteli antrenman ATL etkisini %25 azalt
+      const loadForSim=Math.round(rawLoad*simFactor);
       simAtl=loadForSim*λ_atl+simAtl*(1-λ_atl);
       simCtl=loadForSim*λ_ctl+simCtl*(1-λ_ctl);
       let comparison=null;
