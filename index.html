@@ -6616,56 +6616,67 @@ function Dashboard({workouts,athlete,history,races}){
 }
 
 // Haftalık plandaki antrenman tipini → ANTRENMAN_TURLERI v değerine çevir
-function planTipToTur(planTip){
+function planTipToTur(planTip, baslik=''){
+  const b=(baslik||'').toLowerCase();
+  // Başlıktan önce eşleştir — daha spesifik
+  if(b.includes('piramit'))   return 'piramit';
+  if(b.includes('cruise'))    return 'cruise';
+  if(b.includes('progressive'))return 'progressive';
+  if(b.includes('on-off')||b.includes('fartlek')) return 'on_off';
+  if(b.includes('tempo interval')) return 'tempo_interval';
+  if(b.includes('yarış temposu')||b.includes('race pace')) return 'yaris_tempo';
+  if(b.includes('hill sprint')) return 'hill_sprint';
+  if(b.includes('strides')||b.includes('açıcı')) return 'strides';
+  if(b.includes('kısa yokuş')) return 'yokus_kisa';
+  if(b.includes('uzun yokuş')) return 'yokus_uzun';
+  // Sonra tip'ten eşleştir
   const map={
-    kolay:'kolay', aerobik:'aerobik', uzun:'uzun',
-    tempo:'tempo', esik:'esik', interval:'interval',
-    yokus_kisa:'yokus_kisa', yokus_uzun:'yokus_uzun',
-    tirmanis:'tirmanis', teknik:'teknik', acici:'strides',
-    capraz:'capraz', dinlenme:'',
-    // yeni şablonlar — baslik'ten tespit edilir (aşağıda)
+    kolay:'kolay',aerobik:'aerobik',uzun:'uzun',
+    tempo:'tempo',esik:'esik',interval:'interval',
+    yokus_kisa:'yokus_kisa',yokus_uzun:'yokus_uzun',
+    tirmanis:'tirmanis',teknik:'teknik',acici:'strides',
+    capraz:'capraz',dinlenme:'',
   };
   return map[planTip]||planTip||'';
 }
-// Plan gününün baslik'inden daha spesifik tur ve yapi_notu çıkar
+
+// Plan gününden tur ve yapi_notu çıkar
 function planDayToForm(day){
-  if(!day||day.tip==='dinlenme')return null;
-  const baslik=(day.baslik||'').toLowerCase();
-  let tur=planTipToTur(day.tip);
-  let yapi_notu='';
+  if(!day||day.tip==='dinlenme')return{tur:'',yapi_notu:''};
+  const tur=planTipToTur(day.tip, day.baslik||'');
 
-  // Başlıktan daha spesifik eşleştirme
-  if(baslik.includes('piramit')){tur='piramit';}
-  else if(baslik.includes('cruise')){tur='cruise';}
-  else if(baslik.includes('progressive')){tur='progressive';}
-  else if(baslik.includes('on-off')||baslik.includes('fartlek')){tur='on_off';}
-  else if(baslik.includes('tempo interval')){tur='tempo_interval';}
-  else if(baslik.includes('yarış temposu')||baslik.includes('race pace')){tur='yaris_tempo';}
-  else if(baslik.includes('hill sprint')){tur='hill_sprint';}
-  else if(baslik.includes('strides')||baslik.includes('açıcı')){tur='strides';}
-
-  // Yapilar içinden ilk gerçek antrenman bloğunu bul
-  const blok=(day.yapilar||[]).find(y=>{
+  // yapilar içinden ana antrenman bloğunu bul (ısınma/soğuma hariç)
+  const mainBlok=(day.yapilar||[]).find(y=>{
     const d=(y.detay||'').toLowerCase();
-    return !d.includes('ısınma')&&!d.includes('soğuma')&&d.length>0;
+    const b=(y.baslik||'').toLowerCase();
+    return !b.includes('ısınma')&&!b.includes('soğuma')&&!b.includes('dinlenme')&&d.length>5;
   });
-  if(blok){
-    const detay=blok.detay||'';
-    // Tekrar×süre pattern: "4×3 dk", "5×4 dk"
-    const m=detay.match(/(\d+)[×x](\d+(?:[–\-]\d+)?)\s*(?:dk|sn|m\b)/);
-    if(m) yapi_notu=m[0].trim();
-    // Piramit: "1–2–3–2–1"
+
+  let yapi_notu='';
+  if(mainBlok){
+    const detay=mainBlok.detay||'';
+    // Piramit: "1–2–3–2–1 dk" veya "2–3–4–5–4–3–2 dk"
     const pir=detay.match(/(\d+[–\-])+\d+\s*dk/);
-    if(pir) yapi_notu=pir[0].trim();
-    // Süre: "20 dk", "30 dk"
-    if(!yapi_notu){const s=detay.match(/(\d+)\s*dk/);if(s)yapi_notu=s[1]+' dk';}
+    if(pir){yapi_notu=pir[0].trim();}
+    // NxM pattern: "4×3 dk", "6×4 dk + 6×2 dk", "2×15 dk"
+    else {
+      const nx=detay.match(/(\d+[×x]\d+(?:\s*dk)?(?:\s*[+]\s*\d+[×x]\d+\s*dk)?)/);
+      if(nx) yapi_notu=nx[0].replace(/\s+/g,' ').trim();
+    }
+    // Süre: "20 dk sürekli" gibi
+    if(!yapi_notu){
+      const s=detay.match(/(\d+)\s*dk/);
+      if(s) yapi_notu=s[1]+' dk';
+    }
   }
 
-  // Önerilen yapi_notu listesi — eşleşen ilk elemanı seç
-  const notlar=YAPI_NOTLARI[tur]||[];
-  if(!yapi_notu&&notlar.length>0) yapi_notu=notlar[0];
+  // Eşleşen yapi_notu yoksa — YAPI_NOTLARI listesinden ilkini ver
+  if(!yapi_notu){
+    const notlar=YAPI_NOTLARI[tur]||[];
+    if(notlar.length) yapi_notu=notlar[0];
+  }
 
-  return {tur, yapi_notu};
+  return{tur,yapi_notu};
 }
 
 function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,workouts,races,testPlanlar}){
@@ -6678,29 +6689,49 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,wor
   const selectedAth=athletes.find(a=>a.id===selId)||null;
   const history=allHistory?.[selId]||[];
 
-  // Sporcu veya tarih değişince → planı oku ve öneri oluştur
+  // Sporcu veya tarih değişince → o günün önerilen antrenmanını çek
   React.useEffect(()=>{
     if(!selId||!form.date)return;
     const selAth=athletes.find(a=>a.id===selId);
     if(!selAth)return;
-    // Koşu günleri tanımlı olmalı
     if(!selAth.kosu_gunleri||selAth.kosu_gunleri.length===0){setPlanOneri(null);return;}
     try{
+      const athWorkouts=(workouts||[]).filter(w=>w.athleteId===selId);
+      const athHistory=(allHistory&&allHistory[selId])||[];
       const athRaceIds=selAth.yarıslar||[];
       const athRaces=(races||[]).filter(r=>athRaceIds.includes(r.id));
-      const athWorkouts=(workouts||[]).filter(w=>w.athleteId===selId);
-      // allHistory'den al — yoksa boş array (plan yine de üretilir, sadece CTL=0 olur)
-      const athHistory=(allHistory&&allHistory[selId])||[];
+
+      // Seçilen tarih için günün planını bul
+      // generateTwoWeekPlan'dan o günü çek — en güvenilir yol
       const plan=generateTwoWeekPlan(selAth,athHistory,athRaces,athWorkouts,testPlanlar||[]);
-      if(!plan||!plan.weeks){setPlanOneri(null);return;}
+      if(!plan?.weeks){setPlanOneri(null);return;}
+
       const allDays=plan.weeks.flatMap(w=>w.days);
-      const dayPlan=allDays.find(d=>d.date===form.date);
-      if(dayPlan&&dayPlan.tip&&dayPlan.tip!=='dinlenme'&&dayPlan.yapilar?.length>0){
-        const oneri=planDayToForm(dayPlan);
-        setPlanOneri({...oneri,baslik:dayPlan.baslik,tip:dayPlan.tip,sure_dk:dayPlan.sure_dk});
-      } else {
-        setPlanOneri(null);
+      const gunPlan=allDays.find(d=>d.date===form.date);
+
+      if(!gunPlan||gunPlan.tip==='dinlenme'||!gunPlan.yapilar?.length){
+        // Plan bulunamadıysa veya dinlenmeyse → recommendWorkout ile dene (bugün için)
+        const today=new Date();
+        const todayStr=today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0')+'-'+String(today.getDate()).padStart(2,'0');
+        if(form.date===todayStr){
+          const thisWeekWks=athWorkouts.filter(w=>{
+            const d=new Date(w.date+'T12:00:00');
+            const mon=new Date(today);mon.setDate(today.getDate()-today.getDay()+1);
+            return d>=mon&&d<=today;
+          });
+          const rec=recommendWorkout(selAth,athHistory,athRaces,thisWeekWks,athWorkouts);
+          if(rec&&rec.tip!=='dinlenme'&&rec.yapilar?.length>0){
+            setPlanOneri({baslik:rec.baslik,tip:rec.tip,sure_dk:rec.sure_dk,
+              tur:planTipToTur(rec.tip),yapi_notu:planDayToForm(rec)?.yapi_notu||''});
+            return;
+          }
+        }
+        setPlanOneri(null);return;
       }
+
+      const oneri=planDayToForm(gunPlan);
+      setPlanOneri({baslik:gunPlan.baslik,tip:gunPlan.tip,sure_dk:gunPlan.sure_dk,
+        tur:oneri.tur,yapi_notu:oneri.yapi_notu});
     }catch(e){
       console.warn('Plan önerisi:',e.message);
       setPlanOneri(null);
@@ -6745,11 +6776,14 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,wor
         React.createElement('div',null,
           React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:2}},'📅 Haftalık plan önerisi:'),
           React.createElement('div',{style:{fontWeight:600,fontSize:13}},
-            planOneri.baslik||TUR_LABELS[planOneri.tur]||planOneri.tur,
+            planOneri.baslik||(TUR_LABELS[planOneri.tur]||planOneri.tur)||'—',
+            planOneri.sure_dk>0&&React.createElement('span',{style:{fontWeight:400,color:'var(--text-secondary)',marginLeft:6}},'· '+planOneri.sure_dk+' dk'),
             planOneri.yapi_notu&&React.createElement('span',{style:{fontWeight:400,color:'var(--text-secondary)',marginLeft:6}},'· '+planOneri.yapi_notu)
           )
         ),
-        React.createElement('button',{className:'btn btn-sm',onClick:applyOneri},'Uygula')
+        React.createElement('button',{className:'btn btn-sm',
+          style:{background:'var(--info)',color:'#fff',border:'none'},
+          onClick:applyOneri},'Uygula')
       ),
 
       React.createElement('div',{className:'card-title'},'Antrenman Türü'),
