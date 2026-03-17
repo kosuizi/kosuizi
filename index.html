@@ -541,18 +541,19 @@ function pbToMin(pbStr){
 // Yarış hazırlık skoru (0-100) — CTL, ACWR, sakatlık, faz
 function raceReadinessScore(ctl,acwr,phase,sakatlık,hrv_durum,daysLeft,race,athlete,workouts){
   if(!acwr||!athlete)return null;
-  // ── 8 FAKTÖR — SAF TOPLAÇI SİSTEM (toplam = 100 mükemmelde) ─────────────
+  // ── 6 BAĞIMSIZ FAKTÖR — SAF TOPLAÇI SİSTEM (max=100) ────────────────────
   //
-  //  Faktör                    Max  Etki (r)   Kaynak
-  //  Aerobik Kondisyon CTL      22  0.75-0.90  Banister 1991
-  //  Yük Dengesi ACWR           18  0.50-0.65  Gabbett 2016
-  //  Sağlık & Sakatlık          16  gate-keep  Üst sınır etkisi
-  //  Hazırlık Tamamlanma        14  0.60-0.70  Mujika 2009
-  //  Yarış Zorluğu Uyumu        10  0.50       Spesifik hazırlık
-  //  Plan Tutarlılığı           10  0.55-0.70  Foster 1998
-  //  Hazırlık Fazı               7  0.40       Periodizasyon
-  //  HRV & Toparlanma            3  0.25-0.35  Kiviniemi 2007
-  //  TOPLAM                    100
+  //  Faktör                      Max  Boyut               Kaynak
+  //  Fitness-Talep Dengesi        30  Kondisyon/yarış      Banister 1991
+  //  Yük Dengesi (ACWR)           22  Akut/kronik denge    Gabbett 2016
+  //  Sağlık & Sakatlık            20  Fiziksel müsaitlik   Gate-keeper
+  //  Döngü İlerlemesi             14  Periodizasyon        Mujika 2009
+  //  Plan Tutarlılığı             10  Uygulama kalitesi    Foster 1998
+  //  HRV & Toparlanma              4  Kısa vade toparlanma Kiviniemi 2007
+  //  TOPLAM                      100
+  //
+  //  CTL+ZorlukUyumu → birleştirildi (aynı ctlRatio'yu ölçüyordu)
+  //  HazırlıkTamamlanma+Faz → birleştirildi (aynı döngü ilerlemesini ölçüyordu)
   // ─────────────────────────────────────────────────────────────────────────
   const detaylar=[];
   const km=parseFloat(race?.mesafe)||0;
@@ -560,34 +561,36 @@ function raceReadinessScore(ctl,acwr,phase,sakatlık,hrv_durum,daysLeft,race,ath
   const safeCtl=ctl||0;
   const targetCTL=km<=5?25:km<=10?35:km<=21?45:km<=42?60:km<=60?75:km<=90?90:105;
   const ctlRatio=targetCTL>0?Math.min(safeCtl/targetCTL,1.0):0;
-
-  // ── 1. Aerobik Kondisyon CTL (0-22) ─────────────────────────────────────
-  const ctlPuan=Math.round(ctlRatio*22);
   const ctlPct=Math.round(ctlRatio*100);
+
+  // ── 1. Fitness-Talep Dengesi (0-30) ─────────────────────────────────────
+  // CTL / yarışın gerektirdiği CTL — spesifik hazırlık prensibi burada
+  // targetCTL mesafe+D+ bazlı belirlendiğinden yarış zorluğu zaten içinde
+  const fitPuan=Math.round(ctlRatio*30);
   detaylar.push({
-    baslik:'Aerobik Kondisyon (CTL)',puan:ctlPuan,max:22,
-    yon:ctlPuan>=18?'iyi':ctlPuan>=11?'nötr':'kotu',
-    aciklama:`CTL ${round1(safeCtl)} / Hedef ${targetCTL} (%${ctlPct}) — ${
-      ctlRatio>=1.0?'Hedefe ulaşıldı ✓':
+    baslik:'Fitness-Talep Dengesi',puan:fitPuan,max:30,
+    yon:fitPuan>=24?'iyi':fitPuan>=15?'nötr':'kotu',
+    aciklama:`CTL ${round1(safeCtl)} / ${race?.ad||'Yarış'} için gereken ${targetCTL} (%${ctlPct}) — ${
+      ctlRatio>=1.0?'Yarışın talebi karşılanıyor ✓':
       ctlRatio>=0.8?'İyi seviye, son rötuşlar':
       ctlRatio>=0.6?'Gelişiyor, artış devam etmeli':
       ctlRatio>=0.3?'Kondisyon yetersiz':
       'Çok düşük, uzun hazırlık gerekli'}`
   });
 
-  // ── 2. Yük Dengesi ACWR (0-18) ──────────────────────────────────────────
+  // ── 2. Yük Dengesi ACWR (0-22) ──────────────────────────────────────────
+  // Hem akut hazırlık hem yaralanma riski — üçgen peak 1.05'te
   let acwrPuan;
   if(acwr>=0.8&&acwr<=1.3){
-    const dist=Math.abs(acwr-1.05);
-    acwrPuan=Math.round(18*Math.max(0,1-dist/0.25));
+    acwrPuan=Math.round(22*Math.max(0,1-Math.abs(acwr-1.05)/0.25));
   } else if(acwr<0.8){
-    acwrPuan=Math.round(Math.max(0,18*acwr/0.8));
+    acwrPuan=Math.round(Math.max(0,22*acwr/0.8));
   } else {
-    acwrPuan=Math.round(Math.max(0,18*Math.max(0,1-(acwr-1.3)/0.5)));
+    acwrPuan=Math.round(Math.max(0,22*Math.max(0,1-(acwr-1.3)/0.5)));
   }
   detaylar.push({
-    baslik:'Yük Dengesi (ACWR)',puan:acwrPuan,max:18,
-    yon:acwrPuan>=14?'iyi':acwrPuan>=8?'nötr':'kotu',
+    baslik:'Yük Dengesi (ACWR)',puan:acwrPuan,max:22,
+    yon:acwrPuan>=17?'iyi':acwrPuan>=10?'nötr':'kotu',
     aciklama:`ACWR ${acwr.toFixed(2)} — ${
       acwr>=0.95&&acwr<=1.15?'İdeal yük dengesi ✓':
       acwr>=0.8&&acwr<=1.3?'Kabul edilebilir aralık':
@@ -596,12 +599,13 @@ function raceReadinessScore(ctl,acwr,phase,sakatlık,hrv_durum,daysLeft,race,ath
       'Aşırı yük — zorunlu dinlenme'}`
   });
 
-  // ── 3. Sağlık & Sakatlık (0-16) — gate-keeping faktör ───────────────────
+  // ── 3. Sağlık & Sakatlık (0-20) — gate-keeper faktör ───────────────────
+  // Sakatlık diğer tüm faktörleri geçersiz kılabilir
   const inj=parseInt(sakatlık)||1;
-  const injPuan=Math.round(Math.max(0,16-(inj-1)*16/9));
+  const injPuan=Math.round(Math.max(0,20-(inj-1)*20/9));
   detaylar.push({
-    baslik:'Sağlık & Sakatlık',puan:injPuan,max:16,
-    yon:injPuan>=13?'iyi':injPuan>=8?'nötr':'kotu',
+    baslik:'Sağlık & Sakatlık',puan:injPuan,max:20,
+    yon:injPuan>=16?'iyi':injPuan>=10?'nötr':'kotu',
     aciklama:`Sakatlık ${inj}/10 — ${
       inj===1?'Tam sağlıklı ✓':
       inj<=3?'Hafif şikayet, takip et':
@@ -610,9 +614,16 @@ function raceReadinessScore(ctl,acwr,phase,sakatlık,hrv_durum,daysLeft,race,ath
       'Yüksek risk, yarış sorgulanmalı'}`
   });
 
-  // ── 4. Hazırlık Tamamlanma (0-14) ───────────────────────────────────────
-  let prepPuan=6;
-  let prepAciklama='Hazırlık verisi yok — tahmini orta puan';
+  // ── 4. Döngü İlerlemesi (0-18) ──────────────────────────────────────────
+  // Hazırlık tamamlanma + faz birleşimi — aynı boyutu ölçüyorlar
+  // Faz: döngünün nerede olduğu (0-10)
+  // Tamamlanma: döngünün yüzde kaçı geçildi (0-8 ek puan)
+  const racePhase=race?.tarih&&race?.prep_weeks
+    ?calcPhase(new Date().toISOString().split('T')[0],race.tarih,race.prep_weeks,race)
+    :phase;
+  const fazS={Taper:10,Zirve:8,Gelişme:5,Temel:2,'Yarış Sonrası':0}[racePhase]??2;
+  let compS=0;
+  let dongüAciklama=racePhase;
   if(daysLeft>0&&race?.prep_weeks){
     const prepWeeks=parseInt(race.prep_weeks)||12;
     const taperW=parseInt(race?.taper_w)||(km>42?3:km>21?2:1);
@@ -620,36 +631,23 @@ function raceReadinessScore(ctl,acwr,phase,sakatlık,hrv_durum,daysLeft,race,ath
     const doneDays=Math.max(0,totalDays-(Math.max(0,daysLeft-taperW*7)));
     const pct=Math.min(1,doneDays/totalDays);
     const pctR=Math.round(pct*100);
-    const pts=[[0,0],[0.10,1],[0.25,3],[0.40,5],[0.60,8],[0.75,11],[0.90,14]];
-    prepPuan=Math.max(...pts.filter(([k])=>k<=pct).map(([,v])=>v));
-    prepAciklama=`Hazırlık %${pctR} tamamlandı — ${
-      pct>=0.90?'Final aşama, form zirveye yakın ✓':
-      pct>=0.75?'İyi konumda, kritik son haftalar':
-      pct>=0.60?'Orta-ileri aşama':
-      pct>=0.40?'Orta aşama, önemli çalışmalar önde':
-      pct>=0.25?'Erken aşama':
-      'Hazırlığın çok başında'}`;
+    compS=pct>=0.90?4:pct>=0.75?3:pct>=0.60?2:pct>=0.40?1:0;
+    dongüAciklama=`${racePhase}, %${pctR} tamamlandı`;
   }
+  const dongüPuan=Math.min(14,fazS+compS);
   detaylar.push({
-    baslik:'Hazırlık Tamamlanma',puan:prepPuan,max:14,
-    yon:prepPuan>=10?'iyi':prepPuan>=5?'nötr':'kotu',
-    aciklama:prepAciklama
+    baslik:'Döngü İlerlemesi',puan:dongüPuan,max:14,
+    yon:dongüPuan>=11?'iyi':dongüPuan>=6?'nötr':'kotu',
+    aciklama:`${dongüAciklama} — ${
+      racePhase==='Taper'?'Form zirvede, yarışa hazır ✓':
+      racePhase==='Zirve'?'Son yüksek yük haftaları':
+      racePhase==='Gelişme'?'İyi ilerleme, devam':
+      racePhase==='Temel'?'Temel faz, uzun süreç önde':
+      'Yarış sonrası toparlanma'}`
   });
 
-  // ── 5. Yarış Zorluğu Uyumu (0-10) ───────────────────────────────────────
-  const zorlukPuan=Math.round(Math.min(ctlRatio*10,10));
-  detaylar.push({
-    baslik:'Yarış Zorluğu Uyumu',puan:zorlukPuan,max:10,
-    yon:zorlukPuan>=8?'iyi':zorlukPuan>=5?'nötr':'kotu',
-    aciklama:`${race?.ad||'Yarış'} (${km}km${dp>0?', D+'+dp+'m':''}) gereken CTL: ${targetCTL} — ${
-      ctlRatio>=1.0?'Spesifik kondisyon yeterli ✓':
-      ctlRatio>=0.8?'Yakın, bazı güçlükler olabilir':
-      ctlRatio>=0.6?'Yetersiz spesifik kondisyon':
-      'Bu yarış için hazırlık çok eksik'}`
-  });
-
-  // ── 6. Plan Tutarlılığı (0-10) ───────────────────────────────────────────
-  let planPuan=4;
+  // ── 5. Plan Tutarlılığı (0-6) ────────────────────────────────────────────
+  let planPuan=5; // veri yoksa orta puan
   let planAciklama='Geçmiş hafta verisi yok';
   if(workouts?.length&&race?.prep_weeks&&race?.tarih){
     const weekTargets=calcWeeklyTargets(athlete,[race],workouts||[]);
@@ -668,7 +666,7 @@ function raceReadinessScore(ctl,acwr,phase,sakatlık,hrv_durum,daysLeft,race,ath
       });
       const avg=ts/pastTargets.length;
       const avgPct=Math.round(avg*100);
-      planPuan=avg>=0.90?10:avg>=0.75?8:avg>=0.60?6:avg>=0.40?4:avg>=0.20?2:0;
+      planPuan=avg>=0.90?10:avg>=0.75?8:avg>=0.60?6:avg>=0.40?3:avg>=0.20?1:0;
       planAciklama=`%${avgPct} ortalama uyum (${pastTargets.length} hafta) — ${
         avg>=0.90?'Mükemmel disiplin ✓':
         avg>=0.75?'İyi tutarlılık':
@@ -683,36 +681,21 @@ function raceReadinessScore(ctl,acwr,phase,sakatlık,hrv_durum,daysLeft,race,ath
     aciklama:planAciklama
   });
 
-  // ── 7. Hazırlık Fazı (0-7) ───────────────────────────────────────────────
-  const racePhase=race?.tarih&&race?.prep_weeks
-    ?calcPhase(new Date().toISOString().split('T')[0],race.tarih,race.prep_weeks,race)
-    :phase;
-  const fazPuan={Taper:7,Zirve:6,Gelişme:4,Temel:2,'Yarış Sonrası':0}[racePhase]??2;
+  // ── 6. HRV & Toparlanma (0-4) ─────────────────────────────────────────
+  const hrvPuan={dengeli:4,dengesiz:2,'düşük':0}[hrv_durum]??2;
   detaylar.push({
-    baslik:'Hazırlık Fazı',puan:fazPuan,max:7,
-    yon:fazPuan>=6?'iyi':fazPuan>=3?'nötr':'kotu',
-    aciklama:`${racePhase} — ${
-      racePhase==='Taper'?'Form zirvede ✓':
-      racePhase==='Zirve'?'Son yüksek yük haftaları':
-      racePhase==='Gelişme'?'İyi ilerleme':
-      racePhase==='Temel'?'Uzun süreç önde':
-      'Toparlanma dönemi'}`
-  });
-
-  // ── 8. HRV & Toparlanma (0-3) ────────────────────────────────────────────
-  const hrvPuan={dengeli:3,dengesiz:1,'düşük':0}[hrv_durum]??1;
-  detaylar.push({
-    baslik:'HRV & Toparlanma',puan:hrvPuan,max:3,
-    yon:hrvPuan>=2?'iyi':hrvPuan>=1?'nötr':'kotu',
+    baslik:'HRV & Toparlanma',puan:hrvPuan,max:4,
+    yon:hrvPuan>=3?'iyi':hrvPuan>=1?'nötr':'kotu',
     aciklama:`HRV: ${hrv_durum||'bilinmiyor'} — ${
-      hrv_durum==='dengeli'?'Dinlenmiş ✓':
+      hrv_durum==='dengeli'?'Sinir sistemi dinlenmiş ✓':
       hrv_durum==='dengesiz'?'Orta toparlanma':
       hrv_durum==='düşük'?'Yorgunluk yüksek':
       'Veri yok'}`
   });
 
   // ── TOPLAM ────────────────────────────────────────────────────────────────
-  const rawScore=ctlPuan+acwrPuan+injPuan+prepPuan+zorlukPuan+planPuan+fazPuan+hrvPuan;
+  const rawScore=fitPuan+acwrPuan+injPuan+dongüPuan+planPuan+hrvPuan;
+  // rawScore her zaman 0-100 — floor/cap hack gerekmez
 
   let finalScore=rawScore;
   let tavanNot=null;
