@@ -4077,14 +4077,26 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
         kosuGunleri,caprazGunleri);
       // wkStats güncelleme — geçmiş günlerde gerçek antrenman varsa onu kullan
       const isTestDay=(testPlanlar||[]).some(p=>p.athId===athlete.id&&p.date===dateStr);
-      const effectiveTip=isPast&&actual.length>0?(actual[0].tur||actual[0].spor||'aerobik'):planned.tip;
-      // Geçmiş günlerde gerçek antrenman varsa plan yerine onu göster
-      const effectiveBaslik=isPast&&actual.length>0
-        ?(TUR_LABELS[effectiveTip]||SPOR_TURLERI.find(s=>s.v===actual[0].spor)?.l||effectiveTip)
-        :planned.baslik;
-      const effectiveSureDk=isPast&&actual.length>0
-        ?Math.round((toSec(actual[0].sure_sa,actual[0].sure_dk,actual[0].sure_sn)||0)/60)
-        :planned.sure_dk;
+      // Geçmiş günlerde tüm gerçek antrenmanları al
+      const nonRunActuals = isPast && actual.length > 1
+        ? actual.filter(w => w.spor !== 'kosu' || !['aerobik','kolay','uzun','tempo','esik','interval','yokus_kisa','yokus_uzun','tirmanis','teknik'].includes(w.tur))
+        : [];
+      const primaryActual = actual.length > 0 ? actual[0] : null;
+      const effectiveTip = isPast && primaryActual
+        ? (primaryActual.tur || primaryActual.spor || 'aerobik')
+        : planned.tip;
+      // Geçmiş günlerde tüm antrenmanları başlıkta göster
+      const effectiveBaslik = isPast && actual.length > 0
+        ? actual.map(w => {
+            const t = w.tur || w.spor || 'aerobik';
+            const sporlbl = SPOR_MAP[w.spor]?.l || '';
+            const turlbl = TUR_LABELS[t] || t;
+            return w.spor === 'kosu' ? turlbl : sporlbl || turlbl;
+          }).join(' + ')
+        : planned.baslik;
+      const effectiveSureDk = isPast && actual.length > 0
+        ? Math.round(actual.reduce((s,w) => s + (toSec(w.sure_sa,w.sure_dk,w.sure_sn)||0), 0) / 60)
+        : planned.sure_dk;
       const isYogunTip=['interval','esik','yokus_kisa','yokus_uzun','tirmanis'].includes(effectiveTip);
       // wkStats sayımı: yoga/bisiklet/kuvvet vs. capraz olarak say
       const isCaprazOrDinlenme=['dinlenme'].includes(effectiveTip);
@@ -4427,7 +4439,18 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
                   React.createElement('div',{style:{fontSize:18,textAlign:'center'}},
                     dayEmoji(day)
                   ),
-                  React.createElement('div',{style:{fontSize:10,fontWeight:600,textAlign:'center',color:tipColor(day.tip),marginTop:2}},day.baslik),
+                  // Geçmiş gün: tüm gerçek antrenmanları göster
+                  day.isPast && day.actual?.length > 0
+                    ? day.actual.map((w,wi) => {
+                        const t = w.tur || w.spor || 'aerobik';
+                        const sporlbl = SPOR_MAP[w.spor]?.emoji || tipEmoji(t);
+                        const turlbl = TUR_LABELS[t] || SPOR_MAP[w.spor]?.l || t;
+                        const sureDk = Math.round((toSec(w.sure_sa,w.sure_dk,w.sure_sn)||0)/60);
+                        return React.createElement('div',{key:wi,style:{fontSize:10,fontWeight:600,textAlign:'center',color:tipColor(t),marginTop:wi===0?2:1}},
+                          sporlbl+' '+turlbl+(sureDk>0?' · '+sureDk+'dk':'')
+                        );
+                      })
+                    : React.createElement('div',{style:{fontSize:10,fontWeight:600,textAlign:'center',color:tipColor(day.tip),marginTop:2}},day.baslik),
                   day.sure_dk>0&&React.createElement('div',{style:{fontSize:9,color:'var(--text-tertiary)',textAlign:'center'}},day.sure_dk+' dk'),
                   day.uyari&&React.createElement('div',{style:{fontSize:8,color:'var(--warn)',textAlign:'center',marginTop:2}},'⚠'),
                   day.comparison&&React.createElement('div',{style:{textAlign:'center',marginTop:3}},compBadge(day.comparison)),
