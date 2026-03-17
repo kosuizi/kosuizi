@@ -4078,9 +4078,6 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       // wkStats güncelleme — geçmiş günlerde gerçek antrenman varsa onu kullan
       const isTestDay=(testPlanlar||[]).some(p=>p.athId===athlete.id&&p.date===dateStr);
       // Geçmiş günlerde tüm gerçek antrenmanları al
-      const nonRunActuals = isPast && actual.length > 1
-        ? actual.filter(w => w.spor !== 'kosu' || !['aerobik','kolay','uzun','tempo','esik','interval','yokus_kisa','yokus_uzun','tirmanis','teknik'].includes(w.tur))
-        : [];
       const primaryActual = actual.length > 0 ? actual[0] : null;
       const effectiveTip = isPast && primaryActual
         ? (primaryActual.tur || primaryActual.spor || 'aerobik')
@@ -4097,23 +4094,36 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       const effectiveSureDk = isPast && actual.length > 0
         ? Math.round(actual.reduce((s,w) => s + (toSec(w.sure_sa,w.sure_dk,w.sure_sn)||0), 0) / 60)
         : planned.sure_dk;
-      const isYogunTip=['interval','esik','yokus_kisa','yokus_uzun','tirmanis'].includes(effectiveTip);
-      // wkStats sayımı: yoga/bisiklet/kuvvet vs. capraz olarak say
-      const isCaprazOrDinlenme=['dinlenme'].includes(effectiveTip);
-      if(!isCaprazOrDinlenme&&(isPast?actual.length>0:true)){
-        wkStats.count++;
-        if(['interval','esik','tempo','yokus_kisa','yokus_uzun'].includes(effectiveTip)) wkStats.kaliteliYok=false;
-        if(['uzun','tirmanis'].includes(effectiveTip)) wkStats.uzunYapildi=true;
-        wkStats.wkLoad+=planned.yukHedef||0;
+
+      // wkStats: tüm gerçek antrenmanları ayrı ayrı değerlendir
+      if(isPast && actual.length > 0){
+        actual.forEach(w => {
+          const t = w.tur || w.spor || 'aerobik';
+          if(t === 'dinlenme') return;
+          wkStats.count++;
+          if(['interval','esik','tempo','yokus_kisa','yokus_uzun'].includes(t)) wkStats.kaliteliYok=false;
+          if(['uzun','tirmanis'].includes(t)) wkStats.uzunYapildi=true;
+          wkStats.wkLoad += calcMetrics(w,athlete).yukObj||0;
+        });
+      } else if(!isPast){
+        const t = planned.tip;
+        if(t !== 'dinlenme'){
+          wkStats.count++;
+          if(['interval','esik','tempo','yokus_kisa','yokus_uzun'].includes(t)) wkStats.kaliteliYok=false;
+          if(['uzun','tirmanis'].includes(t)) wkStats.uzunYapildi=true;
+          wkStats.wkLoad += planned.yukHedef||0;
+        }
       }
+
+      const isYogunTip=['interval','esik','yokus_kisa','yokus_uzun','tirmanis'].includes(effectiveTip);
       // Ard arda yoğun gün takibi — haftalar arası korunur
       wkStats.sonYogunGun=isYogunTip;
       sonYogunGunGlobal=isYogunTip;
-      // Kaliteli antrenman simülasyon yükünü yumuşat — ATL'yi gereğinden fazla etkilemesin
-      // Gerçek yük hesaplamada kullanılır, simülasyonda daha konservatif
+      // Kaliteli antrenman simülasyon yükünü yumuşat
       const rawLoad=isPast?(actualLoad||0):(planned.yukHedef||0);
-      const isKaliteliTip=['interval','esik','yokus_kisa','yokus_uzun'].includes(effectiveTip);
-      const simFactor=isTestDay?0.4:isKaliteliTip?0.75:1.0; // kaliteli antrenman ATL etkisini %25 azalt
+      const hasKaliteliActual=isPast&&actual.some(w=>['interval','esik','yokus_kisa','yokus_uzun'].includes(w.tur||w.spor));
+      const isKaliteliTip=hasKaliteliActual||['interval','esik','yokus_kisa','yokus_uzun'].includes(effectiveTip);
+      const simFactor=isTestDay?0.4:isKaliteliTip?0.75:1.0;
       const loadForSim=Math.round(rawLoad*simFactor);
       simAtl=loadForSim*λ_atl+simAtl*(1-λ_atl);
       simCtl=loadForSim*λ_ctl+simCtl*(1-λ_ctl);
