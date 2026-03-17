@@ -1320,7 +1320,7 @@ function katsayiToSpor(k){
   return best;
 }
 const EMPTY_A={ad:'',soyad:'',foto:'',strava:'',cinsiyet:'Erkek',dogum:'',kilo:'',boy:'',rhr:'',mhr:'',lthr:'',ftp:'',vo2max:'',vlt:'',disiplin:'karma',uzun_gun:'',kosu_gunleri:[],capraz_gunleri:[],hrv_durum:'',hrv_7gun:'',sakatlık:'1',motivasyon:'3',dinlenme_siklik:'3x1',pb_5k:'',pb_10k:'',pb_hm:'',pb_m:'',yarıslar:[]};
-const EMPTY_R={ad:'',tarih:'',mesafe:'',d_plus:'',kontrol_noktasi:'',maks_irtifa:'',min_irtifa:'',sicaklik:'',nem:'',iklim_zorluk:'1',ekipman_kg:'',prep_weeks:'',taper_w:'',peak_w:'',url:'',logo:''};
+const EMPTY_R={ad:'',tarih:'',mesafe:'',d_plus:'',kontrol_noktasi:'',maks_irtifa:'',min_irtifa:'',sicaklik:'',nem:'',iklim_zorluk:'1',ekipman_kg:'',prep_weeks:'',taper_w:'',peak_w:'',url:'',logo:'',oncelik:'A'};
 const ANTRENMAN_TURLERI=[
   {v:'',l:'— Belirtilmemiş —'},
   // Kolay/Aerobik
@@ -1428,6 +1428,28 @@ function YarısModal({onClose,onSave,initial}){
       React.createElement('div',{className:'form-grid'},
         fg('Yarış İsmi',f.ad,v=>set('ad',v)),
         fg('Yarış Tarihi',f.tarih,v=>set('tarih',v),'date'),
+        // A/B/C Öncelik seçici
+        React.createElement('div',{className:'form-group'},
+          React.createElement('label',null,'Öncelik'),
+          React.createElement('div',{style:{display:'flex',gap:6}},
+            ['A','B','C'].map(p=>React.createElement('button',{
+              key:p,
+              onClick:()=>set('oncelik',p),
+              style:{
+                flex:1,padding:'8px 0',borderRadius:'var(--radius)',
+                border:'2px solid '+(f.oncelik===p?(p==='A'?'var(--danger)':p==='B'?'var(--warn)':'var(--success)'):'var(--border)'),
+                background:f.oncelik===p?(p==='A'?'var(--danger-bg)':p==='B'?'var(--warn-bg)':'var(--success-bg)'):'var(--bg-primary)',
+                color:f.oncelik===p?(p==='A'?'var(--danger)':p==='B'?'var(--warn)':'var(--success)'):'var(--text-secondary)',
+                fontWeight:f.oncelik===p?700:400,fontSize:14,cursor:'pointer'
+              }
+            },p==='A'?'A — Hedef':p==='B'?'B — Önemli':'C — Antrenman'))
+          ),
+          React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:4}},
+            f.oncelik==='A'?'Tam taper + tam hazırlık. Sezonun ana yarışı.':
+            f.oncelik==='B'?'Kısmi taper. Önemli ama sezon hedefi değil.':
+            'Taper yok. Antrenman yarışı veya deneyim.'
+          )
+        ),
         fg('Mesafe (km)',f.mesafe,v=>set('mesafe',v),'number',{min:0,step:.01}),
         fg('Toplam D+ (m)',f.d_plus,v=>set('d_plus',v),'number',{min:0}),
         fg('Kontrol Noktası Sayısı',f.kontrol_noktasi,v=>set('kontrol_noktasi',v),'number',{min:0}),
@@ -1984,6 +2006,10 @@ function SporcularTab({athletes,races,athHistory,allHistory,onAdd,onUpdate,onDel
               React.createElement('div',{style:{flex:1,minWidth:0,paddingRight:28}},
                 React.createElement('div',{style:{fontWeight:600,fontSize:14,marginBottom:4,wordBreak:'break-word'}},r.ad),
                 React.createElement('div',{className:'flex-gap',style:{flexWrap:'wrap'}},
+                  // Öncelik badge'i — A kırmızı, B turuncu, C yeşil
+                  React.createElement('span',{className:'badge '+((r.oncelik||'A')==='A'?'badge-danger':r.oncelik==='B'?'badge-warn':'badge-good')},
+                    (r.oncelik||'A')+' Yarışı'
+                  ),
                   r.tarih&&React.createElement('span',{className:'badge badge-info'},fmtDate(r.tarih)),
                   r.mesafe&&React.createElement('span',{className:'badge badge-gray'},r.mesafe+' km'),
                   r.d_plus&&React.createElement('span',{className:'badge badge-gray'},'D+ '+r.d_plus+' m')
@@ -3600,10 +3626,31 @@ function selectRaces(athlete, races){
     .filter(r=>athIds.includes(r.id)&&new Date(r.tarih+'T12:00:00')>today)
     .sort((a,b)=>new Date(a.tarih)-new Date(b.tarih));
   if(!upcoming.length)return{primary:null,intermediate:[]};
-  // __force ile override edilmiş mi?
+
+  // __force ile manuel override edilmişse onu kullan
   const forced=upcoming.find(r=>r.__force);
-  const primary=forced||[...upcoming].sort((a,b)=>raceDiffScore(b)-raceDiffScore(a))[0];
-  const intermediate=upcoming.filter(r=>r.id!==primary.id&&new Date(r.tarih)<new Date(primary.tarih));
+  if(forced){
+    const intermediate=upcoming.filter(r=>r.id!==forced.id&&new Date(r.tarih)<new Date(forced.tarih));
+    return{primary:forced,intermediate};
+  }
+
+  // A/B/C öncelik sistemi:
+  // En yakın A yarışı → yoksa en yakın B → yoksa en zor yarış (eski davranış)
+  const aRaces=upcoming.filter(r=>(r.oncelik||'A')==='A');
+  const bRaces=upcoming.filter(r=>r.oncelik==='B');
+
+  const primary=aRaces.length>0
+    ? aRaces[0]                                          // en yakın A
+    : bRaces.length>0
+      ? bRaces[0]                                        // en yakın B
+      : [...upcoming].sort((a,b)=>raceDiffScore(b)-raceDiffScore(a))[0]; // fallback: en zor
+
+  // primary'den önce gelen diğer yarışlar intermediate (ara yarış)
+  const intermediate=upcoming.filter(r=>
+    r.id!==primary.id &&
+    new Date(r.tarih)<new Date(primary.tarih)
+  );
+
   return{primary,intermediate};
 }
 
