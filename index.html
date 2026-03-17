@@ -4077,9 +4077,18 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
         kosuGunleri,caprazGunleri);
       // wkStats güncelleme — geçmiş günlerde gerçek antrenman varsa onu kullan
       const isTestDay=(testPlanlar||[]).some(p=>p.athId===athlete.id&&p.date===dateStr);
-      const effectiveTip=isPast&&actual.length>0?(actual[0].tur||'aerobik'):planned.tip;
+      const effectiveTip=isPast&&actual.length>0?(actual[0].tur||actual[0].spor||'aerobik'):planned.tip;
+      // Geçmiş günlerde gerçek antrenman varsa plan yerine onu göster
+      const effectiveBaslik=isPast&&actual.length>0
+        ?(TUR_LABELS[effectiveTip]||SPOR_TURLERI.find(s=>s.v===actual[0].spor)?.l||effectiveTip)
+        :planned.baslik;
+      const effectiveSureDk=isPast&&actual.length>0
+        ?Math.round((toSec(actual[0].sure_sa,actual[0].sure_dk,actual[0].sure_sn)||0)/60)
+        :planned.sure_dk;
       const isYogunTip=['interval','esik','yokus_kisa','yokus_uzun','tirmanis'].includes(effectiveTip);
-      if(effectiveTip!=='dinlenme'&&effectiveTip!=='capraz'&&(isPast?actual.length>0:true)){
+      // wkStats sayımı: yoga/bisiklet/kuvvet vs. capraz olarak say
+      const isCaprazOrDinlenme=['dinlenme'].includes(effectiveTip);
+      if(!isCaprazOrDinlenme&&(isPast?actual.length>0:true)){
         wkStats.count++;
         if(['interval','esik','tempo','yokus_kisa','yokus_uzun'].includes(effectiveTip)) wkStats.kaliteliYok=false;
         if(['uzun','tirmanis'].includes(effectiveTip)) wkStats.uzunYapildi=true;
@@ -4104,7 +4113,13 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       } else if(isPast&&actual.length===0&&planned.tip!=='dinlenme'){
         comparison={actual:0,planned:planned.yukHedef,diff:-planned.yukHedef,pct:0,actualKm:0,actualDp:0,status:'atlandı'};
       }
-      days.push({...planned,actual,actualLoad:round1(actualLoad),actualKm:round1(actualKm),actualDp:Math.round(actualDp),comparison,nextInt:nextInt||null});
+      days.push({
+        ...planned,
+        tip:effectiveTip,
+        baslik:effectiveBaslik,
+        sure_dk:effectiveSureDk,
+        actual,actualLoad:round1(actualLoad),actualKm:round1(actualKm),actualDp:Math.round(actualDp),comparison,nextInt:nextInt||null
+      });
     }
     // Haftalık gerçekleşen toplam
     const wkActualKm=round1(days.reduce((s,d2)=>s+d2.actualKm,0));
@@ -4167,8 +4182,26 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
   if(!athlete)return React.createElement('div',{className:'empty'},'Sporcu seçilmedi.');
   if(!plan)return React.createElement('div',{className:'empty'},'Veri yetersiz.');
 
-  const tipColor=(tip)=>({dinlenme:'var(--border)',kolay:'var(--success)',aerobik:'var(--success)',uzun:'var(--info)',tempo:'var(--warn)',esik:'var(--warn)',interval:'var(--danger)',acici:'var(--warn)',capraz:'var(--success)',yokus_kisa:'var(--warn)',yokus_uzun:'var(--warn)',tirmanis:'var(--info)',teknik:'var(--info)'}[tip]||'var(--text-tertiary)');
-  const tipEmoji=(tip)=>({kolay:'🚶',aerobik:'🏃',uzun:'🛤',tempo:'💨',esik:'🔥',interval:'⚡',acici:'🎯',capraz:'🚴',dinlenme:'😴',yokus_kisa:'⛰',yokus_uzun:'🏔',tirmanis:'📈',teknik:'🎯'}[tip]||'🏅');
+  const tipColor=(tip)=>({
+    dinlenme:'var(--border)',kolay:'var(--success)',aerobik:'var(--success)',
+    uzun:'var(--info)',tempo:'var(--warn)',esik:'var(--warn)',interval:'var(--danger)',
+    acici:'var(--warn)',capraz:'#38bdf8',yokus_kisa:'var(--warn)',yokus_uzun:'var(--warn)',
+    tirmanis:'var(--info)',teknik:'var(--info)',
+    yoga:'#db2777',pilates:'#ec4899',kuvvet:'#7c3aed',bisiklet:'#0284c7',
+    yuzme:'#0891b2',kuerek:'#0369a1',futbol:'#15803d',basketbol:'#ea580c',
+    progressive:'var(--warn)',tempo_interval:'var(--warn)',cruise:'var(--warn)',
+    piramit:'var(--danger)',on_off:'var(--danger)',yaris_tempo:'var(--danger)',
+    hill_sprint:'var(--warn)',yokus:'var(--warn)',strides:'var(--success)',
+  }[tip]||'var(--text-tertiary)');
+  const tipEmoji=(tip)=>({
+    kolay:'🚶',aerobik:'🏃',uzun:'🛤',tempo:'💨',esik:'🔥',interval:'⚡',
+    acici:'🎯',capraz:'🚴',dinlenme:'😴',yokus_kisa:'⛰',yokus_uzun:'🏔',
+    tirmanis:'📈',teknik:'🎯',
+    yoga:'🧘',pilates:'🤸',kuvvet:'💪',bisiklet:'🚴',yuzme:'🏊',
+    kuerek:'🚣',futbol:'⚽',basketbol:'🏀',
+    progressive:'📈',tempo_interval:'💨',cruise:'🌊',piramit:'🔺',
+    on_off:'🔄',yaris_tempo:'🏁',hill_sprint:'⛰',strides:'💫',
+  }[tip]||'🏅');
   const dayEmoji=(day)=>day.isTest?(TEST_TURLERI[day.testTur]?.icon||'🧪'):day.isKosuCapraz?'🏃🚴':tipEmoji(day.tip);
   const compBadge=(c)=>{
     if(!c)return null;
