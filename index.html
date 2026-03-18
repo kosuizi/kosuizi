@@ -736,8 +736,8 @@ function calibrateVlt(workouts, ath){
   const thresholdHR=lthr>0?lthr:Math.round(mhr*0.85);
 
   // Uygun antrenmanları filtrele
-  // Yapısal olarak sabit tempolu sayılan türler
-  const STEADY_TURLERI=['kolay','aerobik','uzun',''];
+  // Sabit tempolu sayılan türler — bu listede olmayan türler dahil edilmez
+  const STEADY_TURLERI=['kolay','aerobik','uzun'];
 
   const eligible=workouts.filter(w=>{
     const km=parseFloat(w.mesafe)||0;
@@ -749,39 +749,44 @@ function calibrateVlt(workouts, ath){
     const spor=w.spor||'kosu';
     const tur=w.tur||'';
 
+    // 0. "Analiz için kullan" işareti — tüm diğer kriterleri bypass eder
+    //    (koç manuel olarak dahil etmek istediği antrenmanlar için)
+    if(w.analiz_icin===true){
+      return spor==='kosu'&&km>=3&&durSec>=1200&&hr>=100&&hr<=185;
+    }
+
     // 1. Temel koşullar
     if(spor!=='kosu') return false;
     if(km<3) return false;
     if(durSec<1200) return false;   // en az 20dk
     if(hr<115||hr>165) return false; // aerobik bölge
-    if(zemin>2) return false;        // düz/hafif arazi
 
-    // 2. Antrenman türü — interval/esik/tempo/yokuş kesinlikle dışla
-    const YAPILI=['interval','esik','tempo','yokus_kisa','yokus_uzun','tirmanis','teknik','depar','yaris'];
-    if(YAPILI.includes(tur)) return false;
+    // 2. Antrenman türü — ZORUNLU: sadece sabit tempolu türler dahil
+    //    Tür girilmemişse veya yapısal türse dışla
+    if(!STEADY_TURLERI.includes(tur)) return false;
 
-    // 3. Nabız değişkenliği — maks ve ortalama arasındaki fark
-    // Interval/fartlek'te fark büyük olur (>25 bpm)
-    // Sabit tempolu koşuda fark küçük olur (<20 bpm)
+    // 3. Zemin — çok zor arazi dışla (pace güvenilirliği düşer)
+    if(zemin>2) return false;
+
+    // 4. Nabız değişkenliği — maks-ort farkı >25 bpm ise interval/fartlek
     if(hrMax>0&&hr>0){
       const hrRange=hrMax-hr;
-      if(hrRange>25) return false; // çok değişken — sabit tempo değil
+      if(hrRange>25) return false;
     }
 
-    // 4. RPE kontrolü — yüksek RPE yapısal antrenmanı işaret eder
-    if(rpe>7) return false;
+    // 5. RPE — yüksek RPE yapısal antrenmanı işaret eder
+    if(rpe>0&&rpe>7) return false;
 
-    // 5. Pace tutarlılığı proxy — pace/hr oranı makul aralıkta mı?
-    // Çok kısa mesafe + uzun süre = muhtemelen interval (dinlenme dahil)
+    // 6. Pace makul aralıkta
     const durMin=durSec/60;
-    const pace=km>0?durMin/km:0; // dk/km
-    if(pace<3.0||pace>10.0) return false; // gerçekdışı pace
+    const pace=km>0?durMin/km:0;
+    if(pace<3.0||pace>10.0) return false;
 
     return true;
   });
 
   if(eligible.length<3)return{
-    error:`Yeterli veri yok. ${eligible.length} uygun sabit tempolu antrenman bulundu (en az 3 gerekli). İpucu: kolay/aerobik/uzun türündeki antrenmanlara tür atayın.`,
+    error:`Yeterli veri yok. ${eligible.length} uygun sabit tempolu antrenman bulundu (en az 3 gerekli). İpucu: Kolay, Aerobik veya Uzun Koşu türündeki antrenmanlara tür atayın, ya da "Analize Dahil Et" kutusunu işaretleyin.`,
     count:eligible.length
   };
 
@@ -1292,7 +1297,7 @@ function compressImage(file,{maxW=800,maxH=800,quality=0.75,onDone,onError}){
   reader.readAsDataURL(file);
 }
 
-const TABS=[{id:'dashboard',label:'Pano'},{id:'gunun',label:'💡 Günün Antrenmanı'},{id:'plan',label:'📅 Haftalık Plan'},{id:'lider',label:'🏆 Liderlik'},{id:'bolge',label:'Bölgeler'},{id:'test',label:'🧪 Testler'},{id:'yarislar',label:'Yarış Durumu'},{id:'karsilastir',label:'Karşılaştır'},{id:'ekle',label:'Antrenman Ekle'},{id:'gecmis',label:'Geçmiş'},{id:'analiz',label:'📊 Antrenman Analizi'},{id:'yukle',label:'Excel Yükle'},{id:'sporcular',label:'Sporcular ve Yarışlar'},{id:'rehber',label:'📖 Rehber'}];
+const TABS=[{id:'dashboard',label:'Pano'},{id:'gunun',label:'💡 Günün Antrenmanı'},{id:'plan',label:'📅 Haftalık Plan'},{id:'lider',label:'🏆 Liderlik'},{id:'bolge',label:'Bölgeler'},{id:'test',label:'🧪 Testler'},{id:'yarislar',label:'Yarış Durumu'},{id:'karsilastir',label:'Karşılaştır'},{id:'ekle',label:'Antrenman Ekle'},{id:'gecmis',label:'Geçmiş'},{id:'analiz',label:'📊 Antrenman Analizi'},{id:'yukle',label:'Excel Yükle'},{id:'sporcular',label:'Sporcular ve Yarışlar'}];
 
 const SPOR_TURLERI=[
   {v:'kosu',     l:'Koşu',       k:1.00, emoji:'🏃'},
@@ -1385,7 +1390,7 @@ const YAPI_NOTLARI={
 };
 
 
-const EMPTY_W={date:new Date().toISOString().split('T')[0],spor:'kosu',tur:'',yapi_notu:'',sure_sa:'0',sure_dk:'0',sure_sn:'0',mesafe:'',irtifa:'',ort_nabiz:'',maks_nabiz:'',rpe:'',kadans:'',yer_kontak:'',dikey_salinim:'',zemin_dengesi:'',zemin_zorluk:'1',ort_guc:'',maks_guc:'',notlar:''};
+const EMPTY_W={date:new Date().toISOString().split('T')[0],spor:'kosu',tur:'',yapi_notu:'',sure_sa:'0',sure_dk:'0',sure_sn:'0',mesafe:'',irtifa:'',ort_nabiz:'',maks_nabiz:'',rpe:'',kadans:'',yer_kontak:'',dikey_salinim:'',zemin_dengesi:'',zemin_zorluk:'1',ort_guc:'',maks_guc:'',notlar:'',analiz_icin:false,yol_yarisi:false,trail_yarisi:false};
 
 function acwrStatus(v){
   if(!v)return{label:'—',cls:'',badge:''};
@@ -7092,6 +7097,34 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,wor
         React.createElement('label',null,'Notlar'),
         React.createElement('textarea',{value:form.notlar,onChange:e=>set('notlar',e.target.value),placeholder:'Antrenman notu...'})
       ),
+      // ── Etiketler ─────────────────────────────────────────────────────────
+      React.createElement('div',{style:{marginTop:10,display:'flex',flexWrap:'wrap',gap:8}},
+        // Analize dahil et
+        React.createElement('label',{style:{display:'flex',alignItems:'center',gap:6,fontSize:12,cursor:'pointer',
+          padding:'6px 10px',borderRadius:'var(--radius)',
+          background:form.analiz_icin?'var(--info-bg)':'var(--bg-secondary)',
+          border:'1px solid '+(form.analiz_icin?'var(--info)':'var(--border)')}},
+          React.createElement('input',{type:'checkbox',checked:!!form.analiz_icin,onChange:e=>set('analiz_icin',e.target.checked)}),
+          React.createElement('span',null,'📊 Aerobik Analize Dahil Et'),
+          React.createElement('span',{style:{fontSize:10,color:'var(--text-tertiary)',marginLeft:2}},'(sabit tempo değilse)')
+        ),
+        // Yol yarışı
+        React.createElement('label',{style:{display:'flex',alignItems:'center',gap:6,fontSize:12,cursor:'pointer',
+          padding:'6px 10px',borderRadius:'var(--radius)',
+          background:form.yol_yarisi?'var(--info-bg)':'var(--bg-secondary)',
+          border:'1px solid '+(form.yol_yarisi?'var(--info)':'var(--border)')}},
+          React.createElement('input',{type:'checkbox',checked:!!form.yol_yarisi,onChange:e=>set('yol_yarisi',e.target.checked)}),
+          React.createElement('span',null,'🏅 Yol Yarışı')
+        ),
+        // Trail yarışı
+        React.createElement('label',{style:{display:'flex',alignItems:'center',gap:6,fontSize:12,cursor:'pointer',
+          padding:'6px 10px',borderRadius:'var(--radius)',
+          background:form.trail_yarisi?'var(--success-bg)':'var(--bg-secondary)',
+          border:'1px solid '+(form.trail_yarisi?'var(--success)':'var(--border)')}},
+          React.createElement('input',{type:'checkbox',checked:!!form.trail_yarisi,onChange:e=>set('trail_yarisi',e.target.checked)}),
+          React.createElement('span',null,'🏔 Trail Yarışı')
+        )
+      ),
       (()=>{const m=calcMetrics(form,selectedAth||athlete); return durSec>0&&React.createElement('div',{className:'calc-preview'},
         React.createElement('div',{className:'calc-item'},'Süre: ',React.createElement('span',null,fmtDur(durSec))),
         m.hrEstimated&&React.createElement('div',{className:'calc-item',style:{color:'var(--warn)'}},
@@ -7596,104 +7629,6 @@ function Gecmis({workouts,athletes,onDelete,onBulkDelete,onUpdate}){
         )
       )
     )
-  );
-}
-
-function RehberTab(){
-  const [acik,setAcik]=useState(null);
-  const tog=(id)=>setAcik(p=>p===id?null:id);
-  const B=[
-    {id:'fitness',e:'📈',t:'Fitness & Yük Modeli',i:[
-      {a:'ATL (Akut Yük)',m:'Son 7 günün üstel ağırlıklı ort. λ=1−e^(−1/7)≈0.135. Yorgunluk göstergesi. Kaynak: Banister 1991.'},
-      {a:'CTL (Kronik Yük)',m:'Son 42 günün üstel ağırlıklı ort. λ≈0.023. Fitness göstergesi. Kaynak: Banister 1991.'},
-      {a:'TSB = CTL − ATL',m:'Pozitif: dinlenmiş. TSB<−25: çok yorgun → kolay koşu. TSB<−15: yorgun → yük azalt. Kaynak: Morton 1997.'},
-      {a:'ACWR = ATL / CTL',m:'İdeal 0.8–1.3. >1.5: kolay koşuya indir. <0.8: form kaybı riski. Kaynak: Gabbett TJ, Br J Sports Med 2016.'},
-      {a:'Yük Çarpanları',m:'interval=2.1, yokus=2.0, tirmanis=2.0, esik=1.7, tempo=1.55, aerobik=1.1, kolay=0.8, capraz=0.8.'},
-      {a:'CTL Band',m:'<20=band1, 20–40=band2, 40–60=band3, 60–80=band4, >80=band5. Şablon süre ve yoğunluğunu belirler.'},
-    ]},
-    {id:'bolge',e:'🎯',t:'Nabız & Pace Bölgeleri',i:[
-      {a:'LTHR Yöntemi',m:'Z1<%81, Z2=81–89%, Z3=89–93%, Z4=93–99%, Z5a=99–102%, Z5b=102–106%, Z5c>106% LTHR. Kaynak: Friel 2012.'},
-      {a:'Karvonen (HRR)',m:'LTHR yoksa: BPM = RHR + (MHR−RHR)×katsayı. Kaynak: Karvonen 1957.'},
-      {a:'Pace Bölgeleri (vLT)',m:'Z1=%60–75, Z2=%75–85, Z3=%85–90, Z4=%90–97, Z5a=%97–100, Z5b=%100–105, Z5c=%105–115 vLT. Z1 alt sınırı 0.60 — sıfır kullanılırsa hedef pace 12+ dk/km olur. Kaynak: Daniels 2014.'},
-    ]},
-    {id:'faz',e:'📅',t:'Periodizasyon & Fazlar',i:[
-      {a:'Faz Hesabı',m:'Taper (son taper_w hafta) → Zirve (peak_w hafta) → Gelişme (%40) → Temel (%30) → Yarış Sonrası (3 hafta). Kaynak: Mujika 2009.'},
-      {a:'Taper Süresi',m:'>80km=4 hafta, >42km=3 hafta, >21km=2 hafta, kısa=1 hafta. Kaynak: Bosquet L, Med Sci Sports Exerc 2007.'},
-      {a:'Geri Çekme Haftası',m:'3 ardışık artış sonrası: önceki uzunun %72\'si. Kaynak: Lydiard 1995.'},
-    ]},
-    {id:'plan',e:'🗓',t:'Haftalık Plan Motoru',i:[
-      {a:'Hafta İskeleti',m:'En yüksek TSB\'li güne kaliteli antrenman. Uzun koşu günü sabit. Diğerleri aerobik.'},
-      {a:'Sporcu Bazlı Rotasyon',m:'rotIdx = abs(hash(athlete.id)%97) + floor(history/7) + weekOff. Aynı kondisyondaki sporcular farklı antrenman alır.'},
-      {a:'Tekrar Önleme (pickSeq)',m:'Son 2 haftada yapılan kaliteli tip tekrar verilmez. Sekans içinden en son yapılmayan seçilir.'},
-      {a:'22 Antrenman Şablonu',m:'Kolay/Aerobik/Uzun/BackToBack/PowerHiking/KarmaYol · Tempo/Progressive/TempoInterval/Cruise/YarışTemposu · Eşik/İnterval/Piramit/OnOff · YokusKisa/YokusUzun/Tırmanış/HillSprint · TeknikIniş/Strides/Açıcı. Temel/Gelişme/Zirve fazına göre farklı yapı.'},
-      {a:'ACWR Bloğu',m:'ACWR>1.5: kolay koşuya indir (zorunlu). isFutureWeek=false olduğunda çalışır — gelecek hafta simülasyonunda bypass edilir.'},
-      {a:'Bugünün simState',m:'generateTwoWeekPlan içinde bugün için history[last] değerleri kullanılır (simülasyon değil). Haftalık plan ile Günün Antrenmanı tutarlı kalır.'},
-      {a:'yMod',m:'HRV düşükse×0.85, sakatlık≥5 ise×0.80, TSB<−15 ise×0.85, ACWR>1.3 ise×0.85. En kısıtlayıcı geçerli.'},
-    ]},
-    {id:'uzun',e:'🛤',t:'Uzun Koşu Progressionu',i:[
-      {a:'Referans Veri',m:'Her haftanın EN UZUN koşusu — etiketten bağımsız. Süre yoksa mesafe×5dk/km. Son 6 hafta referans alınır.'},
-      {a:'Normal Artış',m:'Maks %10 artış. Öneri = min(band_tavan, son+artış). Kaynak: Lydiard — haftada %10\'dan fazla artış yaralanma riski.'},
-      {a:'Geri Çekme',m:'Son 3 hafta ardışık artış varsa: son_uzun×0.72 önerilir.'},
-      {a:'Band Tavanı',m:'Ultra: band1=80dk, band3=130dk, band5=200dk. Yol: band1=60dk, band3=90dk, band5=130dk.'},
-    ]},
-    {id:'yaris_skor',e:'🏁',t:'Yarış Hazırlık Skoru (6 Faktör, toplam 100)',i:[
-      {a:'1. Fitness-Talep (0–30)',m:'CTL/hedefCTL×30. Hedef CTL: ≤5km=25, ≤21km=45, ≤42km=60, ≤90km=90, >90km=105. Kaynak: Banister 1991 (r=0.75–0.90).'},
-      {a:'2. Yük Dengesi ACWR (0–22)',m:'Üçgen peak 1.05\'te. dist=|acwr−1.05|, puan=22×max(0,1−dist/0.25). Kaynak: Gabbett 2016 (r=0.50–0.65).'},
-      {a:'3. Sağlık (0–20)',m:'puan=max(0,20−(inj−1)×20/9). Gate-keeper: sakatlık diğer tüm faktörleri geçersiz kılabilir.'},
-      {a:'4. Döngü İlerlemesi (0–14)',m:'Faz: Taper=10, Zirve=8, Gelişme=5, Temel=2. Tamamlanma: %90+=4p, %75+=3p, %60+=2p, %40+=1p. min(14, faz+tamamlanma). Kaynak: Mujika 2009.'},
-      {a:'5. Plan Tutarlılığı (0–10)',m:'Haftalık km+D+ hedef uyumu. avg≥0.9→10p, ≥0.75→8p, ≥0.6→6p, ≥0.4→3p. Kaynak: Foster 1998 (r=0.55–0.70).'},
-      {a:'6. HRV (0–4)',m:'dengeli=4p, dengesiz=2p, düşük=0p. Destekleyici kısa vadeli sinyal. Kaynak: Kiviniemi 2007 (r=0.25–0.35).'},
-      {a:'Matematiksel Tutarlılık',m:'sum(faktörler) = gösterilen skor. Taban/floor hack yok. Yarışa <7 gün: görsel tavan 80; <14 gün: tavan 90 (hesabı bozmaz).'},
-    ]},
-    {id:'oncelik',e:'🥇',t:'Yarış Öncelik (A/B/C)',i:[
-      {a:'Tasarım Prensibi',m:'Öncelik yarışa değil sporcu-yarış ilişkisine aittir. Aynı yarış A için A, B için C olabilir. Sporcu kartında yarış seçiminin yanında ayarlanır.'},
-      {a:'selectRaces Mantığı',m:'1. Manuel override (__force). 2. En yakın A. 3. En yakın B. 4. En zor yarış (fallback). Primary\'den önce gelen diğerleri intermediate.'},
-      {a:'Geriye Dönük Uyumluluk',m:'Eski format yarıslar:["id"] → otomatik oncelik=A. Tüm okuma noktalarında normalize edilir.'},
-    ]},
-    {id:'antrenman',e:'🏃',t:'Antrenman Kayıt & Analiz',i:[
-      {a:'Günde N Antrenman',m:'Aynı güne birden fazla kayıt desteklenir. Kart tüm antrenmanları listeler. wkStats actual.forEach ile her biri için ayrı güncellenir.'},
-      {a:'Geçmiş Günler',m:'Haftalık planda geçmiş günler plan değil gerçek antrenmanı gösterir. effectiveTip/Baslik/SureDk gerçek veriden hesaplanır.'},
-      {a:'Antrenman Ekle Otodoldurma',m:'Sporcu + tarih seçilince o günün haftalık plan önerisi (generateTwoWeekPlan\'dan) otomatik yansıtılır. Yapısal tür seçiminde YAPI_NOTLARI dropdown gelir.'},
-      {a:'Analiz Sekmesi',m:'Aynı tür+yapıdaki antrenmanların pace, nabız, süre trendi. Örnek: tüm "Piramit · 1-2-3-4-3-2-1" seansları.'},
-    ]},
-    {id:'uzun2',e:'📊',t:'Diğer Hesaplamalar',i:[
-      {a:'Yarış Tahmini (VDOT+Riegel)',m:'PB\'lerden VDOT, Riegel üssü mesafeye göre (≤10K=1.06, ≤42K=1.08, ≤100K=1.15). Düzeltme: yaş, BMI, CTL, ACWR, HRV, iklim, ekipman. Tırmanış cezası: Naismith revised.'},
-      {a:'Excel Haftalık Plan',m:'Tek sayfa, 2 sütunlu grid, 18 satır/gün. Pace→zone rengi. Formülle hesaplanan süre. Tekrar satırı gri, toplam formülle.'},
-      {a:'Duplike Şablon Sorunu (düzeltildi)',m:'11 şablonun iki tanımı vardı; JS last-wins ile hep eski (phase\'siz) versiyon çalışıyordu. Zengin phase parametreli versiyonlar hiç çalışmıyordu. Düzeltildi.'},
-    ]},
-  ];
-
-  return React.createElement('div',null,
-    React.createElement('div',{className:'card',style:{marginBottom:12}},
-      React.createElement('div',{style:{display:'flex',alignItems:'center',gap:10,marginBottom:6}},
-        React.createElement('span',{style:{fontSize:28}},'📖'),
-        React.createElement('div',null,
-          React.createElement('div',{style:{fontWeight:700,fontSize:16}},'Sistem Rehberi'),
-          React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)'}},'Tüm kural ve hesaplamalar ile bilimsel dayanakları.')
-        )
-      ),
-      React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',fontStyle:'italic'}},
-        'Kaynaklar: Banister 1991 · Gabbett Br J Sports Med 2016 · Mujika 2009 · Foster IJSM 1998 · Friel 2012 · Daniels 2014 · Lydiard 1995 · Karvonen 1957 · Kiviniemi 2007 · Morton 1997'
-      )
-    ),
-    B.map(b=>React.createElement('div',{key:b.id,className:'card',style:{marginBottom:8}},
-      React.createElement('div',{
-        style:{display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer',userSelect:'none'},
-        onClick:()=>tog(b.id)
-      },
-        React.createElement('span',{style:{fontWeight:700,fontSize:14}},b.e+' '+b.t),
-        React.createElement('span',{style:{color:'var(--text-tertiary)',fontSize:13}},acik===b.id?'▲':'▼')
-      ),
-      acik===b.id&&React.createElement('div',{style:{marginTop:12,borderTop:'1px solid var(--border)',paddingTop:12,display:'flex',flexDirection:'column',gap:8}},
-        b.i.map((m,i)=>React.createElement('div',{key:i,style:{
-          padding:'8px 12px',background:'var(--bg-secondary)',borderRadius:'var(--radius)',
-          borderLeft:'3px solid var(--info)'
-        }},
-          React.createElement('div',{style:{fontWeight:600,fontSize:12,marginBottom:3}},m.a),
-          React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',lineHeight:1.6}},m.m)
-        ))
-      )
-    ))
   );
 }
 
@@ -8378,7 +8313,6 @@ function App(){
       },athlete,athletes,selId,onSelChange:setSelId,allHistory,workouts,races,testPlanlar}),
       tab==='gecmis'&&React.createElement(Gecmis,{workouts,athletes,onDelete:id=>setWorkouts(p=>p.filter(x=>x.id!==id)),onBulkDelete:ids=>setWorkouts(p=>p.filter(x=>!ids.includes(x.id))),onUpdate:handleUpdateWorkout}),
       tab==='analiz'&&React.createElement(AntrenmanAnalizTab,{workouts,athletes}),
-      tab==='rehber'&&React.createElement(RehberTab,null),
       tab==='yukle'&&React.createElement(ExcelYukle,{onImport:list=>setWorkouts(p=>[...p,...list]),athletes,selId,onSelChange:setSelId,workouts}),
       tab==='sporcular'&&React.createElement(SporcularTab,{athletes,races,athHistory,allHistory,
         onAdd:a=>setAthletes(p=>[...p,a]),
