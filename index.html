@@ -2732,15 +2732,60 @@ function tplAerobik(band, sure_dk, zones, disiplin){
   };
 }
 
-function tplUzun(band, ctl, zones, disiplin, dpHedef){
+function tplUzun(band, ctl, zones, disiplin, dpHedef, recentLongRuns){
   const isUltra=disiplin==='ultra';
   const isPatika=disiplin==='patika'||disiplin==='ultra'||disiplin==='karma';
-  const dk=isUltra
-    ?(band<=1?70:band===2?90:band===3?110:band===4?130:150)
-    :(band<=1?50:band===2?65:band===3?80:band===4?95:110);
+
+  // ── Band bazlı maksimum tavan (faz/band sınırı) ──────────────────────────
+  const bandMax=isUltra
+    ?(band<=1?80:band===2?100:band===3?130:band===4?160:200)
+    :(band<=1?60:band===2?75:band===3?90:band===4?110:130);
+
+  // ── Son uzun koşulardan progresyon hesapla ───────────────────────────────
+  // recentLongRuns: son 6 haftanın uzun koşuları [{date, sure_dk}], yeniden eskiye
+  let dk = bandMax; // veri yoksa band tablosunu kullan
+  let progressNote = '';
+
+  if(recentLongRuns && recentLongRuns.length > 0){
+    const sonUzun = recentLongRuns[0].sure_dk || 0;
+
+    if(sonUzun > 0){
+      // Geri çekme haftası: son 3 ardışık haftada artış varsa
+      const son3 = recentLongRuns.slice(0, 3);
+      const ardiArdina = son3.length >= 3 &&
+        son3[0].sure_dk > son3[1].sure_dk &&
+        son3[1].sure_dk > son3[2].sure_dk;
+
+      if(ardiArdina){
+        // 3 ardışık artış → geri çekme: son uzunun %72'si
+        dk = Math.round(sonUzun * 0.72);
+        progressNote = `⬇ Geri çekme haftası (3 ardışık artış sonrası) — ${sonUzun}dk × 0.72`;
+      } else {
+        // Normal: son uzun + %8-12 artış
+        // Faza göre artış oranı: Zirve daha agresif, Taper sıfır
+        const artisOran = 0.10; // sabit %10
+        const artis = Math.max(10, Math.round(sonUzun * artisOran));
+        dk = Math.min(bandMax, sonUzun + artis);
+        progressNote = `⬆ Son: ${sonUzun}dk + ${artis}dk artış`;
+      }
+
+      // Tavan kontrolü
+      if(dk > bandMax){
+        dk = bandMax;
+        progressNote += ` (tavan: ${bandMax}dk)`;
+      }
+      // Alt sınır: son uzunun %65'inden düşme
+      const minDk = Math.round(sonUzun * 0.65);
+      if(dk < minDk){
+        dk = minDk;
+        progressNote += ` (alt sınır koruması)`;
+      }
+    }
+  }
+
   const parts=[
     {baslik:'Isınma',detay:`15 dk — ${zoneInfoZ1(zones)||'Z1 kolay'}`},
-    {baslik:'Uzun Koşu',detay:`${dk-15} dk — ${zoneInfo(zones,1)||'Z2 aerobik'}${isPatika?' — arazi tercihli':''}${dpHedef>0?' · Hedef D+: ~'+dpHedef+'m':''}${isUltra?' · Dik tırmanışlarda yürüyüş stratejisi uygula':''}`.trim()},
+    {baslik:'Uzun Koşu',detay:`${dk-15} dk — ${zoneInfo(zones,1)||'Z2 aerobik'}${isPatika?' — arazi tercihli':''}${dpHedef>0?' · Hedef D+: ~'+dpHedef+'m':''}${isUltra?' · Dik tırmanışlarda yürüyüş stratejisi uygula':''}${progressNote?' · '+progressNote:''}`.trim()},
     {baslik:'Soğuma',detay:`5 dk — ${zoneInfoZ1(zones)||'Z1'}`},
   ];
   if(band>=4&&disiplin!=='yol') parts.splice(2,0,{baslik:'Ek Tırmanış',detay:`Son 20 dk içinde ${dpHedef>0?'en az '+Math.round(dpHedef*0.3)+'m tırmanış':'mümkün olduğunca tırmanış'} ekle — nabız ${zoneInfo(zones,2)||'Z3'} bandına çıkabilir`});
@@ -3527,6 +3572,30 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
 
   // ── planDay'den bugünün temel önerisini al ───────────────────────────────
   // wkStats: planDay'in ihtiyacı olan haftalık durum
+  // Son uzun koşular — tplUzun progresyon hesabı için
+  // Etiketten bağımsız, her haftanın en uzun koşusu
+  const recentLongRunsForPlan = (()=>{
+    const kosuWks = (allWorkouts||[]).filter(w=>w.athleteId===athlete.id&&w.date&&(w.spor==='kosu'||!w.spor));
+    const byWeek = {};
+    kosuWks.forEach(w=>{
+      const d = new Date(w.date+'T12:00:00');
+      const day = d.getDay();
+      const diffToMon = day===0?-6:1-day;
+      const mon = new Date(d); mon.setDate(d.getDate()+diffToMon);
+      const wk = mon.toISOString().split('T')[0];
+      const sureDk = Math.round((toSec(w.sure_sa,w.sure_dk,w.sure_sn)||0)/60);
+      const km = parseFloat(w.mesafe)||0;
+      const efektifDk = sureDk || Math.round(km*5);
+      if(!byWeek[wk]||efektifDk>byWeek[wk].sure_dk){
+        byWeek[wk]={date:w.date, sure_dk:efektifDk, km};
+      }
+    });
+    return Object.values(byWeek)
+      .filter(w=>w.sure_dk>30)
+      .sort((a,b)=>new Date(b.date)-new Date(a.date))
+      .slice(0,6);
+  })();
+
   const wkStatsForPlan={
     count:wkSessions,
     kaliteliYok:!kaliteliYapildi,
@@ -3534,7 +3603,8 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
     wkLoad,
     dpHedefHafta:thisWeekTarget?.targetDp||0,
     weekOff: Math.floor((history.length||0)/7),
-    isFutureWeek: false  // Günün antrenmanı her zaman mevcut hafta
+    isFutureWeek: false,
+    recentLongRuns: recentLongRunsForPlan,
   };
   const todayStr=`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
   const simStateToday={
@@ -3756,7 +3826,7 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
       const uzunYMod=cokYorgun?0.65:yorgun?0.80:yMod;
       kosuTpl=isTrail&&dpGun>200
         ?tplTirmanisAcik(band,Math.round(70*uzunYMod),zones,dpGun)
-        :tplUzun(band,simState.ctl||0,zones,disiplin,dpGun);
+        :tplUzun(band,simState.ctl||0,zones,disiplin,dpGun,wkStats.recentLongRuns);
       if(cokYorgun)kosuUyari='TSB '+tsb.toFixed(1)+' — çok yorgun, uzun koşu süresi %35 kısaltıldı';
       else if(yorgun)kosuUyari='TSB '+tsb.toFixed(1)+' — yorgun, uzun koşu süresi %20 kısaltıldı';
     } else if(iskeleteGoreAerobik||sonYogunGun){
@@ -3828,7 +3898,7 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
           ];
           kosuTpl=zirveSeq[wk%zirveSeq.length]();
         } else if(!wkStats.uzunYapildi&&(!uzunGunTanimli||isUzunGun)){
-          kosuTpl=isTrail?tplTirmanisAcik(band,Math.round(75*yMod),zones,dpGun):tplUzun(band,simState.ctl||0,zones,disiplin,dpGun);
+          kosuTpl=isTrail?tplTirmanisAcik(band,Math.round(75*yMod),zones,dpGun):tplUzun(band,simState.ctl||0,zones,disiplin,dpGun,wkStats.recentLongRuns);
         } else {
           kosuTpl=tplEsik(band,Math.round(55*yMod),zones,phase);
         }
@@ -3938,7 +4008,34 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       .slice(0,4)
       .map(w=>w.tur);
     
-    let wkStats={count:0,kaliteliYok:true,uzunYapildi:false,wkLoad:0,dpHedefHafta:wt?.targetDp||0,weekOff:rotIdx,isFutureWeek:weekOff>0,recentKaliteli,sonYogunGun:sonYogunGunGlobal,testPlanlar:testPlanlar||[]};
+    // Son uzun koşular — tplUzun için progresyon hesabında kullanılır
+    // Yaklaşım: etiketten bağımsız, her haftanın EN UZUN koşusunu al
+    // (sporcu aerobik etiketiyle de uzun mesafe koşabilir; etikete güvenmemek daha sağlıklı)
+    const recentLongRuns = (()=>{
+      const kosuWks = athWorkouts.filter(w=>w.date&&(w.spor==='kosu'||!w.spor));
+      const byWeek = {};
+      kosuWks.forEach(w=>{
+        const d = new Date(w.date+'T12:00:00');
+        const day = d.getDay();
+        const diffToMon = day===0?-6:1-day;
+        const mon = new Date(d); mon.setDate(d.getDate()+diffToMon);
+        const wk = mon.toISOString().split('T')[0];
+        const sureDk = Math.round((toSec(w.sure_sa,w.sure_dk,w.sure_sn)||0)/60);
+        const km = parseFloat(w.mesafe)||0;
+        // Süre yoksa mesafeden tahmin (yaklaşık 5dk/km)
+        const efektifDk = sureDk || Math.round(km*5);
+        if(!byWeek[wk]||efektifDk>byWeek[wk].sure_dk){
+          byWeek[wk]={date:w.date, sure_dk:efektifDk, km};
+        }
+      });
+      // Son 6 haftanın en uzun koşuları, yeniden eskiye, >30dk olanlar
+      return Object.values(byWeek)
+        .filter(w=>w.sure_dk>30)
+        .sort((a,b)=>new Date(b.date)-new Date(a.date))
+        .slice(0,6);
+    })();
+
+    let wkStats={count:0,kaliteliYok:true,uzunYapildi:false,wkLoad:0,dpHedefHafta:wt?.targetDp||0,weekOff:rotIdx,isFutureWeek:weekOff>0,recentKaliteli,recentLongRuns,sonYogunGun:sonYogunGunGlobal,testPlanlar:testPlanlar||[]};
 
     // ── Hafta İskeleti: Kaliteli antrenmanı en iyi TSB gününe ata ────────────
     // Sadece gelecek/mevcut haftalar için (geçmiş haftada gerçek veri var)
