@@ -2263,146 +2263,144 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
 
   const chartData=useMemo(()=>{
     if(!history.length||!race||!ath)return null;
-    const points=[];
-    for(let i=0;i<history.length;i+=7){
-      const day=history[i];
-      if(!day.ctl||day.ctl<1)continue;
-      let t=null;try{t=calcTargetTime(race,ath,day.ctl,day.acwr,workouts);}catch(e){}
-      if(t&&t.totalMin>0)points.push({date:day.date,min:round1(t.totalMin)});
-    }
-    const last=history[history.length-1];
-    if(last&&last.ctl>1){
-      let t=null;try{t=calcTargetTime(race,ath,last.ctl,last.acwr,workouts);}catch(e){}
-      if(t&&t.totalMin>0){
-        const already=points.find(p=>p.date===last.date);
-        if(!already)points.push({date:last.date,min:round1(t.totalMin)});
-      }
-    }
-
-    // Mor çizgi = calcTargetTime çıktısı — hiçbir ölçeklendirme yapma
-    // CTL arttıkça tahmini süre zaten düşer, bunu calcTargetTime içindeki fCtl sağlar
-
     const km=parseFloat(race?.mesafe)||0;
     const dp=parseFloat(race?.d_plus)||0;
     const prepWeeks=parseInt(race?.prep_weeks)||12;
     const taperW=parseInt(race?.taper_w)||(km>42?3:km>21?2:1);
     const raceDate=race?.tarih?new Date(race.tarih+'T12:00:00'):null;
+    if(!raceDate||km<=0)return null;
+    const targetCtl=km<=10?50:km<=21?70:km<=42?80:km<=80?95:110;
+    const today=new Date();
 
-    // Hedef çizgi = hazırlık başlangıcındaki ilk tahminden maksimum iyileşme
-    // İlk nokta (hazırlık başlangıcı) referans — sabit bir hedef çizgisi
-    const dpPerKm=km>0?dp/km:0;
-    const maxIyiPct=km<=5?6:km<=10?5:km<=21?4:km<=42?3:km<=60?2.5:2;
-    const maxIyiBonus=dpPerKm>100?1:dpPerKm>50?0.5:0;
-    const totalMaxIyi=maxIyiPct+maxIyiBonus;
+    // Geçmiş noktalar
+    const past=[];
+    for(let i=0;i<history.length;i+=7){
+      const day=history[i];
+      if(!day.ctl||day.ctl<1)continue;
+      let t=null;try{t=calcTargetTime(race,ath,day.ctl,day.acwr||1.0,workouts);}catch(e){}
+      if(t&&t.totalMin>0)past.push({date:day.date,min:round1(t.totalMin),ctl:round1(day.ctl)});
+    }
+    const last=history[history.length-1];
+    if(last&&last.ctl>1){
+      let t=null;try{t=calcTargetTime(race,ath,last.ctl,last.acwr||1.0,workouts);}catch(e){}
+      if(t&&t.totalMin>0&&!past.find(p=>p.date===last.date))
+        past.push({date:last.date,min:round1(t.totalMin),ctl:round1(last.ctl)});
+    }
+    if(!past.length)return null;
 
-    // İlk noktanın tahmini = hazırlık başlangıcı referansı
-    const firstPoint=points[0];
-    const lastPoint=points[points.length-1];
+    // CTL büyüme trendi (son 28 günden)
+    const recentH=history.slice(-28);
+    const ctlGrowthPerDay=recentH.length>7
+      ?(last.ctl-(recentH[0]?.ctl||last.ctl))/recentH.length:0;
 
-    points.forEach(p=>{
-      if(!raceDate||!firstPoint||!lastPoint)return;
-      const daysLeft=Math.ceil((raceDate-new Date(p.date+'T12:00:00'))/864e5);
-      const trainingDaysLeft=Math.max(0,daysLeft-taperW*7);
-      const totalTrainingDays=Math.max(1,(prepWeeks-taperW)*7);
-      const prepPct=Math.min(1,(totalTrainingDays-trainingDaysLeft)/totalTrainingDays);
-
-      // Hedef: hazırlık ilerledikçe referans süre üzerinde artan iyileşme
-      // Tamamen hazır = referans süresinden totalMaxIyi% daha hızlı
-      // Bağımsız referans noktası: firstPoint.min (ilk tahmin)
-      const refMin=firstPoint.min;
-      const realizePct=prepPct<0.1?0.05:prepPct<0.3?0.15+(prepPct-0.1)*0.5:
-        prepPct<0.7?0.25+(prepPct-0.3)*1.5:prepPct<0.9?0.85+(prepPct-0.7)*0.5:0.95;
-      const expectedIyi=totalMaxIyi*realizePct;
-      // Hedef = ilk tahminden maksimum iyileşme oranına göre — mor çizgiden bağımsız
-      p.minTarget=round1(refMin*(1-expectedIyi/100));
-    });
-
-    return points;
+    // Gelecek projeksiyon
+    const daysToRace=Math.ceil((raceDate-today)/864e5);
+    const future=[];
+    if(daysToRace>0){
+      const steps=Math.min(Math.ceil(daysToRace/7),26);
+      for(let i=1;i<=steps;i++){
+        const d=new Date(today);
+        d.setDate(today.getDate()+i*7);
+        if(d>raceDate)break;
+        const dateStr=localDateStr(d);
+        const frac=i*7/Math.max(1,daysToRace);
+        const expectedCtl=Math.min(targetCtl*1.05,last.ctl+ctlGrowthPerDay*i*7);
+        const optimCtl=Math.min(targetCtl*1.05,last.ctl+(targetCtl-last.ctl)*frac);
+        const pessimCtl=Math.max(last.ctl*0.85,last.ctl+ctlGrowthPerDay*i*7*0.2);
+        let tE=null,tO=null,tP=null;
+        try{tE=calcTargetTime(race,ath,Math.max(1,expectedCtl),1.05,workouts);}catch(e){}
+        try{tO=calcTargetTime(race,ath,Math.max(1,optimCtl),1.05,workouts);}catch(e){}
+        try{tP=calcTargetTime(race,ath,Math.max(1,pessimCtl),1.05,workouts);}catch(e){}
+        if(tE?.totalMin>0) future.push({
+          date:dateStr,min:round1(tE.totalMin),
+          minOpt:tO?.totalMin?round1(tO.totalMin):null,
+          minPes:tP?.totalMin?round1(tP.totalMin):null
+        });
+      }
+      // Yarış günü
+      let tO=null,tP=null;
+      try{tO=calcTargetTime(race,ath,Math.min(targetCtl,last.ctl+(targetCtl-last.ctl)),1.05,workouts);}catch(e){}
+      try{tP=calcTargetTime(race,ath,Math.max(last.ctl*0.85,last.ctl+ctlGrowthPerDay*daysToRace*0.2),1.05,workouts);}catch(e){}
+      const lastFut=future[future.length-1];
+      future.push({
+        date:race.tarih,min:lastFut?.min||null,
+        minOpt:tO?.totalMin?round1(tO.totalMin):null,
+        minPes:tP?.totalMin?round1(tP.totalMin):null,
+        isRace:true
+      });
+    }
+    return{past,future,targetCtl,lastCtl:round1(last.ctl)};
   },[history,race,ath]);
 
   useEffect(()=>{
-    if(!ref.current||!chartData?.length)return;
+    if(!ref.current||!chartData)return;
     const isDark=window.matchMedia('(prefers-color-scheme:dark)').matches;
     const gridColor=isDark?'rgba(255,255,255,.08)':'rgba(0,0,0,.08)';
     const tickColor=isDark?'#777':'#888';
     if(inst.current)inst.current.destroy();
-
-    // Gerçek sonuçları scatter noktası olarak ekle
-    const resultPoints=(results||[]).map(r=>({
-      x:r.date,y:round1(r.durSec/60)
-    }));
-
+    const{past,future}=chartData;
+    const allLabels=[...past.map(p=>fmtShort(p.date)),...future.map(p=>fmtShort(p.date))];
+    const n=past.length;
+    const resultPoints=(results||[]).map(r=>({x:fmtShort(r.date),y:round1(r.durSec/60)}));
     inst.current=new Chart(ref.current,{
       type:'line',
       data:{
-        labels:chartData.map(d=>fmtShort(d.date)),
+        labels:allLabels,
         datasets:[
-          {
-            label:'Tahmini Süre',
-            data:chartData.map(d=>d.min),
-            borderColor:'#7c3aed',borderWidth:2,
-            pointRadius:3,pointBackgroundColor:'#7c3aed',
-            tension:.4,fill:false
-          },
-          {
-            label:'Hedef Süre (İyileştirme)',
-            data:chartData.map(d=>d.minTarget||null),
-            borderColor:'#16a34a',borderWidth:2,borderDash:[5,4],
-            pointRadius:2,pointBackgroundColor:'#16a34a',
-            tension:.4,fill:false,spanGaps:false
-          },
+          // Kötümser bant üst kenar
+          {label:'Kötümser',
+            data:[...past.map(()=>null),...future.map(p=>p.minPes)],
+            borderColor:'rgba(251,146,60,0.5)',borderWidth:1.5,borderDash:[4,3],
+            pointRadius:0,tension:.3,fill:false,spanGaps:true},
+          // İyimser bant alt kenar + fill
+          {label:'İyimser',
+            data:[...past.map(()=>null),...future.map(p=>p.minOpt)],
+            borderColor:'rgba(34,197,94,0.5)',borderWidth:1.5,borderDash:[4,3],
+            pointRadius:0,tension:.3,fill:'-1',
+            backgroundColor:'rgba(34,197,94,0.10)',spanGaps:true},
+          // Beklenen gidiş (projeksiyon)
+          {label:'Beklenen gidiş',
+            data:[...past.map((_,i)=>i===n-1?past[i].min:null),...future.map(p=>p.min)],
+            borderColor:'rgba(34,197,94,0.65)',borderWidth:2,borderDash:[7,4],
+            pointRadius:0,tension:.3,fill:false,spanGaps:true},
+          // Geçmiş gerçek çizgi
+          {label:'Mevcut form',
+            data:[...past.map(p=>p.min),...future.map(()=>null)],
+            borderColor:'#16a34a',borderWidth:2.5,
+            pointRadius:3,pointBackgroundColor:'#16a34a',
+            tension:.3,fill:false},
+          // Gerçekleşen yarış
           resultPoints.length>0&&{
             label:'Gerçekleşen',
-            data:chartData.map(d=>{
-              const r=resultPoints.find(p=>p.x===d.date)||
-                (resultPoints.length>0?resultPoints.reduce((a,b)=>
-                  Math.abs(new Date(b.x)-new Date(d.date))<Math.abs(new Date(a.x)-new Date(d.date))?b:a
-                ):null);
-              if(!r)return null;
-              const diff=Math.abs(new Date(r.x)-new Date(d.date));
-              return diff<4*864e5?r.y:null;
-            }),
+            data:allLabels.map(lbl=>{const r=resultPoints.find(p=>p.x===lbl);return r?r.y:null;}),
             borderColor:'#f59e0b',backgroundColor:'#f59e0b',
-            pointRadius:8,pointStyle:'star',
-            showLine:false,spanGaps:false
-          }
+            pointRadius:8,pointStyle:'star',showLine:false,spanGaps:false}
         ].filter(Boolean)
       },
       options:{
         responsive:true,maintainAspectRatio:false,
-        plugins:{
-          legend:{display:false},
-          tooltip:{
-            callbacks:{
-              label:ctx=>{
-                const v=ctx.raw;
-                if(v==null)return null;
-                return ctx.dataset.label+': '+fmtHMS(v);
-              }
-            }
-          }
-        },
+        plugins:{legend:{display:false},
+          tooltip:{callbacks:{label:ctx=>{const v=ctx.raw;if(v==null)return null;return ctx.dataset.label+': '+fmtHMS(v);}}}},
         scales:{
-          x:{ticks:{color:tickColor,font:{size:10},maxTicksLimit:8},grid:{color:gridColor},border:{display:false}},
-          y:{
-            reverse:true,
-            ticks:{color:tickColor,font:{size:10},callback:v=>fmtHMS(v)},
+          x:{ticks:{color:tickColor,font:{size:10},maxTicksLimit:10},grid:{color:gridColor},border:{display:false}},
+          y:{reverse:true,ticks:{color:tickColor,font:{size:10},callback:v=>fmtHMS(v)},
             grid:{color:gridColor},border:{display:false},
-            title:{display:true,text:'↑ Hızlı (daha iyi)',color:tickColor,font:{size:10}}
-          }
+            title:{display:true,text:'↑ Hızlı (daha iyi)',color:tickColor,font:{size:10}}}
         }
       }
     });
     return()=>{if(inst.current)inst.current.destroy();};
   },[chartData,results]);
 
-  if(!chartData||chartData.length<2)return React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',padding:'16px 0',textAlign:'center'}},'Trend için en az 2 haftalik antrenman verisi gerekiyor.');
-  return React.createElement('div',{style:{position:'relative',height:200}},
+  if(!chartData||!chartData.past?.length)return React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',padding:'16px 0',textAlign:'center'}},'Trend için en az 2 haftalık antrenman verisi gerekiyor.');
+  return React.createElement('div',{style:{position:'relative',height:220}},
     React.createElement('canvas',{ref}),
-    React.createElement('div',{style:{display:'flex',gap:16,fontSize:11,color:'var(--text-secondary)',marginTop:4,justifyContent:'center'}},
-      React.createElement('span',null,React.createElement('span',{style:{color:'#7c3aed',fontWeight:700}},'━ '),'CTL bazlı tahmini süre'),
-      React.createElement('span',null,React.createElement('span',{style:{color:'#16a34a',fontWeight:700}},'╌ '),'Hedef (hazırlık ilerlemesi ile iyileşme)'),
-      React.createElement('span',null,React.createElement('span',{style:{color:'#f59e0b',fontWeight:700}},'★ '),'Gerçekleşen')
+    React.createElement('div',{style:{display:'flex',gap:14,fontSize:11,color:'var(--text-secondary)',marginTop:4,justifyContent:'center',flexWrap:'wrap'}},
+      React.createElement('span',null,React.createElement('span',{style:{color:'#16a34a',fontWeight:700}},'━ '),'Mevcut form'),
+      React.createElement('span',null,React.createElement('span',{style:{color:'rgba(34,197,94,0.7)',fontWeight:700}},'╌ '),'Beklenen gidiş'),
+      React.createElement('span',null,React.createElement('span',{style:{color:'rgba(34,197,94,0.5)',fontWeight:700}},'╌ '),'İyimser'),
+      React.createElement('span',null,React.createElement('span',{style:{color:'rgba(251,146,60,0.5)',fontWeight:700}},'╌ '),'Kötümser'),
+      results?.length>0&&React.createElement('span',null,React.createElement('span',{style:{color:'#f59e0b',fontWeight:700}},'★ '),'Gerçekleşen')
     )
   );
 }
