@@ -8732,20 +8732,33 @@ function App(){
       tab==='dashboard'&&React.createElement(Dashboard,{workouts:athWks,athlete,history,races}),
       tab==='gunun'&&React.createElement(GununAntrenmanTab,{athlete,history,races,workouts,planMode,testPlanlar,planSnap,cancelledDays:cancelledDaysApp,onCancelDay:async(dateStr)=>{
         if(!athlete)return;
+        // Geri al isteği
+        if(dateStr.startsWith('__uncancel__')){
+          const realDate=dateStr.replace('__uncancel__','');
+          const newCancelled={...cancelledDaysApp}; delete newCancelled[realDate];
+          setCancelledDaysApp(newCancelled);
+          const wk=getWeekKey(0);
+          const newSnap={...(planSnap||{}),weekKey:wk,athId:athlete.id,cancelledDays:newCancelled};
+          setPlanSnapApp(newSnap);
+          await fbSet(`plan_snapshots/${athlete.id}/${wk}`,newSnap);
+          return;
+        }
         const newCancelled={...cancelledDaysApp,[dateStr]:true};
         setCancelledDaysApp(newCancelled);
         const todayStr=localDateStr(new Date());
-        const racesOv=races;
-        const newPlan=generateTwoWeekPlan(athlete,history,racesOv,workouts,testPlanlar||[]);
-        const weekKey=getWeekKey(0);
-        const newMap={...(planSnap?.overrideMap||{}),[dateStr]:{tip:'dinlenme',baslik:'İptal Edildi',sure_dk:0,yukHedef:0,yapilar:[{baslik:'İptal',detay:'Antrenman iptal edildi'}]}};
-        newPlan.weeks.forEach(wk=>wk.days.forEach(day=>{
+        const newPlan=generateTwoWeekPlan(athlete,history,races,workouts,testPlanlar||[]);
+        const wk=getWeekKey(0);
+        // Önce mevcut snapshot'ı Firebase'den al (yoksa oluştur)
+        let baseSnap=planSnap;
+        if(!baseSnap){baseSnap=await fbGet(`plan_snapshots/${athlete.id}/${wk}`);}
+        const newMap={...(baseSnap?.overrideMap||{}),[dateStr]:{tip:'dinlenme',baslik:'İptal Edildi',sure_dk:0,yukHedef:0,yapilar:[{baslik:'İptal',detay:'Antrenman iptal edildi'}]}};
+        newPlan.weeks.forEach(wk2=>wk2.days.forEach(day=>{
           if(day.date>dateStr&&day.date>=todayStr&&!newCancelled[day.date])
             newMap[day.date]={tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,yapilar:(day.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||''}))};
         }));
-        const newSnap={...(planSnap||{}),weekKey,athId:athlete.id,lastReviewAt:new Date().toISOString(),cancelledDays:newCancelled,overrideMap:newMap};
+        const newSnap={...(baseSnap||{}),weekKey:wk,athId:athlete.id,lastReviewAt:new Date().toISOString(),cancelledDays:newCancelled,overrideMap:newMap};
         setPlanSnapApp(newSnap);
-        await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,newSnap);
+        await fbSet(`plan_snapshots/${athlete.id}/${wk}`,newSnap);
       },onSaveTestPlan:p=>setTestPlanlar(prev=>[...prev.filter(x=>!(x.athId===p.athId&&x.testTur===p.testTur)),p]),onDeleteTestPlan:id=>setTestPlanlar(p=>p.filter(x=>x.id!==id))}),
       tab==='plan'&&React.createElement(HaftalikPlanTab,{athlete,history,races,workouts,planMode,setPlanMode,testPlanlar,planSnapInit:planSnap,onPlanSnapChange:(snap)=>{setPlanSnapApp(snap);if(snap?.cancelledDays)setCancelledDaysApp(snap.cancelledDays);}}),
       tab==='lider'&&React.createElement(LiderlikTab,{athletes,workouts,teamName,teamLogo}),
