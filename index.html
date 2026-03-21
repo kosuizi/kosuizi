@@ -4377,6 +4377,44 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
     });
   },[weekTargets,athWks]);
 
+  // ── İptal edilen günler ───────────────────────────────────────────────────
+  const [cancelledDays,setCancelledDays]=useState({});
+  useEffect(()=>{if(planSnap?.cancelledDays)setCancelledDays(planSnap.cancelledDays);},[planSnap]);
+
+  const handleCancelDay=async(dateStr)=>{
+    const newCancelled={...cancelledDays,[dateStr]:true};
+    setCancelledDays(newCancelled);
+    const todayStr=localDateStr(new Date());
+    const now=new Date();
+    const racesOv=selectedPrimary?races.map(r=>({...r,__force:r.id===selectedPrimary})):races;
+    const newPlan=generateTwoWeekPlan(athlete,history,racesOv,workouts,testPlanlar||[]);
+    const newMap={...(planSnap?.overrideMap||{}),[dateStr]:{tip:'dinlenme',baslik:'İptal Edildi',sure_dk:0,yukHedef:0,yapilar:[{baslik:'İptal',detay:'Antrenman iptal edildi'}]}};
+    newPlan.weeks.forEach(wk=>wk.days.forEach(day=>{
+      if(day.date>dateStr&&day.date>=todayStr&&!newCancelled[day.date])
+        newMap[day.date]={tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,yapilar:(day.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||''}))};
+    }));
+    const newSnap={...(planSnap||{}),weekKey,athId:athlete.id,lastReviewAt:now.toISOString(),cancelledDays:newCancelled,overrideMap:newMap,reviewLog:[...(planSnap?.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} iptal — kalan günler güncellendi`}].slice(-10)};
+    setPlanSnap(newSnap);setReviewMsg(`${dateStr} antrenmanı iptal edildi — haftanın kalanı güncellendi`);
+    await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,newSnap);
+  };
+
+  const handleUncancelDay=async(dateStr)=>{
+    const newCancelled={...cancelledDays};delete newCancelled[dateStr];
+    setCancelledDays(newCancelled);
+    const todayStr=localDateStr(new Date());
+    const now=new Date();
+    const racesOv=selectedPrimary?races.map(r=>({...r,__force:r.id===selectedPrimary})):races;
+    const newPlan=generateTwoWeekPlan(athlete,history,racesOv,workouts,testPlanlar||[]);
+    const newMap={...(planSnap?.overrideMap||{})};
+    newPlan.weeks.forEach(wk=>wk.days.forEach(day=>{
+      if(day.date>=dateStr&&day.date>=todayStr&&!newCancelled[day.date])
+        newMap[day.date]={tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,yapilar:(day.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||''}))};
+    }));
+    const newSnap={...(planSnap||{}),lastReviewAt:now.toISOString(),cancelledDays:newCancelled,overrideMap:newMap,reviewLog:[...(planSnap?.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} iptali geri alındı`}].slice(-10)};
+    setPlanSnap(newSnap);setReviewMsg(`${dateStr} iptali geri alındı`);
+    await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,newSnap);
+  };
+
   if(!athlete)return React.createElement('div',{className:'empty'},'Sporcu seçilmedi.');
   if(!plan)return React.createElement('div',{className:'empty'},'Veri yetersiz.');
 
@@ -4618,11 +4656,12 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
         week.days.map((day,i)=>{
           const isRaceDay=plan.primary?.tarih===day.date||plan.intermediate.some(r=>r.tarih===day.date);
           const testPlan=(testPlanlar||[]).find(p=>p.athId===athlete?.id&&p.date===day.date);
+          const isCancelled=!!cancelledDays[day.date];
           return React.createElement('div',{key:i,style:{
             borderRadius:'var(--radius)',overflow:'hidden',
-            border:day.isToday?'2px solid var(--info)':isRaceDay?'2px solid var(--danger)':testPlan?'2px solid var(--warn)':'1px solid var(--border)',
-            opacity:day.isPast&&!day.actual?.length?0.55:1,
-            background:day.isPast?'var(--bg-secondary)':'var(--bg-primary)',
+            border:isCancelled?'1px dashed var(--border)':day.isToday?'2px solid var(--info)':isRaceDay?'2px solid var(--danger)':testPlan?'2px solid var(--warn)':'1px solid var(--border)',
+            opacity:isCancelled?0.5:day.isPast&&!day.actual?.length?0.55:1,
+            background:isCancelled?'var(--bg-tertiary)':day.isPast?'var(--bg-secondary)':'var(--bg-primary)',
           }},
             React.createElement('div',{style:{
               background:day.isToday?'var(--info)':isRaceDay?'var(--danger)':testPlan?'var(--warn)':day.isPast?'var(--bg-tertiary)':'var(--bg-secondary)',
@@ -4666,7 +4705,23 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
                   day.tip!=='dinlenme'&&React.createElement('div',{
                     style:{fontSize:9,color:'var(--info)',textAlign:'center',cursor:'pointer',marginTop:2},
                     onClick:()=>setExpandDay(expandDay===day.date?null:day.date)
-                  },'▼ Reçete')
+                  },'▼ Reçete'),
+                  // İptal / Geri al butonu — sadece gelecek günler, yarış günü değil
+                  !day.isPast&&!isRaceDay&&day.tip!=='dinlenme'&&(
+                    cancelledDays[day.date]
+                      ? React.createElement('button',{
+                          style:{display:'block',width:'100%',marginTop:4,padding:'2px 0',fontSize:9,
+                            background:'var(--success-bg)',border:'1px solid var(--success)',
+                            borderRadius:'var(--radius)',color:'var(--success)',cursor:'pointer'},
+                          onClick:()=>handleUncancelDay(day.date)
+                        },'↩ Geri Al')
+                      : React.createElement('button',{
+                          style:{display:'block',width:'100%',marginTop:4,padding:'2px 0',fontSize:9,
+                            background:'transparent',border:'1px solid var(--border)',
+                            borderRadius:'var(--radius)',color:'var(--text-tertiary)',cursor:'pointer'},
+                          onClick:()=>{if(confirm(day.dayTR+' antrenmanı iptal edilsin mi? Haftanın kalanı güncellenecek.'))handleCancelDay(day.date);}
+                        },'✕ İptal')
+                  )
                 )
             )
           );
