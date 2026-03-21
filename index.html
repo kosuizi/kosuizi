@@ -4407,34 +4407,32 @@ function generatePlanSnapshot(athlete,history,races,workouts,testPlanlar){
 function reviewPlanSnapshot(snapshot,athlete,history,races,workouts,testPlanlar){
   const now=new Date();
   const todayStr=localDateStr(now);
-  const yest=new Date(now); yest.setDate(now.getDate()-1);
-  const yesterdayStr=localDateStr(yest);
   const athWks=(workouts||[]).filter(w=>w.athleteId===athlete.id);
 
-  // Dünün sapmasını kontrol et
-  const snapDay=snapshot.overrideMap?.[yesterdayStr];
+  // Bugünün değerlendirmesi — 23:00 sonrası, manuel iptal edilmemişse
+  const snapToday=snapshot.overrideMap?.[todayStr];
   let reason=null;
-  if(snapDay&&snapDay.yukHedef>15){
-    const actualYest=athWks.filter(w=>w.date===yesterdayStr);
-    const actualLoad=actualYest.reduce((s,w)=>s+(calcMetrics(w,athlete).yukObj||0),0);
-    if(actualYest.length===0){
-      reason=`${yesterdayStr} antrenmanı atlandı — kalan günler güncellendi`;
+  if(snapToday&&snapToday.yukHedef>15&&!snapshot.cancelledDays?.[todayStr]){
+    const actualToday=athWks.filter(w=>w.date===todayStr);
+    const actualLoad=actualToday.reduce((s,w)=>s+(calcMetrics(w,athlete).yukObj||0),0);
+    if(actualToday.length===0){
+      reason=`${todayStr} antrenmanı atlandı — kalan günler güncellendi`;
     } else {
-      const dev=(actualLoad-snapDay.yukHedef)/snapDay.yukHedef;
-      if(dev>0.35)       reason=`${yesterdayStr} hedeften %${Math.round(dev*100)} fazla — kalan günler hafifletildi`;
-      else if(dev<-0.35) reason=`${yesterdayStr} hedeften %${Math.round(-dev*100)} eksik — kalan günler güçlendirildi`;
+      const dev=(actualLoad-snapToday.yukHedef)/snapToday.yukHedef;
+      if(dev>0.35)       reason=`${todayStr} hedeften %${Math.round(dev*100)} fazla — kalan günler hafifletildi`;
+      else if(dev<-0.35) reason=`${todayStr} hedeften %${Math.round(-dev*100)} eksik — kalan günler güçlendirildi`;
     }
   }
 
-  // Sadece lastReviewAt güncelle, plan değişmez
   const updatedTs={...snapshot,lastReviewAt:now.toISOString()};
   if(!reason) return{updated:false,snap:updatedTs};
 
-  // Kalan günleri (bugün ve sonrası) yeniden üret
+  // Yarın ve sonrasını yeniden üret
+  const tomorrowStr=localDateStr(new Date(now.getFullYear(),now.getMonth(),now.getDate()+1));
   const newPlan=generateTwoWeekPlan(athlete,history,races,workouts,testPlanlar||[]);
   const newMap={...snapshot.overrideMap};
   newPlan.weeks.forEach(wk=>wk.days.forEach(day=>{
-    if(day.date>=todayStr){
+    if(day.date>=tomorrowStr){
       newMap[day.date]={
         tip:day.tip,baslik:day.baslik,
         sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,
