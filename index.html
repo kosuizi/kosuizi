@@ -2285,14 +2285,18 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
     for(let i=0;i<history.length;i+=7){
       const day=history[i];
       if(!day.ctl||day.ctl<1)continue;
-      let t=null;try{t=calcTargetTime(race,ath,day.ctl,day.acwr||1.0,workouts,day.tsb??null);}catch(e){}
-      if(t&&t.totalMin>0)points.push({date:day.date,min:round1(t.totalMin),isPast:true});
+      let t=null,tFresh=null;
+      try{t=calcTargetTime(race,ath,day.ctl,day.acwr||1.0,workouts,day.tsb??null);}catch(e){}
+      try{tFresh=calcTargetTime(race,ath,day.ctl,1.0,workouts,10);}catch(e){}
+      if(t&&t.totalMin>0)points.push({date:day.date,min:round1(t.totalMin),minFresh:tFresh?round1(tFresh.totalMin):null,isPast:true});
     }
     const last=history[history.length-1];
     if(last&&last.ctl>1){
-      let t=null;try{t=calcTargetTime(race,ath,last.ctl,last.acwr||1.0,workouts,last.tsb??null);}catch(e){}
+      let t=null,tFresh=null;
+      try{t=calcTargetTime(race,ath,last.ctl,last.acwr||1.0,workouts,last.tsb??null);}catch(e){}
+      try{tFresh=calcTargetTime(race,ath,last.ctl,1.0,workouts,10);}catch(e){}
       if(t&&t.totalMin>0&&!points.find(p=>p.date===last.date))
-        points.push({date:last.date,min:round1(t.totalMin),isPast:true});
+        points.push({date:last.date,min:round1(t.totalMin),minFresh:tFresh?round1(tFresh.totalMin):null,isPast:true});
     }
     if(!points.length)return null;
 
@@ -2310,19 +2314,22 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
         const dateStr=localDateStr(d);
         if(points.find(p=>p.date===dateStr))continue;
         const projCtl=Math.max(1,Math.min(last.ctl*1.4,last.ctl+ctlGrowthPerDay*i*7));
-        // Taper haftalarında TSB pozitife döner
         const daysLeftProj=Math.ceil((raceDate-d)/864e5);
         const inTaper=daysLeftProj<=taperW*7;
         const projTsb=inTaper?Math.min(15,(last.tsb||0)+daysLeftProj*0.5):(last.tsb||0);
-        let t=null;try{t=calcTargetTime(race,ath,projCtl,1.05,workouts,projTsb);}catch(e){}
-        if(t?.totalMin>0) points.push({date:dateStr,min:round1(t.totalMin),isPast:false});
+        let t=null,tF=null;
+        try{t=calcTargetTime(race,ath,projCtl,1.05,workouts,projTsb);}catch(e){}
+        try{tF=calcTargetTime(race,ath,projCtl,1.0,workouts,10);}catch(e){}
+        if(t?.totalMin>0) points.push({date:dateStr,min:round1(t.totalMin),minFresh:tF?round1(tF.totalMin):null,isPast:false});
       }
       // Yarış günü
       if(!points.find(p=>p.date===race.tarih)){
         const projCtlR=Math.max(1,Math.min(last.ctl*1.4,last.ctl+ctlGrowthPerDay*daysToRace));
         const projTsbR=Math.min(15,(last.tsb||0)+taperW*7*0.5);
-        let t=null;try{t=calcTargetTime(race,ath,projCtlR,1.05,workouts,projTsbR);}catch(e){}
-        if(t?.totalMin>0) points.push({date:race.tarih,min:round1(t.totalMin),isPast:false,isRace:true});
+        let t=null,tF=null;
+        try{t=calcTargetTime(race,ath,projCtlR,1.05,workouts,projTsbR);}catch(e){}
+        try{tF=calcTargetTime(race,ath,projCtlR,1.0,workouts,10);}catch(e){}
+        if(t?.totalMin>0) points.push({date:race.tarih,min:round1(t.totalMin),minFresh:tF?round1(tF.totalMin):null,isPast:false,isRace:true});
       }
     }
     points.sort((a,b)=>a.date.localeCompare(b.date));
@@ -2351,11 +2358,20 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
             pointBackgroundColor:'#7c3aed',
             tension:.35,fill:false,spanGaps:false
           },
+          // Tam toparlanmış (TSB=+10) tahmini — her zaman katı turuncu noktalı
+          {
+            label:'Tam toparlanmış (TSB=+10)',
+            data:chartData.map(d=>d.minFresh||null),
+            borderColor:'#f97316',
+            borderWidth:1.5,
+            borderDash:[3,3],
+            pointRadius:0,
+            tension:.35,fill:false,spanGaps:true
+          },
           {
             label:'Projeksiyon',
             data:chartData.map((d,i)=>{
               if(d.isPast===false)return d.min;
-              // Geçmiş-gelecek bağlantı noktası
               if(i===chartData.length-1||chartData[i+1]?.isPast===false)return d.min;
               return null;
             }),
@@ -2398,7 +2414,8 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
   return React.createElement('div',{style:{position:'relative',height:210}},
     React.createElement('canvas',{ref}),
     React.createElement('div',{style:{display:'flex',gap:16,fontSize:11,color:'var(--text-secondary)',marginTop:4,justifyContent:'center',flexWrap:'wrap'}},
-      React.createElement('span',null,React.createElement('span',{style:{color:'#7c3aed',fontWeight:700}},'━ '),'Tahmini süre'),
+      React.createElement('span',null,React.createElement('span',{style:{color:'#7c3aed',fontWeight:700}},'━ '),'Mevcut form (CTL+TSB)'),
+      React.createElement('span',null,React.createElement('span',{style:{color:'#f97316',fontWeight:700}},'╌ '),'Tam toparlanmış (TSB=+10)'),
       React.createElement('span',null,React.createElement('span',{style:{color:'#16a34a',fontWeight:700}},'╌ '),'Projeksiyon'),
       results?.length>0&&React.createElement('span',null,React.createElement('span',{style:{color:'#f59e0b',fontWeight:700}},'★ '),'Gerçekleşen')
     )
@@ -6034,12 +6051,10 @@ function YarislarTab({athlete,races,history,workouts,raceResults,onAddResult,onD
               padding:'10px 12px',background:'var(--bg-secondary)',borderRadius:'var(--radius)',
               borderLeft:'3px solid #7c3aed',fontSize:12,color:'var(--text-secondary)',lineHeight:1.7
             }},
-              React.createElement('span',{style:{fontWeight:600,color:'#7c3aed'}},'━ Tahmini süre: '),
-              'Her haftanın CTL (kondisyon) ve TSB (form = CTL−ATL) değerlerine göre hesaplanır. ',
-              React.createElement('strong',null,'Grafik yukarı gidiyorsa'),
-              ' süre kısalıyor yani hızlanıyorsun. ',
-              React.createElement('strong',null,'Aşağı gidiyorsa'),
-              ' kondisyon veya form kaybı var.',
+              React.createElement('span',{style:{fontWeight:600,color:'#7c3aed'}},'━ Mor — Mevcut form: '),
+              'Gerçek CTL ve TSB değerleriyle hesaplanır. Yorgunken daha yavaş, dinlendikten sonra daha hızlı. ',
+              React.createElement('span',{style:{fontWeight:600,color:'#f97316'}},'╌ Turuncu — Tam toparlanmış: '),
+              'Aynı CTL ile TSB=+10 (optimal taper formu) varsayımıyla hesaplanır. İkisi arasındaki fark mevcut yorgunluğun süreye etkisini gösterir.',
               results.length>0&&React.createElement('span',null,' ★ Yıldız gerçekleşen yarış sonuçlarını gösterir.')
             ),
             React.createElement('div',{style:{
