@@ -2261,7 +2261,7 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
   const ref=useRef();const inst=useRef();
 
   const chartData=useMemo(()=>{
-    if(!history.length||!race||!ath)return null;
+    if(!history||!history.length||!race||!ath)return null;
     const km=parseFloat(race?.mesafe)||0;
     if(km<=0)return null;
     const raceDate=race?.tarih?new Date(race.tarih+'T12:00:00'):null;
@@ -2272,42 +2272,40 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
     const last=history[history.length-1];
     if(!last||!last.ctl||last.ctl<1)return null;
 
-    // ctlRef: bugünkü CTL — anchor noktası.
-    // Grafik için her haftanın CTL değişimi buraya göreli uygulanır.
-    // Bugünün noktası = 1.0 çarpanı → kart değeriyle tam eşleşir.
-    const ctlRef=last.ctl;
+    // Kart tahminini anchor olarak kullan
+    let anchorMin=null;
+    try{const t=calcTargetTime(race,ath,last.ctl,last.acwr||1.0,workouts);if(t&&t.totalMin>0)anchorMin=t.totalMin;}catch(e){}
+    // Fallback: vo2max yoksa LTHR bazlı kaba tahmin
+    if(!anchorMin){
+      const lthr=parseFloat(ath.lthr)||0;
+      const mhr=parseFloat(ath.mhr)||180;
+      if(lthr>0&&mhr>0){
+        // vLT2 ≈ (lthr/mhr * vVO2max) basit tahmin — km ve D+ ile düzelt
+        const dp=parseFloat(race?.d_plus)||0;
+        const vBase=lthr/mhr*280; // m/min kaba
+        const dpPenalty=1+dp/km*0.001;
+        anchorMin=km/vBase*1000*dpPenalty;
+        anchorMin=round1(anchorMin);
+      }
+    }
+    if(!anchorMin||anchorMin<=0)return null;
 
-    // CTL evrim faktörü: ctl/ctlRef oranına göre
-    // k=0.18: ılımlı hassasiyet
-    //   CTL %50 düşükse → +%9 yavaş  (0.5 → 1+0.18*0.5=1.09)
-    //   CTL bugünkü    → ±0          (1.0 → 1.0)
-    //   CTL %20 yüksekse → -%3.6 hızlı (1.2 → 1+0.18*(-0.2)=0.964)
-    const ctlFactor=(ctl)=>{
-      if(!ctlRef||ctlRef<=0)return 1.0;
-      return Math.max(0.90,Math.min(1.15,1+0.18*(1-ctl/ctlRef)));
-    };
+    // ctlRef = bugünkü CTL, anchorMin = bugünkü tahmin
+    // Her geçmiş nokta: anchorMin * ctlFactor(day.ctl / ctlRef)
+    const ctlRef=last.ctl;
+    const ctlFactor=(ctl)=>Math.max(0.88,Math.min(1.18,1+0.18*(1-ctl/ctlRef)));
 
     const points=[];
     for(let i=0;i<history.length;i+=7){
       const day=history[i];
       if(!day.ctl||day.ctl<1)continue;
-      let t=null;try{t=calcTargetTime(race,ath,day.ctl,day.acwr||1.0,workouts);}catch(e){}
-      if(t&&t.totalMin>0){
-        const adj=round1(t.totalMin*ctlFactor(day.ctl));
-        points.push({date:day.date,min:adj,isPast:true});
-      }
+      points.push({date:day.date,min:round1(anchorMin*ctlFactor(day.ctl)),isPast:true});
     }
-    // Son günü ekle (bugün = kart değeriyle eşleşen nokta)
-    if(last.ctl>1){
-      let t=null;try{t=calcTargetTime(race,ath,last.ctl,last.acwr||1.0,workouts);}catch(e){}
-      if(t&&t.totalMin>0&&!points.find(p=>p.date===last.date)){
-        // ctlFactor(ctlRef) = 1.0 → adj = t.totalMin = kart değeri ✓
-        points.push({date:last.date,min:round1(t.totalMin),isPast:true});
-      }
-    }
-    if(!points.length)return null;
+    if(!points.find(p=>p.date===last.date))
+      points.push({date:last.date,min:round1(anchorMin),isPast:true});
+    if(points.length<2)return null;
 
-    // Gelecek projeksiyon — yarış gününe
+    // Projeksiyon
     const today=new Date();
     const daysToRace=Math.ceil((raceDate-today)/864e5);
     if(daysToRace>0&&daysToRace<400){
@@ -2320,18 +2318,14 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
         if(d>raceDate)break;
         const dateStr=localDateStr(d);
         if(points.find(p=>p.date===dateStr))continue;
-        const projCtl=Math.max(1,Math.min(last.ctl*1.5,last.ctl+ctlGrowthPerDay*i*7));
-        let t=null;try{t=calcTargetTime(race,ath,projCtl,1.0,workouts);}catch(e){}
-        if(t?.totalMin>0) points.push({date:dateStr,min:round1(t.totalMin*ctlFactor(projCtl)),isPast:false});
+        const projCtl=Math.max(1,Math.min(ctlRef*1.5,ctlRef+ctlGrowthPerDay*i*7));
+        points.push({date:dateStr,min:round1(anchorMin*ctlFactor(projCtl)),isPast:false});
       }
-      // Yarış günü
       if(!points.find(p=>p.date===race.tarih)){
-        const projCtlR=Math.max(1,Math.min(last.ctl*1.5,last.ctl+ctlGrowthPerDay*daysToRace));
-        let t=null;try{t=calcTargetTime(race,ath,projCtlR,1.0,workouts);}catch(e){}
-        if(t?.totalMin>0) points.push({date:race.tarih,min:round1(t.totalMin*ctlFactor(projCtlR)),isPast:false,isRace:true});
+        const projCtlR=Math.max(1,Math.min(ctlRef*1.5,ctlRef+ctlGrowthPerDay*daysToRace));
+        points.push({date:race.tarih,min:round1(anchorMin*ctlFactor(projCtlR)),isPast:false,isRace:true});
       }
     }
-
     points.sort((a,b)=>a.date.localeCompare(b.date));
     return points;
   },[history,race,ath]);
