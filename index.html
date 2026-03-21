@@ -2230,6 +2230,14 @@ function getWeekBounds(offset=0){
   const sun=new Date(mon);sun.setDate(mon.getDate()+6);sun.setHours(23,59,59,999);
   return{start:mon,end:sun};
 }
+// Tarihi YYYY-MM-DD formatında döndür (yerel saat)
+function localDateStr(d){
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+// Haftanın Pazartesi tarihini anahtar olarak ver
+function getWeekKey(offset=0){ return localDateStr(getWeekBounds(offset).start); }
+// Türkiye 23:00 = UTC 20:00 — bugünkü dondurma zamanı
+function turkey23Today(){ const d=new Date(); d.setUTCHours(20,0,0,0); return d; }
 
 function weekLabel(offset){
   if(offset===0)return'Bu Hafta';
@@ -4191,32 +4199,160 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
   return{weeks,primary,intermediate};
 }
 
+// ── Plan Snapshot Sistemi ─────────────────────────────────────────────────────
+// Haftalık plan Firebase'e dondurulur. Yalnızca 23:00'da sapma varsa güncellenir.
+// Firebase key: plan_snapshots/{athId}/{weekKey}
+// Snapshot: {weekKey, athId, generatedAt, lastReviewAt, overrideMap, reviewLog}
+
+function generatePlanSnapshot(athlete,history,races,workouts,testPlanlar){
+  const now=new Date();
+  const todayStr=localDateStr(now);
+  const plan=generateTwoWeekPlan(athlete,history,races,workouts,testPlanlar||[]);
+  const overrideMap={};
+  plan.weeks.forEach(wk=>wk.days.forEach(day=>{
+    // Bugün dahil tüm gelecek günleri sakla
+    if(day.date>=todayStr){
+      overrideMap[day.date]={
+        tip:day.tip,baslik:day.baslik,
+        sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,
+        yapilar:(day.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||''}))
+      };
+    }
+  }));
+  return{
+    weekKey:getWeekKey(0),athId:athlete.id,
+    generatedAt:now.toISOString(),lastReviewAt:now.toISOString(),
+    overrideMap,
+    reviewLog:[{at:now.toISOString(),reason:'Haftalık plan oluşturuldu'}]
+  };
+}
+
+function reviewPlanSnapshot(snapshot,athlete,history,races,workouts,testPlanlar){
+  const now=new Date();
+  const todayStr=localDateStr(now);
+  const yest=new Date(now); yest.setDate(now.getDate()-1);
+  const yesterdayStr=localDateStr(yest);
+  const athWks=(workouts||[]).filter(w=>w.athleteId===athlete.id);
+
+  // Dünün sapmasını kontrol et
+  const snapDay=snapshot.overrideMap?.[yesterdayStr];
+  let reason=null;
+  if(snapDay&&snapDay.yukHedef>15){
+    const actualYest=athWks.filter(w=>w.date===yesterdayStr);
+    const actualLoad=actualYest.reduce((s,w)=>s+(calcMetrics(w,athlete).yukObj||0),0);
+    if(actualYest.length===0){
+      reason=`${yesterdayStr} antrenmanı atlandı — kalan günler güncellendi`;
+    } else {
+      const dev=(actualLoad-snapDay.yukHedef)/snapDay.yukHedef;
+      if(dev>0.35)       reason=`${yesterdayStr} hedeften %${Math.round(dev*100)} fazla — kalan günler hafifletildi`;
+      else if(dev<-0.35) reason=`${yesterdayStr} hedeften %${Math.round(-dev*100)} eksik — kalan günler güçlendirildi`;
+    }
+  }
+
+  // Sadece lastReviewAt güncelle, plan değişmez
+  const updatedTs={...snapshot,lastReviewAt:now.toISOString()};
+  if(!reason) return{updated:false,snap:updatedTs};
+
+  // Kalan günleri (bugün ve sonrası) yeniden üret
+  const newPlan=generateTwoWeekPlan(athlete,history,races,workouts,testPlanlar||[]);
+  const newMap={...snapshot.overrideMap};
+  newPlan.weeks.forEach(wk=>wk.days.forEach(day=>{
+    if(day.date>=todayStr){
+      newMap[day.date]={
+        tip:day.tip,baslik:day.baslik,
+        sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,
+        yapilar:(day.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||''}))
+      };
+    }
+  }));
+  return{
+    updated:true,reason,
+    snap:{
+      ...snapshot,
+      lastReviewAt:now.toISOString(),
+      overrideMap:newMap,
+      reviewLog:[...(snapshot.reviewLog||[]),{at:now.toISOString(),reason}].slice(-10)
+    }
+  };
+}
+
 
 function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,testPlanlar}){
   const [showLoading,setShowLoading]=useState(false);
-  const [selectedPrimary,setSelectedPrimary]=useState(null); // null = otomatik
-  const [expandDay,setExpandDay]=useState(null); // 'date' string
+  const [selectedPrimary,setSelectedPrimary]=useState(null);
+  const [expandDay,setExpandDay]=useState(null);
+
+  // ── Plan Snapshot ─────────────────────────────────────────────────────────
+  const [planSnap,setPlanSnap]=useState(null);
+  const [snapReady,setSnapReady]=useState(false);
+  const [reviewMsg,setReviewMsg]=useState(null);
+  const weekKey=getWeekKey(0);
+
+  // 1. Snapshot yükle
+  useEffect(()=>{
+    if(!athlete){setSnapReady(true);return;}
+    setSnapReady(false);
+    fbGet(`plan_snapshots/${athlete.id}/${weekKey}`).then(stored=>{
+      setPlanSnap(stored&&stored.weekKey===weekKey?stored:null);
+      setSnapReady(true);
+    });
+  },[athlete?.id,weekKey]);
+
+  // 2. Snapshot üret veya 23:00 incelemesi yap
+  useEffect(()=>{
+    if(!snapReady||!athlete||!history.length)return;
+    const now=new Date();
+    const t23=turkey23Today();
+    (async()=>{
+      if(!planSnap){
+        // Yeni hafta veya ilk kullanım — plan oluştur ve kaydet
+        const snap=generatePlanSnapshot(athlete,history,races,workouts||[],testPlanlar||[]);
+        setPlanSnap(snap);
+        await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,snap);
+        return;
+      }
+      // 23:00 geçti mi ve bugün henüz incelenmedi mi?
+      const lastRev=planSnap.lastReviewAt?new Date(planSnap.lastReviewAt):new Date(0);
+      if(now>=t23&&lastRev<t23){
+        const{updated,reason,snap:newSnap}=reviewPlanSnapshot(planSnap,athlete,history,races,workouts||[],testPlanlar||[]);
+        setPlanSnap(newSnap);
+        if(updated)setReviewMsg(reason);
+        await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,newSnap);
+      }
+    })();
+  },[snapReady,athlete?.id,planSnap]);
 
   // Yarış seçici için mevcut upcoming yarışlar
   const athRaceIds=(athlete?.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
   const today=new Date();
   const upcomingRaces=(races||[]).filter(r=>athRaceIds.includes(r.id)&&new Date(r.tarih+'T12:00:00')>today).sort((a,b)=>new Date(a.tarih)-new Date(b.tarih));
 
-  // Seçili primary yarış override
   const racesForPlan=React.useMemo(()=>{
     if(!selectedPrimary)return races;
-    // Seçili yarışı birincil yapacak şekilde races'i işle — selectRaces içinde override
     return races;
   },[races,selectedPrimary]);
 
   const plan=React.useMemo(()=>{
     if(!athlete)return null;
-    // Override için races'e __forcePrimary işareti ekle
     const racesOverride=selectedPrimary
       ?races.map(r=>({...r,__force:r.id===selectedPrimary}))
       :races;
-    return generateTwoWeekPlan(athlete,history,racesOverride,workouts,testPlanlar||[]);
-  },[athlete,history,races,workouts,selectedPrimary]);
+    const generated=generateTwoWeekPlan(athlete,history,racesOverride,workouts,testPlanlar||[]);
+    // Snapshot override: geçmiş günler gerçek veriyi korur, gelecek günler snapshot'tan gelir
+    if(planSnap?.overrideMap){
+      const todayStr=localDateStr(new Date());
+      generated.weeks.forEach(wk=>{
+        wk.days=wk.days.map(day=>{
+          if(day.isPast||day.date===todayStr) return day; // geçmiş & bugün: gerçek veri
+          const ov=planSnap.overrideMap[day.date];
+          if(!ov) return day;
+          // Gelecek günü snapshot'la değiştir ama actual/comparison bilgisini koru
+          return{...day,tip:ov.tip,baslik:ov.baslik,sure_dk:ov.sure_dk,yukHedef:ov.yukHedef,yapilar:ov.yapilar};
+        });
+      });
+    }
+    return generated;
+  },[athlete,history,races,workouts,selectedPrimary,planSnap]);
 
   const weekTargets=React.useMemo(()=>{
     if(!athlete)return[];
@@ -4243,6 +4379,21 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
 
   if(!athlete)return React.createElement('div',{className:'empty'},'Sporcu seçilmedi.');
   if(!plan)return React.createElement('div',{className:'empty'},'Veri yetersiz.');
+
+  // Snapshot bilgi bandı
+  const snapBanner=reviewMsg&&React.createElement('div',{
+    style:{marginBottom:10,padding:'10px 14px',borderRadius:'var(--radius)',
+      background:'var(--warn-bg)',border:'1px solid var(--warn)',
+      display:'flex',alignItems:'center',gap:10,fontSize:12}},
+    React.createElement('span',null,'🔄'),
+    React.createElement('span',null,reviewMsg),
+    React.createElement('button',{className:'btn btn-sm',style:{marginLeft:'auto'},
+      onClick:()=>setReviewMsg(null)},'✕')
+  );
+  const snapInfo=planSnap?.lastReviewAt&&React.createElement('div',{
+    style:{fontSize:10,color:'var(--text-tertiary)',marginTop:4}},
+    '📌 Plan sabitlendi · Son inceleme: '+new Date(planSnap.lastReviewAt).toLocaleString('tr-TR')
+  );
 
   const tipColor=(tip)=>({
     dinlenme:'var(--border)',kolay:'var(--success)',aerobik:'var(--success)',
@@ -4273,6 +4424,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
   };
 
   return React.createElement('div',null,
+    snapBanner,
+    snapInfo,
 
     // Yarış seçici + özet
     React.createElement('div',{className:'card',style:{marginBottom:12,padding:'12px 16px'}},
