@@ -958,7 +958,7 @@ function fmtPaceFromMS(ms){
 // Metodoloji: Excel Bilgi!C40 formülünün tam port'u
 // Temel fark: vLT'yi doğru hesaplıyoruz, PROGRESS ile dinamik ağırlık kullanıyoruz
 
-function calcTargetTime(race, ath, ctl, acwr, workouts, tsb=null){
+function calcTargetTime(race, ath, ctl, acwr, workouts, tsb=null, ctlNow=null){
   const km   = parseFloat(race.mesafe)||0;
   const dp   = parseFloat(race.d_plus)||0;
   const altMax = parseFloat(race.maks_irtifa)||0;
@@ -970,11 +970,24 @@ function calcTargetTime(race, ath, ctl, acwr, workouts, tsb=null){
   const cp   = parseInt(race.kontrol_noktasi)||0;
   const heatAdapt = parseFloat(ath.isi_aklimasyon)||0;
 
-  const vo2  = parseFloat(ath.vo2max)||0;
+  // Manuel girişler anchor — CTL oranına göre dinamik ölçekleme
+  // ctlNow: bugünkü CTL (anchor noktası). ctl: hesaplanan noktanın CTL değeri.
+  // Eğer ctlNow verilmişse ve ctl farklıysa, vo2max ve lthr'yi CTL^0.3 ilişkisiyle ölçekle
+  // (Midgley et al. 2007: aerobik kapasite adaptasyonu)
+  const vo2Base  = parseFloat(ath.vo2max)||0;
+  const lthrBase = parseFloat(ath.lthr)||0;
+  let vo2  = vo2Base;
+  let lthr = lthrBase;
+  if(ctlNow && ctlNow>0 && ctl>0 && Math.abs(ctl-ctlNow)>1){
+    const ctlRatio = ctl/ctlNow;
+    // vo2max ∝ CTL^0.3, lthr ∝ CTL^0.2 (daha muhafazakâr)
+    const vo2Scale  = Math.max(0.85, Math.min(1.12, Math.pow(ctlRatio, 0.3)));
+    const lthrScale = Math.max(0.90, Math.min(1.08, Math.pow(ctlRatio, 0.2)));
+    vo2  = vo2Base  * vo2Scale;
+    lthr = lthrBase * lthrScale;
+  }
   const rhr  = parseFloat(ath.rhr)||0;
   const mhr  = parseFloat(ath.mhr)||0;
-  const lthr = parseFloat(ath.lthr)||0;
-  const kilo = parseFloat(ath.kilo)||70;
   const boy  = parseFloat(ath.boy)||170;
   const yas  = ath.dogum?new Date().getFullYear()-new Date(ath.dogum).getFullYear():35;
   const bmi  = kilo/((boy/100)**2);
@@ -2280,21 +2293,22 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
     if(!raceDate||km<=0)return null;
 
     // Geçmiş — her 7 günde bir, gerçek CTL+TSB ile calcTargetTime
+    // ctlNow: bugünkü CTL = anchor (manuel profil değerlerinin bağlı olduğu nokta)
     const points=[];
     const tgtCtl=km<=10?50:km<=21?70:km<=42?80:km<=80?95:110;
+    const ctlNow=last?.ctl||null;
     for(let i=0;i<history.length;i+=7){
       const day=history[i];
       if(!day.ctl||day.ctl<1)continue;
       let t=null,tFresh=null;
-      try{t=calcTargetTime(race,ath,day.ctl,day.acwr||1.0,workouts,day.tsb??null);}catch(e){}
-      try{tFresh=calcTargetTime(race,ath,day.ctl,1.0,workouts,10);}catch(e){}
+      try{t=calcTargetTime(race,ath,day.ctl,day.acwr||1.0,workouts,day.tsb??null,ctlNow);}catch(e){}
+      try{tFresh=calcTargetTime(race,ath,day.ctl,1.0,workouts,10,ctlNow);}catch(e){}
       if(t&&t.totalMin>0)points.push({date:day.date,min:round1(t.totalMin),minFresh:tFresh?round1(tFresh.totalMin):null,isPast:true});
     }
-    const last=history[history.length-1];
     if(last&&last.ctl>1){
       let t=null,tFresh=null;
-      try{t=calcTargetTime(race,ath,last.ctl,last.acwr||1.0,workouts,last.tsb??null);}catch(e){}
-      try{tFresh=calcTargetTime(race,ath,last.ctl,1.0,workouts,10);}catch(e){}
+      try{t=calcTargetTime(race,ath,last.ctl,last.acwr||1.0,workouts,last.tsb??null,ctlNow);}catch(e){}
+      try{tFresh=calcTargetTime(race,ath,last.ctl,1.0,workouts,10,ctlNow);}catch(e){}
       if(t&&t.totalMin>0&&!points.find(p=>p.date===last.date))
         points.push({date:last.date,min:round1(t.totalMin),minFresh:tFresh?round1(tFresh.totalMin):null,isPast:true});
     }
@@ -2318,8 +2332,8 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
         const inTaper=daysLeftProj<=taperW*7;
         const projTsb=inTaper?Math.min(15,(last.tsb||0)+daysLeftProj*0.5):(last.tsb||0);
         let t=null,tF=null;
-        try{t=calcTargetTime(race,ath,projCtl,1.05,workouts,projTsb);}catch(e){}
-        try{tF=calcTargetTime(race,ath,projCtl,1.0,workouts,10);}catch(e){}
+        try{t=calcTargetTime(race,ath,projCtl,1.05,workouts,projTsb,ctlNow);}catch(e){}
+        try{tF=calcTargetTime(race,ath,projCtl,1.0,workouts,10,ctlNow);}catch(e){}
         if(t?.totalMin>0) points.push({date:dateStr,min:round1(t.totalMin),minFresh:tF?round1(tF.totalMin):null,isPast:false});
       }
       // Yarış günü
@@ -2327,8 +2341,8 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
         const projCtlR=Math.max(1,Math.min(last.ctl*1.4,last.ctl+ctlGrowthPerDay*daysToRace));
         const projTsbR=Math.min(15,(last.tsb||0)+taperW*7*0.5);
         let t=null,tF=null;
-        try{t=calcTargetTime(race,ath,projCtlR,1.05,workouts,projTsbR);}catch(e){}
-        try{tF=calcTargetTime(race,ath,projCtlR,1.0,workouts,10);}catch(e){}
+        try{t=calcTargetTime(race,ath,projCtlR,1.05,workouts,projTsbR,ctlNow);}catch(e){}
+        try{tF=calcTargetTime(race,ath,projCtlR,1.0,workouts,10,ctlNow);}catch(e){}
         if(t?.totalMin>0) points.push({date:race.tarih,min:round1(t.totalMin),minFresh:tF?round1(tF.totalMin):null,isPast:false,isRace:true});
       }
     }
