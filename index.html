@@ -4481,6 +4481,7 @@ function generatePlanSnapshot(athlete,history,races,workouts,testPlanlar){
     generatedAt:now.toISOString(),lastReviewAt:now.toISOString(),
     overrideMap,
     b2bCompensationAdded:false,
+    athleteProfile:{kosu_gunleri:athlete.kosu_gunleri,capraz_gunleri:athlete.capraz_gunleri,disiplin:athlete.disiplin,uzun_gun:athlete.uzun_gun},
     reviewLog:[{at:now.toISOString(),reason:'Haftalık plan oluşturuldu'}]
   };
 }
@@ -4638,9 +4639,24 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
     const t23=turkey23Today();
     (async()=>{
       if(!planSnap){
-        // Yeni hafta veya ilk kullanım — plan oluştur ve kaydet
         const snap=generatePlanSnapshot(athlete,history,races,workouts||[],testPlanlar||[]);
         setPlanSnap(snap);
+        await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,snap);
+        return;
+      }
+      // Koşu/çapraz günleri veya disiplin değişmişse planı yeniden üret
+      const savedProfile=planSnap.athleteProfile||{};
+      const profileChanged=
+        JSON.stringify(athlete.kosu_gunleri||[])!==JSON.stringify(savedProfile.kosu_gunleri||[])||
+        JSON.stringify(athlete.capraz_gunleri||[])!==JSON.stringify(savedProfile.capraz_gunleri||[])||
+        (athlete.disiplin||'')!==(savedProfile.disiplin||'')||
+        (athlete.uzun_gun||'')!==(savedProfile.uzun_gun||'');
+      if(profileChanged){
+        const snap=generatePlanSnapshot(athlete,history,races,workouts||[],testPlanlar||[]);
+        // Profil bilgisini snapshot'a ekle
+        snap.athleteProfile={kosu_gunleri:athlete.kosu_gunleri,capraz_gunleri:athlete.capraz_gunleri,disiplin:athlete.disiplin,uzun_gun:athlete.uzun_gun};
+        setPlanSnap(snap);
+        setReviewMsg('Sporcu profili değişti — haftalık plan yenilendi.');
         await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,snap);
         return;
       }
@@ -4653,7 +4669,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
         await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,newSnap);
       }
     })();
-  },[snapReady,athlete?.id,planSnap]);
+  },[snapReady,athlete?.id,athlete?.kosu_gunleri,athlete?.capraz_gunleri,athlete?.disiplin,athlete?.uzun_gun,planSnap]);
 
   // Yarış seçici için mevcut upcoming yarışlar
   const athRaceIds=(athlete?.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
