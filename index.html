@@ -2274,82 +2274,122 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
     const prepWeeks=parseInt(race?.prep_weeks)||12;
     const taperW=parseInt(race?.taper_w)||(km>42?3:km>21?2:1);
     const today=new Date();
+    const todayStr=localDateStr(today);
 
     const last=history[history.length-1];
     if(!last?.ctl||last.ctl<1)return;
-    const ctlRef=last.ctl; // anchor: bugünkü CTL
+    const ctlRef=last.ctl;
 
-    // Bugünkü tahmin = anchor değer (karttaki değerle aynı)
+    // ── 4. Profil snapshot geçmişi ──────────────────────────────────────────
+    // Bir tarihteki profil: o tarihe kadar en son snapshot
+    const profileHistory=(ath.profileHistory||[]).sort((a,b)=>a.date.localeCompare(b.date));
+    const profileAt=(dateStr)=>{
+      if(!profileHistory.length)return ath;
+      const snap=profileHistory.filter(s=>s.date<=dateStr).slice(-1)[0];
+      if(!snap)return ath; // güncelleme öncesi = mevcut profil (muhafazakâr)
+      return {...ath,...snap};
+    };
+
+    // ── Anchor: bugünkü profil + CTL ile tahmin ──────────────────────────────
     let anchorMin=null;
     try{const t=calcTargetTime(race,ath,last.ctl,last.acwr||1.0,workouts);if(t?.totalMin>0)anchorMin=t.totalMin;}catch(e){}
     if(!anchorMin)return;
 
-    // CTL değişimine göre ölçekleme
-    // k=0.18: CTL %10 artarsa süre ~%1.8 kısalır
-    const ctlFactor=(ctl)=>Math.max(0.88,Math.min(1.18,1+0.18*(1-ctl/ctlRef)));
+    // ── 2+3. CTL+TSB birleşik faktör ─────────────────────────────────────────
+    // CTL: kondisyon. TSB: form = CTL-ATL. Taper'da CTL düşer ama TSB yükselir.
+    // Her ikisi anchor noktasına (bugün) göreli.
+    const tsbRef=last.tsb||0;
+    const ctlTsbFactor=(ctl,tsb)=>{
+      const fCtl=Math.max(0.90,Math.min(1.15,1+0.18*(1-ctl/ctlRef)));
+      // TSB etkisi: +10 üstü form için hafif bonus, -20 altı yorgunluk için ceza
+      const tsbDelta=(tsb??tsbRef)-tsbRef;
+      const fTsb=Math.max(0.97,Math.min(1.03,1-tsbDelta/300));
+      return fCtl*fTsb;
+    };
 
-    // Geçmiş noktalar
+    // ── 1. Plan fazına göre CTL büyüme tahmini ───────────────────────────────
+    // Taper haftalarında CTL azalır ama TSB artar → net etki pozitif (daha hızlı)
+    const daysToRace=Math.ceil((raceDate-today)/864e5);
+    const taperStartDay=daysToRace-taperW*7;
+    const projCtlTsb=(dayOffset)=>{
+      const recentH=history.slice(-28);
+      const ctlGrowthPerDay=recentH.length>7?(last.ctl-(recentH[0]?.ctl||last.ctl))/recentH.length:0;
+      const inTaper=dayOffset>taperStartDay;
+      if(inTaper){
+        // Taper: CTL günde ~0.5% azalır, TSB günde +0.8 artar (haftalık ~5.6)
+        const taperDays=dayOffset-taperStartDay;
+        const projCtl=Math.max(ctlRef*0.85,ctlRef-ctlRef*0.005*taperDays);
+        const projTsb=Math.min(20,tsbRef+0.8*taperDays);
+        return{ctl:projCtl,tsb:projTsb};
+      }
+      // Normal hafta: CTL büyüme trendi devam eder, TSB yaklaşık sabit
+      const projCtl=Math.max(1,Math.min(ctlRef*1.5,ctlRef+ctlGrowthPerDay*dayOffset));
+      return{ctl:projCtl,tsb:tsbRef};
+    };
+
+    // ── Geçmiş noktalar ───────────────────────────────────────────────────────
     const pts=[];
     for(let i=0;i<history.length;i+=7){
       const d=history[i];
       if(!d?.ctl||d.ctl<1)continue;
-      pts.push({x:fmtShort(d.date),y:round1(anchorMin*ctlFactor(d.ctl)),past:true});
+      // Profil o tarihte ne durumdaydı?
+      const prof=profileAt(d.date);
+      let dayAnchor=anchorMin;
+      if(prof!==ath){
+        // O tarihteki profille calcTargetTime çalıştır
+        try{const t=calcTargetTime(race,prof,last.ctl,last.acwr||1.0,workouts);if(t?.totalMin>0)dayAnchor=t.totalMin;}catch(e){}
+      }
+      const f=ctlTsbFactor(d.ctl,d.tsb??tsbRef);
+      pts.push({x:fmtShort(d.date),y:round1(dayAnchor*f)});
     }
+    // Bugünün noktası = anchor değeri (karttaki ile eşleşir)
     if(!pts.find(p=>p.x===fmtShort(last.date)))
-      pts.push({x:fmtShort(last.date),y:round1(anchorMin),past:true});
+      pts.push({x:fmtShort(last.date),y:round1(anchorMin)});
     if(pts.length<2)return;
 
-    // Projeksiyon: bugünden yarış gününe
-    const daysToRace=Math.ceil((raceDate-today)/864e5);
+    // ── Projeksiyon noktaları ─────────────────────────────────────────────────
     const projPts=[];
     if(daysToRace>0&&daysToRace<400){
-      const recentH=history.slice(-28);
-      const ctlGrowthPerDay=recentH.length>7?(last.ctl-(recentH[0]?.ctl||last.ctl))/recentH.length:0;
-      // Bugünün noktasını geçmiş+projeksiyon bağlantısı için ekle
-      projPts.push({x:fmtShort(last.date),y:round1(anchorMin)});
+      projPts.push({x:fmtShort(todayStr),y:round1(anchorMin)});
       const steps=Math.min(Math.ceil(daysToRace/7),24);
       for(let i=1;i<=steps;i++){
         const d=new Date(today);d.setDate(today.getDate()+i*7);
         if(d>raceDate)break;
-        const projCtl=Math.max(1,Math.min(ctlRef*1.5,ctlRef+ctlGrowthPerDay*i*7));
-        projPts.push({x:fmtShort(localDateStr(d)),y:round1(anchorMin*ctlFactor(projCtl))});
+        const{ctl,tsb}=projCtlTsb(i*7);
+        projPts.push({x:fmtShort(localDateStr(d)),y:round1(anchorMin*ctlTsbFactor(ctl,tsb))});
       }
       // Yarış günü
-      const projCtlR=Math.max(1,Math.min(ctlRef*1.5,ctlRef+ctlGrowthPerDay*daysToRace));
-      projPts.push({x:fmtShort(race.tarih),y:round1(anchorMin*ctlFactor(projCtlR)),race:true});
+      const{ctl:rCtl,tsb:rTsb}=projCtlTsb(daysToRace);
+      projPts.push({x:fmtShort(race.tarih),y:round1(anchorMin*ctlTsbFactor(rCtl,rTsb)),race:true});
     }
 
     const allLabels=[...pts.map(p=>p.x),...projPts.slice(1).map(p=>p.x)];
     const isDark=window.matchMedia('(prefers-color-scheme:dark)').matches;
-    const gridColor=isDark?'rgba(255,255,255,.08)':'rgba(0,0,0,.08)';
-    const tickColor=isDark?'#777':'#888';
+    const gc=isDark?'rgba(255,255,255,.08)':'rgba(0,0,0,.08)';
+    const tc=isDark?'#777':'#888';
     if(inst.current){try{inst.current.destroy();}catch(e){}}
 
-    const resultPoints=(results||[]).map(r=>({x:fmtShort(r.date),y:round1(r.durSec/60)}));
-
+    const resPts=(results||[]).map(r=>({x:fmtShort(r.date),y:round1(r.durSec/60)}));
     try{
       inst.current=new Chart(ref.current,{
         type:'line',
         data:{
           labels:allLabels,
           datasets:[
-            // Geçmiş: katı mor
-            {label:'Mevcut form',
+            {label:'Antrenman etkisi',
               data:allLabels.map(l=>{const p=pts.find(p=>p.x===l);return p?p.y:null;}),
               borderColor:'#7c3aed',borderWidth:2.5,
               pointRadius:allLabels.map(l=>pts.find(p=>p.x===l)?3:0),
               pointBackgroundColor:'#7c3aed',
               tension:.4,fill:false,spanGaps:false},
-            // Projeksiyon: noktalı yeşil
             projPts.length>1&&{label:'Projeksiyon',
               data:allLabels.map(l=>{const p=projPts.find(p=>p.x===l);return p?p.y:null;}),
               borderColor:'#16a34a',borderWidth:2,borderDash:[6,4],
               pointRadius:allLabels.map(l=>{const p=projPts.find(p=>p.x===l);return p?.race?6:0;}),
               pointBackgroundColor:'#f59e0b',
               tension:.4,fill:false,spanGaps:true},
-            // Gerçekleşen
-            resultPoints.length>0&&{label:'Gerçekleşen',
-              data:allLabels.map(l=>{const r=resultPoints.find(r=>r.x===l);return r?r.y:null;}),
+            resPts.length>0&&{label:'Gerçekleşen',
+              data:allLabels.map(l=>{const r=resPts.find(r=>r.x===l);return r?r.y:null;}),
               borderColor:'#f59e0b',backgroundColor:'#f59e0b',
               pointRadius:8,pointStyle:'star',showLine:false}
           ].filter(Boolean)
@@ -2359,10 +2399,10 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
           plugins:{legend:{display:false},
             tooltip:{callbacks:{label:ctx=>{const v=ctx.raw;if(v==null)return null;return ctx.dataset.label+': '+fmtHMS(v);}}}},
           scales:{
-            x:{ticks:{color:tickColor,font:{size:10},maxTicksLimit:10},grid:{color:gridColor},border:{display:false}},
-            y:{reverse:true,ticks:{color:tickColor,font:{size:10},callback:v=>fmtHMS(v)},
-              grid:{color:gridColor},border:{display:false},
-              title:{display:true,text:'↑ Hızlı',color:tickColor,font:{size:10}}}
+            x:{ticks:{color:tc,font:{size:10},maxTicksLimit:10},grid:{color:gc},border:{display:false}},
+            y:{reverse:true,ticks:{color:tc,font:{size:10},callback:v=>fmtHMS(v)},
+              grid:{color:gc},border:{display:false},
+              title:{display:true,text:'↑ Hızlı',color:tc,font:{size:10}}}
           }
         }
       });
@@ -2372,18 +2412,14 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
 
   if(!history?.length||!race?.tarih)return null;
   return React.createElement('div',null,
-    React.createElement('div',{style:{position:'relative',height:200}},
-      React.createElement('canvas',{ref})
-    ),
+    React.createElement('div',{style:{position:'relative',height:200}},React.createElement('canvas',{ref})),
     React.createElement('div',{style:{display:'flex',gap:14,fontSize:11,color:'var(--text-secondary)',marginTop:4,justifyContent:'center',flexWrap:'wrap'}},
-      React.createElement('span',null,React.createElement('span',{style:{color:'#7c3aed',fontWeight:700}},'━ '),'Antrenman etkisi (CTL bazlı)'),
-      React.createElement('span',null,React.createElement('span',{style:{color:'#16a34a',fontWeight:700}},'╌ '),'Projeksiyon'),
+      React.createElement('span',null,React.createElement('span',{style:{color:'#7c3aed',fontWeight:700}},'━ '),'CTL+TSB bazlı form'),
+      React.createElement('span',null,React.createElement('span',{style:{color:'#16a34a',fontWeight:700}},'╌ '),'Projeksiyon (taper dahil)'),
       (results||[]).length>0&&React.createElement('span',null,React.createElement('span',{style:{color:'#f59e0b',fontWeight:700}},'★ '),'Gerçekleşen')
     ),
     React.createElement('div',{style:{marginTop:6,fontSize:11,color:'var(--text-tertiary)',lineHeight:1.6}},
-      'Grafik, bugünkü profil tahmini (karttaki değer) baz alınarak CTL değişimine göre hesaplanır. Grafik ',
-      React.createElement('strong',null,'yukarı'),
-      ' gidiyorsa antrenmanlarla kondisyon artıyor ve tahmini süre kısalıyor. Noktalı çizgi mevcut CTL büyüme hızı devam ederse yarış gününe projeksiyondur.'
+      'CTL (kondisyon) ve TSB (form) birlikte kullanılır. Taper haftalarında CTL azalsa da TSB yükseldiğinden projeksiyon yukarı döner. Profil güncellemesi (VO₂max vb.) güncelleme tarihinden sonraki noktaları etkiler, geçmişi değiştirmez.'
     )
   );
 }
@@ -8536,11 +8572,18 @@ function App(){
 
   const handleUpdateAthlete=(newA)=>{
     const oldA=athletes.find(x=>x.id===newA.id);
+    const PROFILE_FIELDS=['vo2max','lthr','mhr','rhr','kilo','boy','vlt'];
     if(oldA){
       const changes=detectChanges(oldA,newA);
       if(changes.length>0){
         const messages=generateMessages(changes,newA);
         setAthHistory(h=>[...h,{athId:newA.id,date:new Date().toISOString(),changes,messages}]);
+      }
+      // Profil değişikliği varsa snapshot ekle
+      const profileChanged=PROFILE_FIELDS.some(f=>String(oldA[f]||'')!==String(newA[f]||''));
+      if(profileChanged){
+        const snap={date:localDateStr(new Date()),vo2max:newA.vo2max,lthr:newA.lthr,mhr:newA.mhr,rhr:newA.rhr,kilo:newA.kilo,boy:newA.boy,vlt:newA.vlt};
+        newA={...newA,profileHistory:[...((newA.profileHistory||[]).filter(s=>s.date!==snap.date)),snap].slice(-50)};
       }
     }
     setAthletes(p=>p.map(x=>x.id===newA.id?newA:x));
