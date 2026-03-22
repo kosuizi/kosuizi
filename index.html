@@ -2488,7 +2488,7 @@ function calcWeeklyStats(workouts,athletes,weekOffset=0){
   }).sort((a,b)=>b.sporSkoru-a.sporSkoru);
 }
 
-function LiderlikTab({athletes,workouts,teamName,teamLogo}){
+function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
   const [weekOffset,setWeekOffset]=useState(0);
   const [downloading,setDownloading]=useState(false);
   const [sharing,setSharing]=useState(null); // athId being shared
@@ -2697,14 +2697,33 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo}){
             row.ath.foto
               ?React.createElement('img',{src:row.ath.foto,style:{width:38,height:38,borderRadius:'50%',objectFit:'cover',border:'2px solid rgba(255,255,255,.15)',flexShrink:0}})
               :React.createElement('div',{style:{width:38,height:38,borderRadius:'50%',background:'rgba(255,255,255,.1)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:16,flexShrink:0}},'👤'),
-            // İsim + spor
+            // İsim + spor + yakın yarış
             React.createElement('div',{style:{flex:1,minWidth:0}},
               React.createElement('div',{style:{fontWeight:600,fontSize:14,color:'#f1f5f9'}},
                 (row.ath.ad||'')+' '+(row.ath.soyad||'')
               ),
               React.createElement('div',{style:{fontSize:11,color:'#64748b',marginTop:2}},
                 sporList||'—'
-              )
+              ),
+              (()=>{
+                const today=new Date();
+                const athRaceIds=(row.ath.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
+                const nearest=(races||[])
+                  .filter(r=>athRaceIds.includes(r.id)&&r.tarih)
+                  .map(r=>({...r,daysLeft:Math.ceil((new Date(r.tarih+'T12:00:00')-today)/864e5)}))
+                  .filter(r=>r.daysLeft>=0)
+                  .sort((a,b)=>a.daysLeft-b.daysLeft)[0];
+                if(!nearest)return null;
+                const urgent=nearest.daysLeft<=14;
+                const soon=nearest.daysLeft<=30;
+                return React.createElement('div',{style:{
+                  fontSize:10,marginTop:3,
+                  color:urgent?'#f87171':soon?'#fbbf24':'#94a3b8',
+                  fontWeight:urgent||soon?600:400
+                }},
+                  '🏁 '+nearest.ad+' · '+(nearest.daysLeft===0?'bugün':nearest.daysLeft+' gün')
+                );
+              })()
             ),
             // Metrikler
             React.createElement('div',{style:{textAlign:'right',flexShrink:0}},
@@ -2719,7 +2738,19 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo}){
                 ),
                 React.createElement('div',{style:{textAlign:'center'}},
                   React.createElement('div',{style:{fontWeight:700,fontSize:15,color:'#f59e0b'}},row.sporSkoru),
-                  React.createElement('div',{style:{fontSize:10,color:'#475569'}},'skor')
+                  React.createElement('div',{style:{fontSize:10,color:'#475569'}},'skor'),
+                  (()=>{
+                    const prevRow=prevStats.find(r=>r.ath.id===row.ath.id);
+                    const prevSkor=prevRow?.sporSkoru||0;
+                    if(prevSkor===0&&row.sporSkoru===0)return null;
+                    const diff=round1(row.sporSkoru-prevSkor);
+                    const pctChange=prevSkor>0?Math.round((row.sporSkoru-prevSkor)/prevSkor*100):null;
+                    const color=diff>0?'#34d399':diff<0?'#f87171':'#94a3b8';
+                    const arrow=diff>0?'↑':diff<0?'↓':'→';
+                    return React.createElement('div',{style:{fontSize:10,color,fontWeight:600,marginTop:2}},
+                      arrow+' '+(diff>0?'+':'')+diff+(pctChange!==null?' ('+( pctChange>0?'+':'')+pctChange+'%)':'')
+                    );
+                  })()
                 )
               ),
               // Bar
@@ -8815,7 +8846,7 @@ function App(){
       tab==='dashboard'&&React.createElement(Dashboard,{workouts:athWks,athlete,history,races}),
       tab==='gunun'&&React.createElement(GununAntrenmanTab,{athlete,history,races,workouts,planMode,testPlanlar,onSaveTestPlan:p=>setTestPlanlar(prev=>[...prev.filter(x=>!(x.athId===p.athId&&x.testTur===p.testTur)),p]),onDeleteTestPlan:id=>setTestPlanlar(p=>p.filter(x=>x.id!==id))}),
       tab==='plan'&&React.createElement(HaftalikPlanTab,{athlete,history,races,workouts,planMode,setPlanMode,testPlanlar,planSnapInit:planSnap,onPlanSnapChange:setPlanSnapApp}),
-      tab==='lider'&&React.createElement(LiderlikTab,{athletes,workouts,teamName,teamLogo}),
+      tab==='lider'&&React.createElement(LiderlikTab,{athletes,workouts,teamName,teamLogo,races}),
       tab==='bolge'&&React.createElement(BolgeTab,{athlete,workouts:athWks,onUpdateAthlete:handleUpdateAthlete}),
       tab==='test'&&React.createElement(TestTab,{athlete,history,races,workouts,onUpdateAthlete:handleUpdateAthlete,onSaveWorkout:w=>setWorkouts(p=>[...p,w]),testPlanlar,onSaveTestPlan:p=>setTestPlanlar(prev=>[...prev.filter(x=>!(x.athId===p.athId&&x.testTur===p.testTur)),p]),onDeleteTestPlan:id=>setTestPlanlar(p=>p.filter(x=>x.id!==id))}),
       tab==='yarislar'&&React.createElement(ErrorBoundary,null,React.createElement(YarislarTab,{athlete,races,history,workouts:athWks,raceResults,onAddResult:r=>setRaceResults(p=>[...p,r]),onDeleteResult:id=>setRaceResults(p=>p.filter(x=>x.id!==id))})),
