@@ -2266,73 +2266,124 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
   const ref=useRef();const inst=useRef();
 
   useEffect(()=>{
-    if(!ref.current)return;
-    if(!history||history.length<2||!race||!ath)return;
+    if(!ref.current||!history?.length||!race||!ath)return;
     const km=parseFloat(race?.mesafe)||0;
     if(km<=0||!race?.tarih)return;
 
+    const raceDate=new Date(race.tarih+'T12:00:00');
+    const prepWeeks=parseInt(race?.prep_weeks)||12;
+    const taperW=parseInt(race?.taper_w)||(km>42?3:km>21?2:1);
+    const today=new Date();
+
+    const last=history[history.length-1];
+    if(!last?.ctl||last.ctl<1)return;
+    const ctlRef=last.ctl; // anchor: bugünkü CTL
+
+    // Bugünkü tahmin = anchor değer (karttaki değerle aynı)
+    let anchorMin=null;
+    try{const t=calcTargetTime(race,ath,last.ctl,last.acwr||1.0,workouts);if(t?.totalMin>0)anchorMin=t.totalMin;}catch(e){}
+    if(!anchorMin)return;
+
+    // CTL değişimine göre ölçekleme
+    // k=0.18: CTL %10 artarsa süre ~%1.8 kısalır
+    const ctlFactor=(ctl)=>Math.max(0.88,Math.min(1.18,1+0.18*(1-ctl/ctlRef)));
+
+    // Geçmiş noktalar
+    const pts=[];
+    for(let i=0;i<history.length;i+=7){
+      const d=history[i];
+      if(!d?.ctl||d.ctl<1)continue;
+      pts.push({x:fmtShort(d.date),y:round1(anchorMin*ctlFactor(d.ctl)),past:true});
+    }
+    if(!pts.find(p=>p.x===fmtShort(last.date)))
+      pts.push({x:fmtShort(last.date),y:round1(anchorMin),past:true});
+    if(pts.length<2)return;
+
+    // Projeksiyon: bugünden yarış gününe
+    const daysToRace=Math.ceil((raceDate-today)/864e5);
+    const projPts=[];
+    if(daysToRace>0&&daysToRace<400){
+      const recentH=history.slice(-28);
+      const ctlGrowthPerDay=recentH.length>7?(last.ctl-(recentH[0]?.ctl||last.ctl))/recentH.length:0;
+      // Bugünün noktasını geçmiş+projeksiyon bağlantısı için ekle
+      projPts.push({x:fmtShort(last.date),y:round1(anchorMin)});
+      const steps=Math.min(Math.ceil(daysToRace/7),24);
+      for(let i=1;i<=steps;i++){
+        const d=new Date(today);d.setDate(today.getDate()+i*7);
+        if(d>raceDate)break;
+        const projCtl=Math.max(1,Math.min(ctlRef*1.5,ctlRef+ctlGrowthPerDay*i*7));
+        projPts.push({x:fmtShort(localDateStr(d)),y:round1(anchorMin*ctlFactor(projCtl))});
+      }
+      // Yarış günü
+      const projCtlR=Math.max(1,Math.min(ctlRef*1.5,ctlRef+ctlGrowthPerDay*daysToRace));
+      projPts.push({x:fmtShort(race.tarih),y:round1(anchorMin*ctlFactor(projCtlR)),race:true});
+    }
+
+    const allLabels=[...pts.map(p=>p.x),...projPts.slice(1).map(p=>p.x)];
     const isDark=window.matchMedia('(prefers-color-scheme:dark)').matches;
     const gridColor=isDark?'rgba(255,255,255,.08)':'rgba(0,0,0,.08)';
     const tickColor=isDark?'#777':'#888';
     if(inst.current){try{inst.current.destroy();}catch(e){}}
 
-    // Veri noktaları: her 7 günde bir, calcTargetTime ile
-    const pts=[];
-    for(let i=0;i<history.length;i+=7){
-      const d=history[i];
-      if(!d||!d.ctl||d.ctl<1)continue;
-      let t=null;
-      try{t=calcTargetTime(race,ath,d.ctl,d.acwr||1.0,workouts);}catch(e){}
-      if(t&&t.totalMin>0)pts.push({x:fmtShort(d.date),y:round1(t.totalMin)});
-    }
-    const last=history[history.length-1];
-    if(last&&last.ctl>1&&!pts.find(p=>p.x===fmtShort(last.date))){
-      let t=null;
-      try{t=calcTargetTime(race,ath,last.ctl,last.acwr||1.0,workouts);}catch(e){}
-      if(t&&t.totalMin>0)pts.push({x:fmtShort(last.date),y:round1(t.totalMin)});
-    }
-    if(pts.length<2)return;
+    const resultPoints=(results||[]).map(r=>({x:fmtShort(r.date),y:round1(r.durSec/60)}));
 
     try{
       inst.current=new Chart(ref.current,{
         type:'line',
         data:{
-          labels:pts.map(p=>p.x),
-          datasets:[{
-            label:'Tahmini Süre',
-            data:pts.map(p=>p.y),
-            borderColor:'#7c3aed',borderWidth:2,
-            pointRadius:3,pointBackgroundColor:'#7c3aed',
-            tension:.4,fill:false
-          }]
+          labels:allLabels,
+          datasets:[
+            // Geçmiş: katı mor
+            {label:'Mevcut form',
+              data:allLabels.map(l=>{const p=pts.find(p=>p.x===l);return p?p.y:null;}),
+              borderColor:'#7c3aed',borderWidth:2.5,
+              pointRadius:allLabels.map(l=>pts.find(p=>p.x===l)?3:0),
+              pointBackgroundColor:'#7c3aed',
+              tension:.4,fill:false,spanGaps:false},
+            // Projeksiyon: noktalı yeşil
+            projPts.length>1&&{label:'Projeksiyon',
+              data:allLabels.map(l=>{const p=projPts.find(p=>p.x===l);return p?p.y:null;}),
+              borderColor:'#16a34a',borderWidth:2,borderDash:[6,4],
+              pointRadius:allLabels.map(l=>{const p=projPts.find(p=>p.x===l);return p?.race?6:0;}),
+              pointBackgroundColor:'#f59e0b',
+              tension:.4,fill:false,spanGaps:true},
+            // Gerçekleşen
+            resultPoints.length>0&&{label:'Gerçekleşen',
+              data:allLabels.map(l=>{const r=resultPoints.find(r=>r.x===l);return r?r.y:null;}),
+              borderColor:'#f59e0b',backgroundColor:'#f59e0b',
+              pointRadius:8,pointStyle:'star',showLine:false}
+          ].filter(Boolean)
         },
         options:{
           responsive:true,maintainAspectRatio:false,
           plugins:{legend:{display:false},
-            tooltip:{callbacks:{label:ctx=>fmtHMS(ctx.raw)}}},
+            tooltip:{callbacks:{label:ctx=>{const v=ctx.raw;if(v==null)return null;return ctx.dataset.label+': '+fmtHMS(v);}}}},
           scales:{
-            x:{ticks:{color:tickColor,font:{size:10},maxTicksLimit:8},grid:{color:gridColor},border:{display:false}},
-            y:{reverse:true,ticks:{color:tickColor,font:{size:10},callback:v=>fmtHMS(v)},grid:{color:gridColor},border:{display:false}}
+            x:{ticks:{color:tickColor,font:{size:10},maxTicksLimit:10},grid:{color:gridColor},border:{display:false}},
+            y:{reverse:true,ticks:{color:tickColor,font:{size:10},callback:v=>fmtHMS(v)},
+              grid:{color:gridColor},border:{display:false},
+              title:{display:true,text:'↑ Hızlı',color:tickColor,font:{size:10}}}
           }
         }
       });
-    }catch(e){console.error('Chart error:',e);}
+    }catch(e){console.error('Chart:',e);}
     return()=>{try{if(inst.current)inst.current.destroy();}catch(e){}};
-  },[history,race,ath,workouts]);
+  },[history,race,ath,results,workouts]);
 
-  if(!history||history.length<2)return React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',padding:'16px 0',textAlign:'center'}},'Trend için en az 2 haftalık veri gerekiyor.');
-  // Debug: veri durumunu göster
-  const debugInfo=(()=>{
-    const last=history[history.length-1];
-    let t=null,err='';
-    try{t=calcTargetTime(race,ath,last?.ctl,last?.acwr||1.0,workouts);}catch(e){err=e.message;}
-    return `history:${history.length} ctl:${round1(last?.ctl||0)} vo2:${ath?.vo2max} tarih:${race?.tarih} km:${race?.mesafe} t:${t?round1(t.totalMin):'null'} err:${err}`;
-  })();
-  return React.createElement('div',{style:{position:'relative',height:200}},
-    React.createElement('canvas',{ref}),
-    React.createElement('div',{style:{fontSize:9,color:'var(--text-tertiary)',textAlign:'center',marginTop:2}},debugInfo),
-    React.createElement('div',{style:{display:'flex',gap:16,fontSize:11,color:'var(--text-secondary)',marginTop:4,justifyContent:'center'}},
-      React.createElement('span',null,React.createElement('span',{style:{color:'#7c3aed',fontWeight:700}},'━ '),'Tahmini bitiş süresi')
+  if(!history?.length||!race?.tarih)return null;
+  return React.createElement('div',null,
+    React.createElement('div',{style:{position:'relative',height:200}},
+      React.createElement('canvas',{ref})
+    ),
+    React.createElement('div',{style:{display:'flex',gap:14,fontSize:11,color:'var(--text-secondary)',marginTop:4,justifyContent:'center',flexWrap:'wrap'}},
+      React.createElement('span',null,React.createElement('span',{style:{color:'#7c3aed',fontWeight:700}},'━ '),'Antrenman etkisi (CTL bazlı)'),
+      React.createElement('span',null,React.createElement('span',{style:{color:'#16a34a',fontWeight:700}},'╌ '),'Projeksiyon'),
+      (results||[]).length>0&&React.createElement('span',null,React.createElement('span',{style:{color:'#f59e0b',fontWeight:700}},'★ '),'Gerçekleşen')
+    ),
+    React.createElement('div',{style:{marginTop:6,fontSize:11,color:'var(--text-tertiary)',lineHeight:1.6}},
+      'Grafik, bugünkü profil tahmini (karttaki değer) baz alınarak CTL değişimine göre hesaplanır. Grafik ',
+      React.createElement('strong',null,'yukarı'),
+      ' gidiyorsa antrenmanlarla kondisyon artıyor ve tahmini süre kısalıyor. Noktalı çizgi mevcut CTL büyüme hızı devam ederse yarış gününe projeksiyondur.'
     )
   );
 }
