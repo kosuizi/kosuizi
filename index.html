@@ -2260,124 +2260,66 @@ function SporcularTab({athletes,races,athHistory,allHistory,onAdd,onUpdate,onDel
 function ChartTargetTrend({history,race,ath,results,workouts}){
   const ref=useRef();const inst=useRef();
 
-  const chartData=useMemo(()=>{
-    if(!history||!history.length||!race||!ath)return null;
-    const km=parseFloat(race?.mesafe)||0;
-    if(km<=0)return null;
-    const raceDate=race?.tarih?new Date(race.tarih+'T12:00:00'):null;
-    if(!raceDate)return null;
-    const prepWeeks=parseInt(race?.prep_weeks)||12;
-    const taperW=parseInt(race?.taper_w)||(km>42?3:km>21?2:1);
-    const dp=parseFloat(race?.d_plus)||0;
-    const dpPerKm=km>0?dp/km:0;
-    const maxIyiPct=(km<=5?6:km<=10?5:km<=21?4:km<=42?3:km<=60?2.5:2)+(dpPerKm>100?1:dpPerKm>50?0.5:0);
-
-    const points=[];
-    for(let i=0;i<history.length;i+=7){
-      const day=history[i];
-      if(!day.ctl||day.ctl<1)continue;
-      let t=null;
-      try{t=calcTargetTime(race,ath,day.ctl,day.acwr||1.0,workouts);}catch(e){}
-      if(t&&t.totalMin>0)points.push({date:day.date,min:round1(t.totalMin)});
-    }
-    const last=history[history.length-1];
-    if(last&&last.ctl>1){
-      let t=null;
-      try{t=calcTargetTime(race,ath,last.ctl,last.acwr||1.0,workouts);}catch(e){}
-      if(t&&t.totalMin>0&&!points.find(p=>p.date===last.date))
-        points.push({date:last.date,min:round1(t.totalMin)});
-    }
-    if(points.length<2)return null;
-    const firstPoint=points[0];
-
-    const calcTarget=(dateStr)=>{
-      if(!firstPoint)return null;
-      const daysLeft=Math.ceil((raceDate-new Date(dateStr+'T12:00:00'))/864e5);
-      const trainingDaysLeft=Math.max(0,daysLeft-taperW*7);
-      const totalTrainingDays=Math.max(1,(prepWeeks-taperW)*7);
-      const prepPct=Math.min(1,(totalTrainingDays-trainingDaysLeft)/totalTrainingDays);
-      const realizePct=prepPct<0.1?0.05:prepPct<0.3?0.15+(prepPct-0.1)*0.5:
-        prepPct<0.7?0.25+(prepPct-0.3)*1.5:prepPct<0.9?0.85+(prepPct-0.7)*0.5:0.95;
-      return round1(firstPoint.min*(1-maxIyiPct*realizePct/100));
-    };
-    points.forEach(p=>{p.minTarget=calcTarget(p.date);});
-
-    const today=new Date();
-    const daysToRace=Math.ceil((raceDate-today)/864e5);
-    if(daysToRace>0&&daysToRace<400){
-      const recentH=history.slice(-28);
-      const ctlGrowthPerDay=recentH.length>7
-        ?(last.ctl-(recentH[0]?.ctl||last.ctl))/recentH.length:0;
-      const steps=Math.min(Math.ceil(daysToRace/7),24);
-      for(let i=1;i<=steps;i++){
-        const d=new Date(today);d.setDate(today.getDate()+i*7);
-        if(d>raceDate)break;
-        const dateStr=localDateStr(d);
-        if(points.find(p=>p.date===dateStr))continue;
-        const projCtl=Math.max(1,Math.min(last.ctl*1.4,last.ctl+ctlGrowthPerDay*i*7));
-        let t=null;
-        try{t=calcTargetTime(race,ath,projCtl,1.05,workouts);}catch(e){}
-        if(t?.totalMin>0)points.push({date:dateStr,min:round1(t.totalMin),minTarget:calcTarget(dateStr),isFuture:true});
-      }
-      if(!points.find(p=>p.date===race.tarih)){
-        const projCtlR=Math.max(1,Math.min(last.ctl*1.4,last.ctl+ctlGrowthPerDay*daysToRace));
-        let t=null;
-        try{t=calcTargetTime(race,ath,projCtlR,1.05,workouts);}catch(e){}
-        if(t?.totalMin>0)points.push({date:race.tarih,min:round1(t.totalMin),minTarget:calcTarget(race.tarih),isFuture:true,isRace:true});
-      }
-    }
-    points.sort((a,b)=>a.date.localeCompare(b.date));
-    return points;
-  },[history,race,ath]);
-
   useEffect(()=>{
-    if(!ref.current||!chartData||chartData.length<2)return;
+    if(!ref.current)return;
+    if(!history||history.length<2||!race||!ath)return;
+    const km=parseFloat(race?.mesafe)||0;
+    if(km<=0||!race?.tarih)return;
+
     const isDark=window.matchMedia('(prefers-color-scheme:dark)').matches;
     const gridColor=isDark?'rgba(255,255,255,.08)':'rgba(0,0,0,.08)';
     const tickColor=isDark?'#777':'#888';
-    if(inst.current)inst.current.destroy();
-    const labels=chartData.map(d=>fmtShort(d.date));
-    const resultPoints=(results||[]).map(r=>({x:fmtShort(r.date),y:round1(r.durSec/60)}));
-    inst.current=new Chart(ref.current,{
-      type:'line',
-      data:{
-        labels,
-        datasets:[
-          {label:'Tahmini Süre',data:chartData.map(d=>d.min),
-            borderColor:'#7c3aed',borderWidth:2,pointRadius:3,
-            pointBackgroundColor:'#7c3aed',tension:.4,fill:false},
-          {label:'Hedef (iyileşme)',data:chartData.map(d=>d.minTarget||null),
-            borderColor:'#16a34a',borderWidth:2,borderDash:[5,4],
-            pointRadius:2,pointBackgroundColor:'#16a34a',tension:.4,fill:false,spanGaps:false},
-          resultPoints.length>0&&{
-            label:'Gerçekleşen',
-            data:labels.map(lbl=>{const r=resultPoints.find(p=>p.x===lbl);return r?r.y:null;}),
-            borderColor:'#f59e0b',backgroundColor:'#f59e0b',
-            pointRadius:8,pointStyle:'star',showLine:false,spanGaps:false}
-        ].filter(Boolean)
-      },
-      options:{
-        responsive:true,maintainAspectRatio:false,
-        plugins:{legend:{display:false},
-          tooltip:{callbacks:{label:ctx=>{const v=ctx.raw;if(v==null)return null;return ctx.dataset.label+': '+fmtHMS(v);}}}},
-        scales:{
-          x:{ticks:{color:tickColor,font:{size:10},maxTicksLimit:10},grid:{color:gridColor},border:{display:false}},
-          y:{reverse:true,ticks:{color:tickColor,font:{size:10},callback:v=>fmtHMS(v)},
-            grid:{color:gridColor},border:{display:false},
-            title:{display:true,text:'↑ Hızlı (süre kısa)',color:tickColor,font:{size:10}}}
-        }
-      }
-    });
-    return()=>{if(inst.current)inst.current.destroy();};
-  },[chartData,results]);
+    if(inst.current){try{inst.current.destroy();}catch(e){}}
 
-  if(!chartData||chartData.length<2)return React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',padding:'16px 0',textAlign:'center'}},'Trend için en az 2 haftalık antrenman verisi gerekiyor.');
-  return React.createElement('div',{style:{position:'relative',height:210}},
+    // Veri noktaları: her 7 günde bir, calcTargetTime ile
+    const pts=[];
+    for(let i=0;i<history.length;i+=7){
+      const d=history[i];
+      if(!d||!d.ctl||d.ctl<1)continue;
+      let t=null;
+      try{t=calcTargetTime(race,ath,d.ctl,d.acwr||1.0,workouts);}catch(e){}
+      if(t&&t.totalMin>0)pts.push({x:fmtShort(d.date),y:round1(t.totalMin)});
+    }
+    const last=history[history.length-1];
+    if(last&&last.ctl>1&&!pts.find(p=>p.x===fmtShort(last.date))){
+      let t=null;
+      try{t=calcTargetTime(race,ath,last.ctl,last.acwr||1.0,workouts);}catch(e){}
+      if(t&&t.totalMin>0)pts.push({x:fmtShort(last.date),y:round1(t.totalMin)});
+    }
+    if(pts.length<2)return;
+
+    try{
+      inst.current=new Chart(ref.current,{
+        type:'line',
+        data:{
+          labels:pts.map(p=>p.x),
+          datasets:[{
+            label:'Tahmini Süre',
+            data:pts.map(p=>p.y),
+            borderColor:'#7c3aed',borderWidth:2,
+            pointRadius:3,pointBackgroundColor:'#7c3aed',
+            tension:.4,fill:false
+          }]
+        },
+        options:{
+          responsive:true,maintainAspectRatio:false,
+          plugins:{legend:{display:false},
+            tooltip:{callbacks:{label:ctx=>fmtHMS(ctx.raw)}}},
+          scales:{
+            x:{ticks:{color:tickColor,font:{size:10},maxTicksLimit:8},grid:{color:gridColor},border:{display:false}},
+            y:{reverse:true,ticks:{color:tickColor,font:{size:10},callback:v=>fmtHMS(v)},grid:{color:gridColor},border:{display:false}}
+          }
+        }
+      });
+    }catch(e){console.error('Chart error:',e);}
+    return()=>{try{if(inst.current)inst.current.destroy();}catch(e){}};
+  },[history,race,ath,workouts]);
+
+  if(!history||history.length<2)return React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',padding:'16px 0',textAlign:'center'}},'Trend için en az 2 haftalık veri gerekiyor.');
+  return React.createElement('div',{style:{position:'relative',height:200}},
     React.createElement('canvas',{ref}),
-    React.createElement('div',{style:{display:'flex',gap:16,fontSize:11,color:'var(--text-secondary)',marginTop:4,justifyContent:'center',flexWrap:'wrap'}},
-      React.createElement('span',null,React.createElement('span',{style:{color:'#7c3aed',fontWeight:700}},'━ '),'Tahmini süre'),
-      React.createElement('span',null,React.createElement('span',{style:{color:'#16a34a',fontWeight:700}},'╌ '),'Hedef (hazırlık ilerlemesi)'),
-      results?.length>0&&React.createElement('span',null,React.createElement('span',{style:{color:'#f59e0b',fontWeight:700}},'★ '),'Gerçekleşen')
+    React.createElement('div',{style:{display:'flex',gap:16,fontSize:11,color:'var(--text-secondary)',marginTop:4,justifyContent:'center'}},
+      React.createElement('span',null,React.createElement('span',{style:{color:'#7c3aed',fontWeight:700}},'━ '),'Tahmini bitiş süresi')
     )
   );
 }
