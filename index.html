@@ -3692,6 +3692,7 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   const tsb=last?.tsb||0;
   const acwr=last?.acwr||1.0;
   const mechCtl=last?.mechCtl||0;
+  const mechAtl=last?.mechAtl||0;
   const phase=last?.phase||'Temel';
 
   // ── Sporcu profili ────────────────────────────────────────────────────────
@@ -3733,8 +3734,8 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   const powerOverload=wkHasPower&&wkPTSS>0&&wkLoad>0&&(wkPTSS/wkLoad)>1.30;
 
   // ── Aerobik verimlilik trendi ─────────────────────────────────────────────
-  const recentAerEff=history.slice(-14).filter(d=>d.aerEff!=null).map(d=>d.aerEff);
-  const olderAerEff=history.slice(-28,-14).filter(d=>d.aerEff!=null).map(d=>d.aerEff);
+  const recentAerEff=history.slice(-28).filter(d=>d.aerEff!=null).map(d=>d.aerEff);
+  const olderAerEff=history.slice(-56,-28).filter(d=>d.aerEff!=null).map(d=>d.aerEff);
   const avgRecent=recentAerEff.length?recentAerEff.reduce((s,v)=>s+v,0)/recentAerEff.length:null;
   const avgOlder=olderAerEff.length?olderAerEff.reduce((s,v)=>s+v,0)/olderAerEff.length:null;
   const aerEffDecline=avgRecent!=null&&avgOlder!=null&&(avgRecent-avgOlder)>5;
@@ -3742,6 +3743,15 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   // ── Nöromüsküler yük oranı ────────────────────────────────────────────────
   const mechRatio=ctl>5?(mechCtl/ctl):0;
   const mechOverload=mechRatio>0.18;
+
+  // ── Mekanik ATL/CTL oranı (akut mekanik aşırı yük) ───────────────────────
+  const mechAtlCtlRatio=(mechCtl>0)?(mechAtl/mechCtl):1;
+  const mechAclOverload=mechAtlCtlRatio>1.3;
+
+  // ── Mekanik/Kardiyovasküler denge ─────────────────────────────────────────
+  // Mech CTL / Kardio CTL < 0.6 → kaslar/tendonlar kardiyovasküler sisteme yetişemiyor
+  const mechKardioRatio=ctl>5?(mechCtl/ctl):null;
+  const mechKardioImbalance=mechKardioRatio!==null&&mechKardioRatio<0.6;
 
   // ── HRV 7g düşüklüğü ─────────────────────────────────────────────────────
   const hrv7Low=hrv7>0&&hrv7<50;
@@ -3777,8 +3787,10 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   if(daysToRace!=null&&daysToRace<=7) warnings.push({icon:'🏁',text:'Yarışa '+daysToRace+' gün kaldı — taper.'});
   if(ifOverloaded) warnings.push({icon:'⚡',text:'Son hafta IF ortalaması '+meanIF+' — kronik yüksek yoğunluk. Aerobik taban gerekli.'});
   if(powerOverload) warnings.push({icon:'💪',text:'Güç yükü HR yükünden orantısız yüksek — nöromüsküler aşırı yük riski.'});
-  if(aerEffDecline) warnings.push({icon:'📉',text:'Aerobik verimlilik son 2 haftada kötüleşiyor (aynı nabızda daha yavaş) — yorgunluk birikimi işareti.'});
+  if(aerEffDecline) warnings.push({icon:'📉',text:'Aerobik verimlilik son 4 haftada kötüleşiyor (aynı nabızda daha yavaş) — yorgunluk birikimi işareti.'});
   if(mechOverload) warnings.push({icon:'🏔',text:'Mekanik yük oranı yüksek (%'+Math.round(mechRatio*100)+') — düz antrenman önerilir.'});
+  if(mechAclOverload) warnings.push({icon:'🦵',text:'Akut mekanik yük kronik ortalamanın çok üzerinde (ATL/CTL: '+round1(mechAtlCtlRatio)+') — tendon/kas dokusu aşırı yük riski.'});
+  if(mechKardioImbalance) warnings.push({icon:'🫀',text:'Kardiyovasküler kondisyon mekanik kondisyonun önünde (Mech/Kardio: '+round1(mechKardioRatio)+') — bu hafta mekanik yük yerine aerobik öncelikli.'});
   if(ctlNearCap) warnings.push({icon:'🔝',text:'CTL/VO2max oranı yüksek ('+ctlVo2Ratio.toFixed(2)+') — fitness tavan yakın. Hacmi koruyun.'});
   if(kmDeficit) warnings.push({icon:'📏',text:'Haftalık km hedefinin gerisinde ('+wkKm+'/'+targetKm+'km). Süre artırılabilir.'});
 
@@ -3797,6 +3809,7 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   if(hrv7Low)       yMod=Math.min(yMod,0.85);
   if(aerEffDecline) yMod=Math.min(yMod,0.90);
   if(powerOverload) yMod=Math.min(yMod,0.88);
+  if(mechAclOverload) yMod=Math.min(yMod,0.82); // akut mekanik aşırı yük → belirgin düşüş
 
   const kaliteliYapildi=(workoutsThisWeek||[]).some(w=>['interval','esik','tempo','yokus_kisa','yokus_uzun'].includes(w.tur));
   const uzunYapildi=(workoutsThisWeek||[]).some(w=>['uzun','tirmanis'].includes(w.tur));
@@ -3821,8 +3834,10 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   const karmaYolYapildi=(workoutsThisWeek||[]).some(w=>w.spor==='kosu'&&!w.yapi_notu?.includes('arazi')&&['aerobik','tempo','esik','interval'].includes(w.tur));
 
   // Zorunlu toparlanma sinyalleri
-  const forceEasy=anaPctHigh||ifOverloaded||mechOverload||(powerOverload&&wkSessions>=2);
-  const forceLow=lowPctLow&&!kaliteliYapildi&&wkSessions>=1;
+  // mechAclOverload: akut mekanik aşırı yük → yoğun/mekanik antrenman iptal
+  // mechKardioImbalance: kaslar kardiyoya yetişemiyor → mekanik yük yerine aerobik
+  const forceEasy=anaPctHigh||ifOverloaded||mechOverload||mechAclOverload||(powerOverload&&wkSessions>=2);
+  const forceLow=(lowPctLow&&!kaliteliYapildi&&wkSessions>=1)||mechKardioImbalance;
 
   // ── planDay'den bugünün temel önerisini al ───────────────────────────────
   // wkStats: planDay'in ihtiyacı olan haftalık durum
