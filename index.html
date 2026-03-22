@@ -4465,6 +4465,7 @@ function generatePlanSnapshot(athlete,history,races,workouts,testPlanlar){
     weekKey:getWeekKey(0),athId:athlete.id,
     generatedAt:now.toISOString(),lastReviewAt:now.toISOString(),
     overrideMap,
+    b2bCompensationAdded:false,
     reviewLog:[{at:now.toISOString(),reason:'Haftalık plan oluşturuldu'}]
   };
 }
@@ -4489,8 +4490,44 @@ function reviewPlanSnapshot(snapshot,athlete,history,races,workouts,testPlanlar)
     }
   }
 
+  // ── Uzun koşu telafisi: bu hafta uzun koşu atlandıysa bir sonraki haftaya B2B ekle ──
+  // Bugün Pazar veya Cumartesi → haftanın sonu, uzun koşu denetimi yapılabilir
+  const dayOfWeek=now.getDay(); // 0=Paz, 6=Cmt
+  const isWeekEnd=(dayOfWeek===0||dayOfWeek===6);
+  let b2bCompensationReason=null;
+  if(isWeekEnd||true){ // Her gece kontrol et, çünkü uzun koşu herhangi bir gün olabilir
+    const thisWeekStart=getWeekBounds(0).start;
+    const thisWeekEnd=getWeekBounds(0).end;
+    // Bu hafta uzun koşu yapılmış mı?
+    const longRunDone=athWks.some(w=>{
+      const d=new Date(w.date+'T12:00:00');
+      return d>=thisWeekStart&&d<=thisWeekEnd&&['uzun','back_to_back','tirmanis'].includes(w.tur||'');
+    });
+    // Bu haftanın planında uzun koşu var mıydı?
+    const longRunPlanned=Object.values(snapshot.overrideMap||{}).some(day=>{
+      return ['uzun','back_to_back'].includes(day.tip);
+    });
+    // Uzun koşu planlanmış ama yapılmamış → bir sonraki haftanın ilk uygun koşu gününe B2B yerleştir
+    if(longRunPlanned&&!longRunDone&&!snapshot.b2bCompensationAdded){
+      const nextWeekDays=[];
+      for(let i=1;i<=7;i++){
+        const d=new Date(now);d.setDate(now.getDate()+i);
+        nextWeekDays.push(localDateStr(d));
+      }
+      // Sporcu koşu günleri
+      const kosuGunleri=athlete.kosu_gunleri||[];
+      const DAYS_SHORT_LOCAL=['Paz','Pzt','Sal','Çar','Per','Cum','Cmt'];
+      const b2bDay=nextWeekDays.find(dateStr=>{
+        const d=new Date(dateStr+'T12:00:00');
+        const dayShort=DAYS_SHORT_LOCAL[d.getDay()];
+        return kosuGunleri.includes(dayShort);
+      })||nextWeekDays[0];
+      b2bCompensationReason=`Bu hafta uzun koşu tamamlanamadı — ${b2bDay} tarihine B2B telafi antrenmanı eklendi`;
+    }
+  }
+
   const updatedTs={...snapshot,lastReviewAt:now.toISOString()};
-  if(!reason) return{updated:false,snap:updatedTs};
+  if(!reason&&!b2bCompensationReason) return{updated:false,snap:updatedTs};
 
   // Yarın ve sonrasını yeniden üret
   const tomorrowStr=localDateStr(new Date(now.getFullYear(),now.getMonth(),now.getDate()+1));
@@ -4505,13 +4542,44 @@ function reviewPlanSnapshot(snapshot,athlete,history,races,workouts,testPlanlar)
       };
     }
   }));
+
+  // B2B telafisi — ilk uygun koşu gününe yerleştir
+  if(b2bCompensationReason){
+    const nextWeekDays=[];
+    for(let i=1;i<=7;i++){
+      const d=new Date(now);d.setDate(now.getDate()+i);
+      nextWeekDays.push(localDateStr(d));
+    }
+    const kosuGunleri=athlete.kosu_gunleri||[];
+    const DAYS_SHORT_LOCAL=['Paz','Pzt','Sal','Çar','Per','Cum','Cmt'];
+    const b2bDay=nextWeekDays.find(dateStr=>{
+      const d=new Date(dateStr+'T12:00:00');
+      const dayShort=DAYS_SHORT_LOCAL[d.getDay()];
+      return kosuGunleri.includes(dayShort);
+    })||nextWeekDays[0];
+    const last=history[history.length-1];
+    const band=ctlBand(last?.ctl||0);
+    const zones=calcZones(athlete);
+    const b2bTpl=tplBackToBack(band,zones,0);
+    newMap[b2bDay]={
+      tip:'uzun',
+      baslik:'B2B Telafi — Kaçırılan Uzun Koşu',
+      sure_dk:b2bTpl.sure_dk,
+      yukHedef:Math.round(b2bTpl.sure_dk*0.8),
+      yapilar:b2bTpl.yapilar.map(y=>({baslik:y.baslik,detay:y.detay||''})),
+      isB2bCompensation:true
+    };
+  }
+
+  const finalReason=[reason,b2bCompensationReason].filter(Boolean).join(' · ');
   return{
-    updated:true,reason,
+    updated:true,reason:finalReason,
     snap:{
       ...snapshot,
       lastReviewAt:now.toISOString(),
       overrideMap:newMap,
-      reviewLog:[...(snapshot.reviewLog||[]),{at:now.toISOString(),reason}].slice(-10)
+      b2bCompensationAdded:b2bCompensationReason?true:snapshot.b2bCompensationAdded,
+      reviewLog:[...(snapshot.reviewLog||[]),{at:now.toISOString(),reason:finalReason}].slice(-10)
     }
   };
 }
