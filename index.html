@@ -3013,14 +3013,28 @@ function adimToRows(adim, zones){
     if(pz?.lo_ms&&pz?.hi_ms) return Math.round(1000/((pz.lo_ms+pz.hi_ms)/2));
     return [600,540,480,420,375,345,315][zi]||480;
   };
-  const fmtPace=(pSec)=>({pm:Math.floor(pSec/60),ps:Math.round(pSec%60)});
-  const fmtHMS=(sec)=>{sec=Math.max(0,sec||0);return{h:Math.floor(sec/3600),m:Math.floor((sec%3600)/60),s:Math.round(sec%60)};};
-  const mesafeHesap=(sec,pSec)=>Math.round((sec/pSec)*1000);
-  const paceSec=getPace(zIdx);
-  const pace=fmtPace(paceSec);
 
-  // 1. Piramit sekansı: "2–3–4–5–4–3–2 dk"
-  const seqMatch=detay.match(/(\d+(?:[\u2013\-]\d+){2,})\s*dk/i);
+  // Pace saniyesini 5'in katına yuvarla
+  const roundPaceSec=(pSec)=>{
+    const m=Math.floor(pSec/60);
+    const s=Math.round((pSec%60)/5)*5;
+    return s===60?{pm:m+1,ps:0}:{pm:m,ps:s};
+  };
+
+  // Mesafeyi yuvarla: kısa (<200m) → 5'in katı, uzun → 100'ün katı
+  const roundMesafe=(m)=>{
+    if(!m||m<=0) return 0;
+    if(m<200) return Math.round(m/5)*5;
+    return Math.round(m/100)*100;
+  };
+
+  const fmtHMS=(sec)=>{sec=Math.max(0,sec||0);return{h:Math.floor(sec/3600),m:Math.floor((sec%3600)/60),s:Math.round(sec%60)};};
+  const paceSec=getPace(zIdx);
+  const pace=roundPaceSec(paceSec);
+  const mesafeHesap=(sec,pSec)=>roundMesafe(Math.round((sec/pSec)*1000));
+
+  // ── 1. Piramit sekansı: "2–3–4–5–4–3–2 dk" ─────────────────────────────────
+  const seqMatch=detay.match(/([\d]+(?:[\u2013\-][\d]+){2,})\s*dk/i);
   if(seqMatch){
     const seqParts=seqMatch[1].split(/[\u2013\-]/).map(Number).filter(Boolean);
     const dinSure=parseSureSn(detay.replace(seqMatch[0],''))||90;
@@ -3032,36 +3046,64 @@ function adimToRows(adim, zones){
       rows.push({type:'run',label:`Blok ${i+1} \u00b7 ${dk} dk`,color,textColor,h,m,s,mesafe:mesafeHesap(sn,paceSec),...pace});
       if(i<seqParts.length-1){
         const ds=fmtHMS(dinSure);
-        rows.push({type:'rest',label:'Dinlenme',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],h:ds.h,m:ds.m,s:ds.s,mesafe:mesafeHesap(dinSure,dinPaceSec),...fmtPace(dinPaceSec)});
+        const dp=roundPaceSec(dinPaceSec);
+        rows.push({type:'rest',label:'Dinlenme',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],
+          h:ds.h,m:ds.m,s:ds.s,mesafe:mesafeHesap(dinSure,dinPaceSec),...dp});
       }
     });
     return rows;
   }
 
-  // 2. Tekrar: "4×8 dk"
+  // ── 2. Tekrar dk/sn: "6×8–10sn", "4×8 dk", "5×20sn" ──────────────────────
+  // Range formatı: "6×8–10sn" → orta değer al
+  const rangeM=detay.match(/(\d+)\s*[\u00d7x]\s*(\d+)[\u2013\-](\d+)\s*(sn|dk)/i);
   const tekrarM=detay.match(/(\d+)\s*[\u00d7x]\s*(\d+(?:[.,]\d+)?)\s*(dk|sn)/i);
-  if(tekrarM){
-    const n=parseInt(tekrarM[1]);
-    const birSn=Math.round(parseFloat(tekrarM[2].replace(',','.'))*( tekrarM[3].toLowerCase()==='dk'?60:1));
+  const match=rangeM||tekrarM;
+
+  if(match){
+    const n=parseInt(match[1]);
+    let birSn;
+    if(rangeM){
+      const lo=parseInt(rangeM[2]), hi=parseInt(rangeM[3]);
+      const birim=rangeM[4].toLowerCase();
+      birSn=Math.round(((lo+hi)/2)*(birim==='dk'?60:1));
+    } else {
+      birSn=Math.round(parseFloat(match[2].replace(',','.'))*( match[3].toLowerCase()==='dk'?60:1));
+    }
+    const isShort=birSn<30; // kısa sprint: 30sn altı
     const {h,m,s}=fmtHMS(birSn);
-    let dinSn=120;
+    const mes=isShort?roundMesafe(Math.round(birSn/paceSec*1000)):mesafeHesap(birSn,paceSec);
+
+    // Dinlenme
     const dinPats=[
-      /(\d+(?:[.,]\d+)?)\s*(dk|sn)\s+(?:yürüyüş|hafif koşu|aktif)/i,
+      /(\d+(?:[.,]\d+)?)\s*(dk|sn)\s+(?:yürüyüş|hafif koşu|aktif|tam duruş|yürüyüş inişi)/i,
       /(?:arası|dinlenme)[^\d]*(\d+(?:[.,]\d+)?)\s*(dk|sn)/i,
+      /(\d+(?:[.,]\d+)?)\s*(dk)\s+(?:yürüyüş|dinlenme|toparlanma)/i,
     ];
-    for(const p of dinPats){const dm=detay.match(p);if(dm){dinSn=Math.round(parseFloat(dm[1].replace(',','.'))*( dm[2].toLowerCase()==='dk'?60:1));break;}}
+    let dinSn=isShort?120:120;
+    for(const p of dinPats){
+      const dm=(adim.detay||'').match(p);
+      if(dm){dinSn=Math.round(parseFloat(dm[1].replace(',','.'))*( dm[2].toLowerCase()==='dk'?60:1));break;}
+    }
+    // "yürüyüş inişi" → sabit 120sn tahmin
+    if(detay.toLowerCase().includes('yürüyüş ini')) dinSn=120;
+
     const dinPaceSec=getPace(0);
     const ds=fmtHMS(dinSn);
+    const dp=roundPaceSec(dinPaceSec);
+
     rows.push({type:'header',label:`\u21bb ${n} Tekrar`,color:'#1e293b',textColor:'#f8fafc',h:0,m:0,s:0,mesafe:0,pm:0,ps:0});
-    rows.push({type:'run',label:baslik.split('\u00b7')[0].trim(),color,textColor,h,m,s,mesafe:mesafeHesap(birSn,paceSec),...pace});
-    rows.push({type:'rest',label:'Dinlenme / Toparlanma',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],h:ds.h,m:ds.m,s:ds.s,mesafe:mesafeHesap(dinSn,dinPaceSec),...fmtPace(dinPaceSec)});
+    rows.push({type:'run',label:baslik.split('\u00b7')[0].trim(),color,textColor,h,m,s,mesafe:mes,...pace});
+    rows.push({type:'rest',label:'Dinlenme / Toparlanma',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],
+      h:ds.h,m:ds.m,s:ds.s,mesafe:mesafeHesap(dinSn,dinPaceSec),...dp});
     return rows;
   }
 
-  // 3. Tek blok
+  // ── 3. Tek blok ─────────────────────────────────────────────────────────────
   let totalSn=adim.sure_dk>0?adim.sure_dk*60:parseSureSn(detay)||parseSureSn(baslik)||60;
   const {h,m,s}=fmtHMS(totalSn);
-  rows.push({type:'single',label:baslik,color,textColor,h,m,s,mesafe:mesafeHesap(totalSn,paceSec),...pace});
+  rows.push({type:'single',label:baslik,color,textColor,h,m,s,
+    mesafe:mesafeHesap(totalSn,paceSec),...pace});
   return rows;
 }
 function ReceteTablosu({yapilar, zones}){
