@@ -3004,79 +3004,66 @@ function adimToRows(adim, zones){
   const baslik=adim.baslik||'';
   const detay=adim.detay||'';
   const full=baslik+' '+detay;
+  const zIdx=detectZone(full);
+  const color=ZONE_COLORS_INLINE[zIdx];
+  const textColor=ZONE_TEXT_COLOR[zIdx];
 
-  // Tekrar var mı? "3×8 dk", "4×2 dk" vb.
-  const tekM=detay.match(/(\d+)\s*[×x]\s*(\d+(?:[.,]\d+)?)\s*(dk|sn)/i);
+  const getPace=(zi)=>{
+    const pz=zones?.paceZones?.[zi];
+    if(pz?.lo_ms&&pz?.hi_ms) return Math.round(1000/((pz.lo_ms+pz.hi_ms)/2));
+    return [600,540,480,420,375,345,315][zi]||480;
+  };
+  const fmtPace=(pSec)=>({pm:Math.floor(pSec/60),ps:Math.round(pSec%60)});
+  const fmtHMS=(sec)=>{sec=Math.max(0,sec||0);return{h:Math.floor(sec/3600),m:Math.floor((sec%3600)/60),s:Math.round(sec%60)};};
+  const mesafeHesap=(sec,pSec)=>Math.round((sec/pSec)*1000);
+  const paceSec=getPace(zIdx);
+  const pace=fmtPace(paceSec);
 
-  if(tekM){
-    const n=parseInt(tekM[1]);
-    const birSn=Math.round(parseFloat(tekM[2].replace(',','.'))*( tekM[3].toLowerCase()==='dk'?60:1));
-    const zIdx=detectZone(full);
-    const paceSec=getPaceSec(zones,zIdx);
-    const mesafe=Math.round(birSn/paceSec*1000);
-
-    // Dinlenme
-    const dinPatterns=[
-      /(\d+(?:[.,]\d+)?)\s*(dk|sn)\s+(?:yürüyüş|hafif koşu|aktif)/i,
-      /(?:arası|dinlenme)[^\d]*(\d+(?:[.,]\d+)?)\s*(dk|sn)/i,
-    ];
-    let dinSn=0;
-    for(const p of dinPatterns){
-      const dm=detay.match(p);
-      if(dm){dinSn=Math.round(parseFloat(dm[1].replace(',','.'))*( dm[2].toLowerCase()==='dk'?60:1));break;}
-    }
-    if(!dinSn) dinSn=120; // varsayılan 2dk
-
-    const dinPaceSec=getPaceSec(zones,0);
-
-    // Tekrar başlık satırı
-    rows.push({
-      type:'header',
-      label:`↻ ${n} Tekrar`,
-      color:'#1e293b', textColor:'#f8fafc',
-      h:0,m:0,s:0,mesafe:0,pm:0,ps:0
-    });
-    // Koşu satırı
-    const {h,m,s}=secToHMS(birSn);
-    rows.push({
-      type:'run',
-      label:baslik.split('·')[0].trim(),
-      color:ZONE_COLORS_INLINE[zIdx],textColor:ZONE_TEXT_COLOR[zIdx],
-      h,m,s,mesafe,pm:Math.floor(paceSec/60),ps:Math.round(paceSec%60)
-    });
-    // Dinlenme satırı
-    const ds=secToHMS(dinSn);
-    rows.push({
-      type:'rest',
-      label:'Dinlenme / Toparlanma',
-      color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],
-      h:ds.h,m:ds.m,s:ds.s,
-      mesafe:Math.round(dinSn/dinPaceSec*1000),
-      pm:Math.floor(dinPaceSec/60),ps:Math.round(dinPaceSec%60)
+  // 1. Piramit sekansı: "2–3–4–5–4–3–2 dk"
+  const seqMatch=detay.match(/(\d+(?:[\u2013\-]\d+){2,})\s*dk/i);
+  if(seqMatch){
+    const seqParts=seqMatch[1].split(/[\u2013\-]/).map(Number).filter(Boolean);
+    const dinSure=parseSureSn(detay.replace(seqMatch[0],''))||90;
+    const dinPaceSec=getPace(0);
+    rows.push({type:'header',label:`\u21bb ${seqParts.length} Blok \u00b7 ${seqMatch[1]} dk`,color:'#1e293b',textColor:'#f8fafc',h:0,m:0,s:0,mesafe:0,pm:0,ps:0});
+    seqParts.forEach((dk,i)=>{
+      const sn=dk*60;
+      const {h,m,s}=fmtHMS(sn);
+      rows.push({type:'run',label:`Blok ${i+1} \u00b7 ${dk} dk`,color,textColor,h,m,s,mesafe:mesafeHesap(sn,paceSec),...pace});
+      if(i<seqParts.length-1){
+        const ds=fmtHMS(dinSure);
+        rows.push({type:'rest',label:'Dinlenme',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],h:ds.h,m:ds.m,s:ds.s,mesafe:mesafeHesap(dinSure,dinPaceSec),...fmtPace(dinPaceSec)});
+      }
     });
     return rows;
   }
 
-  // Tek blok
-  const zIdx=detectZone(full);
-  const color=ZONE_COLORS_INLINE[zIdx];
-  const textColor=ZONE_TEXT_COLOR[zIdx];
-  const paceSec=getPaceSec(zones,zIdx);
+  // 2. Tekrar: "4×8 dk"
+  const tekrarM=detay.match(/(\d+)\s*[\u00d7x]\s*(\d+(?:[.,]\d+)?)\s*(dk|sn)/i);
+  if(tekrarM){
+    const n=parseInt(tekrarM[1]);
+    const birSn=Math.round(parseFloat(tekrarM[2].replace(',','.'))*( tekrarM[3].toLowerCase()==='dk'?60:1));
+    const {h,m,s}=fmtHMS(birSn);
+    let dinSn=120;
+    const dinPats=[
+      /(\d+(?:[.,]\d+)?)\s*(dk|sn)\s+(?:yürüyüş|hafif koşu|aktif)/i,
+      /(?:arası|dinlenme)[^\d]*(\d+(?:[.,]\d+)?)\s*(dk|sn)/i,
+    ];
+    for(const p of dinPats){const dm=detay.match(p);if(dm){dinSn=Math.round(parseFloat(dm[1].replace(',','.'))*( dm[2].toLowerCase()==='dk'?60:1));break;}}
+    const dinPaceSec=getPace(0);
+    const ds=fmtHMS(dinSn);
+    rows.push({type:'header',label:`\u21bb ${n} Tekrar`,color:'#1e293b',textColor:'#f8fafc',h:0,m:0,s:0,mesafe:0,pm:0,ps:0});
+    rows.push({type:'run',label:baslik.split('\u00b7')[0].trim(),color,textColor,h,m,s,mesafe:mesafeHesap(birSn,paceSec),...pace});
+    rows.push({type:'rest',label:'Dinlenme / Toparlanma',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],h:ds.h,m:ds.m,s:ds.s,mesafe:mesafeHesap(dinSn,dinPaceSec),...fmtPace(dinPaceSec)});
+    return rows;
+  }
 
-  let totalSn=0;
-  if(adim.sure_dk>0) totalSn=adim.sure_dk*60;
-  else totalSn=parseSureSn(detay)||parseSureSn(baslik)||60;
-
-  const {h,m,s}=secToHMS(totalSn);
-  const mesafe=Math.round(totalSn/paceSec*1000);
-  rows.push({
-    type:'single',label:baslik,color,textColor,
-    h,m,s,mesafe,
-    pm:Math.floor(paceSec/60),ps:Math.round(paceSec%60)
-  });
+  // 3. Tek blok
+  let totalSn=adim.sure_dk>0?adim.sure_dk*60:parseSureSn(detay)||parseSureSn(baslik)||60;
+  const {h,m,s}=fmtHMS(totalSn);
+  rows.push({type:'single',label:baslik,color,textColor,h,m,s,mesafe:mesafeHesap(totalSn,paceSec),...pace});
   return rows;
 }
-
 function ReceteTablosu({yapilar, zones}){
   if(!yapilar?.length) return null;
 
