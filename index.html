@@ -2957,6 +2957,128 @@ function realisticClimbRate(band){
 
 // ── Zone bilgisi formatı ─────────────────────────────────────────────────────
 // Her aşama için "Z2 · 145–158 bpm · 5:30–6:15 (5:52) /km" formatı
+// ── Reçete Tablo Yardımcısı ───────────────────────────────────────────────────
+// yapilar adımlarını 6 sütunlu tablo satırlarına dönüştürür
+// Tekrar içeren adımları (ör. 2×8 dk) ayrı satırlara böler
+const ZONE_ZONE_MAP={
+  'Z1':0,'Z2':1,'Z3':2,'Z4':3,'Z5a':4,'Z5b':5,'Z5c':6,
+  'isınma':0,'soğuma':0,'kolay':0,'yürüyüş':0,'toparlanma':0,'dinlenme':0,
+  'aerobik':1,'uzun':1,
+  'tempo':2,'progressive':2,
+  'eşik':3,'cruise':3,'yarış':3,
+  'interval':4,'piramit':4,'vo2':4,
+  'anaerobik':5,'sprint':5,'strides':5,'açıcı':5,
+};
+const ZONE_COLORS_INLINE={0:'#6ee7b7',1:'#34d399',2:'#fbbf24',3:'#f97316',4:'#ef4444',5:'#dc2626',6:'#991b1b'};
+
+function adimToRows(adim, zones){
+  const rows=[];
+  const baslik=(adim.baslik||'').toLowerCase();
+  const detay=(adim.detay||'');
+
+  // Zone belirle (başlık ve detaydan)
+  let zIdx=0;
+  for(const [key,idx] of Object.entries(ZONE_ZONE_MAP)){
+    if(baslik.includes(key)||detay.toLowerCase().includes(key)){zIdx=idx;break;}
+  }
+  // Daha spesifik zone override: Z1-Z5c geçiyorsa onu al
+  const zMatch=detay.match(/\bZ([1-5][abc]?)\b/);
+  if(zMatch){const z='Z'+zMatch[1];if(ZONE_ZONE_MAP[z]!==undefined)zIdx=ZONE_ZONE_MAP[z];}
+
+  // Pace bilgisi
+  const paceZone=zones?.paceZones?.[zIdx];
+  // Hedef pace: zone ortası (sn/km)
+  let paceSec=null;
+  if(paceZone?.lo_ms&&paceZone?.hi_ms){
+    const midMs=(paceZone.lo_ms+paceZone.hi_ms)/2;
+    paceSec=Math.round(1000/midMs);
+  }
+
+  // Tekrar sayısı: "2×8 dk", "3×100m" gibi
+  const tekrarMatch=detay.match(/(\d+)\s*[×x]\s*(\d+(?:\.\d+)?)\s*(dk|sn|m\b|km)?/i);
+  const tekrarSayi=tekrarMatch?parseInt(tekrarMatch[1]):1;
+  const tekrarSure=tekrarMatch?parseFloat(tekrarMatch[2]):null;
+  const tekrarBirim=tekrarMatch?(tekrarMatch[3]||'dk').toLowerCase():'dk';
+
+  // Dinlenme: "2 dk yürüyüş", "90 sn hafif koşu" gibi
+  const dinMatch=detay.match(/(?:arası|dinlenme)[^\d]*(\d+)\s*(dk|sn)/i)||
+                 detay.match(/(\d+)\s*(dk|sn)\s+(?:yürüyüş|hafif koşu|aktif)/i);
+  let dinSec=null;
+  if(dinMatch){
+    dinSec=parseInt(dinMatch[1])*(dinMatch[2].toLowerCase()==='dk'?60:1);
+  }
+
+  // Adımın toplam süresi (sn)
+  let totalSec=0;
+  if(adim.sure_dk>0) totalSec=adim.sure_dk*60;
+  else if(tekrarSure){
+    totalSec=tekrarSayi*(tekrarBirim==='dk'?tekrarSure*60:tekrarBirim==='sn'?tekrarSure:tekrarSure/1000*60);
+    if(dinSec) totalSec+=Math.max(0,tekrarSayi-1)*dinSec;
+  }
+
+  const makeSure=(sec)=>{
+    const h=Math.floor(sec/3600);
+    const m=Math.floor((sec%3600)/60);
+    const s=Math.round(sec%60);
+    return{h,m,s};
+  };
+  const makePace=(sec)=>{if(!sec)return{pm:null,ps:null};return{pm:Math.floor(sec/60),ps:Math.round(sec%60)};};
+  const color=ZONE_COLORS_INLINE[zIdx]||'#6ee7b7';
+
+  if(tekrarSayi>1&&tekrarSure&&dinSec!==null){
+    // Her tekrar + dinlenme ayrı satır
+    const isSure=tekrarBirim==='dk'?tekrarSure*60:tekrarSure;
+    const mesafe=paceZone?.lo_ms?Math.round(isSure*((paceZone.lo_ms+paceZone.hi_ms)/2)):null;
+    for(let r=0;r<tekrarSayi;r++){
+      rows.push({label:`${adim.baslik} ${r+1}/${tekrarSayi}`,color,...makeSure(isSure),mesafe,pace:makePace(paceSec)});
+      if(r<tekrarSayi-1){
+        rows.push({label:'Dinlenme',color:'#94a3b8',...makeSure(dinSec),mesafe:null,pace:{pm:null,ps:null}});
+      }
+    }
+  } else {
+    // Tek satır
+    const mesafe=paceSec&&totalSec?Math.round(totalSec/paceSec*1000):null;
+    rows.push({label:adim.baslik,color,...makeSure(totalSec),mesafe,pace:makePace(paceSec)});
+  }
+  return rows;
+}
+
+function ReceteTablosu({yapilar, zones}){
+  if(!yapilar?.length)return null;
+  const rows=yapilar.flatMap(y=>adimToRows(y,zones));
+  if(!rows.length)return null;
+  const COL={h:40,m:40,s:40,mesafe:60,pm:40,ps:40};
+  return React.createElement('div',{style:{marginTop:10,overflowX:'auto'}},
+    React.createElement('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:11,tableLayout:'fixed'}},
+      React.createElement('thead',null,
+        React.createElement('tr',{style:{background:'var(--bg-secondary)'}},
+          React.createElement('th',{style:{padding:'4px 6px',textAlign:'left',fontWeight:600,color:'var(--text-secondary)',minWidth:100}},'Aşama'),
+          React.createElement('th',{style:{padding:'4px 6px',textAlign:'center',fontWeight:600,color:'var(--text-secondary)',width:COL.h}},'Sa'),
+          React.createElement('th',{style:{padding:'4px 6px',textAlign:'center',fontWeight:600,color:'var(--text-secondary)',width:COL.m}},'Dk'),
+          React.createElement('th',{style:{padding:'4px 6px',textAlign:'center',fontWeight:600,color:'var(--text-secondary)',width:COL.s}},'Sn'),
+          React.createElement('th',{style:{padding:'4px 6px',textAlign:'center',fontWeight:600,color:'var(--text-secondary)',width:COL.mesafe}},'Mesafe (m)'),
+          React.createElement('th',{style:{padding:'4px 6px',textAlign:'center',fontWeight:600,color:'var(--text-secondary)',width:COL.pm}},'Pace dk'),
+          React.createElement('th',{style:{padding:'4px 6px',textAlign:'center',fontWeight:600,color:'var(--text-secondary)',width:COL.ps}},'Pace sn')
+        )
+      ),
+      React.createElement('tbody',null,
+        rows.map((r,i)=>React.createElement('tr',{key:i,style:{borderBottom:'1px solid var(--border)'}},
+          React.createElement('td',{style:{padding:'5px 6px',display:'flex',alignItems:'center',gap:6}},
+            React.createElement('div',{style:{width:8,height:8,borderRadius:2,background:r.color,flexShrink:0}}),
+            React.createElement('span',{style:{fontSize:11,fontWeight:500}},r.label)
+          ),
+          React.createElement('td',{style:{padding:'5px 6px',textAlign:'center',fontFamily:'monospace'}},r.h||'—'),
+          React.createElement('td',{style:{padding:'5px 6px',textAlign:'center',fontFamily:'monospace',fontWeight:600}},r.m||'—'),
+          React.createElement('td',{style:{padding:'5px 6px',textAlign:'center',fontFamily:'monospace'}},r.s||'—'),
+          React.createElement('td',{style:{padding:'5px 6px',textAlign:'center',fontFamily:'monospace'}},r.mesafe?r.mesafe:'—'),
+          React.createElement('td',{style:{padding:'5px 6px',textAlign:'center',fontFamily:'monospace',fontWeight:600}},r.pace.pm!=null?r.pace.pm:'—'),
+          React.createElement('td',{style:{padding:'5px 6px',textAlign:'center',fontFamily:'monospace'}},r.pace.ps!=null?String(r.pace.ps).padStart(2,'0'):'—')
+        ))
+      )
+    )
+  );
+}
+
 function zoneInfo(zones, zIdx, label){
   const zLabel=label||(['Z1','Z2','Z3','Z4','Z5a','Z5b','Z5c'][zIdx]||'Z'+zIdx);
   const hr=zones?.hrZones?.[zIdx];
@@ -5271,7 +5393,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
                       React.createElement('div',{style:{fontWeight:600,fontSize:13}},y.baslik),
                       React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginTop:2,lineHeight:1.5}},y.detay)
                     )
-                  ))
+                  )),
+                  React.createElement(ReceteTablosu,{yapilar:day.yapilar,zones:calcZones(athlete)})
                 )
               ),
               React.createElement('div',{style:{
@@ -5623,7 +5746,8 @@ function GununAntrenmanTab({athlete,history,races,workouts,planMode,testPlanlar,
               React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginTop:2}},y.detay)
             )
           ))
-        )
+        ),
+        React.createElement(ReceteTablosu,{yapilar:rec.yapilar,zones})
       )
     ),
 
