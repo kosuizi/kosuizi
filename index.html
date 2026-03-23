@@ -3051,7 +3051,14 @@ function adimToRows(adim, zones){
   const seqMatch=detay.match(/([\d]+(?:[\u2013\-][\d]+){2,})\s*dk/i);
   if(seqMatch){
     const seqParts=seqMatch[1].split(/[\u2013\-]/).map(Number).filter(Boolean);
-    const dinSure=parseSureSn(detay.replace(seqMatch[0],''))||90;
+    // dinSure: pace string içindeki "5:25" gibi değerleri yanlış parse etmemek için
+    // önce sadece "90 sn" veya "X dk" kalıplarını ara, time regex kullanma
+    const afterSeq=detay.replace(seqMatch[0],'');
+    let dinSure=90; // varsayılan
+    const dkM=afterSeq.match(/(\d+(?:[.,]\d+)?)\s*dk/i);
+    const snM=afterSeq.match(/(\d+)\s*sn/i);
+    if(dkM) dinSure=Math.round(parseFloat(dkM[1].replace(',','.'))*60);
+    else if(snM) dinSure=parseInt(snM[1]);
     const dinPaceSec=getPace(0);
     rows.push({type:'header',label:`\u21bb ${seqParts.length} Blok \u00b7 ${seqMatch[1]} dk`,color:'#1e293b',textColor:'#f8fafc',h:0,m:0,s:0,mesafe:0,pm:0,ps:0});
     seqParts.forEach((dk,i)=>{
@@ -3131,7 +3138,7 @@ function adimToRows(adim, zones){
     if(strideM){
       // Koşu kısmı
       const kosuDetay=detay.slice(0,plusIdx).trim();
-      const kosuSn=parseSureSn(kosuDetay)||totalSn;
+      const kosuSn=parseSureSn(kosuDetay)||60;
       const kHMS=fmtHMS(kosuSn);
       rows.push({type:'single',label:'Isınma Koşusu',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],
         h:kHMS.h,m:kHMS.m,s:kHMS.s,mesafe:mesafeHesap(kosuSn,blokPaceSec),...blokPace,rpe:null});
@@ -4298,6 +4305,8 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   }
 
   const TIP_NAMES={kolay:'Kolay Koşu',aerobik:'Aerobik Koşu',uzun:'Uzun Koşu',tempo:'Tempo',esik:'Eşik',interval:'İnterval',piramit:'İnterval Piramit',kesintisiz_piramit:'Kesintisiz Piramit',yokus_kisa:'Kısa Yokuş Tekrarı',yokus_uzun:'Uzun Yokuş',tirmanis:'Tırmanış Koşusu',teknik:'Teknik İniş',acici:'Açıcı',capraz:'Çapraz Antrenman',dinlenme:'Dinlenme'};
+  // Eski snapshot'larda tip değeri baslik olarak saklı olabilir → normalize et
+  const fixBaslik=(b,tip)=>TIP_NAMES[b]||b;
   return{
     ...tpl,baslik:TIP_NAMES[tpl.tip]||tpl.tip,
     aciklama:tpl.yapilar.map(y=>y.baslik).join(' → '),
@@ -5453,7 +5462,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
                     : isCancelled
                       ? React.createElement('div',{style:{fontSize:10,textAlign:'center',marginTop:2,color:'var(--text-tertiary)'}},
                           '✕ ',React.createElement('s',null,day.baslik))
-                      : React.createElement('div',{style:{fontSize:10,fontWeight:600,textAlign:'center',color:tipColor(day.tip),marginTop:2}},day.baslik),
+                      : React.createElement('div',{style:{fontSize:10,fontWeight:600,textAlign:'center',color:tipColor(day.tip),marginTop:2}},fixBaslik(day.baslik,day.tip)),
                   day.sure_dk>0&&React.createElement('div',{style:{fontSize:9,color:'var(--text-tertiary)',textAlign:'center'}},day.sure_dk+' dk'),
                   day.uyari&&React.createElement('div',{style:{fontSize:8,color:'var(--warn)',textAlign:'center',marginTop:2}},'⚠'),
                   day.comparison&&React.createElement('div',{style:{textAlign:'center',marginTop:3}},compBadge(day.comparison)),
@@ -5496,13 +5505,13 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
           const shareRecete=async()=>{
             const el=receteRef.current;
             if(!el)return;
-            const title=day.baslik+' — '+day.dayTR+' '+day.date;
+            const title=fixBaslik(day.baslik,day.tip)+' — '+day.dayTR+' '+day.date;
             try{await shareElement(el,'recete_'+day.date+'.png',title);}
             catch(e){alert('Paylaşım hatası: '+e.message);}
           };
           return React.createElement('div',{key:day.date,className:'card',style:{borderLeft:'4px solid '+tipColor(day.tip)}},
             React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}},
-              React.createElement('div',{style:{fontWeight:700,fontSize:14}},dayEmoji(day)+' '+day.baslik+' — '+day.dayTR+' · '+day.sure_dk+' dk'),
+              React.createElement('div',{style:{fontWeight:700,fontSize:14}},dayEmoji(day)+' '+fixBaslik(day.baslik,day.tip)+' — '+day.dayTR+' · '+day.sure_dk+' dk'),
               React.createElement('div',{className:'flex-gap'},
                 React.createElement('button',{className:'btn btn-sm',
                   style:{background:'var(--info)',color:'#fff',border:'none'},
@@ -5524,7 +5533,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
                     fontSize:20,flexShrink:0
                   }},dayEmoji(day)),
                   React.createElement('div',null,
-                    React.createElement('div',{style:{fontWeight:700,fontSize:15}},day.baslik),
+                    React.createElement('div',{style:{fontWeight:700,fontSize:15}},fixBaslik(day.baslik,day.tip)),
                     React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)'}},
                       day.dayTR+' · '+day.sure_dk+' dk'+(day.yukHedef?' · Hedef yük: '+day.yukHedef:'')
                     )
@@ -5597,8 +5606,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
                     ?React.createElement('span',{style:{color:'var(--danger)',fontWeight:600}},'🏁 Yarış')
                     :isCancelled
                       ?React.createElement('span',{style:{color:'var(--text-tertiary)'}},
-                        '✕ ',React.createElement('s',null,(tipEmoji(day.tip)||'')+' '+day.baslik))
-                      :React.createElement('span',{style:{color:tipColor(day.tip)}},(tipEmoji(day.tip)||'')+' '+day.baslik)),
+                        '✕ ',React.createElement('s',null,(tipEmoji(day.tip)||'')+' '+fixBaslik(day.baslik,day.tip)))
+                      :React.createElement('span',{style:{color:tipColor(day.tip)}},(tipEmoji(day.tip)||'')+' '+fixBaslik(day.baslik,day.tip))),
                   React.createElement('td',{style:{fontFamily:'monospace'}},isCancelled?'—':day.sure_dk>0?day.sure_dk+' dk':'—'),
                   React.createElement('td',{style:{color:'var(--text-secondary)',maxWidth:220,fontSize:11}},isCancelled?'—':day.yapilar?.map(y=>y.baslik).join(' → ')||'—'),
                   React.createElement('td',null,
