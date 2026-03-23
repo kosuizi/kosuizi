@@ -3070,14 +3070,58 @@ function adimToRows(adim, zones){
       if(i<seqParts.length-1){
         const ds=fmtHMS(dinSure);
         const dp=roundPaceSec(dinPaceSec);
-        rows.push({type:'rest',label:'Dinlenme',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],
+        rows.push({type:'rest',label:'Blok Arası Dinlenme',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],
           h:ds.h,m:ds.m,s:ds.s,mesafe:mesafeHesap(dinSure,dinPaceSec),...dp});
       }
     });
     return rows;
   }
 
-  // ── 2. Tekrar dk/sn: "6×8–10sn", "4×8 dk", "5×20sn" ──────────────────────
+  // ── 2. Bileşik ısınma: "X dk ... + N×Ysn strides" — tekrar kontrolünden ÖNCE ──
+  const isIsinma=/ısınma/i.test(baslik);
+  const isSoguma=/soğuma/i.test(baslik);
+  let blokPaceSec=paceSec;
+  if(isIsinma) blokPaceSec=getPaceWarmup();
+  else if(isSoguma) blokPaceSec=getPaceCooldown();
+  const blokPace=roundPaceSec(blokPaceSec);
+
+  if(isIsinma){
+    const plusIdx=detay.indexOf('+');
+    if(plusIdx>0){
+      const kosuPart=detay.slice(0,plusIdx).trim();
+      const stridePart=detay.slice(plusIdx+1).trim();
+      const strideM=stridePart.match(/(\d+)\s*[×x]\s*(\d+(?:[.,]\d+)?)\s*(sn|dk|m\b)/i);
+      if(strideM){
+        const kosuSn=parseSureSn(kosuPart)||60;
+        const kHMS=fmtHMS(kosuSn);
+        rows.push({type:'single',label:'Isınma Koşusu',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],
+          h:kHMS.h,m:kHMS.m,s:kHMS.s,mesafe:mesafeHesap(kosuSn,blokPaceSec),...blokPace,rpe:null});
+        const sn=parseInt(strideM[1]);
+        const strideUnit=strideM[3].toLowerCase();
+        const strideVal=parseFloat(strideM[2].replace(',','.'));
+        const strideZIdx=5;
+        const stridePaceSec=getPace(strideZIdx);
+        // Metre → pace'den süre; sn/dk → doğrudan
+        const birSn=strideUnit==='m'
+          ?Math.round(strideVal/1000*stridePaceSec)
+          :Math.round(strideVal*(strideUnit==='dk'?60:1));
+        const dinM=stridePart.match(/(?:arası)[^\d]*(\d+)\s*(sn|dk)/i);
+        const dinSn=dinM?Math.round(parseInt(dinM[1])*(dinM[2].toLowerCase()==='dk'?60:1)):45;
+        const {h:sh,m:sm,s:ss}=fmtHMS(birSn);
+        const ds=fmtHMS(dinSn);
+        const dp=roundPaceSec(getPace(0));
+        rows.push({type:'header',label:`↻ ${sn} Strides`,color:'#1e293b',textColor:'#f8fafc',h:0,m:0,s:0,mesafe:0,pm:0,ps:0});
+        rows.push({type:'run',label:'Strides',color:ZONE_COLORS_INLINE[strideZIdx],textColor:ZONE_TEXT_COLOR[strideZIdx],
+          h:sh,m:sm,s:ss,mesafe:mesafeHesap(birSn,getPace(strideZIdx)),pm:null,ps:null,rpe:'8–9'});
+        rows.push({type:'rest',label:'Strides Arası Dinlenme',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],
+          h:ds.h,m:ds.m,s:ds.s,mesafe:mesafeHesap(dinSn,getPace(0)),...dp,rpe:null});
+        return rows;
+      }
+    }
+    // Bileşik değil — normal tek blok olarak devam et
+  }
+
+  // ── 3. Tekrar dk/sn: "6×8–10sn", "4×8 dk", "5×20sn" ──────────────────────
   // Range formatı: "6×8–10sn" → orta değer al
   const rangeM=detay.match(/(\d+)\s*[\u00d7x]\s*(\d+)[\u2013\-](\d+)\s*(sn|dk)/i);
   const tekrarM=detay.match(/(\d+)\s*[\u00d7x]\s*(\d+(?:[.,]\d+)?)\s*(dk|sn)/i);
@@ -3124,51 +3168,9 @@ function adimToRows(adim, zones){
     return rows;
   }
 
-  // ── 3. Tek blok (bileşik ısınma kontrolü dahil) ──────────────────────────────
-  const isIsinma=/ısınma/i.test(baslik);
-  const isSoguma=/soğuma/i.test(baslik);
-  let blokPaceSec=paceSec;
-  if(isIsinma) blokPaceSec=getPaceWarmup();
-  else if(isSoguma) blokPaceSec=getPaceCooldown();
-  const blokPace=roundPaceSec(blokPaceSec);
-
-  // Isınma'da "X dk ... + N×Ysn strides" bileşik yapısı?
-  if(isIsinma){
-    const plusIdx=detay.indexOf('+');
-    const stridePart=plusIdx>0?detay.slice(plusIdx+1).trim():'';
-    const strideM=stridePart.match(/(\d+)\s*[×x]\s*(\d+(?:[.,]\d+)?)\s*(sn|dk)/i);
-    if(strideM){
-      // Koşu kısmı
-      const kosuDetay=detay.slice(0,plusIdx).trim();
-      const kosuSn=parseSureSn(kosuDetay)||60;
-      const kHMS=fmtHMS(kosuSn);
-      rows.push({type:'single',label:'Isınma Koşusu',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],
-        h:kHMS.h,m:kHMS.m,s:kHMS.s,mesafe:mesafeHesap(kosuSn,blokPaceSec),...blokPace,rpe:null});
-      // Strides kısmı
-      const sn=parseInt(strideM[1]);
-      const birSn=Math.round(parseFloat(strideM[2].replace(',','.'))*( strideM[3].toLowerCase()==='dk'?60:1));
-      // Strides arası dinlenme
-      const dinM=stridePart.match(/(?:arası|dinlenme)[^\d]*(\d+)\s*(sn|dk)/i);
-      const dinSn=dinM?Math.round(parseInt(dinM[1])*(dinM[2].toLowerCase()==='dk'?60:1)):45;
-      const strideColor=ZONE_COLORS_INLINE[5]; // Z5b — yüksek efor
-      const strideTColor=ZONE_TEXT_COLOR[5];
-      const stridePaceSec=getPace(5);
-      const {h:sh,m:sm,s:ss}=fmtHMS(birSn);
-      const dinPaceSec=getPace(0);
-      const ds=fmtHMS(dinSn);
-      const dp=roundPaceSec(dinPaceSec);
-      rows.push({type:'header',label:`↻ ${sn} Strides`,color:'#1e293b',textColor:'#f8fafc',h:0,m:0,s:0,mesafe:0,pm:0,ps:0});
-      rows.push({type:'run',label:'Strides',color:strideColor,textColor:strideTColor,
-        h:sh,m:sm,s:ss,mesafe:mesafeHesap(birSn,stridePaceSec),pm:null,ps:null,rpe:'8–9'});
-      rows.push({type:'rest',label:'Strides Arası',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],
-        h:ds.h,m:ds.m,s:ds.s,mesafe:mesafeHesap(dinSn,dinPaceSec),...dp,rpe:null});
-      return rows;
-    }
-  }
-
+  // ── 4. Tek blok ─────────────────────────────────────────────────────────────
   // Sprint tipi: RPE göster
   const rpe=isSprintType?ZONE_RPE[Math.min(zIdx,6)]||'':null;
-
   let totalSn2=adim.sure_dk>0?adim.sure_dk*60:parseSureSn(detay)||parseSureSn(baslik)||60;
   const {h,m,s}=fmtHMS(totalSn2);
   rows.push({type:'single',label:baslik,color,textColor,h,m,s,
@@ -3511,8 +3513,7 @@ function tplPiramit(band, zones, phase='Gelişme'){
     tip:'piramit', sure_dk:cfg.sure,
     yapilar:[
       {baslik:'Isınma',detay:`12 dk Z1 kolay koşu + 4×20sn strides (arası 45sn yürüyüş)`},
-      {baslik:`İnterval Piramit Blokları · ${phase}`,detay:`${cfg.seq} dk — her blok ${z5aStr} · Maksimal ama kontrollü efor, son sn'ye kadar ritim koru`},
-      {baslik:'Blok Arası Dinlenme',detay:`Her blok sonrası ${cfg.dinSure} ${cfg.dinTur} — nabız ${z4Str} düzeyine inince sonraki blok başlar · Tam durmak yasak`},
+      {baslik:`İnterval Piramit Blokları · ${phase}`,detay:`${cfg.seq} dk — her blok ${z5aStr} · Maksimal ama kontrollü efor, son sn'ye kadar ritim koru · ${cfg.dinSure} ${cfg.dinTur} blok arası`},
       {baslik:'Soğuma',detay:`10 dk Z1 hafif koşu + bacak sallama ve baldır germe`},
     ]
   };
