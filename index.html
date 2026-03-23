@@ -2957,7 +2957,12 @@ function realisticClimbRate(band){
 
 // ── Zone bilgisi formatı ─────────────────────────────────────────────────────
 // Her aşama için "Z2 · 145–158 bpm · 5:30–6:15 (5:52) /km" formatı
-// ── Reçete Tablo Yardımcısı ───────────────────────────────────────────────────
+// ── Reçete satır şablonu yardımcısı ─────────────────────────────────────────
+// Her yapilar adımına _rows eklenir — adimToRows bunu doğrudan kullanır
+// row: {label, sure_sn, zIdx, tekrar?, din_sn?, rpe?, isSprint?}
+function mkRows(rows){ return rows; } // identity — sadece belgeleme amaçlı
+
+
 const ZONE_COLORS_INLINE={0:'#6ee7b7',1:'#34d399',2:'#fbbf24',3:'#f97316',4:'#ef4444',5:'#dc2626',6:'#991b1b'};
 const TIP_NAMES={kolay:'Kolay Koşu',aerobik:'Aerobik Koşu',uzun:'Uzun Koşu',tempo:'Tempo',esik:'Eşik',interval:'İnterval',piramit:'İnterval Piramit',kesintisiz_piramit:'Kesintisiz Piramit',yokus_kisa:'Kısa Yokuş Tekrarı',yokus_uzun:'Uzun Yokuş',tirmanis:'Tırmanış Koşusu',teknik:'Teknik İniş',acici:'Açıcı',capraz:'Çapraz Antrenman',dinlenme:'Dinlenme'};
 const fixBaslik=(b)=>TIP_NAMES[b]||b;
@@ -3002,6 +3007,39 @@ function secToHMS(sec){
 }
 
 function adimToRows(adim, zones){
+  // _rows varsa doğrudan kullan (yapısal veri)
+  if(adim._rows&&adim._rows.length){
+    return adim._rows.map(r=>{
+      const pSec=r.pSec||getPaceFromZone(r.zIdx,zones);
+      const cr=r.rpe||r.isSprint?{mesafe:calcRowM(r.sure_sn,pSec),pm:null,ps:null}:calcRowM(r.sure_sn,pSec);
+      const {h,m,s}=fmtHMS2(r.sure_sn);
+      return{type:r.type||'run',label:r.label,
+        color:ZONE_COLORS_INLINE[r.zIdx]||'#34d399',
+        textColor:ZONE_TEXT_COLOR[r.zIdx]||'#064e3b',
+        h,m,s,...cr,rpe:r.rpe||null};
+    });
+  }
+  // Fallback: metin parse (eski şablonlar için)
+  return adimToRowsFallback(adim,zones);
+}
+
+function getPaceFromZone(zi,zones){
+  const pz=zones?.paceZones?.[zi];
+  if(pz?.lo_ms&&pz?.hi_ms) return Math.round(1000/((pz.lo_ms+pz.hi_ms)/2));
+  return [600,540,480,420,375,345,315][zi]||480;
+}
+function calcRowM(sec,rawPaceSec){
+  if(!sec||!rawPaceSec) return{mesafe:0,pm:0,ps:0};
+  const rawM=sec/rawPaceSec*1000;
+  const mesafe=rawM<200?Math.round(rawM/5)*5:Math.round(rawM/100)*100;
+  const actualPaceSec=mesafe>0?Math.round(sec/(mesafe/1000)):rawPaceSec;
+  const pm=Math.floor(actualPaceSec/60);
+  const ps=Math.round((actualPaceSec%60)/5)*5;
+  return{mesafe,pm:ps===60?pm+1:pm,ps:ps===60?0:ps};
+}
+function fmtHMS2(sec){sec=Math.max(0,sec||0);return{h:Math.floor(sec/3600),m:Math.floor((sec%3600)/60),s:Math.round(sec%60)};}
+
+function adimToRowsFallback(adim, zones){
   const rows=[];
   const baslik=adim.baslik||'';
   const detay=adim.detay||'';
@@ -3010,214 +3048,131 @@ function adimToRows(adim, zones){
   const color=ZONE_COLORS_INLINE[zIdx];
   const textColor=ZONE_TEXT_COLOR[zIdx];
 
-  const getPace=(zi)=>{
-    const pz=zones?.paceZones?.[zi];
-    if(pz?.lo_ms&&pz?.hi_ms) return Math.round(1000/((pz.lo_ms+pz.hi_ms)/2));
-    return [600,540,480,420,375,345,315][zi]||480;
-  };
+  const getPace=(zi)=>getPaceFromZone(zi,zones);
+  const roundPaceSec2=(pSec)=>{const m=Math.floor(pSec/60);const s=Math.round((pSec%60)/5)*5;return s===60?{pm:m+1,ps:0}:{pm:m,ps:s};};
+  const getPaceWarmup2=()=>Math.round((getPace(0)*3+getPace(1))/4);
+  const getPaceCooldown2=()=>Math.round((getPace(0)+getPace(1))/2);
+  const fmtHMS=(sec)=>fmtHMS2(sec);
+  const calcRow=(sec,pSec)=>calcRowM(sec,pSec);
+  const paceSec=getPace(zIdx);
+  const isIsinma=/ısınma/i.test(baslik);
+  const isSoguma=/soğuma/i.test(baslik);
+  let blokPaceSec=paceSec;
+  if(isIsinma) blokPaceSec=getPaceWarmup2();
+  else if(isSoguma) blokPaceSec=getPaceCooldown2();
 
-  // Isınma pace: Z1'den Z2'ye tırmanan ortalama = (3×Z1+Z2)/4 → Z1'e yakın, soğumadan YAVAŞ
-  // Soğuma pace: sabit kolay tempo = (Z1+Z2)/2 → ısınmadan HIZLI
-  // Not: büyük sayı = yavaş pace (sn/km). Z1=600, Z2=540 → ısınma=585 (9:45), soğuma=570 (9:30) ✓
-  const getPaceWarmup=()=>{
-    const z1=getPace(0),z2=getPace(1);
-    return Math.round((z1+z1+z1+z2)/4); // (3×Z1+Z2)/4 → Z1'e yakın → yavaş
-  };
-  const getPaceCooldown=()=>Math.round((getPace(0)+getPace(1))/2); // (Z1+Z2)/2 → ortada
-
-  // RPE tanımları (zone bazlı)
-  const ZONE_RPE=['1–2','3–4','5–6','7–8','8–9','9–10','10'];
-
-  // Sprint/depar tipi mi? (RPE gösterilsin, pace ikincil)
+  const ZONE_RPE2=['1–2','3–4','5–6','7–8','8–9','9–10','10'];
   const isSprintType=/strides|depar|sprint|açıcı|hill/i.test(full);
 
-  // Pace saniyesini 5'in katına yuvarla
-  const roundPaceSec=(pSec)=>{
-    const m=Math.floor(pSec/60);
-    const s=Math.round((pSec%60)/5)*5;
-    return s===60?{pm:m+1,ps:0}:{pm:m,ps:s};
-  };
-
-  // Mesafeyi yuvarla: kısa (<200m) → 5'in katı, uzun → 100'ün katı
-  const roundMesafe=(m)=>{
-    if(!m||m<=0) return 0;
-    if(m<200) return Math.round(m/5)*5;
-    return Math.round(m/100)*100;
-  };
-
-  // Tutarlı hesaplama: süre + rawPace → mesafe yuvarla → pace geri hesapla
-  // Bu şekilde üç değer her zaman örtüşür
-  const calcRow=(sec, rawPaceSec)=>{
-    const rawMesafe=sec/rawPaceSec*1000;
-    const mesafe=roundMesafe(rawMesafe);
-    // Mesafeden geri pace hesapla (tutarlılık için)
-    const actualPaceSec=mesafe>0?Math.round(sec/(mesafe/1000)):rawPaceSec;
-    // Pace saniyesini 5'in katına yuvarla
-    const pm=Math.floor(actualPaceSec/60);
-    const ps=Math.round((actualPaceSec%60)/5)*5;
-    return{mesafe, pm:ps===60?pm+1:pm, ps:ps===60?0:ps};
-  };
-
-  const fmtHMS=(sec)=>{sec=Math.max(0,sec||0);return{h:Math.floor(sec/3600),m:Math.floor((sec%3600)/60),s:Math.round(sec%60)};};
-  const paceSec=getPace(zIdx);
-
-  // ── 1. Kesintisiz Piramit: "5 dk Z2 → 4 dk Z3 → 3 dk Z4 → ..." ──────────────
-  const okMatch=detay.match(/(\d+)\s*dk\s+Z\d/i);
-  if(okMatch&&detay.includes('→')){
-    // Her "X dk ZY" segmentini ayır
-    const segParts=detay.split('→').map(s=>s.trim()).filter(Boolean);
-    const segsValid=segParts.filter(s=>/^\d+\s*dk\s+Z/i.test(s));
-    if(segsValid.length>=3){
-      rows.push({type:'header',label:`↻ ${segsValid.length} Segment (Kesintisiz)`,color:'#1e293b',textColor:'#f8fafc',h:0,m:0,s:0,mesafe:0,pm:0,ps:0});
-      segsValid.forEach((seg,i)=>{
+  // 1. Kesintisiz Piramit: "X dk ZY → ..."
+  if(detay.includes('→')&&/\d+\s*dk\s+Z\d/i.test(detay)){
+    const segs=detay.split('→').map(s=>s.trim()).filter(s=>/^\d+\s*dk\s+Z/i.test(s));
+    if(segs.length>=3){
+      rows.push({type:'header',label:`↻ ${segs.length} Segment (Kesintisiz)`,color:'#1e293b',textColor:'#f8fafc',h:0,m:0,s:0,mesafe:0,pm:0,ps:0});
+      segs.forEach((seg,i)=>{
         const dkM=seg.match(/(\d+)\s*dk/i);
         const zM=seg.match(/Z(\d+[abc]?)/i);
         if(!dkM) return;
         const sn=parseInt(dkM[1])*60;
         const zi=zM?({'1':0,'2':1,'3':2,'4':3,'5a':4,'5b':5,'5c':6}[zM[1].toLowerCase()]||1):1;
-        const pSec=getPace(zi);
+        const cr=calcRow(sn,getPace(zi));
         const {h,m,s}=fmtHMS(sn);
-        const cr=calcRow(sn,pSec);
         rows.push({type:'run',label:`Segment ${i+1} · ${dkM[1]} dk · Z${zM?zM[1]:'?'}`,
-          color:ZONE_COLORS_INLINE[zi],textColor:ZONE_TEXT_COLOR[zi],
-          h,m,s,...cr,rpe:null});
+          color:ZONE_COLORS_INLINE[zi],textColor:ZONE_TEXT_COLOR[zi],h,m,s,...cr,rpe:null});
       });
       return rows;
     }
   }
 
-  // ── 2. İnterval Piramit sekansı: "2–3–4–5–4–3–2 dk" ─────────────────────────
+  // 2. İnterval Piramit: "2–3–4–5–4–3–2 dk"
   const seqMatch=detay.match(/([\d]+(?:[\u2013\-][\d]+){2,})\s*dk/i);
   if(seqMatch){
-    const seqParts=seqMatch[1].split(/[\u2013\-]/).map(Number).filter(Boolean);
-    const afterSeq=detay.replace(seqMatch[0],'');
-    let dinSure=90;
-    const dkM2=afterSeq.match(/(\d+(?:[.,]\d+)?)\s*dk/i);
-    const snM=afterSeq.match(/(\d+)\s*sn/i);
-    if(dkM2) dinSure=Math.round(parseFloat(dkM2[1].replace(',','.'))*60);
-    else if(snM) dinSure=parseInt(snM[1]);
-    const dinPaceSec=getPace(0);
-    // Piramit blokları Z5a'da — zIdx değil, zorla Z5a kullan
-    const blokZIdx=4; // Z5a
-    const blokColor=ZONE_COLORS_INLINE[blokZIdx];
-    const blokTextColor=ZONE_TEXT_COLOR[blokZIdx];
-    const blokPaceSecP=getPace(blokZIdx);
-    rows.push({type:'header',label:`↻ ${seqParts.length} Blok · ${seqMatch[1]} dk`,color:'#1e293b',textColor:'#f8fafc',h:0,m:0,s:0,mesafe:0,pm:0,ps:0});
-    seqParts.forEach((dk,i)=>{
-      const sn=dk*60;
-      const {h,m,s}=fmtHMS(sn);
-      const cbr=calcRow(sn,blokPaceSecP);
-      rows.push({type:'run',label:`Blok ${i+1} · ${dk} dk`,color:blokColor,textColor:blokTextColor,
-        h,m,s,...cbr});
-      if(i<seqParts.length-1){
-        const ds=fmtHMS(dinSure);
-        const cdr=calcRow(dinSure,dinPaceSec);
-        rows.push({type:'rest',label:'Blok Arası Dinlenme',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],
-          h:ds.h,m:ds.m,s:ds.s,...cdr});
-      }
-    });
-    return rows;
+    const seqParts=seqMatch[1].split(/[\u2013\-]/).map(Number).filter(n=>n>0&&n<30);
+    if(seqParts.length>=3){
+      const afterSeq=detay.replace(seqMatch[0],'');
+      let dinSure=90;
+      const dkM=afterSeq.match(/(\d+(?:[.,]\d+)?)\s*dk/i);
+      const snM=afterSeq.match(/(\d+)\s*sn/i);
+      if(dkM) dinSure=Math.round(parseFloat(dkM[1].replace(',','.'))*60);
+      else if(snM) dinSure=parseInt(snM[1]);
+      const blokZIdx=4;
+      const blokPaceSecP=getPace(blokZIdx);
+      const dinPaceSec=getPace(0);
+      rows.push({type:'header',label:`↻ ${seqParts.length} Blok · ${seqMatch[1]} dk`,color:'#1e293b',textColor:'#f8fafc',h:0,m:0,s:0,mesafe:0,pm:0,ps:0});
+      seqParts.forEach((dk,i)=>{
+        const sn=dk*60;
+        const {h,m,s}=fmtHMS(sn);
+        rows.push({type:'run',label:`Blok ${i+1} · ${dk} dk`,color:ZONE_COLORS_INLINE[blokZIdx],textColor:ZONE_TEXT_COLOR[blokZIdx],h,m,s,...calcRow(sn,blokPaceSecP)});
+        if(i<seqParts.length-1){const ds=fmtHMS(dinSure);rows.push({type:'rest',label:'Blok Arası Dinlenme',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],h:ds.h,m:ds.m,s:ds.s,...calcRow(dinSure,dinPaceSec)});}
+      });
+      return rows;
+    }
   }
 
-  // ── 2. Bileşik ısınma: "X dk ... N×Y(sn|dk|m) strides" — tekrar kontrolünden ÖNCE ──
-  const isIsinma=/ısınma/i.test(baslik);
-  const isSoguma=/soğuma/i.test(baslik);
-  let blokPaceSec=paceSec;
-  if(isIsinma) blokPaceSec=getPaceWarmup();
-  else if(isSoguma) blokPaceSec=getPaceCooldown();
-
+  // 3. Bileşik ısınma: "X dk ... N×Y(sn|dk|m) strides"
   if(isIsinma){
-    // Detayda N×M(sn|dk|m) pattern'ı ara
-    const strideFullM=detay.match(/(\d+)\s*[×x]\s*(\d+(?:[.,]\d+)?)\s*(sn|dk|m\b)/i);
-    if(strideFullM){
-      const strideStart=detay.indexOf(strideFullM[0]);
-      const kosuPart=detay.slice(0,strideStart).trim().replace(/[+\-–—·]+$/,'').trim();
-      const stridePart=detay.slice(strideStart).trim();
-      const kosuSn=parseSureSn(kosuPart)||parseSureSn(detay.slice(0,strideStart))||60;
+    const strideM=detay.match(/(\d+)\s*[×x]\s*(\d+(?:[.,]\d+)?)\s*(sn|dk|m\b)/i);
+    if(strideM){
+      const strideStart=detay.indexOf(strideM[0]);
+      const kosuPart=detay.slice(0,strideStart).trim().replace(/[+\-–—·,]+$/,'').trim();
+      const kosuSn=(() => {
+        const m=kosuPart.match(/(\d+(?:[.,]\d+)?)\s*dk/i);
+        if(m) return Math.round(parseFloat(m[1].replace(',','.'))*60);
+        return 0;
+      })();
       if(kosuSn>0){
-        const kHMS=fmtHMS(kosuSn);
-        const cwk=calcRow(kosuSn,blokPaceSec);
-        rows.push({type:'single',label:'Isınma Koşusu',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],
-          h:kHMS.h,m:kHMS.m,s:kHMS.s,...cwk,rpe:null});
+        const {h,m,s}=fmtHMS(kosuSn);
+        rows.push({type:'single',label:'Isınma Koşusu',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],h,m,s,...calcRow(kosuSn,blokPaceSec),rpe:null});
       }
-      const sn=parseInt(strideFullM[1]);
-      const strideUnit=strideFullM[3].toLowerCase();
-      const strideVal=parseFloat(strideFullM[2].replace(',','.'));
+      const n=parseInt(strideM[1]);
+      const strideUnit=strideM[3].toLowerCase();
+      const strideVal=parseFloat(strideM[2].replace(',','.'));
       const strideZIdx=5;
-      const stridePaceSec2=getPace(strideZIdx);
-      const birSn=strideUnit==='m'
-        ?Math.round(strideVal/1000*stridePaceSec2)
-        :Math.round(strideVal*(strideUnit==='dk'?60:1));
+      const sPaceSec=getPace(strideZIdx);
+      const birSn=strideUnit==='m'?Math.round(strideVal/1000*sPaceSec):Math.round(strideVal*(strideUnit==='dk'?60:1));
+      const stridePart=detay.slice(strideStart);
       const dinM=stridePart.match(/(?:arası)[^\d]*(\d+)\s*(sn|dk)/i);
       const dinSn=dinM?Math.round(parseInt(dinM[1])*(dinM[2].toLowerCase()==='dk'?60:1)):45;
       const {h:sh,m:sm,s:ss}=fmtHMS(birSn);
       const ds=fmtHMS(dinSn);
-      rows.push({type:'header',label:`↻ ${sn} Strides`,color:'#1e293b',textColor:'#f8fafc',h:0,m:0,s:0,mesafe:0,pm:0,ps:0});
-      const csr=calcRow(birSn,stridePaceSec2);
-      const cdsr=calcRow(dinSn,getPace(0));
-      rows.push({type:'run',label:'Strides',color:ZONE_COLORS_INLINE[strideZIdx],textColor:ZONE_TEXT_COLOR[strideZIdx],
-        h:sh,m:sm,s:ss,...csr,pm:null,ps:null,rpe:'8–9'});
-      rows.push({type:'rest',label:'Strides Arası Dinlenme',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],
-        h:ds.h,m:ds.m,s:ds.s,...cdsr,rpe:null});
+      rows.push({type:'header',label:`↻ ${n} Strides`,color:'#1e293b',textColor:'#f8fafc',h:0,m:0,s:0,mesafe:0,pm:0,ps:0});
+      rows.push({type:'run',label:'Strides',color:ZONE_COLORS_INLINE[strideZIdx],textColor:ZONE_TEXT_COLOR[strideZIdx],h:sh,m:sm,s:ss,...calcRow(birSn,sPaceSec),pm:null,ps:null,rpe:'8–9'});
+      rows.push({type:'rest',label:'Strides Arası Dinlenme',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],h:ds.h,m:ds.m,s:ds.s,...calcRow(dinSn,getPace(0)),rpe:null});
       return rows;
     }
-    // Bileşik değil — normal tek blok olarak devam et
   }
 
-  // ── 3. Tekrar dk/sn: "6×8–10sn", "4×8 dk", "5×20sn" ──────────────────────
-  // Range formatı: "6×8–10sn" → orta değer al
-  const rangeM=detay.match(/(\d+)\s*[\u00d7x]\s*(\d+)[\u2013\-](\d+)\s*(sn|dk)/i);
-  const tekrarM=detay.match(/(\d+)\s*[\u00d7x]\s*(\d+(?:[.,]\d+)?)\s*(dk|sn)/i);
+  // 4. Tekrar: "4×8 dk", "6×30sn", "6×8–10sn"
+  const rangeM=detay.match(/(\d+)\s*[×x]\s*(\d+)[\u2013\-](\d+)\s*(sn|dk)/i);
+  const tekrarM=detay.match(/(\d+)\s*[×x]\s*(\d+(?:[.,]\d+)?)\s*(dk|sn)/i);
   const match=rangeM||tekrarM;
-
   if(match){
     const n=parseInt(match[1]);
     let birSn;
-    if(rangeM){
-      const lo=parseInt(rangeM[2]), hi=parseInt(rangeM[3]);
-      const birim=rangeM[4].toLowerCase();
-      birSn=Math.round(((lo+hi)/2)*(birim==='dk'?60:1));
-    } else {
-      birSn=Math.round(parseFloat(match[2].replace(',','.'))*( match[3].toLowerCase()==='dk'?60:1));
-    }
-    const isShort=birSn<30; // kısa sprint: 30sn altı
+    if(rangeM){const lo=parseInt(rangeM[2]),hi=parseInt(rangeM[3]);birSn=Math.round(((lo+hi)/2)*(rangeM[4].toLowerCase()==='dk'?60:1));}
+    else{birSn=Math.round(parseFloat(match[2].replace(',','.'))*( match[3].toLowerCase()==='dk'?60:1));}
     const {h,m,s}=fmtHMS(birSn);
-    const mes=isShort?roundMesafe(Math.round(birSn/paceSec*1000)):mesafeHesap(birSn,paceSec);
-
-    // Dinlenme
-    const dinPats=[
-      /(\d+(?:[.,]\d+)?)\s*(dk|sn)\s+(?:yürüyüş|hafif koşu|aktif|tam duruş|yürüyüş inişi)/i,
-      /(?:arası|dinlenme)[^\d]*(\d+(?:[.,]\d+)?)\s*(dk|sn)/i,
-      /(\d+(?:[.,]\d+)?)\s*(dk)\s+(?:yürüyüş|dinlenme|toparlanma)/i,
-    ];
-    let dinSn=isShort?120:120;
-    for(const p of dinPats){
-      const dm=(adim.detay||'').match(p);
-      if(dm){dinSn=Math.round(parseFloat(dm[1].replace(',','.'))*( dm[2].toLowerCase()==='dk'?60:1));break;}
-    }
-    // "yürüyüş inişi" → sabit 120sn tahmin
+    let dinSn=120;
+    const dinPats=[/(\d+(?:[.,]\d+)?)\s*(dk|sn)\s+(?:yürüyüş|hafif koşu|aktif|tam duruş)/i,/(?:arası|dinlenme)[^\d]*(\d+(?:[.,]\d+)?)\s*(dk|sn)/i];
+    for(const p of dinPats){const dm=detay.match(p);if(dm){dinSn=Math.round(parseFloat(dm[1].replace(',','.'))*( dm[2].toLowerCase()==='dk'?60:1));break;}}
     if(detay.toLowerCase().includes('yürüyüş ini')) dinSn=120;
-
-    const dinPaceSec=getPace(0);
-    const ds=fmtHMS(dinSn);
-    const dp=roundPaceSec(dinPaceSec);
-
-    const rpe=isSprintType?ZONE_RPE[Math.min(zIdx,6)]||'':null;
+    const rpe=isSprintType?ZONE_RPE2[Math.min(zIdx,6)]||'':null;
     const ctr=rpe?{mesafe:calcRow(birSn,paceSec).mesafe,pm:null,ps:null}:calcRow(birSn,paceSec);
-    const cdtr=calcRow(dinSn,getPace(0));
-    rows.push({type:'header',label:`\u21bb ${n} Tekrar`,color:'#1e293b',textColor:'#f8fafc',h:0,m:0,s:0,mesafe:0,pm:0,ps:0});
-    rows.push({type:'run',label:baslik.split('\u00b7')[0].trim(),color,textColor,h,m,s,...ctr,rpe});
-    rows.push({type:'rest',label:'Dinlenme / Toparlanma',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],
-      h:ds.h,m:ds.m,s:ds.s,...cdtr});
+    const ds=fmtHMS(dinSn);
+    rows.push({type:'header',label:`↻ ${n} Tekrar`,color:'#1e293b',textColor:'#f8fafc',h:0,m:0,s:0,mesafe:0,pm:0,ps:0});
+    rows.push({type:'run',label:baslik.split('·')[0].trim(),color,textColor,h,m,s,...ctr,rpe});
+    rows.push({type:'rest',label:'Dinlenme / Toparlanma',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],h:ds.h,m:ds.m,s:ds.s,...calcRow(dinSn,getPace(0))});
     return rows;
   }
 
-  // ── 4. Tek blok ─────────────────────────────────────────────────────────────
-  // Sprint tipi: RPE göster
-  const rpe=isSprintType?ZONE_RPE[Math.min(zIdx,6)]||'':null;
-  let totalSn2=adim.sure_dk>0?adim.sure_dk*60:parseSureSn(detay)||parseSureSn(baslik)||60;
-  const {h,m,s}=fmtHMS(totalSn2);
-  const csb=rpe?{mesafe:calcRow(totalSn2,blokPaceSec).mesafe,pm:null,ps:null}:calcRow(totalSn2,blokPaceSec);
+  // 5. Tek blok
+  const rpe=isSprintType?ZONE_RPE2[Math.min(zIdx,6)]||'':null;
+  let totalSn=adim.sure_dk>0?adim.sure_dk*60:0;
+  if(!totalSn){const m=detay.match(/(\d+(?:[.,]\d+)?)\s*dk/i);if(m)totalSn=Math.round(parseFloat(m[1].replace(',','.'))*60);}
+  if(!totalSn){const m=detay.match(/(\d+)\s*sn/i);if(m)totalSn=parseInt(m[1]);}
+  if(!totalSn) totalSn=60;
+  const {h,m,s}=fmtHMS(totalSn);
+  const csb=rpe?{mesafe:calcRow(totalSn,blokPaceSec).mesafe,pm:null,ps:null}:calcRow(totalSn,blokPaceSec);
   rows.push({type:'single',label:baslik,color,textColor,h,m,s,...csb,rpe});
   return rows;
 }
@@ -3225,7 +3180,7 @@ function ReceteTablosu({yapilar, zones}){
   if(!yapilar?.length) return null;
 
   // Satırları üret — header satırları toplama dahil edilmez
-  const rows=yapilar.flatMap(y=>adimToRows(y,zones));
+  const rows=yapilar.flatMap(y=>{try{return adimToRows(y,zones);}catch(e){console.warn('adimToRows error:',e,y);return[];};});
   if(!rows.length) return null;
 
   // Toplam hesapla (header hariç)
@@ -3329,7 +3284,7 @@ function tplAerobik(band, sure_dk, zones, disiplin){
     yapilar:[
       {baslik:'Isınma',detay:`10 dk — ${zoneInfoZ1(zones)||'Z1 kolay'}`},
       {baslik:'Aerobik Blok',detay:`${sure_dk-15} dk — ${zoneInfo(zones,1)||'Z2 aerobik'}${isPatika?' — patika/arazi tercih et':''}`},
-      {baslik:'Soğuma',detay:`5 dk — ${zoneInfoZ1(zones)||'Z1'} + esneme`},
+      {baslik:'Soğuma',detay:`5 dk Z1 kolay koşu`},
     ]
   };
 }
@@ -3431,7 +3386,7 @@ function tplKarmaYol(band, sure_dk, zones){
   return{
     tip:'aerobik', sure_dk,
     yapilar:[
-      {baslik:'Isınma',detay:`10 dk — ${zoneInfoZ1(zones)||'Z1'}`},
+      {baslik:'Isınma',detay:`10 dk Z1 kolay koşu`},
       {baslik:'Yol Aerobik',detay:`${sure_dk-15} dk — ${zoneInfo(zones,1)||'Z2 aerobik'} — düz asfalt/bant · Pace tutarlılığına odaklan, form çalışması`},
       {baslik:'Soğuma',detay:`5 dk — ${zoneInfoZ1(zones)||'Z1'}`},
     ]
@@ -3448,9 +3403,9 @@ function tplTempo(band, sure_dk, zones, phase='Gelişme'){
   return{
     tip:'tempo', sure_dk,
     yapilar:[
-      {baslik:'Isınma',detay:`15 dk — ${zoneInfo(zones,0)||'Z1–Z2'} + dinamik ısınma`},
-      {baslik:`Tempo Blokları · ${phase}`,detay:`${cfg.sets} — ${zoneInfo(zones,2)||'Z3 tempo'} · ${cfg.dinlenme} aktif dinlenme arası · ${cfg.extra}`},
-      {baslik:'Soğuma',detay:`10 dk — ${zoneInfoZ1(zones)||'Z1'}`},
+      {baslik:'Isınma',detay:`15 dk kolay koşu Z1 + dinamik ısınma`},
+      {baslik:`Tempo Blokları · ${phase}`,detay:`${cfg.sets} Z3 tempo · ${cfg.dinlenme} dinlenme arası · ${cfg.extra}`},
+      {baslik:'Soğuma',detay:`10 dk Z1 kolay koşu`},
     ]
   };
 }
@@ -3464,9 +3419,9 @@ function tplEsik(band, sure_dk, zones, phase='Gelişme'){
   return{
     tip:'esik', sure_dk,
     yapilar:[
-      {baslik:'Isınma',detay:`15 dk — ${zoneInfo(zones,0)||'Z1–Z2'} + 4×100m strides`},
+      {baslik:'Isınma',detay:`15 dk Z1 kolay koşu + 4×100m strides (arası 45sn yürüyüş)`},
       {baslik:`Eşik Blokları · ${phase}`,detay:`${cfg.sets} — ${zoneInfo(zones,3)||'Z4 eşik'} · ${cfg.din} dinlenme arası · ${cfg.extra}`},
-      {baslik:'Soğuma',detay:`10 dk — ${zoneInfoZ1(zones)||'Z1'}`},
+      {baslik:'Soğuma',detay:`10 dk Z1 kolay koşu`},
     ]
   };
 }
@@ -3486,9 +3441,9 @@ function tplInterval(band, phase, zones){
   return{
     tip:'interval', sure_dk,
     yapilar:[
-      {baslik:'Isınma',detay:`15 dk — ${zoneInfo(zones,1)||'Z1–Z2'} + ${strides} strides`},
+      {baslik:'Isınma',detay:`15 dk Z1 kolay koşu + ${strides} strides (arası 45sn yürüyüş)`},
       {baslik:`İnterval · ${phase}`,detay:blok},
-      {baslik:'Soğuma',detay:`10 dk — ${zoneInfoZ1(zones)||'Z1'}`},
+      {baslik:'Soğuma',detay:`10 dk Z1 kolay koşu`},
     ]
   };
 }
@@ -3505,7 +3460,7 @@ function tplYokusKisa(band, zones, phase='Gelişme'){
     yapilar:[
       {baslik:'Isınma',detay:`15 dk — ${zoneInfo(zones,1)||'Z1–Z2'}`},
       {baslik:`Kısa Yokuş · ${phase}`,detay:`${cfg.sets} maksimal çıkış (eğim %8–12) · ${cfg.din} · ${cfg.extra}`},
-      {baslik:'Soğuma',detay:`10 dk — ${zoneInfoZ1(zones)||'Z1'}`},
+      {baslik:'Soğuma',detay:`10 dk Z1 kolay koşu`},
     ]
   };
 }
@@ -3523,7 +3478,7 @@ function tplYokusUzun(band, zones, phase='Gelişme'){
     yapilar:[
       {baslik:'Isınma',detay:`15 dk — ${zoneInfo(zones,1)||'Z1–Z2'}`},
       {baslik:`Uzun Yokuş · ${phase}`,detay:`${cfg.sets} çıkış (eğim %6–10) — ${z4} · ${cfg.din} · ${cfg.extra}`},
-      {baslik:'Soğuma',detay:`10 dk — ${zoneInfoZ1(zones)||'Z1'}`},
+      {baslik:'Soğuma',detay:`10 dk Z1 kolay koşu`},
     ]
   };
 }
@@ -3533,10 +3488,10 @@ function tplAcici(sure_dk, phase='Gelişme'){
   return{
     tip:'acici', sure_dk,
     yapilar:[
-      {baslik:'Isınma',detay:'10 dk Z1 kolay yürüyüş/koşu + dinamik germe'},
+      {baslik:'Isınma',detay:'10 dk Z1 kolay koşu'},
       {baslik:`Açıcılar · ${phase}`,detay:`${sets} yarış temposu — Z5b–Z5c · Kademeli hızlanma, zirve 10sn, kademeli yavaşlama · Hız değil form: hafif, elastik, rahat`},
       {baslik:'Set Arası Dinlenme',detay:`Her açıcı sonrası yürüyüş ile geri dön (tam duruş) — en az 60sn · Nefes tamamen toparlansın, bir sonraki set temiz başlasın`},
-      {baslik:'Soğuma',detay:'5 dk Z1 yürüyüş'},
+      {baslik:'Soğuma',detay:'5 dk Z1 kolay koşu'},
     ]
   };
 }
@@ -3653,7 +3608,7 @@ function tplOnOff(band, zones, phase='Gelişme'){
       {baslik:`On (Hızlı) · ${phase}`,detay:`${cfg.acik} — ${z5a} · Maksimal ama kontrollü, form bozulmamalı`},
       {baslik:`Off (Dinlenme)`,detay:`${cfg.kapali} — ${z2} hafif koşu (yürüyüş değil, ayaklar hareketli kalır) · Nefes toparlan, tam durma`},
       {baslik:'Tur Arası Dinlenme',detay:`${cfg.tur} tur yapılır · Her tur arasında 2 dk yürüyüş — tam toparlanma`},
-      {baslik:'Soğuma',detay:`8 dk Z1 hafif koşu + esneme`},
+      {baslik:'Soğuma',detay:`8 dk Z1 kolay koşu`},
     ]
   };
 }
@@ -3706,7 +3661,7 @@ function tplHillSprint(band, zones, phase='Gelişme'){
   return{
     tip:'yokus_kisa', sure_dk:cfg.sure,
     yapilar:[
-      {baslik:'Isınma',detay:`15 dk Z1 kolay koşu + dinamik germe`},
+      {baslik:'Isınma',detay:`15 dk Z1 kolay koşu`},
       {baslik:`Hill Sprints · ${phase}`,detay:`${cfg.sets}×8–10sn maksimal çıkış (%8–12 eğim) · ${cfg.extra}`},
       {baslik:'Sprint Arası Dinlenme',detay:`Her sprint sonrası yürüyerek ini (2 dk) — tam toparlanma, bir sonraki sprint %100 efor için hazır ol · Koşarak inme yapma (diz stresi)`},
       {baslik:'Soğuma',detay:`10 dk düz zeminde Z1 hafif koşu + esneme`},
