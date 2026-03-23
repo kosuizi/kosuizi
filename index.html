@@ -3011,12 +3011,11 @@ function adimToRows(adim, zones){
   if(adim._rows&&adim._rows.length){
     return adim._rows.map(r=>{
       const pSec=r.pSec||getPaceFromZone(r.zIdx,zones);
-      const cr=r.rpe||r.isSprint?{mesafe:calcRowM(r.sure_sn,pSec),pm:null,ps:null}:calcRowM(r.sure_sn,pSec);
-      const {h,m,s}=fmtHMS2(r.sure_sn);
+      const cr=r.rpe||r.isSprint?{...calcRowM(r.sure_sn,pSec),pm:null,ps:null}:calcRowM(r.sure_sn,pSec);
       return{type:r.type||'run',label:r.label,
         color:ZONE_COLORS_INLINE[r.zIdx]||'#34d399',
         textColor:ZONE_TEXT_COLOR[r.zIdx]||'#064e3b',
-        h,m,s,...cr,rpe:r.rpe||null};
+        ...cr,rpe:r.rpe||null};
     });
   }
   // Fallback: metin parse (eski şablonlar için)
@@ -3029,13 +3028,24 @@ function getPaceFromZone(zi,zones){
   return [600,540,480,420,375,345,315][zi]||480;
 }
 function calcRowM(sec,rawPaceSec){
-  if(!sec||!rawPaceSec) return{mesafe:0,pm:0,ps:0};
+  if(!sec||!rawPaceSec) return{mesafe:0,pm:0,ps:0,h:0,m:0,s:0};
+  // 1. Ham mesafe
   const rawM=sec/rawPaceSec*1000;
+  // 2. Mesafeyi yuvarla
   const mesafe=rawM<200?Math.round(rawM/5)*5:Math.round(rawM/100)*100;
-  const actualPaceSec=mesafe>0?Math.round(sec/(mesafe/1000)):rawPaceSec;
-  const pm=Math.floor(actualPaceSec/60);
-  const ps=Math.round((actualPaceSec%60)/5)*5;
-  return{mesafe,pm:ps===60?pm+1:pm,ps:ps===60?0:ps};
+  if(!mesafe) return{mesafe:0,pm:0,ps:0,h:0,m:0,s:0};
+  // 3. Pace'i 5sn katına yuvarla
+  const rawActualPace=sec/(mesafe/1000);
+  const pm0=Math.floor(rawActualPace/60);
+  const ps0=Math.round((rawActualPace%60)/5)*5;
+  const pmF=ps0===60?pm0+1:pm0;
+  const psF=ps0===60?0:ps0;
+  // 4. Süreyi mesafe × yuvarlanan pace'den hesapla (tutarlılık)
+  const finalSec=Math.round(mesafe/1000*(pmF*60+psF));
+  const h=Math.floor(finalSec/3600);
+  const m=Math.floor((finalSec%3600)/60);
+  const s=Math.round(finalSec%60);
+  return{mesafe,pm:pmF,ps:psF,h,m,s};
 }
 function fmtHMS2(sec){sec=Math.max(0,sec||0);return{h:Math.floor(sec/3600),m:Math.floor((sec%3600)/60),s:Math.round(sec%60)};}
 
@@ -3078,9 +3088,8 @@ function adimToRowsFallback(adim, zones){
         const sn=parseInt(dkM[1])*60;
         const zi=zM?({'1':0,'2':1,'3':2,'4':3,'5a':4,'5b':5,'5c':6}[zM[1].toLowerCase()]||1):1;
         const cr=calcRow(sn,getPace(zi));
-        const {h,m,s}=fmtHMS(sn);
         rows.push({type:'run',label:`Segment ${i+1} · ${dkM[1]} dk · Z${zM?zM[1]:'?'}`,
-          color:ZONE_COLORS_INLINE[zi],textColor:ZONE_TEXT_COLOR[zi],h,m,s,...cr,rpe:null});
+          color:ZONE_COLORS_INLINE[zi],textColor:ZONE_TEXT_COLOR[zi],...cr,rpe:null});
       });
       return rows;
     }
@@ -3103,9 +3112,8 @@ function adimToRowsFallback(adim, zones){
       rows.push({type:'header',label:`↻ ${seqParts.length} Blok · ${seqMatch[1]} dk`,color:'#1e293b',textColor:'#f8fafc',h:0,m:0,s:0,mesafe:0,pm:0,ps:0});
       seqParts.forEach((dk,i)=>{
         const sn=dk*60;
-        const {h,m,s}=fmtHMS(sn);
-        rows.push({type:'run',label:`Blok ${i+1} · ${dk} dk`,color:ZONE_COLORS_INLINE[blokZIdx],textColor:ZONE_TEXT_COLOR[blokZIdx],h,m,s,...calcRow(sn,blokPaceSecP)});
-        if(i<seqParts.length-1){const ds=fmtHMS(dinSure);rows.push({type:'rest',label:'Blok Arası Dinlenme',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],h:ds.h,m:ds.m,s:ds.s,...calcRow(dinSure,dinPaceSec)});}
+        rows.push({type:'run',label:`Blok ${i+1} · ${dk} dk`,color:ZONE_COLORS_INLINE[blokZIdx],textColor:ZONE_TEXT_COLOR[blokZIdx],...calcRow(sn,blokPaceSecP)});
+        if(i<seqParts.length-1){const ds=fmtHMS(dinSure);rows.push({type:'rest',label:'Blok Arası Dinlenme',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],...calcRow(dinSure,dinPaceSec)});}
       });
       return rows;
     }
@@ -3123,8 +3131,7 @@ function adimToRowsFallback(adim, zones){
         return 0;
       })();
       if(kosuSn>0){
-        const {h,m,s}=fmtHMS(kosuSn);
-        rows.push({type:'single',label:'Isınma Koşusu',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],h,m,s,...calcRow(kosuSn,blokPaceSec),rpe:null});
+        rows.push({type:'single',label:'Isınma Koşusu',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],...calcRow(kosuSn,blokPaceSec),rpe:null});
       }
       const n=parseInt(strideM[1]);
       const strideUnit=strideM[3].toLowerCase();
@@ -3139,31 +3146,34 @@ function adimToRowsFallback(adim, zones){
       const ds=fmtHMS(dinSn);
       rows.push({type:'header',label:`↻ ${n} Strides`,color:'#1e293b',textColor:'#f8fafc',h:0,m:0,s:0,mesafe:0,pm:0,ps:0});
       rows.push({type:'run',label:'Strides',color:ZONE_COLORS_INLINE[strideZIdx],textColor:ZONE_TEXT_COLOR[strideZIdx],h:sh,m:sm,s:ss,...calcRow(birSn,sPaceSec),pm:null,ps:null,rpe:'8–9'});
-      rows.push({type:'rest',label:'Strides Arası Dinlenme',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],h:ds.h,m:ds.m,s:ds.s,...calcRow(dinSn,getPace(0)),rpe:null});
+      rows.push({type:'rest',label:'Strides Arası Dinlenme',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],...calcRow(dinSn,getPace(0)),rpe:null});
       return rows;
     }
   }
 
   // 4. Tekrar: "4×8 dk", "6×30sn", "6×8–10sn"
   const rangeM=detay.match(/(\d+)\s*[×x]\s*(\d+)[\u2013\-](\d+)\s*(sn|dk)/i);
-  const tekrarM=detay.match(/(\d+)\s*[×x]\s*(\d+(?:[.,]\d+)?)\s*(dk|sn)/i);
+  const tekrarM=detay.match(/(\d+)\s*[×x]\s*(\d+(?:[.,]\d+)?)\s*(dk|sn|m\b)/i);
   const match=rangeM||tekrarM;
   if(match){
     const n=parseInt(match[1]);
     let birSn;
     if(rangeM){const lo=parseInt(rangeM[2]),hi=parseInt(rangeM[3]);birSn=Math.round(((lo+hi)/2)*(rangeM[4].toLowerCase()==='dk'?60:1));}
-    else{birSn=Math.round(parseFloat(match[2].replace(',','.'))*( match[3].toLowerCase()==='dk'?60:1));}
-    const {h,m,s}=fmtHMS(birSn);
+    else{
+      const unit=match[3].toLowerCase();
+      const val=parseFloat(match[2].replace(',','.'));
+      if(unit==='m') birSn=Math.round(val/1000*getPaceFromZone(zIdx,zones));
+      else birSn=Math.round(val*(unit==='dk'?60:1));
+    }
     let dinSn=120;
     const dinPats=[/(\d+(?:[.,]\d+)?)\s*(dk|sn)\s+(?:yürüyüş|hafif koşu|aktif|tam duruş)/i,/(?:arası|dinlenme)[^\d]*(\d+(?:[.,]\d+)?)\s*(dk|sn)/i];
     for(const p of dinPats){const dm=detay.match(p);if(dm){dinSn=Math.round(parseFloat(dm[1].replace(',','.'))*( dm[2].toLowerCase()==='dk'?60:1));break;}}
     if(detay.toLowerCase().includes('yürüyüş ini')) dinSn=120;
     const rpe=isSprintType?ZONE_RPE2[Math.min(zIdx,6)]||'':null;
-    const ctr=rpe?{mesafe:calcRow(birSn,paceSec).mesafe,pm:null,ps:null}:calcRow(birSn,paceSec);
-    const ds=fmtHMS(dinSn);
+    const ctr=rpe?{...calcRow(birSn,paceSec),pm:null,ps:null}:calcRow(birSn,paceSec);
     rows.push({type:'header',label:`↻ ${n} Tekrar`,color:'#1e293b',textColor:'#f8fafc',h:0,m:0,s:0,mesafe:0,pm:0,ps:0});
-    rows.push({type:'run',label:baslik.split('·')[0].trim(),color,textColor,h,m,s,...ctr,rpe});
-    rows.push({type:'rest',label:'Dinlenme / Toparlanma',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],h:ds.h,m:ds.m,s:ds.s,...calcRow(dinSn,getPace(0))});
+    rows.push({type:'run',label:baslik.split('·')[0].trim(),color,textColor,...ctr,rpe});
+    rows.push({type:'rest',label:'Dinlenme / Toparlanma',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],...calcRow(dinSn,getPaceFromZone(0,zones))});
     return rows;
   }
 
@@ -3173,9 +3183,8 @@ function adimToRowsFallback(adim, zones){
   if(!totalSn){const m=detay.match(/(\d+(?:[.,]\d+)?)\s*dk/i);if(m)totalSn=Math.round(parseFloat(m[1].replace(',','.'))*60);}
   if(!totalSn){const m=detay.match(/(\d+)\s*sn/i);if(m)totalSn=parseInt(m[1]);}
   if(!totalSn) totalSn=60;
-  const {h,m,s}=fmtHMS(totalSn);
   const csb=rpe?{mesafe:calcRow(totalSn,blokPaceSec).mesafe,pm:null,ps:null}:calcRow(totalSn,blokPaceSec);
-  rows.push({type:'single',label:baslik,color,textColor,h,m,s,...csb,rpe});
+  rows.push({type:'single',label:baslik,color,textColor,...csb,rpe});
   return rows;
 }
 function ReceteTablosu({yapilar, zones}){
@@ -3552,8 +3561,7 @@ function tplKesintisizPiramit(band, zones, phase='Gelişme'){
     tip:'kesintisiz_piramit', sure_dk:sure+20,
     yapilar:[
       {baslik:'Isınma',detay:`10 dk Z1 kolay koşu — tempo değişimine hazırlık`},
-      {baslik:`Kesintisiz Piramit · ${phase}`,detay:`${blok} · Hiç durmadan — tempo geçişleri yumuşak, nabız bölgeye oturduğunda bir sonraki bölüme geç · İç his rehberin`},
-      {baslik:'Tempo Geçişleri',detay:`Bölümler arası geçiş 30–60sn içinde gerçekleşmeli · Ani hız artışı değil, kademeli · En zor kısım: zirvenin hemen öncesi ve sonrası — ritim kaybetme`},
+      {baslik:`Kesintisiz Piramit · ${phase}`,detay:`${blok} · Hiç durmadan — tempo geçişleri 30–60sn içinde yumuşak, nabız bölgeye oturduğunda bir sonraki bölüme geç`},
       {baslik:'Soğuma',detay:`10 dk Z1 hafif koşu + esneme`},
     ]
   };
