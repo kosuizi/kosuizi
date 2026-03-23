@@ -2958,39 +2958,45 @@ function realisticClimbRate(band){
 // ── Zone bilgisi formatı ─────────────────────────────────────────────────────
 // Her aşama için "Z2 · 145–158 bpm · 5:30–6:15 (5:52) /km" formatı
 // ── Reçete Tablo Yardımcısı ───────────────────────────────────────────────────
-const ZONE_ZONE_MAP={
-  'z1':0,'z2':1,'z3':2,'z4':3,'z5a':4,'z5b':5,'z5c':6,
-};
 const ZONE_COLORS_INLINE={0:'#6ee7b7',1:'#34d399',2:'#fbbf24',3:'#f97316',4:'#ef4444',5:'#dc2626',6:'#991b1b'};
-const ZONE_TEXT_COLOR={0:'#064e3b',1:'#064e3b',2:'#78350f',3:'#7c2d12',4:'#7f1d1d',5:'#7f1d1d',6:'#7f1d1d'};
+const ZONE_TEXT_COLOR  ={0:'#064e3b',1:'#064e3b',2:'#78350f',3:'#7c2d12',4:'#7f1d1d',5:'#7f1d1d',6:'#7f1d1d'};
 
 function detectZone(text){
-  // En yüksek zone'u bul (detayda Z5a varsa Z5a dönsün)
-  const t=text.toLowerCase();
-  for(let i=6;i>=0;i--){
-    const k=Object.keys(ZONE_ZONE_MAP).find(k=>ZONE_ZONE_MAP[k]===i);
-    if(k&&t.includes(k))return i;
-  }
-  // İsim bazlı fallback
-  if(t.includes('ısınma')||t.includes('soğuma')||t.includes('toparlanma')||t.includes('dinlenme')||t.includes('yürüyüş'))return 0;
-  if(t.includes('aerobik')||t.includes('uzun koşu'))return 1;
-  if(t.includes('tempo'))return 2;
-  if(t.includes('eşik')||t.includes('cruise')||t.includes('yarış temposu'))return 3;
-  if(t.includes('interval')||t.includes('piramit')||t.includes('vo2'))return 4;
-  if(t.includes('strides')||t.includes('açıcı')||t.includes('sprint'))return 5;
+  const t=(text||'').toLowerCase();
+  // Önce açık zone etiketi ara (yüksekten düşüğe)
+  const tags=[['z5c',6],['z5b',5],['z5a',4],['z5',4],['z4',3],['z3',2],['z2',1],['z1',0]];
+  for(const [k,i] of tags) if(t.includes(k)) return i;
+  // Anahtar kelime fallback
+  if(/ısınma|soğuma|toparlanma|dinlenme|yürüyüş|kolay/.test(t)) return 0;
+  if(/aerobik|uzun koşu/.test(t)) return 1;
+  if(/tempo/.test(t)) return 2;
+  if(/eşik|cruise|yarış temposu/.test(t)) return 3;
+  if(/interval|piramit|vo2/.test(t)) return 4;
+  if(/strides|açıcı|sprint|hill/.test(t)) return 5;
   return 1;
 }
 
 function parseSureSn(text){
-  // "15 dk", "90 sn", "2.5 dk", "1:30"
+  const t=text||'';
   let m;
-  m=text.match(/(\d+(?:[.,]\d+)?)\s*dk/i);
-  if(m)return parseFloat(m[1].replace(',','.'))*60;
-  m=text.match(/(\d+)\s*sn/i);
-  if(m)return parseInt(m[1]);
-  m=text.match(/(\d+):(\d+)/);
-  if(m)return parseInt(m[1])*60+parseInt(m[2]);
+  m=t.match(/(\d+(?:[.,]\d+)?)\s*dk/i);  if(m) return Math.round(parseFloat(m[1].replace(',','.'))*60);
+  m=t.match(/(\d+(?:[.,]\d+)?)\s*sn/i);  if(m) return Math.round(parseFloat(m[1].replace(',','.')));
+  m=t.match(/(\d+):(\d{2})/);             if(m) return parseInt(m[1])*60+parseInt(m[2]);
   return 0;
+}
+
+function getPaceSec(zones, zIdx){
+  const pz=zones?.paceZones?.[zIdx];
+  if(pz?.lo_ms&&pz?.hi_ms) return Math.round(1000/((pz.lo_ms+pz.hi_ms)/2));
+  // Pace yoksa zone'a göre kaba tahmin (600=10dk/km base, Z2≈+30sn, Z3≈-30sn vb.)
+  const base=600; // Z1 fallback
+  const offsets=[60,30,0,-30,-60,-90,-120];
+  return base+(offsets[zIdx]||0);
+}
+
+function secToHMS(sec){
+  if(!sec||sec<0) sec=0;
+  return{h:Math.floor(sec/3600), m:Math.floor((sec%3600)/60), s:Math.round(sec%60)};
 }
 
 function adimToRows(adim, zones){
@@ -2998,107 +3004,150 @@ function adimToRows(adim, zones){
   const baslik=adim.baslik||'';
   const detay=adim.detay||'';
   const full=baslik+' '+detay;
-  const zIdx=detectZone(full);
-  const color=ZONE_COLORS_INLINE[zIdx]||'#34d399';
-  const textColor=ZONE_TEXT_COLOR[zIdx]||'#064e3b';
 
-  // Pace hesapla
-  const paceZone=zones?.paceZones?.[zIdx];
-  let paceSec=null;
-  if(paceZone?.lo_ms&&paceZone?.hi_ms){
-    const midMs=(paceZone.lo_ms+paceZone.hi_ms)/2;
-    paceSec=Math.round(1000/midMs);
-  }
+  // Tekrar var mı? "3×8 dk", "4×2 dk" vb.
+  const tekM=detay.match(/(\d+)\s*[×x]\s*(\d+(?:[.,]\d+)?)\s*(dk|sn)/i);
 
-  const makeSure=(sec)=>{
-    if(!sec||sec<=0)return{h:0,m:0,s:0};
-    const h=Math.floor(sec/3600);
-    const m=Math.floor((sec%3600)/60);
-    const s=Math.round(sec%60);
-    return{h,m,s};
-  };
-  const makePace=(sec)=>sec?{pm:Math.floor(sec/60),ps:Math.round(sec%60)}:{pm:null,ps:null};
-  const calcMesafe=(sec,pSec)=>sec&&pSec?Math.round(sec/pSec*1000):null;
+  if(tekM){
+    const n=parseInt(tekM[1]);
+    const birSn=Math.round(parseFloat(tekM[2].replace(',','.'))*( tekM[3].toLowerCase()==='dk'?60:1));
+    const zIdx=detectZone(full);
+    const paceSec=getPaceSec(zones,zIdx);
+    const mesafe=Math.round(birSn/paceSec*1000);
 
-  // Tekrar kontrolü: "2×8 dk", "3×10 dk", "4×2 dk" vb.
-  const tekrarMatch=detay.match(/(\d+)\s*[×x]\s*(\d+(?:[.,]\d+)?)\s*(dk|sn)/i);
-  if(tekrarMatch){
-    const n=parseInt(tekrarMatch[1]);
-    const birSure=parseFloat(tekrarMatch[2].replace(',','.'))*( tekrarMatch[3].toLowerCase()==='dk'?60:1);
-
-    // Dinlenme süresini bul
+    // Dinlenme
+    const dinPatterns=[
+      /(\d+(?:[.,]\d+)?)\s*(dk|sn)\s+(?:yürüyüş|hafif koşu|aktif)/i,
+      /(?:arası|dinlenme)[^\d]*(\d+(?:[.,]\d+)?)\s*(dk|sn)/i,
+    ];
     let dinSn=0;
-    const dinMatch=detay.match(/(\d+(?:[.,]\d+)?)\s*(dk|sn)\s+(?:yürüyüş|hafif koşu|aktif|dinlenme|arası)/i)
-      ||detay.match(/(?:dinlenme|arası)[^:]*?(\d+(?:[.,]\d+)?)\s*(dk|sn)/i);
-    if(dinMatch)dinSn=parseFloat(dinMatch[1].replace(',','.'))*( dinMatch[2].toLowerCase()==='dk'?60:1);
-
-    const dinZIdx=0; // dinlenme her zaman Z1
-    const dinColor=ZONE_COLORS_INLINE[0];
-    const dinTextColor=ZONE_TEXT_COLOR[0];
-
-    for(let r=0;r<n;r++){
-      const sur=makeSure(birSure);
-      rows.push({
-        label:`${baslik.split('·')[0].trim()} ${r+1}/${n}`,
-        color,textColor,
-        h:sur.h,m:sur.m,s:sur.s,
-        mesafe:calcMesafe(birSure,paceSec),
-        pace:makePace(paceSec)
-      });
-      if(r<n-1&&dinSn>0){
-        const ds=makeSure(dinSn);
-        rows.push({label:'Dinlenme',color:dinColor,textColor:dinTextColor,h:ds.h,m:ds.m,s:ds.s,mesafe:null,pace:{pm:null,ps:null}});
-      }
+    for(const p of dinPatterns){
+      const dm=detay.match(p);
+      if(dm){dinSn=Math.round(parseFloat(dm[1].replace(',','.'))*( dm[2].toLowerCase()==='dk'?60:1));break;}
     }
+    if(!dinSn) dinSn=120; // varsayılan 2dk
+
+    const dinPaceSec=getPaceSec(zones,0);
+
+    // Tekrar başlık satırı
+    rows.push({
+      type:'header',
+      label:`↻ ${n} Tekrar`,
+      color:'#1e293b', textColor:'#f8fafc',
+      h:0,m:0,s:0,mesafe:0,pm:0,ps:0
+    });
+    // Koşu satırı
+    const {h,m,s}=secToHMS(birSn);
+    rows.push({
+      type:'run',
+      label:baslik.split('·')[0].trim(),
+      color:ZONE_COLORS_INLINE[zIdx],textColor:ZONE_TEXT_COLOR[zIdx],
+      h,m,s,mesafe,pm:Math.floor(paceSec/60),ps:Math.round(paceSec%60)
+    });
+    // Dinlenme satırı
+    const ds=secToHMS(dinSn);
+    rows.push({
+      type:'rest',
+      label:'Dinlenme / Toparlanma',
+      color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],
+      h:ds.h,m:ds.m,s:ds.s,
+      mesafe:Math.round(dinSn/dinPaceSec*1000),
+      pm:Math.floor(dinPaceSec/60),ps:Math.round(dinPaceSec%60)
+    });
     return rows;
   }
 
-  // Tek blok — sure_dk öncelikli, sonra detay parse
+  // Tek blok
+  const zIdx=detectZone(full);
+  const color=ZONE_COLORS_INLINE[zIdx];
+  const textColor=ZONE_TEXT_COLOR[zIdx];
+  const paceSec=getPaceSec(zones,zIdx);
+
   let totalSn=0;
   if(adim.sure_dk>0) totalSn=adim.sure_dk*60;
-  else totalSn=parseSureSn(detay)||parseSureSn(baslik)||0;
+  else totalSn=parseSureSn(detay)||parseSureSn(baslik)||60;
 
-  const sur=makeSure(totalSn);
+  const {h,m,s}=secToHMS(totalSn);
+  const mesafe=Math.round(totalSn/paceSec*1000);
   rows.push({
-    label:baslik,color,textColor,
-    h:sur.h,m:sur.m,s:sur.s,
-    mesafe:calcMesafe(totalSn,paceSec),
-    pace:makePace(paceSec)
+    type:'single',label:baslik,color,textColor,
+    h,m,s,mesafe,
+    pm:Math.floor(paceSec/60),ps:Math.round(paceSec%60)
   });
   return rows;
 }
 
 function ReceteTablosu({yapilar, zones}){
-  if(!yapilar?.length)return null;
+  if(!yapilar?.length) return null;
+
+  // Satırları üret — header satırları toplama dahil edilmez
   const rows=yapilar.flatMap(y=>adimToRows(y,zones));
-  if(!rows.length)return null;
-  return React.createElement('div',{style:{marginTop:10,overflowX:'auto',borderRadius:6,overflow:'hidden',border:'1px solid var(--border)'}},
-    React.createElement('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:11,tableLayout:'fixed'}},
+  if(!rows.length) return null;
+
+  // Toplam hesapla (header hariç)
+  let totSn=0, totMesafe=0, totWeightedPace=0, paceWeight=0;
+  rows.forEach(r=>{
+    if(r.type==='header') return;
+    const sn=r.h*3600+r.m*60+r.s;
+    totSn+=sn; totMesafe+=r.mesafe||0;
+    if(r.mesafe>0&&r.pm!=null){
+      const pSec=r.pm*60+(r.ps||0);
+      totWeightedPace+=pSec*(r.mesafe/1000);
+      paceWeight+=r.mesafe/1000;
+    }
+  });
+  const avgPaceSec=paceWeight>0?Math.round(totWeightedPace/paceWeight):0;
+  const tot=secToHMS(totSn);
+
+  const cell=(val,bold=false)=>({padding:'5px 8px',textAlign:'center',fontFamily:'monospace',fontSize:11,fontWeight:bold?700:400});
+
+  return React.createElement('div',{style:{marginTop:10,borderRadius:6,overflow:'hidden',border:'1px solid var(--border)'}},
+    React.createElement('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:11}},
+      // Başlık
       React.createElement('thead',null,
-        React.createElement('tr',{style:{background:'var(--bg-tertiary)'}},
+        React.createElement('tr',{style:{background:'#0f172a'}},
           ['Aşama','Sa','Dk','Sn','Mesafe (m)','Pace dk','Pace sn'].map((h,i)=>
             React.createElement('th',{key:i,style:{
               padding:'5px 8px',textAlign:i===0?'left':'center',
-              fontWeight:600,fontSize:10,color:'var(--text-secondary)',
-              width:i===0?'auto':[36,36,36,70,48,48][i-1]
+              fontWeight:600,fontSize:10,color:'#94a3b8',
+              width:i===0?'auto':[40,40,40,76,48,48][i-1]
             }},h)
           )
         )
       ),
+      // Gövde
       React.createElement('tbody',null,
-        rows.map((r,i)=>React.createElement('tr',{key:i,style:{background:r.color}},
-          React.createElement('td',{style:{padding:'5px 8px',fontWeight:600,fontSize:11,color:r.textColor}},r.label),
-          React.createElement('td',{style:{padding:'5px 8px',textAlign:'center',fontFamily:'monospace',fontSize:11,color:r.textColor}},r.h>0?r.h:'—'),
-          React.createElement('td',{style:{padding:'5px 8px',textAlign:'center',fontFamily:'monospace',fontWeight:700,fontSize:12,color:r.textColor}},r.m>0||r.h>0?r.m:'—'),
-          React.createElement('td',{style:{padding:'5px 8px',textAlign:'center',fontFamily:'monospace',fontSize:11,color:r.textColor}},r.s>0?r.s:'—'),
-          React.createElement('td',{style:{padding:'5px 8px',textAlign:'center',fontFamily:'monospace',fontSize:11,color:r.textColor}},r.mesafe||'—'),
-          React.createElement('td',{style:{padding:'5px 8px',textAlign:'center',fontFamily:'monospace',fontWeight:700,fontSize:12,color:r.textColor}},r.pace.pm!=null?r.pace.pm:'—'),
-          React.createElement('td',{style:{padding:'5px 8px',textAlign:'center',fontFamily:'monospace',fontSize:11,color:r.textColor}},r.pace.ps!=null?String(r.pace.ps).padStart(2,'0'):'—')
-        ))
+        rows.map((r,i)=>{
+          if(r.type==='header'){
+            return React.createElement('tr',{key:i,style:{background:r.color}},
+              React.createElement('td',{colSpan:7,style:{padding:'4px 8px',fontWeight:700,fontSize:11,color:r.textColor,letterSpacing:'.3px'}},r.label)
+            );
+          }
+          return React.createElement('tr',{key:i,style:{background:r.color,borderBottom:'1px solid rgba(0,0,0,.08)'}},
+            React.createElement('td',{style:{padding:'5px 8px',fontWeight:600,fontSize:11,color:r.textColor}},r.label),
+            React.createElement('td',{style:{...cell(),color:r.textColor}},r.h>0?r.h:0),
+            React.createElement('td',{style:{...cell(true),color:r.textColor}},r.m),
+            React.createElement('td',{style:{...cell(),color:r.textColor}},String(r.s).padStart(2,'0')),
+            React.createElement('td',{style:{...cell(),color:r.textColor}},r.mesafe>0?r.mesafe:0),
+            React.createElement('td',{style:{...cell(true),color:r.textColor}},r.pm!=null?r.pm:0),
+            React.createElement('td',{style:{...cell(),color:r.textColor}},r.ps!=null?String(r.ps).padStart(2,'0'):'00')
+          );
+        }),
+        // Toplam satırı
+        React.createElement('tr',{style:{background:'#1e293b',borderTop:'2px solid #475569'}},
+          React.createElement('td',{style:{padding:'6px 8px',fontWeight:700,fontSize:11,color:'#f1f5f9'}},'TOPLAM'),
+          React.createElement('td',{style:{...cell(true),color:'#f1f5f9'}},tot.h||0),
+          React.createElement('td',{style:{...cell(true),color:'#fbbf24',fontSize:13}},tot.m),
+          React.createElement('td',{style:{...cell(),color:'#f1f5f9'}},String(tot.s).padStart(2,'0')),
+          React.createElement('td',{style:{...cell(true),color:'#fbbf24',fontSize:12}},totMesafe>0?totMesafe:0),
+          React.createElement('td',{style:{...cell(true),color:'#fbbf24',fontSize:13}},avgPaceSec?Math.floor(avgPaceSec/60):0),
+          React.createElement('td',{style:{...cell(),color:'#f1f5f9'}},avgPaceSec?String(Math.round(avgPaceSec%60)).padStart(2,'0'):'00')
+        )
       )
     )
   );
 }
+
 
 function zoneInfo(zones, zIdx, label){
   const zLabel=label||(['Z1','Z2','Z3','Z4','Z5a','Z5b','Z5c'][zIdx]||'Z'+zIdx);
