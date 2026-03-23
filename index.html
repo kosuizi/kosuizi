@@ -4711,7 +4711,6 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
         // Profil bilgisini snapshot'a ekle
         snap.athleteProfile={kosu_gunleri:athlete.kosu_gunleri,capraz_gunleri:athlete.capraz_gunleri,disiplin:athlete.disiplin,uzun_gun:athlete.uzun_gun};
         setPlanSnap(snap);
-        setReviewMsg('Sporcu profili değişti — haftalık plan yenilendi.');
         await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,snap);
         return;
       }
@@ -9127,7 +9126,34 @@ function App(){
         const ath=athletes.find(a=>a.id===w.athleteId);
         const m=calcMetrics(w,ath);
         const rec=calcRecovery(w,ath,m.yukObj);
-        setWorkouts(p=>[...p,{...w,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:new Date(Date.now()+rec.saatler*3600000).toISOString()}]);
+        const updatedWorkouts=[...workouts,{...w,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:new Date(Date.now()+rec.saatler*3600000).toISOString()}];
+        setWorkouts(updatedWorkouts);
+
+        // Haftanın son antrenmanı mı? → Gelecek hafta planını önceden oluştur
+        if(ath&&allHistory?.length){
+          try{
+            const kosuGunleri=(Array.isArray(ath.kosu_gunleri)?ath.kosu_gunleri:[ath.kosu_gunleri].filter(Boolean));
+            const{end:thisWeekEnd}=getWeekBounds(0);
+            const{start:nextWeekStart}=getWeekBounds(1);
+            const nextWeekKey=getWeekKey(1);
+            // Bu hafta kalan koşu günü var mı?
+            const today=new Date();
+            const remaining=[];
+            for(let d=new Date(today);d<=thisWeekEnd;d.setDate(d.getDate()+1)){
+              const ds=localDateStr(new Date(d));
+              if(ds===localDateStr(today))continue; // bugün hariç
+              const dayShort=DAYS_SHORT[new Date(ds+'T12:00:00').getDay()];
+              if(kosuGunleri.includes(dayShort))remaining.push(ds);
+            }
+            // Kalan koşu günü yok = haftanın son antrenmanı
+            if(remaining.length===0){
+              const nextSnap=generatePlanSnapshot(ath,allHistory.filter(h=>h.athId===ath.id||!h.athId),races,updatedWorkouts,testPlanlar||[]);
+              // nextWeekKey ile kaydet
+              const nextSnapFinal={...nextSnap,weekKey:nextWeekKey,generatedAt:new Date().toISOString(),reviewLog:[{at:new Date().toISOString(),reason:'Haftanın son antrenmanı sonrası gelecek hafta planı oluşturuldu'}]};
+              fbSet(`plan_snapshots/${ath.id}/${nextWeekKey}`,nextSnapFinal);
+            }
+          }catch(e){console.warn('Next week plan gen error:',e);}
+        }
       },athlete,athletes,selId,onSelChange:setSelId,allHistory,workouts,races,testPlanlar}),
       tab==='gecmis'&&React.createElement(Gecmis,{workouts,athletes,onDelete:id=>setWorkouts(p=>p.filter(x=>x.id!==id)),onBulkDelete:ids=>setWorkouts(p=>p.filter(x=>!ids.includes(x.id))),onUpdate:handleUpdateWorkout}),
       tab==='analiz'&&React.createElement(AntrenmanAnalizTab,{workouts,athletes}),
