@@ -1337,7 +1337,7 @@ function katsayiToSpor(k){
   });
   return best;
 }
-const EMPTY_A={ad:'',soyad:'',foto:'',strava:'',cinsiyet:'Erkek',dogum:'',kilo:'',boy:'',rhr:'',mhr:'',lthr:'',ftp:'',vo2max:'',vlt:'',disiplin:'karma',uzun_gun:'',kosu_gunleri:[],capraz_gunleri:[],hrv_durum:'',hrv_7gun:'',sakatlık:'1',motivasyon:'3',dinlenme_siklik:'3x1',pb_5k:'',pb_10k:'',pb_hm:'',pb_m:'',yarıslar:[]};
+const EMPTY_A={ad:'',soyad:'',foto:'',strava:'',cinsiyet:'Erkek',dogum:'',kilo:'',boy:'',rhr:'',mhr:'',lthr:'',ftp:'',vo2max:'',vlt:'',disiplin:'karma',uzun_gun:[],kosu_gunleri:[],capraz_gunleri:[],hrv_durum:'',hrv_7gun:'',sakatlık:'1',motivasyon:'3',dinlenme_siklik:'3x1',pb_5k:'',pb_10k:'',pb_hm:'',pb_m:'',yarıslar:[]};
 const EMPTY_R={ad:'',tarih:'',mesafe:'',d_plus:'',kontrol_noktasi:'',maks_irtifa:'',min_irtifa:'',sicaklik:'',nem:'',iklim_zorluk:'1',ekipman_kg:'',prep_weeks:'',taper_w:'',peak_w:'',url:'',logo:''};
 const ANTRENMAN_TURLERI=[
   {v:'',        l:'— Belirtilmemiş —'},
@@ -1984,12 +1984,16 @@ function SporcuModal({onClose,onSave,initial,races}){
         React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:4}},'Haftalık uzun koşu bu güne planlanır (koşu günlerinden biri olmalı)'),
         React.createElement('div',{className:'days-grid'},GUNLER.map(g=>{
           const isKosuGunu=(f.kosu_gunleri||[]).includes(g);
-          const isSelected=f.uzun_gun===g;
+          const isSelected=(Array.isArray(f.uzun_gun)?f.uzun_gun:[f.uzun_gun].filter(Boolean)).includes(g);
           return React.createElement('div',{key:g,
             className:'day-btn'+(isSelected?' run-active':isKosuGunu?' ':' '),
             style:{opacity:isKosuGunu?1:0.35,cursor:isKosuGunu?'pointer':'not-allowed',
                    border:isSelected?'2px solid var(--info)':''},
-            onClick:()=>isKosuGunu&&set('uzun_gun',f.uzun_gun===g?'':g)
+            onClick:()=>{
+              if(!isKosuGunu)return;
+              const cur=Array.isArray(f.uzun_gun)?f.uzun_gun:[f.uzun_gun].filter(Boolean);
+              set('uzun_gun',isSelected?cur.filter(x=>x!==g):[...cur,g]);
+            }
           },g+(isSelected?' 🛤':''));
         }))
       ),
@@ -3714,7 +3718,7 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   const motiv=parseInt(athlete.motivasyon)||3;
   const disiplin=athlete.disiplin||'karma';
   const isTrail=disiplin!=='yol';
-  const uzunGun=athlete.uzun_gun||'';
+  const uzunGun=Array.isArray(athlete.uzun_gun)?athlete.uzun_gun:[athlete.uzun_gun].filter(Boolean);
   const kosuGunleri=athlete.kosu_gunleri||[];
   const caprazGunleri=athlete.capraz_gunleri||[];
   const lthr=parseFloat(athlete.lthr)||0;
@@ -3781,7 +3785,7 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   // ── Gün belirleme ─────────────────────────────────────────────────────────
   const isKosuGunu=kosuGunleri.includes(dayShort);
   const isCaprazGunu=caprazGunleri.includes(dayShort);
-  const isUzunGun=uzunGun===dayShort;
+  const isUzunGun=uzunGun.includes(dayShort);
   const isAntrenmanGunu=isKosuGunu||isCaprazGunu;
 
   // ── Uyarı ve blokerlar ────────────────────────────────────────────────────
@@ -4030,7 +4034,7 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
   const isToday=date===localToday;
   const isKosu=kosuGunleri.includes(dayShort);
   const isCapraz=caprazGunleri.includes(dayShort);
-  const isUzunGun=(athlete.uzun_gun||'')===dayShort;
+  const isUzunGun=(Array.isArray(athlete.uzun_gun)?athlete.uzun_gun:[athlete.uzun_gun].filter(Boolean)).includes(dayShort);
   const isAntrenman=isKosu||isCapraz;
   const disiplin=athlete.disiplin||'karma';
   const isTrail=disiplin!=='yol';
@@ -4053,8 +4057,8 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
   // Sakatlık >=8 — tek zorunlu dinlenme durumu
   if(inj>=8) return{...REST,baslik:'Zorunlu Dinlenme',uyari:'Sakatlık puanı yüksek ('+inj+'/10)',yapilar:[{baslik:'Dinlenme',detay:'Sakatlık nedeniyle zorunlu dinlenme'}]};
 
-  const uzunGunTanimli=(athlete.uzun_gun||'')!=='';
-  const dpGun=wkStats.uzunYapildi?0:Math.round((wkStats.dpHedefHafta||0)*0.6);
+  const uzunGunTanimli=(Array.isArray(athlete.uzun_gun)?athlete.uzun_gun:[athlete.uzun_gun].filter(Boolean)).length>0;
+  const dpGun=wkStats.uzunYapildi&&phase!=='Zirve'?0:Math.round((wkStats.dpHedefHafta||0)*0.6);
   const sonYogunGun=wkStats.sonYogunGun||false;
   const haftaGunTipi=wkStats.haftaGunTipi||null;
 
@@ -4122,6 +4126,27 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
         :tplUzun(band,simState.ctl||0,zones,disiplin,dpGun,wkStats.recentLongRuns);
       if(cokYorgun)kosuUyari='TSB '+tsb.toFixed(1)+' — çok yorgun, uzun koşu süresi %35 kısaltıldı';
       else if(yorgun)kosuUyari='TSB '+tsb.toFixed(1)+' — yorgun, uzun koşu süresi %20 kısaltıldı';
+    } else if((isUzunGun||haftaGunTipi==='uzun')&&wkStats.uzunYapildi){
+      // İkinci uzun koşu: B2B veya zirve/gelişme fazında uygun koşullar varsa izin ver
+      // Koşullar: ACWR < 1.3, TSB > -20, taper değil, band >= 3
+      const ikincıUzunUygun=!cokYorgun&&acwr<1.3&&['Zirve','Gelişme'].includes(phase)&&band>=3;
+      if(ikincıUzunUygun){
+        // İkinci uzun koşu: ilkinin %60-65'i — yorgun bacak adaptasyonu
+        const uzunYMod2=yorgun?0.55:0.65;
+        const tpl2=tplUzun(band,simState.ctl||0,zones,disiplin,0,wkStats.recentLongRuns);
+        tpl2.sure_dk=Math.round(tpl2.sure_dk*uzunYMod2);
+        tpl2.baslik='Yorgun Bacak Uzun Koşusu (B2B 2. Gün)';
+        tpl2.yapilar=[
+          {baslik:'Yorgun Bacak Koşusu',detay:`${tpl2.sure_dk} dk — Z1-Z2 çok kolay · Pace önemsiz, bitiş önemli · Glikojen depolarının boşalmış haliyle aerobik stimülüs`},
+          {baslik:'Toparlanma',detay:'Bitişte: karbonhidrat + protein, sonraki gün dinlenme zorunlu'}
+        ];
+        kosuTpl=tpl2;
+        kosuUyari='Haftanın ikinci uzun koşusu (B2B 2. gün) — süre ilk günün %65\'i';
+      } else {
+        // Uygun değil → aerobik'e düşür
+        kosuTpl=tplAerobik(band,Math.round(50*yMod),zones,disiplin);
+        kosuUyari='Bu hafta uzun koşu yapıldı — bugün aerobik toparlanma';
+      }
     } else if(iskeleteGoreAerobik||sonYogunGun){
       // İskelet bu günü aerobik olarak atadı VEYA dün yoğundu
       kosuTpl=tplAerobik(band,Math.round(55*yMod),zones,disiplin);
@@ -4347,7 +4372,7 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
         const dShort=DAYS_SHORT[d.getDay()];
         const isPastDay=d<today;
         const isKosuDay=kosuGunleri.includes(dShort);
-        const isUzunDay=(athlete.uzun_gun||'')===dShort;
+        const isUzunDay=(Array.isArray(athlete.uzun_gun)?athlete.uzun_gun:[athlete.uzun_gun].filter(Boolean)).includes(dShort);
         const estTsb=round1(tmpCtl-tmpAtl);
         if(isKosuDay&&!isPastDay)kosuGunleriHafta.push({ds,di,estTsb,isUzunDay});
         // Tahmini yük: aerobik varsayımıyla simüle et
@@ -4674,7 +4699,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
         JSON.stringify(athlete.kosu_gunleri||[])!==JSON.stringify(savedProfile.kosu_gunleri||[])||
         JSON.stringify(athlete.capraz_gunleri||[])!==JSON.stringify(savedProfile.capraz_gunleri||[])||
         (athlete.disiplin||'')!==(savedProfile.disiplin||'')||
-        (athlete.uzun_gun||'')!==(savedProfile.uzun_gun||'');
+        JSON.stringify((Array.isArray(athlete.uzun_gun)?athlete.uzun_gun:[athlete.uzun_gun].filter(Boolean)).sort())!==JSON.stringify((Array.isArray(savedProfile.uzun_gun)?savedProfile.uzun_gun:[savedProfile.uzun_gun].filter(Boolean)).sort());
       if(profileChanged){
         const snap=generatePlanSnapshot(athlete,history,races,workouts||[],testPlanlar||[]);
         // Profil bilgisini snapshot'a ekle
@@ -4707,6 +4732,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
 
   const plan=React.useMemo(()=>{
     if(!athlete)return null;
+    try{
     const racesOverride=selectedPrimary
       ?races.map(r=>({...r,__force:r.id===selectedPrimary}))
       :races;
@@ -4716,15 +4742,15 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
       const todayStr=localDateStr(new Date());
       generated.weeks.forEach(wk=>{
         wk.days=wk.days.map(day=>{
-          if(day.isPast||day.date===todayStr) return day; // geçmiş & bugün: gerçek veri
+          if(day.isPast||day.date===todayStr) return day;
           const ov=planSnap.overrideMap[day.date];
           if(!ov) return day;
-          // Gelecek günü snapshot'la değiştir ama actual/comparison bilgisini koru
           return{...day,tip:ov.tip,baslik:ov.baslik,sure_dk:ov.sure_dk,yukHedef:ov.yukHedef,yapilar:ov.yapilar};
         });
       });
     }
     return generated;
+    }catch(e){console.error('plan useMemo error:',e);return null;}
   },[athlete,history,races,workouts,selectedPrimary,planSnap]);
 
   const weekTargets=React.useMemo(()=>{
@@ -4787,7 +4813,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
   };
 
   if(!athlete)return React.createElement('div',{className:'empty'},'Sporcu seçilmedi.');
-  if(!plan)return React.createElement('div',{className:'empty'},'Veri yetersiz.');
+  if(!plan)return React.createElement('div',{className:'empty'},'Plan oluşturulamadı. Sporcu profilini ve yarış bilgilerini kontrol edin. (Detay için tarayıcı konsoluna bakın)');
 
   // Snapshot bilgi bandı
   const snapBanner=reviewMsg&&React.createElement('div',{
