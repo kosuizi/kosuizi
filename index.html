@@ -3594,7 +3594,23 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary){
     let kmPct;
     if(phase==='Taper'){
       const taperIdx=w-buildW-peakW;
-      kmPct=taperIdx===0?0.6:taperIdx===1?0.45:0.30;
+      // Zirve haftasında (bir önceki faz) yeterli uzun koşu yapılmış mı?
+      // Zirve bitmeden önceki 2 haftadaki max uzun koşuya bak
+      const peakWeekStart=new Date(today);peakWeekStart.setDate(today.getDate()-(taperIdx+1)*7);
+      const peakWeekEnd=new Date(peakWeekStart);peakWeekEnd.setDate(peakWeekStart.getDate()+14);
+      const peakLongRuns=athWks.filter(w=>{
+        const d=new Date(w.date+'T12:00:00');
+        return d>=peakWeekStart&&d<=peakWeekEnd&&['uzun','tirmanis','back_to_back'].includes(w.tur||'');
+      });
+      const targetLongKm=km*0.35; // 90K için ~31.5km
+      const bestPeakKm=peakLongRuns.reduce((mx,w)=>Math.max(mx,parseFloat(w.mesafe)||0),0);
+      const peakMissed=taperIdx===0&&bestPeakKm<targetLongKm*0.7; // Zirve ilk taper haftası, uzun koşu eksik
+      if(peakMissed){
+        // İlk taper haftası tam düşürme yerine hafif zirve uygula (%70)
+        kmPct=0.70;
+      } else {
+        kmPct=taperIdx===0?0.6:taperIdx===1?0.45:0.30;
+      }
     } else if(phase==='Zirve'){
       kmPct=isRecovery?0.65:0.85+0.05*(w-buildW);
     } else {
@@ -4089,7 +4105,24 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
     } else if(daysToIntermediate!==null&&daysToIntermediate<=7){
       kosuTpl=tplKolay(band,Math.round(35*yMod),zones);
     } else if(phase==='Taper'||(daysToRace!==null&&daysToRace<=7)){
-      kosuTpl=daysToRace<=3?tplAcici(25,phase):tplTempo(band,Math.round(40*yMod),zones,phase);
+      // Taper ilk haftasında zirve uzun koşu eksikse → hafifletilmiş uzun koşu ver
+      const targetLongKm=parseFloat(athlete.hedef_mesafe||nextRace?.mesafe||0)*0.35;
+      const recentLongKm=workoutsThisWeek?[...(allWorkouts||[])].filter(w=>{
+        const d=new Date(w.date+'T12:00:00');
+        const twoWeeksAgo=new Date();twoWeeksAgo.setDate(twoWeeksAgo.getDate()-14);
+        return w.athleteId===athlete.id&&d>=twoWeeksAgo&&['uzun','tirmanis','back_to_back'].includes(w.tur||'');
+      }).reduce((mx,w)=>Math.max(mx,parseFloat(w.mesafe)||0),0):0;
+      const taperPeakMissed=daysToRace!==null&&daysToRace>14&&daysToRace<=21&&recentLongKm<targetLongKm*0.7&&targetLongKm>0&&isUzunGun&&!wkStats.uzunYapildi;
+      if(taperPeakMissed){
+        // Hafifletilmiş zirve: hedef mesafenin %65'i, D+ dahil
+        const uzunYMod=Math.min(yMod,0.75);
+        kosuTpl=isTrail&&dpGun>200
+          ?tplTirmanisAcik(band,Math.round(80*uzunYMod),zones,dpGun)
+          :tplUzun(band,simState.ctl||0,zones,disiplin,dpGun,wkStats.recentLongRuns);
+        kosuUyari='Zirve antrenmanı eksik kaldı — taper\'da hafifletilmiş uzun koşu uygulandı (%70 yoğunluk)';
+      } else {
+        kosuTpl=daysToRace<=3?tplAcici(25,phase):tplTempo(band,Math.round(40*yMod),zones,phase);
+      }
     } else if((isUzunGun||haftaGunTipi==='uzun')&&!wkStats.uzunYapildi){
       // Uzun koşu TSB'den bağımsız — her koşulda uzun koşu ver, sadece süre kısalır
       const uzunYMod=cokYorgun?0.65:yorgun?0.80:yMod;
