@@ -3014,18 +3014,18 @@ function adimToRows(adim, zones){
     return [600,540,480,420,375,345,315][zi]||480;
   };
 
-  // Özelleştirilmiş ısınma/soğuma pace
-  // Soğuma = (Z1+Z2)/2, Isınma = (soğuma+Z2)/2
+  // Isınma = (Z1+3×Z2)/4  → Z2'ye yakın (tırmanıyor), soğumadan hızlı
+  // Soğuma = (Z1+Z2)/2    → ortada, ısınmadan yavaş ✓
   const getPaceWarmup=()=>{
-    const z1=getPace(0); const z2=getPace(1);
-    return Math.round((z1+z1+z1+z2)/4); // ağırlıklı: (Z1+3×Z1+Z2... wait: ısınma=(soğuma+Z2)/2=((Z1+Z2)/2+Z2)/2=(Z1+3Z2)/4
+    const z1=getPace(0),z2=getPace(1);
+    return Math.round((z1+z2+z2+z2)/4); // (Z1+3×Z2)/4
   };
-  const getPaceCooldown=()=>Math.round((getPace(0)+getPace(1))/2);
+  const getPaceCooldown=()=>Math.round((getPace(0)+getPace(1))/2); // (Z1+Z2)/2
 
   // RPE tanımları (zone bazlı)
   const ZONE_RPE=['1–2','3–4','5–6','7–8','8–9','9–10','10'];
 
-  // Sprint/depar tipi mi?
+  // Sprint/depar tipi mi? (RPE gösterilsin, pace ikincil)
   const isSprintType=/strides|depar|sprint|açıcı|hill/i.test(full);
 
   // Pace saniyesini 5'in katına yuvarla
@@ -3115,11 +3115,7 @@ function adimToRows(adim, zones){
     return rows;
   }
 
-  // ── 3. Tek blok ─────────────────────────────────────────────────────────────
-  let totalSn=adim.sure_dk>0?adim.sure_dk*60:parseSureSn(detay)||parseSureSn(baslik)||60;
-  const {h,m,s}=fmtHMS(totalSn);
-
-  // Isınma/soğuma özel pace
+  // ── 3. Tek blok (bileşik ısınma kontrolü dahil) ──────────────────────────────
   const isIsinma=/ısınma/i.test(baslik);
   const isSoguma=/soğuma/i.test(baslik);
   let blokPaceSec=paceSec;
@@ -3127,11 +3123,47 @@ function adimToRows(adim, zones){
   else if(isSoguma) blokPaceSec=getPaceCooldown();
   const blokPace=roundPaceSec(blokPaceSec);
 
-  // Sprint tipi: pace yerine RPE göster — pm/ps'yi 0 bırak, rpe ekle
+  // Isınma'da "X dk ... + N×Ysn strides" bileşik yapısı?
+  if(isIsinma){
+    const plusIdx=detay.indexOf('+');
+    const stridePart=plusIdx>0?detay.slice(plusIdx+1).trim():'';
+    const strideM=stridePart.match(/(\d+)\s*[×x]\s*(\d+(?:[.,]\d+)?)\s*(sn|dk)/i);
+    if(strideM){
+      // Koşu kısmı
+      const kosuDetay=detay.slice(0,plusIdx).trim();
+      const kosuSn=parseSureSn(kosuDetay)||totalSn;
+      const kHMS=fmtHMS(kosuSn);
+      rows.push({type:'single',label:'Isınma Koşusu',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],
+        h:kHMS.h,m:kHMS.m,s:kHMS.s,mesafe:mesafeHesap(kosuSn,blokPaceSec),...blokPace,rpe:null});
+      // Strides kısmı
+      const sn=parseInt(strideM[1]);
+      const birSn=Math.round(parseFloat(strideM[2].replace(',','.'))*( strideM[3].toLowerCase()==='dk'?60:1));
+      // Strides arası dinlenme
+      const dinM=stridePart.match(/(?:arası|dinlenme)[^\d]*(\d+)\s*(sn|dk)/i);
+      const dinSn=dinM?Math.round(parseInt(dinM[1])*(dinM[2].toLowerCase()==='dk'?60:1)):45;
+      const strideColor=ZONE_COLORS_INLINE[5]; // Z5b — yüksek efor
+      const strideTColor=ZONE_TEXT_COLOR[5];
+      const stridePaceSec=getPace(5);
+      const {h:sh,m:sm,s:ss}=fmtHMS(birSn);
+      const dinPaceSec=getPace(0);
+      const ds=fmtHMS(dinSn);
+      const dp=roundPaceSec(dinPaceSec);
+      rows.push({type:'header',label:`↻ ${sn} Strides`,color:'#1e293b',textColor:'#f8fafc',h:0,m:0,s:0,mesafe:0,pm:0,ps:0});
+      rows.push({type:'run',label:'Strides',color:strideColor,textColor:strideTColor,
+        h:sh,m:sm,s:ss,mesafe:mesafeHesap(birSn,stridePaceSec),pm:null,ps:null,rpe:'8–9'});
+      rows.push({type:'rest',label:'Strides Arası',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],
+        h:ds.h,m:ds.m,s:ds.s,mesafe:mesafeHesap(dinSn,dinPaceSec),...dp,rpe:null});
+      return rows;
+    }
+  }
+
+  // Sprint tipi: RPE göster
   const rpe=isSprintType?ZONE_RPE[Math.min(zIdx,6)]||'':null;
 
+  let totalSn2=adim.sure_dk>0?adim.sure_dk*60:parseSureSn(detay)||parseSureSn(baslik)||60;
+  const {h,m,s}=fmtHMS(totalSn2);
   rows.push({type:'single',label:baslik,color,textColor,h,m,s,
-    mesafe:mesafeHesap(totalSn,blokPaceSec),
+    mesafe:mesafeHesap(totalSn2,blokPaceSec),
     pm:rpe?null:blokPace.pm, ps:rpe?null:blokPace.ps, rpe});
   return rows;
 }
