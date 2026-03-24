@@ -4249,7 +4249,10 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   // mechAclOverload: akut mekanik aşırı yük → yoğun/mekanik antrenman iptal
   // mechKardioImbalance: kaslar kardiyoya yetişemiyor → mekanik yük yerine aerobik
   const forceEasy=anaPctHigh||ifOverloaded||mechOverload||mechAclOverload||(powerOverload&&wkSessions>=2);
-  const forceLow=(lowPctLow&&!kaliteliYapildi&&wkSessions>=1)||mechKardioImbalance;
+  // Zone dağılımı kritik bozuksa (lowPct<%65) kaliteliYapildi'ye bakmaksızın yoğun antrenman engelle
+  // Bir günlük aerobik 4 haftalık dengesizliği telafi edemez
+  const zoneCritical=lowPctLow&&(zoneDist4w?.lowPct||100)<55; // %55 altı kritik eşik
+  const forceLow=(lowPctLow&&!kaliteliYapildi&&wkSessions>=1)||mechKardioImbalance||zoneCritical;
 
   // ── planDay'den bugünün temel önerisini al ───────────────────────────────
   // wkStats: planDay'in ihtiyacı olan haftalık durum
@@ -4962,6 +4965,8 @@ function reviewPlanSnapshot(snapshot,athlete,history,races,workouts,testPlanlar)
     const actualLoad=actualToday.reduce((s,w)=>s+(calcMetrics(w,athlete).yukObj||0),0);
     if(actualToday.length===0){
       reason=`${todayStr} antrenmanı atlandı — kalan günler güncellendi`;
+      // Manuel iptal ile aynı davranış: cancelledDays'e ekle
+      snapshot={...snapshot,cancelledDays:{...(snapshot.cancelledDays||{}),[todayStr]:true}};
     } else {
       const dev=(actualLoad-snapToday.yukHedef)/snapToday.yukHedef;
       if(dev>0.35)       reason=`${todayStr} hedeften %${Math.round(dev*100)} fazla — kalan günler hafifletildi`;
@@ -5012,6 +5017,11 @@ function reviewPlanSnapshot(snapshot,athlete,history,races,workouts,testPlanlar)
   const tomorrowStr=localDateStr(new Date(now.getFullYear(),now.getMonth(),now.getDate()+1));
   const newPlan=generateTwoWeekPlan(athlete,history,races,workouts,testPlanlar||[]);
   const newMap={...snapshot.overrideMap};
+  // Atlandı durumunda bugünü de Manuel iptal gibi işaretle (üzeri çizili görünsün)
+  if(reason&&reason.includes('atlandı')&&snapToday){
+    newMap[todayStr]={tip:'dinlenme',baslik:'İptal Edildi',sure_dk:0,yukHedef:0,
+      yapilar:[{baslik:'İptal',detay:'Antrenman yapılmadı (otomatik)'}]};
+  }
   newPlan.weeks.forEach(wk=>wk.days.forEach(day=>{
     if(day.date>=tomorrowStr){
       newMap[day.date]={
@@ -5057,6 +5067,7 @@ function reviewPlanSnapshot(snapshot,athlete,history,races,workouts,testPlanlar)
       ...snapshot,
       lastReviewAt:now.toISOString(),
       overrideMap:newMap,
+      cancelledDays:snapshot.cancelledDays||{},
       b2bCompensationAdded:b2bCompensationReason?true:snapshot.b2bCompensationAdded,
       reviewLog:[...(snapshot.reviewLog||[]),{at:now.toISOString(),reason:finalReason}].slice(-10)
     }
