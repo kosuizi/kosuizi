@@ -4957,47 +4957,7 @@ function reviewPlanSnapshot(snapshot,athlete,history,races,workouts,testPlanlar)
   const todayStr=localDateStr(now);
   const athWks=(workouts||[]).filter(w=>w.athleteId===athlete.id);
 
-  // ── Otomatik iptal: geçmiş günler + bugün (22:00 sonrası) ──────────────────
-  // Planlanan spor türüyle eşleşen kayıt yoksa → iptal
-  // koşu planı → spor=kosu kaydı aranır; capraz planı → kosu dışı kayıt aranır
-  const isKosuTip=(tip)=>tip&&tip!=='dinlenme'&&tip!=='capraz';
-  const isCaprazTip=(tip)=>tip==='capraz';
-  const planKarsilandi=(day, kayitlar)=>{
-    if(!day||day.tip==='dinlenme'||(day.yukHedef||0)<=15) return true; // dinlenme — iptal gerekmez
-    if(isKosuTip(day.tip)) return kayitlar.some(w=>!w.spor||w.spor==='kosu');
-    if(isCaprazTip(day.tip)) return kayitlar.some(w=>w.spor&&w.spor!=='kosu');
-    return kayitlar.length>0;
-  };
-
   let reason=null;
-  const newCancelledDays={...(snapshot.cancelledDays||{})};
-  const t22check=turkey22Today();
-
-  Object.entries(snapshot.overrideMap||{}).forEach(([date,day])=>{
-    if(newCancelledDays[date]) return; // zaten iptal
-    const isTodayDate=date===todayStr;
-    const isPastDate=date<todayStr;
-    if(!isPastDate&&!isTodayDate) return; // gelecek günlere dokunma
-    if(isTodayDate&&now<t22check) return; // bugün için 22:00 beklenir
-    const kayitlar=athWks.filter(w=>w.date===date);
-    if(!planKarsilandi(day,kayitlar)){
-      newCancelledDays[date]=true;
-      reason=reason||`${date} antrenmanı atlandı — kalan günler güncellendi`;
-    }
-  });
-  snapshot={...snapshot,cancelledDays:newCancelledDays};
-
-  // Yük sapması kontrolü — bugün kayıt varsa
-  const snapToday=snapshot.overrideMap?.[todayStr];
-  if(snapToday&&(snapToday.yukHedef||0)>15&&!newCancelledDays[todayStr]){
-    const actualToday=athWks.filter(w=>w.date===todayStr);
-    if(actualToday.length>0){
-      const actualLoad=actualToday.reduce((s,w)=>s+(calcMetrics(w,athlete).yukObj||0),0);
-      const dev=(actualLoad-snapToday.yukHedef)/snapToday.yukHedef;
-      if(dev>0.35)       reason=`${todayStr} hedeften %${Math.round(dev*100)} fazla — kalan günler hafifletildi`;
-      else if(dev<-0.35) reason=`${todayStr} hedeften %${Math.round(-dev*100)} eksik — kalan günler güçlendirildi`;
-    }
-  }
 
   // ── Uzun koşu telafisi: bu hafta uzun koşu atlandıysa bir sonraki haftaya B2B ekle ──
   // Bugün Pazar veya Cumartesi → haftanın sonu, uzun koşu denetimi yapılabilir
@@ -5158,23 +5118,9 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
         await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,snap);
         return;
       }
-      // Geçmiş veya bugün (22:00 sonrası) için işlenmemiş iptal var mı?
-      const todayStrNow=localDateStr(now);
-      const athWksNow=(workouts||[]).filter(w=>w.athleteId===athlete.id);
-      const needsReview=Object.entries(planSnap.overrideMap||{}).some(([date,day])=>{
-        if((planSnap.cancelledDays||{})[date]) return false; // zaten iptal
-        if((day.yukHedef||0)<=15||day.tip==='dinlenme') return false;
-        const isPast=date<todayStrNow;
-        const isToday=date===todayStrNow;
-        if(!isPast&&!isToday) return false;
-        if(isToday&&now<t22) return false; // bugün için 22:00 beklenir
-        const isKosu=day.tip!=='capraz';
-        const kayitlar=athWksNow.filter(w=>w.date===date);
-        if(isKosu) return !kayitlar.some(w=>!w.spor||w.spor==='kosu');
-        return !kayitlar.some(w=>w.spor&&w.spor!=='kosu');
-      });
-
-      if(needsReview){
+      // Günde 1 kez: saat 22:00 sonrası, bugün henüz incelenmemişse planı güncelle
+      const lastRev=planSnap.lastReviewAt?new Date(planSnap.lastReviewAt):new Date(0);
+      if(now>=t22&&lastRev<t22){
         const{updated,reason,snap:newSnap}=reviewPlanSnapshot(planSnap,athlete,history,races,workouts||[],testPlanlar||[]);
         setPlanSnap(newSnap);
         if(updated)setReviewMsg(reason);
