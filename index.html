@@ -4957,16 +4957,32 @@ function reviewPlanSnapshot(snapshot,athlete,history,races,workouts,testPlanlar)
   const todayStr=localDateStr(now);
   const athWks=(workouts||[]).filter(w=>w.athleteId===athlete.id);
 
+  // Bugün + geçmiş günlerin değerlendirmesi
+  let reason=null;
+  const newCancelledDays={...(snapshot.cancelledDays||{})};
+
+  // Geçmiş günler: atlanmış ama iptal edilmemiş olanları işaretle
+  Object.entries(snapshot.overrideMap||{}).forEach(([date,day])=>{
+    if(date>=todayStr) return; // bugün ve gelecek hariç
+    if(newCancelledDays[date]) return; // zaten iptal
+    if((day.yukHedef||0)<=15||day.tip==='dinlenme') return;
+    const done=athWks.some(w=>w.date===date);
+    if(!done){
+      newCancelledDays[date]=true;
+      snapshot={...snapshot,cancelledDays:newCancelledDays};
+      if(!reason) reason=`Atlanmış antrenmanlar işaretlendi`;
+    }
+  });
+
   // Bugünün değerlendirmesi — 23:00 sonrası, manuel iptal edilmemişse
   const snapToday=snapshot.overrideMap?.[todayStr];
-  let reason=null;
-  if(snapToday&&snapToday.yukHedef>15&&!snapshot.cancelledDays?.[todayStr]){
+  if(snapToday&&snapToday.yukHedef>15&&!newCancelledDays[todayStr]){
     const actualToday=athWks.filter(w=>w.date===todayStr);
     const actualLoad=actualToday.reduce((s,w)=>s+(calcMetrics(w,athlete).yukObj||0),0);
     if(actualToday.length===0){
       reason=`${todayStr} antrenmanı atlandı — kalan günler güncellendi`;
-      // Manuel iptal ile aynı davranış: cancelledDays'e ekle
-      snapshot={...snapshot,cancelledDays:{...(snapshot.cancelledDays||{}),[todayStr]:true}};
+      newCancelledDays[todayStr]=true;
+      snapshot={...snapshot,cancelledDays:newCancelledDays};
     } else {
       const dev=(actualLoad-snapToday.yukHedef)/snapToday.yukHedef;
       if(dev>0.35)       reason=`${todayStr} hedeften %${Math.round(dev*100)} fazla — kalan günler hafifletildi`;
@@ -5133,18 +5149,23 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
         await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,snap);
         return;
       }
-      // 23:00 geçti mi ve bugün henüz incelenmedi mi?
-      const lastRev=planSnap.lastReviewAt?new Date(planSnap.lastReviewAt):new Date(0);
-      // Ayrıca: geçmiş günlerde atlanmış antrenman var mı? (23:00 beklenmeden yakala)
-      const athWksCheck=(workouts||[]).filter(w=>w.athleteId===athlete.id);
-      const todayStrCheck=localDateStr(now);
+      // Basit kontrol: saat 23:00 geçmiş mi? Bugün planlanmış antrenman var mı? Yapıldı mı?
+      const todayStrNow=localDateStr(now);
+      const athWksNow=(workouts||[]).filter(w=>w.athleteId===athlete.id);
+      const snapToday=planSnap.overrideMap?.[todayStrNow];
+      const alreadyCancelled=!!(planSnap.cancelledDays||{})[todayStrNow];
+      const todayDone=athWksNow.some(w=>w.date===todayStrNow);
+      const shouldCancel=now>=t23&&snapToday&&snapToday.yukHedef>15&&snapToday.tip!=='dinlenme'&&!alreadyCancelled&&!todayDone;
+
+      // Geçmiş günlerde de atlanmış antrenman var mı?
       const hasSkippedPast=Object.entries(planSnap.overrideMap||{}).some(([date,day])=>{
-        if(date>=todayStrCheck) return false; // bugün ve gelecek hariç
-        if((planSnap.cancelledDays||{})[date]) return false; // zaten iptal
-        if(day.yukHedef<=15||day.tip==='dinlenme') return false;
-        return !athWksCheck.some(w=>w.date===date);
+        if(date>=todayStrNow) return false;
+        if((planSnap.cancelledDays||{})[date]) return false;
+        if((day.yukHedef||0)<=15||day.tip==='dinlenme') return false;
+        return !athWksNow.some(w=>w.date===date);
       });
-      if((now>=t23&&lastRev<t23)||hasSkippedPast){
+
+      if(shouldCancel||hasSkippedPast){
         const{updated,reason,snap:newSnap}=reviewPlanSnapshot(planSnap,athlete,history,races,workouts||[],testPlanlar||[]);
         setPlanSnap(newSnap);
         if(updated)setReviewMsg(reason);
