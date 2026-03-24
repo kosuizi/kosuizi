@@ -2162,6 +2162,9 @@ function SporcularTab({athletes,races,athHistory,allHistory,onAdd,onUpdate,onDel
         const ah=allHistory?.[a.id]||[];
         const ctl=ah[ah.length-1]?.ctl;
         const acwr=ah[ah.length-1]?.acwr;
+        const band=ctlBand(ctl||0);
+        const bandLabel=['Başlangıç Düzey Yük','Gelişmekte Düzey Yük','Orta Düzey Yük','İleri Düzey Yük','Elit Düzey Yük'][band-1];
+        const bandClass=['badge-gray','badge-info','badge-good','badge-warn','badge-danger'][band-1];
         return React.createElement('div',{key:a.id,className:'sporcu-card'},
         React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:12}},
         React.createElement('div',{className:'sporcu-info',style:{flex:1}},
@@ -2173,6 +2176,7 @@ function SporcularTab({athletes,races,athHistory,allHistory,onAdd,onUpdate,onDel
               React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:4}},
                 React.createElement('h3',{style:{margin:0,fontSize:14}},(a.ad||'')+' '+(a.soyad||'')),
                 ctl!=null&&React.createElement('span',{className:'badge badge-info',style:{fontSize:11}},'CTL '+ctl.toFixed(1)),
+                ctl!=null&&React.createElement('span',{className:'badge '+bandClass,style:{fontSize:10}},bandLabel),
                 acwr!=null&&React.createElement('span',{className:'badge '+(acwr<0.8?'badge-info':acwr<=1.3?'badge-good':acwr<=1.5?'badge-warn':'badge-danger'),style:{fontSize:11}},'ACWR '+acwr.toFixed(2))
               )
             )
@@ -2974,8 +2978,9 @@ const pzT=(zones,i)=>{
 // Tırmanış için gerçekçi D+ hızı (m/saat) — CTL bandına göre
 // Trail koşucusu için tipik değerler
 function realisticClimbRate(band){
-  // m/saat: Band 1→400, 2→550, 3→700, 4→850, 5→1000
-  return [400,550,700,850,1000][Math.max(0,Math.min(4,(band||1)-1))];
+  // m/saat: Band 1→250, 2→350, 3→480, 4→600, 5→750
+  // Referans: tipik trail runner tırmanış hızları, yürüyüş/koşu karması
+  return [250,350,480,600,750][Math.max(0,Math.min(4,(band||1)-1))];
 }
 
 // ── Şablon üreticileri ─────────────────────────────────────────────────────
@@ -3042,6 +3047,10 @@ function adimToRows(adim, zones){
         textColor:ZONE_TEXT_COLOR[r.zIdx]||'#064e3b',
         ...cr,rpe:r.rpe||null};
     });
+  }
+  // Eski snapshot'lardan gelen Tırmanış Koşusu adımlarını dinamik işaretle
+  if(!adim._tirmanisAna&&(adim.baslik||'').includes('Tırmanış Koşusu')){
+    adim={...adim,_tirmanisAna:true};
   }
   // Fallback: metin parse (eski şablonlar için)
   return adimToRowsFallback(adim,zones);
@@ -3209,7 +3218,26 @@ function adimToRowsFallback(adim, zones){
   if(!totalSn){const m=detay.match(/(\d+)\s*sn/i);if(m)totalSn=parseInt(m[1]);}
   if(!totalSn) totalSn=60;
   // Tırmanış ana bloğu: GAP hesaplı gerçek pace kullan
-  const effectivePaceSec=adim._tirmanisAna&&adim._tirAvgPaceSec?adim._tirAvgPaceSec:blokPaceSec;
+  let effectivePaceSec=blokPaceSec;
+  if(adim._tirmanisAna){
+    if(adim._tirAvgPaceSec){
+      effectivePaceSec=adim._tirAvgPaceSec;
+    } else {
+      // Eski snapshot: detay'dan eğim bilgisini parse et veya %8 varsayılan eğimle hesapla
+      const gradeM=detay.match(/ort\.\s*%(\d+)\s*eğim/i)||detay.match(/%(\d+)\s*eğim/i);
+      const grade=gradeM?parseInt(gradeM[1]):8; // varsayılan %8
+      const gapFactor=1+grade*0.035; // yaklaşık GAP faktörü
+      const z2lo=zones?.paceZones?.[1]?.lo_pace;
+      const z3hi=zones?.paceZones?.[2]?.hi_pace;
+      const z2loSec=z2lo?paceToSec(z2lo):0;
+      const z3hiSec=z3hi?paceToSec(z3hi):0;
+      if(z2loSec&&z3hiSec){
+        const actLo=z2loSec*gapFactor;
+        const actHi=z3hiSec*gapFactor;
+        effectivePaceSec=Math.round((actLo+actHi)/2);
+      }
+    }
+  }
   const csb=rpe?{...calcRow(totalSn,effectivePaceSec),pm:null,ps:null}:calcRow(totalSn,effectivePaceSec);
   const tirLabel=adim._tirmanisAna?baslik+' (tırmanışta)':baslik;
   rows.push({type:'single',label:tirLabel,color,textColor,...csb,rpe});
@@ -3783,6 +3811,10 @@ function gapInfo(dpHedef, sure_dk, zones, zone_idx){
 
 
 function tplTirmanisAcik(band, sure_dk, zones, dpHedef){
+  // Gerçekçi D+ cap: antrenman süresinin %55'i tırmanışta geçse ulaşılabilecek max
+  const maxDpForSure=Math.round(realisticClimbRate(band)/60*(sure_dk*0.55));
+  if(dpHedef>0) dpHedef=Math.min(dpHedef,maxDpForSure);
+
   // ── Gerçekçi süre hesabı ──────────────────────────────────────────────────
   let adjustedSure=sure_dk;
   let durationNote='';
