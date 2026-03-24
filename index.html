@@ -3208,7 +3208,9 @@ function adimToRowsFallback(adim, zones){
   if(!totalSn){const m=detay.match(/(\d+(?:[.,]\d+)?)\s*dk/i);if(m)totalSn=Math.round(parseFloat(m[1].replace(',','.'))*60);}
   if(!totalSn){const m=detay.match(/(\d+)\s*sn/i);if(m)totalSn=parseInt(m[1]);}
   if(!totalSn) totalSn=60;
-  const csb=rpe?{...calcRow(totalSn,blokPaceSec),pm:null,ps:null}:calcRow(totalSn,blokPaceSec);
+  // Tırmanış ana bloğu: GAP hesaplı gerçek pace kullan
+  const effectivePaceSec=adim._tirmanisAna&&adim._tirAvgPaceSec?adim._tirAvgPaceSec:blokPaceSec;
+  const csb=rpe?{...calcRow(totalSn,effectivePaceSec),pm:null,ps:null}:calcRow(totalSn,effectivePaceSec);
   const paceLabel=adim._tirmanisAna?'Tırmanışta beklenen pace':null;
   rows.push({type:'single',label:baslik,color,textColor,...csb,rpe,paceLabel});
   return rows;
@@ -3809,6 +3811,7 @@ function tplTirmanisAcik(band, sure_dk, zones, dpHedef){
     const actLo=z2lo?gapToActualPace(z2lo,gap.factor):null;
     const actHi=z3hi?gapToActualPace(z3hi,gap.factor):null;
     const actAvg=actLo&&actHi?secToPace((paceToSec(actLo)+paceToSec(actHi))/2):null;
+    const actAvgSec=actLo&&actHi?Math.round((paceToSec(actLo)+paceToSec(actHi))/2):null;
     paceDetay=actLo&&actHi
       ?`Flat eşdeğer: ${flatPaceStr} — Tırmanışta beklenen pace: ${actLo}–${actHi}${actAvg?` (${actAvg})`:''}/km (ort. %${gap.grade} eğim)`
       :`${flatPaceStr} efor hissiyle · %${gap.grade} ort. eğimde pace daha yavaş olacak`;
@@ -3818,11 +3821,23 @@ function tplTirmanisAcik(band, sure_dk, zones, dpHedef){
     paceDetay=`${flatPaceStr} efor hissiyle`;
   }
 
+  // Ortalama tırmanış pace saniyesi — tablo için
+  const tirAvgPaceSec=(()=>{
+    if(gap&&zones?.paceZones){
+      const z2lo=paceToSec(zones.paceZones[1]?.lo_pace);
+      const z3hi=paceToSec(zones.paceZones[2]?.hi_pace);
+      const actLo2=z2lo?gapToActualPace(z2lo,gap.factor):null;
+      const actHi2=z3hi?gapToActualPace(z3hi,gap.factor):null;
+      if(actLo2&&actHi2) return Math.round((paceToSec(actLo2)+paceToSec(actHi2))/2);
+    }
+    return null;
+  })();
+
   return{
     tip:'tirmanis', sure_dk:adjustedSure,
     yapilar:[
       {baslik:'Isınma',detay:`10 dk — ${zoneInfoZ1(zones)||'Z1 kolay'} düz`},
-      {baslik:'Tırmanış Koşusu',detay:`${adjustedSure-10} dk — Nabız: ${hrStr} · ${paceDetay} · Hedef D+: ${dpHedef>0?'~'+dpHedef+'m':'maksimum'} · Tırmanışta güç adımı, inişte kontrollü teknik${durationNote}`,_tirmanisAna:true},
+      {baslik:'Tırmanış Koşusu',detay:`${adjustedSure-10} dk — Nabız: ${hrStr} · ${paceDetay} · Hedef D+: ${dpHedef>0?'~'+dpHedef+'m':'maksimum'} · Tırmanışta güç adımı, inişte kontrollü teknik${durationNote}`,_tirmanisAna:true,_tirAvgPaceSec:tirAvgPaceSec},
       {baslik:'Soğuma',detay:`5 dk — ${zoneInfoZ1(zones)||'Z1'}`},
       {baslik:'💡 Isınma/Soğuma Notu',detay:'Isınma ve soğuma düzde koşulmuyorsa (patika/yokuş) nabız hedeflerine dikkat edin — Z1 bandında kalmak zor olabilir, tempo yerine nabzı baz alın'},
     ],
