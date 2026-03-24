@@ -4957,34 +4957,42 @@ function reviewPlanSnapshot(snapshot,athlete,history,races,workouts,testPlanlar)
   const todayStr=localDateStr(now);
   const athWks=(workouts||[]).filter(w=>w.athleteId===athlete.id);
 
-  // Bugün + geçmiş günlerin değerlendirmesi
+  // ── Otomatik iptal: geçmiş günler + bugün (23:00 sonrası) ──────────────────
+  // Planlanan spor türüyle eşleşen kayıt yoksa → iptal
+  // koşu planı → spor=kosu kaydı aranır; capraz planı → kosu dışı kayıt aranır
+  const isKosuTip=(tip)=>tip&&tip!=='dinlenme'&&tip!=='capraz';
+  const isCaprazTip=(tip)=>tip==='capraz';
+  const planKarsilandi=(day, kayitlar)=>{
+    if(!day||day.tip==='dinlenme'||(day.yukHedef||0)<=15) return true; // dinlenme — iptal gerekmez
+    if(isKosuTip(day.tip)) return kayitlar.some(w=>!w.spor||w.spor==='kosu');
+    if(isCaprazTip(day.tip)) return kayitlar.some(w=>w.spor&&w.spor!=='kosu');
+    return kayitlar.length>0;
+  };
+
   let reason=null;
   const newCancelledDays={...(snapshot.cancelledDays||{})};
+  const t23check=turkey23Today();
 
-  // Geçmiş günler: atlanmış ama iptal edilmemiş olanları işaretle
   Object.entries(snapshot.overrideMap||{}).forEach(([date,day])=>{
-    if(date>=todayStr) return; // bugün ve gelecek hariç
     if(newCancelledDays[date]) return; // zaten iptal
-    if((day.yukHedef||0)<=15||day.tip==='dinlenme') return;
-    const done=athWks.some(w=>w.date===date);
-    if(!done){
+    const isTodayDate=date===todayStr;
+    const isPastDate=date<todayStr;
+    if(!isPastDate&&!isTodayDate) return; // gelecek günlere dokunma
+    if(isTodayDate&&now<t23check) return; // bugün için 23:00 beklenir
+    const kayitlar=athWks.filter(w=>w.date===date);
+    if(!planKarsilandi(day,kayitlar)){
       newCancelledDays[date]=true;
-      snapshot={...snapshot,cancelledDays:newCancelledDays};
-      if(!reason) reason=`Atlanmış antrenmanlar işaretlendi`;
+      reason=reason||`${date} antrenmanı atlandı — kalan günler güncellendi`;
     }
   });
+  snapshot={...snapshot,cancelledDays:newCancelledDays};
 
-  // Bugünün değerlendirmesi — SADECE 23:00 sonrası
-  const t23check=turkey23Today();
+  // Yük sapması kontrolü — bugün kayıt varsa
   const snapToday=snapshot.overrideMap?.[todayStr];
-  if(now>=t23check&&snapToday&&snapToday.yukHedef>15&&!newCancelledDays[todayStr]){
+  if(snapToday&&(snapToday.yukHedef||0)>15&&!newCancelledDays[todayStr]){
     const actualToday=athWks.filter(w=>w.date===todayStr);
-    const actualLoad=actualToday.reduce((s,w)=>s+(calcMetrics(w,athlete).yukObj||0),0);
-    if(actualToday.length===0){
-      reason=`${todayStr} antrenmanı atlandı — kalan günler güncellendi`;
-      newCancelledDays[todayStr]=true;
-      snapshot={...snapshot,cancelledDays:newCancelledDays};
-    } else {
+    if(actualToday.length>0){
+      const actualLoad=actualToday.reduce((s,w)=>s+(calcMetrics(w,athlete).yukObj||0),0);
       const dev=(actualLoad-snapToday.yukHedef)/snapToday.yukHedef;
       if(dev>0.35)       reason=`${todayStr} hedeften %${Math.round(dev*100)} fazla — kalan günler hafifletildi`;
       else if(dev<-0.35) reason=`${todayStr} hedeften %${Math.round(-dev*100)} eksik — kalan günler güçlendirildi`;
@@ -5150,23 +5158,23 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
         await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,snap);
         return;
       }
-      // Basit kontrol: saat 23:00 geçmiş mi? Bugün planlanmış antrenman var mı? Yapıldı mı?
+      // Geçmiş veya bugün (23:00 sonrası) için işlenmemiş iptal var mı?
       const todayStrNow=localDateStr(now);
       const athWksNow=(workouts||[]).filter(w=>w.athleteId===athlete.id);
-      const snapToday=planSnap.overrideMap?.[todayStrNow];
-      const alreadyCancelled=!!(planSnap.cancelledDays||{})[todayStrNow];
-      const todayDone=athWksNow.some(w=>w.date===todayStrNow);
-      const shouldCancel=now>=t23&&snapToday&&snapToday.yukHedef>15&&snapToday.tip!=='dinlenme'&&!alreadyCancelled&&!todayDone;
-
-      // Geçmiş günlerde de atlanmış antrenman var mı?
-      const hasSkippedPast=Object.entries(planSnap.overrideMap||{}).some(([date,day])=>{
-        if(date>=todayStrNow) return false;
-        if((planSnap.cancelledDays||{})[date]) return false;
+      const needsReview=Object.entries(planSnap.overrideMap||{}).some(([date,day])=>{
+        if((planSnap.cancelledDays||{})[date]) return false; // zaten iptal
         if((day.yukHedef||0)<=15||day.tip==='dinlenme') return false;
-        return !athWksNow.some(w=>w.date===date);
+        const isPast=date<todayStrNow;
+        const isToday=date===todayStrNow;
+        if(!isPast&&!isToday) return false;
+        if(isToday&&now<t23) return false; // bugün için 23:00 beklenir
+        const isKosu=day.tip!=='capraz';
+        const kayitlar=athWksNow.filter(w=>w.date===date);
+        if(isKosu) return !kayitlar.some(w=>!w.spor||w.spor==='kosu');
+        return !kayitlar.some(w=>w.spor&&w.spor!=='kosu');
       });
 
-      if(shouldCancel||hasSkippedPast){
+      if(needsReview){
         const{updated,reason,snap:newSnap}=reviewPlanSnapshot(planSnap,athlete,history,races,workouts||[],testPlanlar||[]);
         setPlanSnap(newSnap);
         if(updated)setReviewMsg(reason);
