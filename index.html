@@ -1353,7 +1353,7 @@ function katsayiToSpor(k){
   });
   return best;
 }
-const EMPTY_A={ad:'',soyad:'',foto:'',strava:'',cinsiyet:'Erkek',dogum:'',kilo:'',boy:'',rhr:'',mhr:'',lthr:'',ftp:'',vo2max:'',vlt:'',disiplin:'karma',uzun_gun:[],kosu_gunleri:[],capraz_gunleri:[],hrv_durum:'',hrv_7gun:'',sakatlık:'1',motivasyon:'3',dinlenme_siklik:'3x1',pb_5k:'',pb_10k:'',pb_hm:'',pb_m:'',yarıslar:[]};
+const EMPTY_A={ad:'',soyad:'',foto:'',strava:'',cinsiyet:'Erkek',dogum:'',kilo:'',boy:'',rhr:'',mhr:'',lthr:'',ftp:'',vo2max:'',vlt:'',disiplin:'karma',uzun_gun:[],kosu_gunleri:[],capraz_gunleri:[],hrv_durum:'',hrv_7gun:'',sakatlık:'1',motivasyon:'3',dinlenme_siklik:'3x1',pb_5k:'',pb_10k:'',pb_hm:'',pb_m:'',yarıslar:[],anket_pin:''};
 const EMPTY_R={ad:'',tarih:'',mesafe:'',d_plus:'',kontrol_noktasi:'',maks_irtifa:'',min_irtifa:'',sicaklik:'',nem:'',iklim_zorluk:'1',zemin_zorluk:'1',ekipman_kg:'',prep_weeks:'',taper_w:'',peak_w:'',url:'',logo:''};
 const ANTRENMAN_TURLERI=[
   {v:'',        l:'— Belirtilmemiş —'},
@@ -2097,6 +2097,20 @@ function SporcuModal({onClose,onSave,initial,races}){
             );
           })
         )
+      ),
+      React.createElement('div',{className:'divider'}),
+      React.createElement('div',{className:'card-title'},'Sporcu Formu Erişimi'),
+      React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:8}},
+        '4 haneli PIN belirle — sporcu bu PIN ile kendi bilgi formuna erişebilir.'
+      ),
+      React.createElement('div',{className:'form-group',style:{maxWidth:160}},
+        React.createElement('label',null,'Sporcu PIN (4 hane)'),
+        React.createElement('input',{
+          type:'text',inputMode:'numeric',maxLength:4,
+          value:f.anket_pin||'',
+          placeholder:'ör. 1234',
+          onChange:e=>{const v=e.target.value.replace(/[^0-9]/g,'').slice(0,4);set('anket_pin',v);}
+        })
       ),
       React.createElement('div',{className:'flex-gap',style:{marginTop:16}},
         React.createElement('button',{className:'btn btn-primary',onClick:()=>{if(!f.ad.trim())return alert('Ad alanı zorunlu!');onSave({...f,id:f.id||uid()});}},(initial?'Güncelle':'Sporcu Ekle')),
@@ -9142,11 +9156,272 @@ function AppWithAuth(){
   return React.createElement(App);
 }
 
+
+// ── Sporcu Anketi ─────────────────────────────────────────────────────────────
+const GUNLER_LIST=['Pzt','Sal','Çar','Per','Cum','Cmt','Paz'];
+const HRV_OPTS=[
+  {v:'dengeli',l:'Dengeli — Normal hissediyorum'},
+  {v:'dengesiz',l:'Dengesiz — Biraz yorgun/stresli'},
+  {v:'dusuk',l:'Düşük — Çok yorgun, kötü hissediyorum'}
+];
+
+function SporcuAnketi(){
+  const [athletes,setAthletes]=useState([]);
+  const [selId,setSelId]=useState('');
+  const [form,setForm]=useState(null);
+  const [saved,setSaved]=useState(false);
+  const [loading,setLoading]=useState(true);
+  const [saving,setSaving]=useState(false);
+  const [appName,setAppName]=useState('Kosu Izi');
+  const [logo,setLogo]=useState('');
+  const [pinInput,setPinInput]=useState('');
+  const [pinOk,setPinOk]=useState(false);
+  const [pinErr,setPinErr]=useState('');
+
+  useEffect(()=>{
+    (async()=>{
+      try{
+        const cfg=await fbGet('app_config');
+        if(cfg&&cfg.teamName)setAppName(cfg.teamName);
+        if(cfg&&cfg.teamLogo)setLogo(cfg.teamLogo);
+        const aths=await fbGet('ath2');
+        setAthletes(aths||[]);
+      }catch(e){console.warn(e);}
+      setLoading(false);
+    })();
+  },[]);
+
+  const selectAthlete=(id)=>{
+    setSelId(id);
+    setSaved(false);
+    setPinInput('');
+    setPinOk(false);
+    setPinErr('');
+    const a=athletes.find(function(x){return x.id===id;});
+    if(!a){setForm(null);return;}
+    setForm({
+      kilo:a.kilo||'',
+      boy:a.boy||'',
+      hrv_durum:a.hrv_durum||'',
+      hrv_7gun:a.hrv_7gun||'',
+      sakatlık:a.sakatlık||'1',
+      kosu_gunleri:a.kosu_gunleri||[],
+      capraz_gunleri:a.capraz_gunleri||[],
+      uzun_gun:Array.isArray(a.uzun_gun)?a.uzun_gun:[a.uzun_gun].filter(Boolean),
+    });
+  };
+
+  const toggleGun=(field,gun)=>{
+    setForm(function(f){
+      const arr=f[field]||[];
+      return Object.assign({},f,{[field]:arr.includes(gun)?arr.filter(function(x){return x!==gun;}):[...arr,gun]});
+    });
+  };
+
+  const checkPin=()=>{
+    const a=athletes.find(function(x){return x.id===selId;});
+    if(!a||!a.anket_pin){setPinErr('PIN tanimli degil. Antrenorunuze danisın.');return;}
+    if(pinInput===a.anket_pin){setPinOk(true);setPinErr('');}
+    else{setPinErr('Yanlis PIN. Tekrar dene.');setPinInput('');}
+  };
+
+  const handleSave=async()=>{
+    if(!selId||!form)return;
+    setSaving(true);
+    try{
+      const updated=athletes.map(function(a){return a.id===selId?Object.assign({},a,form):a;});
+      await fbSet('ath2',updated);
+      setAthletes(updated);
+      setSaved(true);
+      setTimeout(function(){setSaved(false);},3000);
+    }catch(e){alert('Kayit hatasi: '+e.message);}
+    setSaving(false);
+  };
+
+  if(loading){
+    return React.createElement('div',{style:{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'var(--text-tertiary)',fontSize:14}},'Yukleniyor...');
+  }
+
+  const headerEl=React.createElement('div',{style:{textAlign:'center',marginBottom:24}},
+    logo
+      ?React.createElement('img',{src:logo,style:{width:60,height:60,objectFit:'contain',borderRadius:10,marginBottom:8,border:'1px solid var(--border)',background:'var(--bg-secondary)',padding:3}})
+      :React.createElement('div',{style:{fontSize:36,marginBottom:6}},'🏃'),
+    React.createElement('div',{style:{fontSize:18,fontWeight:700,marginBottom:2}},appName),
+    React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)'}},'Sporcu Bilgi Formu')
+  );
+
+  const selectEl=React.createElement('div',{className:'card',style:{marginBottom:12}},
+    React.createElement('div',{className:'form-group'},
+      React.createElement('label',{style:{fontSize:13,fontWeight:600}},'Adını sec'),
+      React.createElement('select',{
+        value:selId,
+        onChange:function(e){selectAthlete(e.target.value);},
+        style:{fontSize:14,padding:'10px 12px'}
+      },
+        React.createElement('option',{value:''},'— Listeden sec —'),
+        athletes.map(function(a){return React.createElement('option',{key:a.id,value:a.id},(a.ad||'')+' '+(a.soyad||''));})
+      )
+    )
+  );
+
+  const pinEl=selId&&!pinOk?React.createElement('div',{className:'card',style:{marginBottom:12}},
+    React.createElement('div',{className:'card-title'},'Kimlik Dogrulama'),
+    React.createElement('div',{style:{fontSize:13,color:'var(--text-secondary)',marginBottom:12}},'Antrenorunuzun size verdigi PIN kodu girin.'),
+    React.createElement('div',{className:'form-group',style:{marginBottom:10}},
+      React.createElement('label',null,'PIN (4 hane)'),
+      React.createElement('input',{
+        type:'password',inputMode:'numeric',maxLength:4,value:pinInput,
+        placeholder:'••••',autoFocus:true,
+        style:{fontSize:20,letterSpacing:8,textAlign:'center',padding:'10px'},
+        onChange:function(e){
+          var v=e.target.value.replace(/[^0-9]/g,'').slice(0,4);
+          setPinInput(v);
+          setPinErr('');
+        },
+        onKeyDown:function(e){if(e.key==='Enter')checkPin();}
+      })
+    ),
+    pinErr?React.createElement('div',{style:{fontSize:12,color:'var(--danger)',marginBottom:8,padding:'6px 10px',background:'var(--danger-bg)',borderRadius:6}},pinErr):null,
+    React.createElement('button',{
+      className:'btn btn-primary',style:{width:'100%',padding:'10px',fontSize:14},
+      onClick:checkPin
+    },'Giris')
+  ):null;
+
+  const formEl=form&&pinOk?React.createElement('div',null,
+
+    React.createElement('div',{className:'card',style:{marginBottom:12}},
+      React.createElement('div',{className:'card-title'},'Fiziksel Bilgiler'),
+      React.createElement('div',{className:'form-grid'},
+        React.createElement('div',{className:'form-group'},
+          React.createElement('label',null,'Kilo (kg)'),
+          React.createElement('input',{type:'number',value:form.kilo,min:30,max:200,
+            onChange:function(e){setForm(function(f){return Object.assign({},f,{kilo:e.target.value});});}})
+        ),
+        React.createElement('div',{className:'form-group'},
+          React.createElement('label',null,'Boy (cm)'),
+          React.createElement('input',{type:'number',value:form.boy,min:100,max:230,
+            onChange:function(e){setForm(function(f){return Object.assign({},f,{boy:e.target.value});});}})
+        )
+      )
+    ),
+
+    React.createElement('div',{className:'card',style:{marginBottom:12}},
+      React.createElement('div',{className:'card-title'},'Bugunku HRV Durumu'),
+      React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:8,marginBottom:12}},
+        HRV_OPTS.map(function(o){
+          return React.createElement('label',{key:o.v,style:{
+            display:'flex',alignItems:'center',gap:10,padding:'10px 12px',
+            borderRadius:'var(--radius)',cursor:'pointer',
+            background:form.hrv_durum===o.v?'var(--info-bg)':'var(--bg-secondary)',
+            border:'1px solid '+(form.hrv_durum===o.v?'var(--info)':'var(--border)'),
+            fontSize:13
+          }},
+            React.createElement('input',{type:'radio',name:'hrv',value:o.v,checked:form.hrv_durum===o.v,
+              onChange:function(){setForm(function(f){return Object.assign({},f,{hrv_durum:o.v});});}}),
+            o.l
+          );
+        })
+      ),
+      React.createElement('div',{className:'form-group'},
+        React.createElement('label',null,'HRV 7 Gunluk Ortalama (ms)'),
+        React.createElement('input',{type:'number',value:form.hrv_7gun,min:10,max:200,
+          placeholder:'or. 58',
+          onChange:function(e){setForm(function(f){return Object.assign({},f,{hrv_7gun:e.target.value});}); }})
+      )
+    ),
+
+    React.createElement('div',{className:'card',style:{marginBottom:12}},
+      React.createElement('div',{className:'card-title'},'Sakatlık / Agrı Durumu'),
+      React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:8}},'1 = Hic sorun yok   5 = Orta duzey agri   10 = Kosamıyorum'),
+      React.createElement('div',{className:'range-row'},
+        React.createElement('input',{type:'range',min:1,max:10,value:form.sakatlık,
+          onChange:function(e){setForm(function(f){return Object.assign({},f,{sakatlık:e.target.value});});}}),
+        React.createElement('span',{className:'range-val'},form.sakatlık)
+      ),
+      React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:4}},
+        parseInt(form.sakatlık)<=2?'Sorunsuz':
+        parseInt(form.sakatlık)<=4?'Hafif rahatsizlik':
+        parseInt(form.sakatlık)<=6?'Orta duzey sorun':
+        'Ciddi — antrenman onerilmez'
+      )
+    ),
+
+    React.createElement('div',{className:'card',style:{marginBottom:12}},
+      React.createElement('div',{className:'card-title'},'Kosu Gunleri'),
+      React.createElement('div',{className:'days-grid'},
+        GUNLER_LIST.map(function(g){
+          return React.createElement('div',{
+            key:g,
+            className:'day-btn '+(form.kosu_gunleri.includes(g)?'run-active':''),
+            onClick:function(){toggleGun('kosu_gunleri',g);}
+          },g);
+        })
+      ),
+      React.createElement('div',{className:'card-title',style:{marginTop:14}},'Capraz Antrenman Gunleri'),
+      React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',marginBottom:6}},'Bisiklet, yuzme, yoga gibi kosu disi antrenman gunleri'),
+      React.createElement('div',{className:'days-grid'},
+        GUNLER_LIST.map(function(g){
+          return React.createElement('div',{
+            key:g,
+            className:'day-btn '+(form.capraz_gunleri.includes(g)?'cross-active':''),
+            onClick:function(){toggleGun('capraz_gunleri',g);}
+          },g);
+        })
+      ),
+      React.createElement('div',{className:'card-title',style:{marginTop:14}},'Uzun Kosu Gunu'),
+      React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',marginBottom:6}},'Haftanin en uzun kosusunu hangi gun yapiyorsun?'),
+      React.createElement('div',{className:'days-grid'},
+        GUNLER_LIST.map(function(g){
+          return React.createElement('div',{
+            key:g,
+            className:'day-btn '+(form.uzun_gun.includes(g)?'run-active':''),
+            onClick:function(){
+              setForm(function(f){
+                var arr=f.uzun_gun.includes(g)?f.uzun_gun.filter(function(x){return x!==g;}):f.uzun_gun.concat([g]);
+                return Object.assign({},f,{uzun_gun:arr});
+              });
+            }
+          },g);
+        })
+      )
+    ),
+
+    React.createElement('button',{
+      className:'btn btn-primary',
+      style:{width:'100%',padding:'12px',fontSize:14,fontWeight:600,marginBottom:8},
+      disabled:saving,
+      onClick:handleSave
+    },saving?'Kaydediliyor...':(saved?'Kaydedildi!':'Bilgilerimi Guncelle')),
+
+    saved?React.createElement('div',{style:{
+      textAlign:'center',fontSize:12,color:'var(--success)',padding:'8px',
+      background:'var(--success-bg)',borderRadius:'var(--radius)'
+    }},'Bilgilerin antrenoruze iletildi.'):null
+
+  ):null;
+
+  return React.createElement('div',{style:{minHeight:'100vh',background:'var(--bg-tertiary)',padding:'20px 16px'}},
+    React.createElement('div',{style:{maxWidth:480,margin:'0 auto'}},
+      headerEl,
+      selectEl,
+      pinEl,
+      formEl
+    )
+  );
+}
+
+
 (async()=>{
   await loadScript('https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js');
   await loadScript('https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js');
   initFirebase();
-  ReactDOM.render(React.createElement(AppWithAuth),document.getElementById('root'));
+  // ?form=sporcu parametresi varsa sporcu anketini göster
+  const urlParams=new URLSearchParams(window.location.search);
+  const component=urlParams.get('form')==='sporcu'
+    ?React.createElement(SporcuAnketi)
+    :React.createElement(AppWithAuth);
+  ReactDOM.render(component,document.getElementById('root'));
 })();
 </script>
 </body>
