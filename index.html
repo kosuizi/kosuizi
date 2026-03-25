@@ -7522,6 +7522,20 @@ function Dashboard({workouts,athlete,history,races}){
   const chart=history.slice(-90);
   if(!workouts.length)return React.createElement('div',{className:'empty'},'Bu sporcu için henüz antrenman kaydı yok.');
 
+  // profileHistory verisini al (son 50 snapshot)
+  const profHist=(athlete.profileHistory||[]).sort((a,b)=>new Date(a.date)-new Date(b.date));
+
+  const METRIK_LIST=[
+    {key:'kilo',label:'Kilo',unit:'kg',color:'#60a5fa'},
+    {key:'rhr',label:'Dinlenme Nabzı (RHR)',unit:'bpm',color:'#f87171'},
+    {key:'mhr',label:'Maksimum Nabız (MHR)',unit:'bpm',color:'#fb923c'},
+    {key:'lthr',label:'Laktat Eşiği (LTHR)',unit:'bpm',color:'#fbbf24'},
+    {key:'vo2max',label:'VO₂max',unit:'ml/kg/dak',color:'#34d399'},
+    {key:'hrv_7gun',label:'HRV 7g Ort.',unit:'ms',color:'#a78bfa'},
+    {key:'sakatlık',label:'Sakatlık Puanı',unit:'/10',color:'#f472b6'},
+    {key:'boy',label:'Boy',unit:'cm',color:'#94a3b8'},
+  ].filter(m=>profHist.some(s=>s[m.key]!=null&&s[m.key]!==''));
+
   return React.createElement('div',null,
 
     // Faz + yarış + hazırlık skoru
@@ -7815,7 +7829,8 @@ function Dashboard({workouts,athlete,history,races}){
           }},m.text))
         );
       })()
-    )
+    ),
+    profHist.length>0&&React.createElement(MetrikGrafikKarti,{profHist,metrikList:METRIK_LIST})
   );
 }
 
@@ -8950,6 +8965,86 @@ function ShareBtn({elRef,filename,title,text,style}){
   },busy?'⏳':(navigator.share?'↗ Paylaş':'⬇ İndir'));
 }
 
+// ── Sporcu Metrik Grafik Kartı ────────────────────────────────────────────────
+function MetrikGrafikKarti({profHist,metrikList}){
+  const [aktif,setAktif]=useState(metrikList[0]?.key||'kilo');
+  const canvasRef=useRef(null);
+  const instRef=useRef(null);
+  const metrik=metrikList.find(m=>m.key===aktif)||metrikList[0];
+  const veriler=profHist.filter(s=>s[aktif]!=null&&s[aktif]!=='');
+
+  useEffect(()=>{
+    if(!canvasRef.current||!metrik||!veriler.length)return;
+    if(instRef.current){instRef.current.destroy();}
+    const labels=veriler.map(s=>new Date(s.date+'T12:00:00').toLocaleDateString('tr-TR',{day:'2-digit',month:'short'}));
+    const data=veriler.map(s=>parseFloat(s[aktif])||null);
+    instRef.current=new Chart(canvasRef.current,{
+      type:'line',
+      data:{
+        labels,
+        datasets:[{
+          label:metrik.label,
+          data,
+          borderColor:metrik.color,
+          backgroundColor:metrik.color+'22',
+          borderWidth:2,
+          pointBackgroundColor:metrik.color,
+          pointRadius:4,
+          tension:0.3,
+          fill:true
+        }]
+      },
+      options:{
+        responsive:true,maintainAspectRatio:false,
+        plugins:{legend:{display:false},tooltip:{callbacks:{label:function(ctx){return ctx.parsed.y+' '+metrik.unit;}}}},
+        scales:{
+          x:{grid:{color:'rgba(255,255,255,.05)'},ticks:{color:'#94a3b8',font:{size:10}}},
+          y:{grid:{color:'rgba(255,255,255,.05)'},ticks:{color:'#94a3b8',font:{size:10}},
+             title:{display:true,text:metrik.unit,color:'#64748b',font:{size:10}}}
+        }
+      }
+    });
+    return()=>{if(instRef.current)instRef.current.destroy();};
+  },[aktif,profHist]);
+
+  if(!metrikList.length)return null;
+
+  return React.createElement('div',{className:'card',style:{marginBottom:12}},
+    React.createElement('div',{className:'card-title',style:{marginBottom:10}},'📈 Sporcu Metrikleri'),
+    // Tab seçici
+    React.createElement('div',{style:{display:'flex',flexWrap:'wrap',gap:4,marginBottom:12}},
+      metrikList.map(m=>React.createElement('button',{
+        key:m.key,
+        onClick:()=>setAktif(m.key),
+        style:{
+          fontSize:11,padding:'4px 10px',borderRadius:99,cursor:'pointer',
+          fontWeight:aktif===m.key?700:400,
+          background:aktif===m.key?m.color+'33':'var(--bg-secondary)',
+          border:'1px solid '+(aktif===m.key?m.color:'var(--border)'),
+          color:aktif===m.key?m.color:'var(--text-secondary)'
+        }
+      },m.label))
+    ),
+    // Grafik
+    veriler.length<2
+      ?React.createElement('div',{style:{textAlign:'center',color:'var(--text-tertiary)',fontSize:12,padding:'20px 0'}},
+        veriler.length===1?'Grafik için en az 2 kayıt gerekiyor':'Henüz veri yok'
+      )
+      :React.createElement('div',{style:{height:180,position:'relative'}},
+        React.createElement('canvas',{ref:canvasRef})
+      ),
+    // Son değer
+    veriler.length>0&&React.createElement('div',{style:{
+      marginTop:8,display:'flex',justifyContent:'space-between',
+      fontSize:12,color:'var(--text-secondary)'
+    }},
+      React.createElement('span',null,'Son: '+React.createElement('strong',null,veriler[veriler.length-1][aktif]+' '+metrik.unit)),
+      React.createElement('span',null,veriler[veriler.length-1].date)
+    )
+  );
+}
+
+
 function SporcuGecmis({athHistory,athId,onDeleteEntry}){
   const entries=(athHistory||[]).filter(h=>h.athId===athId).sort((a,b)=>new Date(b.date)-new Date(a.date));
   if(!entries.length)return React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',padding:'8px 0'}},'Henüz değişim kaydı yok.');
@@ -9047,7 +9142,7 @@ function App(){
 
   const handleUpdateAthlete=(newA)=>{
     const oldA=athletes.find(x=>x.id===newA.id);
-    const PROFILE_FIELDS=['vo2max','lthr','mhr','rhr','kilo','boy','vlt'];
+    const PROFILE_FIELDS=['vo2max','lthr','mhr','rhr','kilo','boy','vlt','hrv_7gun','sakatlık'];
     if(oldA){
       const changes=detectChanges(oldA,newA);
       if(changes.length>0){
@@ -9057,7 +9152,7 @@ function App(){
       // Profil değişikliği varsa snapshot ekle
       const profileChanged=PROFILE_FIELDS.some(f=>String(oldA[f]||'')!==String(newA[f]||''));
       if(profileChanged){
-        const snap={date:localDateStr(new Date()),vo2max:newA.vo2max,lthr:newA.lthr,mhr:newA.mhr,rhr:newA.rhr,kilo:newA.kilo,boy:newA.boy,vlt:newA.vlt};
+        const snap={date:localDateStr(new Date()),vo2max:newA.vo2max,lthr:newA.lthr,mhr:newA.mhr,rhr:newA.rhr,kilo:newA.kilo,boy:newA.boy,vlt:newA.vlt,hrv_7gun:newA.hrv_7gun,sakatlık:newA.sakatlık};
         newA={...newA,profileHistory:[...((newA.profileHistory||[]).filter(s=>s.date!==snap.date)),snap].slice(-50)};
       }
     }
@@ -9564,7 +9659,16 @@ function SporcuAnketi(){
     setSaving(true);
     try{
       const mevcut=athletes.find(function(a){return a.id===selId;})||{};
-      const updated=athletes.map(function(a){return a.id===selId?Object.assign({},a,form):a;});
+      const mevcut2=athletes.find(function(a){return a.id===selId;})||{};
+      const ANKET_SNAP_FIELDS=['kilo','boy','rhr','mhr','lthr','vo2max','hrv_7gun','sakatlık'];
+      const snapChanged=ANKET_SNAP_FIELDS.some(function(f){return String(mevcut2[f]||'')!==String(form[f]||'');});
+      const formWithSnap=snapChanged?Object.assign({},form,{
+        profileHistory:[...((mevcut2.profileHistory||[]).filter(function(s){return s.date!==localDateStr(new Date());})),
+          {date:localDateStr(new Date()),vo2max:form.vo2max,lthr:form.lthr,mhr:form.mhr,rhr:form.rhr,
+           kilo:form.kilo,boy:form.boy,hrv_7gun:form.hrv_7gun,sakatlık:form.sakatlık}
+        ].slice(-50)
+      }):form;
+      const updated=athletes.map(function(a){return a.id===selId?Object.assign({},a,formWithSnap):a;});
       await fbSet('ath2',updated);
       // Değişen alanları tespit et
       const ALAN_ETIKET={kilo:'Kilo',boy:'Boy',rhr:'RHR',mhr:'MHR',lthr:'LTHR',vo2max:'VO₂max',
