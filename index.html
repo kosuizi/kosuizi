@@ -2550,11 +2550,9 @@ function ProgramTab({athletes,workouts,allHistory,races,testPlanlar,teamName,tea
   const todayStr=today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0')+'-'+String(today.getDate()).padStart(2,'0');
   const dayNames=['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'];
   const monthNames=['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'];
-  const dateLabel=dayNames[today.getDay()]+', '+today.getDate()+' '+monthNames[today.getMonth()]+' '+today.getFullYear();
+  const dateLabel=dayNames[today.getDay()]+', '+today.getDate()+' '+monthNames[today.getMonth()];
   const cardRef=React.useRef(null);
 
-
-  // Her sporcu için bugünün planını üret
   const gunProgrami=React.useMemo(()=>{
     return athletes
       .filter(a=>(a.kosu_gunleri||[]).length>0||(a.capraz_gunleri||[]).length>0)
@@ -2570,7 +2568,10 @@ function ProgramTab({athletes,workouts,allHistory,races,testPlanlar,teamName,tea
           const day=allDays.find(d=>d.date===todayStr);
           if(!day||day.tip==='dinlenme')return null;
           const actualToday=athWorkouts.filter(w=>w.date===todayStr);
-          return{athlete:a,day,done:actualToday.length>0};
+          const athRaceIds2=(a.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
+          const nextRace=(races||[]).filter(r=>athRaceIds2.includes(r.id)&&new Date(r.tarih+'T12:00:00')>=today).sort((a,b)=>new Date(a.tarih)-new Date(b.tarih))[0];
+          const daysLeft=nextRace?Math.ceil((new Date(nextRace.tarih+'T12:00:00')-today)/864e5):null;
+          return{athlete:a,day,done:actualToday.length>0,nextRace,daysLeft};
         }catch(e){return null;}
       })
       .filter(Boolean)
@@ -2579,6 +2580,21 @@ function ProgramTab({athletes,workouts,allHistory,races,testPlanlar,teamName,tea
 
   const toplamSporcu=gunProgrami.length;
   const tamamlayan=gunProgrami.filter(x=>x.done).length;
+  const pct=toplamSporcu>0?Math.round(tamamlayan/toplamSporcu*100):0;
+
+  // Takım serisi
+  const seriInfo=React.useMemo(()=>{
+    let seri=0;
+    const d=new Date(today);
+    d.setDate(d.getDate()-1);
+    while(seri<365){
+      const ds=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+      if(!(workouts||[]).some(w=>w.date===ds))break;
+      seri++;d.setDate(d.getDate()-1);
+    }
+    const bas=new Date(today);bas.setDate(bas.getDate()-seri);
+    return{seri,basStr:bas.getDate()+' '+monthNames[bas.getMonth()]};
+  },[workouts,todayStr]);
 
   const tipEmoji2=(tip)=>({
     kolay:'🚶',aerobik:'🏃',uzun:'🛤',tempo:'💨',esik:'🔥',
@@ -2590,104 +2606,100 @@ function ProgramTab({athletes,workouts,allHistory,races,testPlanlar,teamName,tea
   }[tip]||'🏃');
 
   const tipRenk=(tip)=>({
-    kolay:'var(--success)',aerobik:'var(--info)',uzun:'var(--info)',
-    tempo:'var(--warn)',esik:'var(--warn)',interval:'var(--danger)',
-    piramit:'var(--danger)',kesintisiz_piramit:'var(--danger)',
-    yokus_kisa:'var(--warn)',yokus_uzun:'var(--warn)',tirmanis:'var(--info)',
-    hill_sprint:'var(--warn)',capraz:'var(--success)'
-  }[tip]||'var(--text-secondary)');
+    kolay:'#22c55e',aerobik:'#60a5fa',uzun:'#60a5fa',
+    tempo:'#fbbf24',esik:'#fbbf24',interval:'#f87171',
+    piramit:'#f87171',kesintisiz_piramit:'#f87171',
+    yokus_kisa:'#fbbf24',yokus_uzun:'#fbbf24',tirmanis:'#60a5fa',
+    hill_sprint:'#fbbf24',capraz:'#22c55e'
+  }[tip]||'#94a3b8');
 
+  // Instagram hikayesi: 9:16 dikey kart, koyu arka plan
   return React.createElement('div',null,
-    // Paylaşılabilir kart
     React.createElement('div',{ref:cardRef,style:{
-      background:'var(--bg-primary)',borderRadius:'var(--radius-lg)',
-      border:'1px solid var(--border)',overflow:'hidden',marginBottom:12
+      width:'100%',maxWidth:420,margin:'0 auto',
+      aspectRatio:'9/16',
+      background:'linear-gradient(160deg,#0f172a 0%,#1e1b4b 50%,#0f172a 100%)',
+      borderRadius:16,overflow:'hidden',position:'relative',
+      display:'flex',flexDirection:'column',
+      fontFamily:'-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif'
     }},
-      // Başlık bandı
-      React.createElement('div',{style:{
-        background:'linear-gradient(135deg,#1e3a5f,#2563eb)',
-        padding:'16px 20px',
-        display:'flex',justifyContent:'space-between',alignItems:'center'
-      }},
-        React.createElement('div',{style:{display:'flex',alignItems:'center',gap:12}},
-          teamLogo&&React.createElement('img',{src:teamLogo,style:{width:36,height:36,objectFit:'contain',borderRadius:6,background:'rgba(255,255,255,.15)',padding:2}}),
+
+      // Üst dekoratif şerit
+      React.createElement('div',{style:{height:4,background:'linear-gradient(90deg,#6366f1,#2563eb,#06b6d4)'}}),
+
+      // Başlık alanı
+      React.createElement('div',{style:{padding:'20px 24px 12px',display:'flex',alignItems:'center',justifyContent:'space-between'}},
+        React.createElement('div',{style:{display:'flex',alignItems:'center',gap:10}},
+          teamLogo
+            ?React.createElement('img',{src:teamLogo,style:{width:40,height:40,objectFit:'contain',borderRadius:8,background:'rgba(255,255,255,.1)',padding:3}})
+            :React.createElement('div',{style:{width:40,height:40,borderRadius:8,background:'rgba(99,102,241,.3)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:20}},'🏃'),
           React.createElement('div',null,
-            React.createElement('div',{style:{color:'#fff',fontWeight:700,fontSize:15}},teamName||'Koşu İzi'),
-            React.createElement('div',{style:{color:'rgba(255,255,255,.75)',fontSize:12}},'📋 Günün Programı')
+            React.createElement('div',{style:{color:'#fff',fontWeight:800,fontSize:16,letterSpacing:'-0.3px'}},teamName||'Koşu İzi'),
+            React.createElement('div',{style:{color:'rgba(255,255,255,.5)',fontSize:11,marginTop:1}},'GÜNÜN PROGRAMI')
           )
         ),
         React.createElement('div',{style:{textAlign:'right'}},
-          React.createElement('div',{style:{color:'#fff',fontWeight:700,fontSize:14}},dateLabel),
-          toplamSporcu>0&&React.createElement('div',{style:{color:'rgba(255,255,255,.75)',fontSize:11}},
-            tamamlayan+'/'+toplamSporcu+' tamamlandı'
-          )
+          React.createElement('div',{style:{color:'#e2e8f0',fontWeight:700,fontSize:14}},dateLabel),
+          React.createElement('div',{style:{color:'rgba(255,255,255,.4)',fontSize:11}},today.getFullYear())
         )
       ),
 
-      // İlerleme çubuğu
-      toplamSporcu>0&&React.createElement('div',{style:{height:4,background:'rgba(37,99,235,.15)'}},
-        React.createElement('div',{style:{
-          height:'100%',
-          background:'linear-gradient(90deg,#22c55e,#16a34a)',
-          width:Math.round(tamamlayan/toplamSporcu*100)+'%',
-          transition:'width .4s ease'
-        }})
+      // İlerleme çubuğu + özet
+      React.createElement('div',{style:{padding:'0 24px 16px'}},
+        React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}},
+          React.createElement('span',{style:{color:'rgba(255,255,255,.5)',fontSize:11}},'TAMAMLANAN'),
+          React.createElement('span',{style:{color:'#a5b4fc',fontWeight:700,fontSize:13}},tamamlayan+'/'+toplamSporcu+' sporcu · %'+pct)
+        ),
+        React.createElement('div',{style:{height:6,borderRadius:99,background:'rgba(255,255,255,.1)',overflow:'hidden'}},
+          React.createElement('div',{style:{
+            height:'100%',borderRadius:99,
+            background:'linear-gradient(90deg,#22c55e,#16a34a)',
+            width:pct+'%',transition:'width .4s ease'
+          }})
+        )
       ),
 
-      // Takım serisi bandı
-      (()=>{
-        // Kaç gün üst üste en az 1 antrenman yapıldı?
-        let seri=0;
-        const d=new Date(today);
-        d.setDate(d.getDate()-1); // dünden geriye say (bugün henüz sayılmaz)
-        while(seri<365){
-          const ds=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-          const hasAny=(workouts||[]).some(w=>w.date===ds);
-          if(!hasAny)break;
-          seri++;
-          d.setDate(d.getDate()-1);
-        }
-        // Serinin başladığı tarih
-        const seriBaslangic=new Date(today);
-        seriBaslangic.setDate(seriBaslangic.getDate()-seri);
-        const seriBaslangicStr=seriBaslangic.getDate()+' '+['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'][seriBaslangic.getMonth()];
-        return seri>0?React.createElement('div',{style:{
-          padding:'10px 20px',borderBottom:'1px solid var(--border)',
-          background:'linear-gradient(90deg,var(--success-bg),var(--bg-secondary))',
-          display:'flex',alignItems:'center',gap:8
-        }},
-          React.createElement('span',{style:{fontSize:20}},'🔥'),
-          React.createElement('div',null,
-            React.createElement('div',{style:{fontSize:13,fontWeight:700,color:'var(--success)'}},seri+' günlük seri!'),
-            React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)'}},seriBaslangicStr+' tarihinden beri aktif')
-          )
-        ):null;
-      })(),
+      // Takım serisi
+      seriInfo.seri>0&&React.createElement('div',{style:{
+        margin:'0 24px 14px',padding:'10px 14px',
+        borderRadius:10,
+        background:'rgba(34,197,94,.12)',
+        border:'1px solid rgba(34,197,94,.25)',
+        display:'flex',alignItems:'center',gap:10
+      }},
+        React.createElement('span',{style:{fontSize:22}},'🔥'),
+        React.createElement('div',null,
+          React.createElement('div',{style:{color:'#4ade80',fontWeight:700,fontSize:13}},seriInfo.seri+' günlük takım serisi!'),
+          React.createElement('div',{style:{color:'rgba(255,255,255,.4)',fontSize:11}},seriInfo.basStr+' tarihinden beri aktif')
+        )
+      ),
 
       // Sporcu listesi
-      gunProgrami.length===0
-        ?React.createElement('div',{style:{padding:40,textAlign:'center',color:'var(--text-tertiary)',fontSize:13}},
-          '🏖 Bugün kimsenin antrenmanı yok'
-        )
-        :React.createElement('div',{style:{padding:'8px 0'}},
-          gunProgrami.map(({athlete:a,day,done},i)=>{
+      React.createElement('div',{style:{flex:1,overflowY:'auto',padding:'0 24px',display:'flex',flexDirection:'column',gap:8}},
+        gunProgrami.length===0
+          ?React.createElement('div',{style:{flex:1,display:'flex',alignItems:'center',justifyContent:'center',color:'rgba(255,255,255,.3)',fontSize:14}},
+            '🏖 Bugün kimsenin antrenmanı yok'
+          )
+          :gunProgrami.map(({athlete:a,day,done,nextRace,daysLeft})=>{
             const foto=a.foto;
             const isim=(a.ad||'')+' '+(a.soyad||'');
             const emoji=tipEmoji2(day.tip);
             const renk=tipRenk(day.tip);
+            const antAd=day.yapi_notu?day.yapi_notu.split(' — ')[0]:day.baslik;
             return React.createElement('div',{key:a.id,style:{
               display:'flex',alignItems:'center',gap:12,
-              padding:'10px 20px',
-              borderBottom:i<gunProgrami.length-1?'1px solid var(--border)':'none',
-              opacity:done?0.7:1,
-              background:done?'var(--bg-secondary)':'var(--bg-primary)'
+              padding:'10px 14px',borderRadius:12,
+              background:done?'rgba(255,255,255,.04)':'rgba(255,255,255,.07)',
+              border:'1px solid '+(done?'rgba(255,255,255,.06)':'rgba(255,255,255,.1)'),
+              opacity:done?0.6:1
             }},
               // Avatar
               React.createElement('div',{style:{
-                width:42,height:42,borderRadius:'50%',flexShrink:0,
-                overflow:'hidden',border:'2px solid '+(done?'var(--success)':renk),
-                background:'var(--bg-secondary)',display:'flex',alignItems:'center',
-                justifyContent:'center',fontSize:18,position:'relative'
+                width:44,height:44,borderRadius:'50%',flexShrink:0,
+                overflow:'hidden',
+                border:'2px solid '+(done?'#22c55e':renk),
+                background:'rgba(255,255,255,.1)',
+                display:'flex',alignItems:'center',justifyContent:'center',fontSize:20
               }},
                 foto
                   ?React.createElement('img',{src:foto,style:{width:'100%',height:'100%',objectFit:'cover'}})
@@ -2696,44 +2708,40 @@ function ProgramTab({athletes,workouts,allHistory,races,testPlanlar,teamName,tea
               // Bilgi
               React.createElement('div',{style:{flex:1,minWidth:0}},
                 React.createElement('div',{style:{
+                  color:done?'rgba(255,255,255,.4)':'#f1f5f9',
                   fontWeight:600,fontSize:13,
                   textDecoration:done?'line-through':'none',
-                  color:done?'var(--text-tertiary)':'var(--text-primary)'
+                  whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'
                 }},isim),
-                React.createElement('div',{style:{fontSize:12,color:renk,marginTop:1}},
-                  emoji+' '+(day.yapi_notu?day.yapi_notu.split(' — ')[0]:day.baslik)
-                ),
-                (()=>{
-                  const athRaceIds=(a.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
-                  const nextRace=(races||[])
-                    .filter(r=>athRaceIds.includes(r.id)&&new Date(r.tarih+'T12:00:00')>=today)
-                    .sort((a,b)=>new Date(a.tarih)-new Date(b.tarih))[0];
-                  if(!nextRace)return null;
-                  const daysLeft=Math.ceil((new Date(nextRace.tarih+'T12:00:00')-today)/864e5);
-                  return React.createElement('div',{style:{fontSize:10,color:'var(--danger)',marginTop:2,fontWeight:600}},
-                    '🏁 '+nextRace.ad+' — '+daysLeft+' gün'
-                  );
-                })()
+                React.createElement('div',{style:{color:renk,fontSize:11,marginTop:2}},emoji+' '+antAd),
+                nextRace&&React.createElement('div',{style:{color:'rgba(248,113,113,.8)',fontSize:10,marginTop:2}},
+                  '🏁 '+nextRace.ad+' — '+daysLeft+' gün'
+                )
               ),
-              // Durum
-              done
-                ?React.createElement('span',{style:{fontSize:18}},'✅')
-                :React.createElement('span',{style:{fontSize:20}},emoji)
+              done&&React.createElement('span',{style:{fontSize:18,flexShrink:0}},'✅')
             );
           })
-        )
+      ),
+
+      // Alt imza
+      React.createElement('div',{style:{padding:'12px 24px',borderTop:'1px solid rgba(255,255,255,.06)',display:'flex',justifyContent:'center'}},
+        React.createElement('div',{style:{color:'rgba(255,255,255,.2)',fontSize:10,letterSpacing:1}},'KOŞU İZİ · kosuizi.github.io')
+      )
     ),
 
     // Paylaş butonu
-    React.createElement('div',{style:{display:'flex',justifyContent:'flex-end',marginBottom:8}},
+    React.createElement('div',{style:{display:'flex',justifyContent:'center',marginTop:12}},
       React.createElement(ShareButton,{
         targetRef:cardRef,
-        filename:'gunun_programi_'+todayStr+'.png',
-        title:dateLabel+' · '+(teamName||'Koşu İzi')+' Günlük Program'
+        filename:'program_'+todayStr+'.png',
+        title:dateLabel+' Günün Programı'
       })
     )
   );
 }
+
+
+
 
 
 function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
