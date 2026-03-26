@@ -3547,7 +3547,16 @@ function adimToRowsFallback(adim, zones){
 function ReceteTablosu({yapilar, zones}){
   // _caprazNot olanlar tablo dışında yazılı gösterilir
   const caprazNotlar=(yapilar||[]).filter(y=>y._caprazNot);
-  yapilar=(yapilar||[]).filter(y=>!y._caprazNot);
+  // Çapraz antrenman adımlarını tamamen filtrele
+  const CAPRAZ_KEYWORDS=['bisiklet','yüzme','kürek','kuvvet','çapraz antrenman'];
+  yapilar=(yapilar||[]).filter(y=>{
+    if(y._caprazNot) return false;
+    const b=(y.baslik||'').toLowerCase();
+    const d=(y.detay||'').toLowerCase();
+    if(b.startsWith('🚴')||b.startsWith('➕')) return false;
+    if(CAPRAZ_KEYWORDS.some(k=>b.includes(k)||d.includes(k))) return false;
+    return true;
+  });
   if(!yapilar?.length) return null;
 
   // 💡 öneri bloklarını ayır — tabloya dahil edilmez
@@ -5512,23 +5521,25 @@ function reviewPlanSnapshot(snapshot,athlete,history,races,workouts,testPlanlar)
 }
 
 
-// Koşu yapılarını al — çapraz aşama satırlarını filtrele, sadece not bırak
+// Koşu yapılarını al — çapraz aşama satırlarını tamamen dışla
 function kosuYapilarAl(day){
   if(!day||day.tip==='capraz') return [];
   const yapilar=day.yapilar||[];
   if(!day.isKosuCapraz) return yapilar;
-  // Birleşik günde: ➕ ile başlayan çapraz not satırını tut, diğer capraz yapilarını at
-  // ➕ işareti veya _caprazNot flag'i olan satırlar not olarak kalır
-  // 🚴 başlıklı boş ayraç satırlarını kaldır
-  return yapilar.filter(y=>{
+  // Birleşik gün: ➕ veya 🚴 ayracından önceki yapılar koşuya ait
+  const sepIdx=yapilar.findIndex(y=>{
     const b=(y.baslik||'');
-    if(b.startsWith('🚴')) return false; // eski ayraç satırları
-    if(y._caprazNot) return true;        // yeni format: çapraz not
-    if(b.startsWith('➕')) return true;  // ➕ ile başlayan not satırı
-    // Eski snapshot: capraz tipinden gelen yapılar — detayda "bisiklet/yüzme" varsa at
-    if(b.toLowerCase().includes('çapraz')&&!b.startsWith('➕')) return false;
-    return true;
+    return b.startsWith('➕')||b.startsWith('🚴')||y._caprazNot;
   });
+  if(sepIdx>0) return yapilar.slice(0,sepIdx);
+  if(sepIdx===0) return []; // Tüm yapılar çapraz ait
+  // Ayraç yok — 🏃 ile başlayan bloğun yapılarını bul
+  const kosutIdx=yapilar.findIndex(y=>(y.baslik||'').startsWith('🏃'));
+  if(kosutIdx>=0){
+    const endIdx=yapilar.findIndex((y,i)=>i>kosutIdx&&((y.baslik||'').startsWith('🚴')||(y.baslik||'').startsWith('➕')));
+    return endIdx>0?yapilar.slice(kosutIdx+1,endIdx):yapilar.slice(kosutIdx+1);
+  }
+  return yapilar;
 }
 
 
