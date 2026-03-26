@@ -150,27 +150,57 @@ class ErrorBoundary extends React.Component{
 }
 
 // ── Genel Paylaş Butonu ───────────────────────────────────────────────────────
-async function shareElement(el, filename, shareText){
-  if(!el)return;
-  // html2canvas yükle
-  await new Promise((resolve,reject)=>{
+async function loadHtml2CanvasLib(){
+  return new Promise((resolve,reject)=>{
     if(window.html2canvas)return resolve();
     const s=document.createElement('script');
     s.src='https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
     s.onload=resolve;s.onerror=()=>reject(new Error('Yüklenemedi'));
     document.head.appendChild(s);
   });
-  const bgColor=document.body.classList.contains('dark')?'#0a1220':'#f0f4f9';
-  const bodyStyleBefore=document.body.style.cssText;
-  const htmlStyleBefore=document.documentElement.style.cssText;
+}
+
+async function captureElement(el, bgColor){
+  // html2canvas öncesi tüm kritik stilleri kaydet
+  const saved={
+    bodyCSS: document.body.getAttribute('style')||'',
+    htmlCSS: document.documentElement.getAttribute('style')||'',
+    bodyTransform: document.body.style.transform,
+    bodyOverflow: document.body.style.overflow,
+    bodyWidth: document.body.style.width,
+    bodyHeight: document.body.style.height,
+    scrollX: window.scrollX||0,
+    scrollY: window.scrollY||0,
+  };
   let canvas;
   try{
-    canvas=await window.html2canvas(el,{scale:2,useCORS:true,backgroundColor:bgColor,logging:false});
+    canvas=await window.html2canvas(el,{
+      scale:2,useCORS:true,backgroundColor:bgColor||'#ffffff',
+      logging:false,allowTaint:false,
+      windowWidth:document.documentElement.scrollWidth,
+      windowHeight:document.documentElement.scrollHeight,
+    });
   }finally{
-    // html2canvas bazen body/html stillerini bozuyor — geri yükle
-    document.body.style.cssText=bodyStyleBefore;
-    document.documentElement.style.cssText=htmlStyleBefore;
+    // Agresif temizlik — html2canvas'ın bıraktığı tüm izleri sil
+    document.body.setAttribute('style', saved.bodyCSS);
+    document.documentElement.setAttribute('style', saved.htmlCSS);
+    // Ekstra güvenlik: kritik stilleri zorla sıfırla
+    document.body.style.transform='';
+    document.body.style.overflow='';
+    document.body.style.width='';
+    document.body.style.height='';
+    document.documentElement.style.transform='';
+    document.documentElement.style.overflow='';
+    window.scrollTo(saved.scrollX, saved.scrollY);
   }
+  return canvas;
+}
+
+async function shareElement(el, filename, shareText){
+  if(!el)return;
+  await loadHtml2CanvasLib();
+  const bgColor=document.body.classList.contains('dark')?'#0a1220':'#f0f4f9';
+  const canvas=await captureElement(el, bgColor);
   const blob=await new Promise(r=>canvas.toBlob(r,'image/png'));
   const file=new File([blob],filename,{type:'image/png'});
   if(navigator.share&&navigator.canShare&&navigator.canShare({files:[file]})){
@@ -2846,18 +2876,7 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
     setDownloading(true);
     try{
       await loadHtml2Canvas();
-      const bodyStyle3=document.body.style.cssText;
-      const htmlStyle3=document.documentElement.style.cssText;
-      let canvas;
-      try{
-        canvas=await window.html2canvas(cardRef.current,{
-          scale:2,useCORS:true,backgroundColor:'#0f172a',logging:false,
-          width:cardRef.current.offsetWidth,height:cardRef.current.offsetHeight
-        });
-      }finally{
-        document.body.style.cssText=bodyStyle3;
-        document.documentElement.style.cssText=htmlStyle3;
-      }
+      const canvas=await captureElement(cardRef.current,'#0f172a');
       const a=document.createElement('a');
       const dateStr=new Date().toISOString().split('T')[0];
       a.download=`kosuizi_haftalik_${dateStr}.png`;
@@ -2897,7 +2916,7 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
       document.body.appendChild(wrapper);
       let canvas;
       try{
-        canvas=await window.html2canvas(wrapper,{scale:2,useCORS:true,backgroundColor:'#0f172a'});
+        canvas=await captureElement(wrapper,'#0f172a');
       }finally{
         if(document.body.contains(wrapper))document.body.removeChild(wrapper);
       }
@@ -2933,10 +2952,7 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
       // Paylaş butonlarını geçici gizle
       const btns=cardRef.current.querySelectorAll('[data-no-export]');
       btns.forEach(b=>{b._prevDisplay=b.style.display;b.style.display='none';});
-      const canvas=await window.html2canvas(cardRef.current,{
-        scale:2,useCORS:true,backgroundColor:'#0f172a',
-        width:cardRef.current.offsetWidth,height:cardRef.current.offsetHeight
-      });
+      const canvas=await captureElement(cardRef.current,'#0f172a');
       btns.forEach(b=>{b.style.display=b._prevDisplay||'';});
       const blob=await new Promise(r=>canvas.toBlob(r,'image/png'));
       const dateStr=new Date().toISOString().split('T')[0];
@@ -8930,11 +8946,7 @@ async function shareCard(el, filename, title, text){
     document.head.appendChild(s);
   });
   const isDark=document.body.classList.contains('dark');
-  const canvas=await window.html2canvas(el,{
-    scale:2,useCORS:true,
-    backgroundColor:isDark?'#0a1220':'#f0f4f9',
-    width:el.offsetWidth,height:el.offsetHeight
-  });
+  const canvas=await captureElement(el,isDark?'#0a1220':'#f0f4f9');
   const blob=await new Promise(r=>canvas.toBlob(r,'image/png'));
   const file=new File([blob],filename,{type:'image/png'});
   try{
