@@ -5747,7 +5747,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
 
   // ── Plan Snapshot ─────────────────────────────────────────────────────────
   const [planSnap,setPlanSnapLocal]=useState(planSnapInit||null);
-  const setPlanSnap=(snap)=>{setPlanSnapLocal(snap);if(onPlanSnapChange)onPlanSnapChange(snap);};
+  const planSnapRef=useRef(planSnapInit||null);
+  const setPlanSnap=(snap)=>{setPlanSnapLocal(snap);planSnapRef.current=snap;if(onPlanSnapChange)onPlanSnapChange(snap);};
   const [snapReady,setSnapReady]=useState(!!planSnapInit);
   const [reviewMsg,setReviewMsg]=useState(null);
   const weekKey=getWeekKey(0);
@@ -5771,43 +5772,42 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
     });
   },[athlete?.id,weekKey]);
 
-  // 2. Snapshot üret veya 22:00 incelemesi yap
   useEffect(()=>{
     if(!snapReady||!athlete||!history.length)return;
     const now=new Date();
     const t22=turkey22Today();
     (async()=>{
-      if(!planSnap){
-        const snap=generatePlanSnapshot(athlete,history,races,workouts||[],testPlanlar||[]);
-        setPlanSnap(snap);
-        await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,snap);
+      const snap=planSnapRef.current;
+      if(!snap){
+        const newSnap=generatePlanSnapshot(athlete,history,races,workouts||[],testPlanlar||[]);
+        setPlanSnap(newSnap);
+        await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,newSnap);
         return;
       }
       // Koşu/çapraz günleri veya disiplin değişmişse planı yeniden üret
-      const savedProfile=planSnap.athleteProfile||{};
+      const savedProfile=snap.athleteProfile||{};
       const profileChanged=
         JSON.stringify(athlete.kosu_gunleri||[])!==JSON.stringify(savedProfile.kosu_gunleri||[])||
         JSON.stringify(athlete.capraz_gunleri||[])!==JSON.stringify(savedProfile.capraz_gunleri||[])||
         (athlete.disiplin||'')!==(savedProfile.disiplin||'')||
         JSON.stringify((Array.isArray(athlete.uzun_gun)?athlete.uzun_gun:[athlete.uzun_gun].filter(Boolean)).sort())!==JSON.stringify((Array.isArray(savedProfile.uzun_gun)?savedProfile.uzun_gun:[savedProfile.uzun_gun].filter(Boolean)).sort());
       if(profileChanged){
-        const snap=generatePlanSnapshot(athlete,history,races,workouts||[],testPlanlar||[]);
-        // Profil bilgisini snapshot'a ekle
-        snap.athleteProfile={kosu_gunleri:athlete.kosu_gunleri,capraz_gunleri:athlete.capraz_gunleri,disiplin:athlete.disiplin,uzun_gun:athlete.uzun_gun};
-        setPlanSnap(snap);
-        await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,snap);
+        const newSnap=generatePlanSnapshot(athlete,history,races,workouts||[],testPlanlar||[]);
+        newSnap.athleteProfile={kosu_gunleri:athlete.kosu_gunleri,capraz_gunleri:athlete.capraz_gunleri,disiplin:athlete.disiplin,uzun_gun:athlete.uzun_gun};
+        setPlanSnap(newSnap);
+        await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,newSnap);
         return;
       }
       // Günde 1 kez: saat 22:00 sonrası, bugün henüz incelenmemişse planı güncelle
-      const lastRev=planSnap.lastReviewAt?new Date(planSnap.lastReviewAt):new Date(0);
+      const lastRev=snap.lastReviewAt?new Date(snap.lastReviewAt):new Date(0);
       if(now>=t22&&lastRev<t22){
-        const{updated,reason,snap:newSnap}=reviewPlanSnapshot(planSnap,athlete,history,races,workouts||[],testPlanlar||[]);
-        setPlanSnap(newSnap);
+        const{updated,reason,snap:reviewedSnap}=reviewPlanSnapshot(snap,athlete,history,races,workouts||[],testPlanlar||[]);
+        setPlanSnap(reviewedSnap);
         if(updated)setReviewMsg(reason);
-        await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,newSnap);
+        await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,reviewedSnap);
       }
     })();
-  },[snapReady,athlete?.id,athlete?.kosu_gunleri,athlete?.capraz_gunleri,athlete?.disiplin,athlete?.uzun_gun,planSnap]);
+  },[snapReady,athlete?.id,athlete?.kosu_gunleri,athlete?.capraz_gunleri,athlete?.disiplin,athlete?.uzun_gun]);
 
   // Yarış seçici için mevcut upcoming yarışlar
   const athRaceIds=(athlete?.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
