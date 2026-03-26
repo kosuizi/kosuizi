@@ -3544,7 +3544,7 @@ function adimToRowsFallback(adim, zones){
   rows.push({type:'single',label:tirLabel,color,textColor,...csb,rpe});
   return rows;
 }
-function ReceteTablosu({yapilar, zones}){
+function ReceteTablosu({yapilar, zones, isYuruyus, tip}){
   // _caprazNot olanlar tablo dışında yazılı gösterilir
   const caprazNotlar=(yapilar||[]).filter(y=>y._caprazNot);
   // Çapraz antrenman adımlarını tamamen filtrele
@@ -3557,6 +3557,16 @@ function ReceteTablosu({yapilar, zones}){
     if(CAPRAZ_KEYWORDS.some(k=>b.includes(k)||d.includes(k))) return false;
     return true;
   });
+  // Yürüyüş modunda "koşu" → "tempolu yürüyüş" dönüşümü
+  // Kararı dışarıdan gelen isYuruyus değil, hesaplanan ortalama pace belirler
+  const YURUYUS_ESIGI_SN_R=570; // 9:30/km
+  const TEKRARLI_TIPLER_R=['interval','piramit','kesintisiz_piramit','on_off','tempo_interval',
+    'cruise','yaris_tempo','hill_sprint','yokus_kisa','yokus_uzun','tirmanis','teknik'];
+  const tipYuruyus = !TEKRARLI_TIPLER_R.includes(tip) && avgPaceSec>0 && avgPaceSec>YURUYUS_ESIGI_SN_R;
+  if(tipYuruyus){
+    const kosuDon=(s)=>(s||'').replace(/kolay koşu/gi,'kolay tempolu yürüyüş').replace(/Kolay Koşu/g,'Kolay Tempolu Yürüyüş').replace(/aerobik koşu/gi,'aerobik tempolu yürüyüş').replace(/Aerobik Koşu/g,'Aerobik Tempolu Yürüyüş').replace(/uzun koşu/gi,'uzun tempolu yürüyüş').replace(/Uzun Koşu/g,'Uzun Tempolu Yürüyüş').replace(/kolay koşu/gi,'kolay tempolu yürüyüş').replace(/koşu/gi,'tempolu yürüyüş').replace(/Koşu/g,'Tempolu Yürüyüş');
+    yapilar=yapilar.map(y=>({...y,baslik:kosuDon(y.baslik),detay:kosuDon(y.detay)}));
+  }
   if(!yapilar?.length) return null;
 
   // 💡 öneri bloklarını ayır — tabloya dahil edilmez
@@ -5155,9 +5165,12 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
     'cruise','yaris_tempo','hill_sprint','yokus_kisa','yokus_uzun','tirmanis','teknik'];
   const kosuYuruyusMu=(tpl)=>{
     if(!tpl||TEKRARLI_TIPLER.includes(tpl.tip)) return false;
-    const z1=zones?.paceZones?.[0]; const z2=zones?.paceZones?.[1];
-    const lo=paceToSec(z1?.lo_pace||z2?.lo_pace||'');
-    const hi=paceToSec(z1?.hi_pace||z2?.hi_pace||'');
+    // Antrenman tipine göre ilgili zone pace'ini kontrol et
+    // kolay/acici → Z1, aerobik/uzun/progressive → Z2, tempo/esik → Z3
+    const zoneIdx={'kolay':0,'acici':0,'aerobik':1,'uzun':1,'progressive':1,'tempo':2,'esik':2}[tpl.tip]??1;
+    const z=zones?.paceZones?.[zoneIdx];
+    const lo=paceToSec(z?.lo_pace||'');
+    const hi=paceToSec(z?.hi_pace||'');
     const ort=lo&&hi?(lo+hi)/2:lo||hi;
     return ort>0&&ort>YURUYUS_ESIGI_SN;
   };
@@ -6035,7 +6048,9 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
               ),
               day.tip!=='capraz'&&React.createElement(ReceteTablosu,{
                 yapilar:kosuYapilarAl(day),
-                zones
+                zones,
+                isYuruyus:day.isYuruyus,
+                tip:day.tip
               })
             );
           })
@@ -6172,7 +6187,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
                   background:'var(--warn-bg)',borderRadius:6,marginBottom:8,
                   display:'flex',gap:6,alignItems:'center'
                 }},React.createElement('span',null,'⚠'),React.createElement('span',null,day.uyari)),
-                day.tip!=='capraz'&&React.createElement(ReceteTablosu,{yapilar:kosuYapilarAl(day),zones:calcZones(athlete)})
+                day.tip!=='capraz'&&React.createElement(ReceteTablosu,{yapilar:kosuYapilarAl(day),zones:calcZones(athlete),isYuruyus:day.isYuruyus,tip:day.tip})
               ),
               React.createElement('div',{style:{
                 display:'flex',justifyContent:'flex-end',
