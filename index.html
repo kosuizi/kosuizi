@@ -5744,6 +5744,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
   const [expandDay,setExpandDay]=useState(null);
   const [hizliEkleGun,setHizliEkleGun]=useState(null);
   const [manuelAtaGun,setManuelAtaGun]=useState(null);
+  const [showNextWeek,setShowNextWeek]=useState(false);
 
   // ── Plan Snapshot ─────────────────────────────────────────────────────────
   const [planSnap,setPlanSnapLocal]=useState(planSnapInit||null);
@@ -5767,7 +5768,9 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
     setPlanSnap(null);
     setSnapReady(false);
     fbGet(`plan_snapshots/${athlete.id}/${weekKey}`).then(stored=>{
-      setPlanSnap(stored&&stored.weekKey===weekKey?stored:null);
+      const snap=stored&&stored.weekKey===weekKey?stored:null;
+      setPlanSnap(snap);
+      if(snap?.selectedPrimary!==undefined)setSelectedPrimary(snap.selectedPrimary||null);
       setSnapReady(true);
     });
   },[athlete?.id,weekKey]);
@@ -5873,22 +5876,24 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
 
   const handleManuelAta=(dateStr,tpl)=>{
     const now=new Date();
+    const curSnap=planSnapRef.current;
     const baslik=tpl.baslik||(tpl.yapi_notu?tpl.yapi_notu.split(' — ')[0]:'')||(TIP_NAMES[tpl.tip]||tpl.tip||'');
-    const newMap={...(planSnap?.overrideMap||{}),[dateStr]:{
+    const newMap={...(curSnap?.overrideMap||{}),[dateStr]:{
       tip:tpl.tip,baslik,sure_dk:tpl.sure_dk||50,
       yukHedef:Math.round((tpl.sure_dk||50)*1.2),
       yapi_notu:tpl.yapi_notu||'',
       yapilar:(tpl.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||'',_caprazNot:y._caprazNot}))
     }};
-    const newSnap={...(planSnap||{}),weekKey,athId:athlete.id,lastReviewAt:now.toISOString(),
-      cancelledDays:{...(planSnap?.cancelledDays||{})},
+    const newSnap={...(curSnap||{}),weekKey,athId:athlete.id,lastReviewAt:now.toISOString(),
+      cancelledDays:{...(curSnap?.cancelledDays||{})},
+      selectedPrimary:selectedPrimary||null,
       overrideMap:newMap,
-      reviewLog:[...(planSnap?.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} manuel: ${baslik}`}].slice(-10)
+      reviewLog:[...(curSnap?.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} manuel: ${baslik}`}].slice(-10)
     };
     setPlanSnap(newSnap);
     setManuelAtaGun(null);
     setReviewMsg(`${dateStr} — ${baslik} atandı`);
-    fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,newSnap);
+    fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,newSnap).catch(e=>console.error('fbSet error:',e));
   };
 
     const handleCancelDay=async(dateStr)=>{
@@ -5902,8 +5907,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
       if(day.date>dateStr&&day.date>=todayStr&&!newCancelled[day.date])
         newMap[day.date]={tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,yapilar:(day.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||''}))};
     }));
-    const newSnap={...(planSnap||{}),weekKey,athId:athlete.id,lastReviewAt:now.toISOString(),cancelledDays:newCancelled,overrideMap:newMap,reviewLog:[...(planSnap?.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} iptal — kalan günler güncellendi`}].slice(-10)};
-    setPlanSnap(newSnap);setReviewMsg(`${dateStr} antrenmanı iptal edildi — haftanın kalanı güncellendi`);
+    const newSnap={...(planSnapRef.current||{}),weekKey,athId:athlete.id,lastReviewAt:now.toISOString(),cancelledDays:newCancelled,selectedPrimary:selectedPrimary||null,overrideMap:newMap,reviewLog:[...(planSnapRef.current?.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} iptal`}].slice(-10)};
+    setPlanSnap(newSnap);setReviewMsg(`${dateStr} antrenmanı iptal edildi`);
     await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,newSnap);
   };
 
@@ -5918,7 +5923,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
       if(day.date>=dateStr&&day.date>=todayStr&&!newCancelled[day.date])
         newMap[day.date]={tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,yapilar:(day.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||''}))};
     }));
-    const newSnap={...(planSnap||{}),lastReviewAt:now.toISOString(),cancelledDays:newCancelled,overrideMap:newMap,reviewLog:[...(planSnap?.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} iptali geri alındı`}].slice(-10)};
+    const newSnap={...(planSnapRef.current||{}),weekKey,athId:athlete.id,lastReviewAt:now.toISOString(),cancelledDays:newCancelled,selectedPrimary:selectedPrimary||null,overrideMap:newMap,reviewLog:[...(planSnapRef.current?.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} iptali geri alındı`}].slice(-10)};
     setPlanSnap(newSnap);setReviewMsg(`${dateStr} iptali geri alındı`);
     await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,newSnap);
   };
@@ -6009,7 +6014,15 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
             React.createElement('span',{style:{fontSize:12,color:'var(--text-secondary)'}},'Hedef:'),
             React.createElement('select',{
               value:selectedPrimary||'',
-              onChange:e=>setSelectedPrimary(e.target.value||null),
+              onChange:e=>{
+                const val=e.target.value||null;
+                setSelectedPrimary(val);
+                if(planSnapRef.current){
+                  const updated={...planSnapRef.current,selectedPrimary:val};
+                  setPlanSnap(updated);
+                  fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,updated);
+                }
+              },
               style:{fontSize:12,padding:'4px 8px',border:'1px solid var(--border)',borderRadius:'var(--radius)',background:'var(--bg-primary)',color:'var(--text-primary)'}
             },
               React.createElement('option',{value:''},'Otomatik (en zor)'),
@@ -6158,7 +6171,12 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
     ),
 
     // 2 haftalık plan
-    plan.weeks.map(week=>{
+    !showNextWeek&&React.createElement('button',{
+      className:'btn btn-sm',
+      style:{marginBottom:12,background:'var(--info)',color:'#fff',border:'none'},
+      onClick:()=>setShowNextWeek(true)
+    },'📅 Gelecek Hafta Planını Göster'),
+    plan.weeks.filter(week=>week.weekOff===0||(week.weekOff===1&&showNextWeek)).map(week=>{
       const haftalikReceteRef=React.createRef();
       const antrenmanGunleri=week.days.filter(d=>d.tip!=='dinlenme'&&d.yapilar?.length>0);
       const shareHaftalikRecete=async()=>{
