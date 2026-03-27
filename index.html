@@ -4649,7 +4649,16 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   const weekTargets=calcWeeklyTargets(athlete,races,allWorkouts||[],planMode==='optimize');
   const thisWeekTarget=weekTargets.find(wt=>wt.isCurrent);
   const targetKm=thisWeekTarget?.targetKm||0;
-  const kmDeficit=targetKm>0&&wkKm<targetKm*0.5&&wkSessions>=2;
+  // ── Haftalık km hedefi — ±%15 tolerans penceresi ─────────────────────────
+  // Kalan koşu günlerine km'yi dengeli dağıt
+  const kmToleransAlt=targetKm*0.85;
+  const kmToleransUst=targetKm*1.15;
+  const kmDeficit=targetKm>0&&wkKm<kmToleransAlt&&wkSessions>=2;
+  const kmFazla=targetKm>0&&wkKm>kmToleransUst;
+  // Kalan koşu günü tahmini (bugün dahil)
+  const kalanKosuGunSayisi=Math.max(1,wkStats.kalanKosuGun||1);
+  const kmHedefKalan=Math.max(0,kmToleransAlt-wkKm); // tolerans altına girmemek için gereken km
+  const kmGunBasiHedef=kmHedefKalan/kalanKosuGunSayisi; // her güne düşen ortalama
 
   // ── Gün belirleme ─────────────────────────────────────────────────────────
   const isKosuGunu=kosuGunleri.includes(dayShort);
@@ -4677,7 +4686,8 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   if(mechAclOverload) warnings.push({icon:'🦵',text:'Akut mekanik yük kronik ortalamanın çok üzerinde (ATL/CTL: '+round1(mechAtlCtlRatio)+') — tendon/kas dokusu aşırı yük riski.'});
   if(mechKardioImbalance) warnings.push({icon:'🫀',text:'Kardiyovasküler kondisyon mekanik kondisyonun önünde (Mech/Kardio: '+round1(mechKardioRatio)+') — bu hafta mekanik yük yerine aerobik öncelikli.'});
   if(ctlNearCap) warnings.push({icon:'🔝',text:'CTL/VO2max oranı yüksek ('+ctlVo2Ratio.toFixed(2)+') — fitness tavan yakın. Hacmi koruyun.'});
-  if(kmDeficit) warnings.push({icon:'📏',text:'Haftalık km hedefinin gerisinde ('+wkKm+'/'+targetKm+'km). Süre artırılabilir.'});
+  if(kmDeficit) warnings.push({icon:'📏',text:`Km hedefinin gerisinde (${wkKm}/${targetKm}km, -%${Math.round((1-wkKm/targetKm)*100)}). Süre ayarlandı.`});
+  if(kmFazla) warnings.push({icon:'📏',text:`Km hedefini aştı (${wkKm}/${targetKm}km, +%${Math.round((wkKm/targetKm-1)*100)}). Süre kısaltılabilir.`});
 
   if(blockers.length>0||!isAntrenmanGunu){
     return{tip:'dinlenme',baslik:'Dinlenme',aciklama:blockers.length>0?blockers[0].text:'Bugün antrenman programında yok.',sure_dk:0,yapilar:[],warnings,blockers,isAntrenmanGunu,dayOfWeek,daysToRace,nextRace,phase,acwr,tsb,hrv,wkLoad,wkSessions,wkKm,targetWeeklyLoad,remainingLoad,yMod:1};
@@ -4868,11 +4878,22 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   }
 
   // ── Km hedefine göre süre düzeltmesi ─────────────────────────────────────
-  if(kmDeficit&&tpl.tip==='aerobik'&&targetKm>0){
-    const extraMin=Math.min(20,Math.round((targetKm-wkKm)*6));
-    if(extraMin>5){
-      tpl.sure_dk=Math.min(tpl.sure_dk+extraMin,Math.round(120*yMod));
-      tpl.yapilar=tpl.yapilar.map((y,i)=>i===1?{...y,detay:y.detay+' (+'+extraMin+'dk km hedefi için)'}:y);
+  // Km hedef ayarı — tolerans penceresine göre süre düzenle
+  if(targetKm>0&&!forceEasy&&['aerobik','uzun','kolay'].includes(tpl.tip)){
+    if(kmDeficit&&kmGunBasiHedef>0){
+      // Geride — süre artır (max +25dk, pace*kmGunBasiHedef)
+      const extraMin=Math.min(25,Math.round(kmGunBasiHedef*6));
+      if(extraMin>3){
+        tpl.sure_dk=Math.min(tpl.sure_dk+extraMin,Math.round(120*yMod));
+        tpl.yapilar=tpl.yapilar.map((y,i)=>i===1?{...y,detay:y.detay+` (+${extraMin}dk · km hedefi için)`}:y);
+      }
+    } else if(kmFazla&&!['uzun'].includes(tpl.tip)){
+      // Fazla — süre hafifçe kıs (max -%15)
+      const reduceMin=Math.min(15,Math.round(tpl.sure_dk*0.10));
+      if(reduceMin>3){
+        tpl.sure_dk=Math.max(25,tpl.sure_dk-reduceMin);
+        tpl.yapilar=tpl.yapilar.map((y,i)=>i===1?{...y,detay:y.detay+` (-${reduceMin}dk · haftalık km aşıldı)`}:y);
+      }
     }
   }
 
@@ -5394,7 +5415,16 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
         actualDp+=parseFloat(w.irtifa)||0;
       });
       const planned=planDay(dateStr,athlete,simState,phase,dtR,dtInt,
-        {...wkStats, haftaGunTipi:haftaIskeleti[dateStr]||null},
+        {...wkStats, haftaGunTipi:haftaIskeleti[dateStr]||null,
+          kalanKosuGun:kosuGunleri.filter(g=>{
+            // Bugünden sonraki koşu günleri sayısı
+            const gunler=['Paz','Pzt','Sal','Çar','Per','Cum','Cmt'];
+            const bugunIdx=d.getDay();
+            return kosuGunleri.some(kg=>{
+              const kIdx=gunler.indexOf(kg);
+              return kIdx>bugunIdx||(kIdx===bugunIdx);
+            });
+          }).length||1},
         kosuGunleri,caprazGunleri,primary||null);
       // wkStats güncelleme — geçmiş günlerde gerçek antrenman varsa onu kullan
       const isTestDay=(testPlanlar||[]).some(p=>p.athId===athlete.id&&p.date===dateStr);
