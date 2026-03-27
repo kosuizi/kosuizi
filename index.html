@@ -1296,18 +1296,31 @@ async function fbGet(key){
   }catch(e){console.warn('fbGet error',key,e);return lsGet(key);}
 }
 
+// undefined içeren alanları Firebase için temizle
+function stripUndefined(obj){
+  if(Array.isArray(obj)) return obj.map(stripUndefined);
+  if(obj&&typeof obj==='object'){
+    const out={};
+    for(const k of Object.keys(obj)){
+      if(obj[k]!==undefined) out[k]=stripUndefined(obj[k]);
+    }
+    return out;
+  }
+  return obj;
+}
+
 // Firebase yazma — yoksa localStorage fallback
 async function fbSet(key,val){
   if(!db&&!initFirebase()){
     lsSet(key,val);return;
   }
+  const clean=stripUndefined(val);
   try{
-    await db.ref(key).set(val);
-    lsSet(key,val); // yerel cache güncelle
+    await db.ref(key).set(clean);
+    lsSet(key,clean);
   }catch(e){
     console.warn('fbSet error',key,e);
-    lsSet(key,val);
-    // plan_snapshots için hata önemliyse göster
+    lsSet(key,clean);
     if(key.includes('plan_snapshots')){
       console.error('PLAN KAYIT HATASI:',e.message,e.code);
     }
@@ -5927,7 +5940,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
       let fbSuccess=false;
       if(db||initFirebase()){
         try{
-          await db.ref(fbKey).set(toSave);
+          await db.ref(fbKey).set(stripUndefined(toSave));
           fbSuccess=true;
         }catch(e){
           alert('Firebase yazma hatası: '+e.message+'\n\nKod: '+(e.code||'?')+'\nBu hata genellikle Firebase güvenlik kurallarından kaynaklanır.');
