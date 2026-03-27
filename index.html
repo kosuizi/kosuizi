@@ -5745,6 +5745,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
   const [hizliEkleGun,setHizliEkleGun]=useState(null);
   const [manuelAtaGun,setManuelAtaGun]=useState(null);
   const [showNextWeek,setShowNextWeek]=useState(false);
+  const [planSaving,setPlanSaving]=useState(false);
+  const [planSaved,setPlanSaved]=useState(false);
 
   // ── Plan Snapshot ─────────────────────────────────────────────────────────
   const [planSnap,setPlanSnapLocal]=useState(planSnapInit||null);
@@ -5886,6 +5888,22 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
   // cancelledDays: planSnap'ten türetilir — ayrı state yok, sporcu değişince otomatik temizlenir
   const cancelledDays = React.useMemo(()=>planSnap?.cancelledDays||{},[planSnap]);
 
+
+  const savePlan=async()=>{
+    const snap=planSnapRef.current;
+    if(!snap||!athlete)return;
+    setPlanSaving(true);
+    try{
+      const toSave={...snap,weekKey,athId:athlete.id,selectedPrimary:selectedPrimary||null,lastSavedAt:new Date().toISOString()};
+      await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,toSave);
+      planSnapRef.current=toSave;
+      setPlanSnapLocal(toSave);
+      setPlanSaved(true);
+      setTimeout(()=>setPlanSaved(false),2500);
+    }catch(e){alert('Kayıt hatası: '+e.message);}
+    finally{setPlanSaving(false);}
+  };
+
   const handleManuelAta=(dateStr,tpl)=>{
     const now=new Date();
     const curSnap=planSnapRef.current;
@@ -5905,7 +5923,6 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
     setPlanSnap(newSnap);
     setManuelAtaGun(null);
     setReviewMsg(`${dateStr} — ${baslik} atandı`);
-    fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,newSnap).catch(e=>console.error('fbSet error:',e));
   };
 
     const handleCancelDay=async(dateStr)=>{
@@ -5920,8 +5937,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
         newMap[day.date]={tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,yapilar:(day.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||''}))};
     }));
     const newSnap={...(planSnapRef.current||{}),weekKey,athId:athlete.id,lastReviewAt:now.toISOString(),cancelledDays:newCancelled,selectedPrimary:selectedPrimary||null,overrideMap:newMap,reviewLog:[...(planSnapRef.current?.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} iptal`}].slice(-10)};
-    setPlanSnap(newSnap);setReviewMsg(`${dateStr} antrenmanı iptal edildi`);
-    await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,newSnap);
+    setPlanSnap(newSnap);setReviewMsg(`${dateStr} antrenmanı iptal edildi — Kaydetmek için 💾 Planı Kaydet butonuna bas`);
   };
 
   const handleUncancelDay=async(dateStr)=>{
@@ -5936,8 +5952,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
         newMap[day.date]={tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,yapilar:(day.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||''}))};
     }));
     const newSnap={...(planSnapRef.current||{}),weekKey,athId:athlete.id,lastReviewAt:now.toISOString(),cancelledDays:newCancelled,selectedPrimary:selectedPrimary||null,overrideMap:newMap,reviewLog:[...(planSnapRef.current?.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} iptali geri alındı`}].slice(-10)};
-    setPlanSnap(newSnap);setReviewMsg(`${dateStr} iptali geri alındı`);
-    await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,newSnap);
+    setPlanSnap(newSnap);setReviewMsg(`${dateStr} iptali geri alındı — Kaydetmek için 💾 Planı Kaydet butonuna bas`);
   };
 
   if(!athlete)return React.createElement('div',{className:'empty'},'Sporcu seçilmedi.');
@@ -6029,11 +6044,6 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
               onChange:e=>{
                 const val=e.target.value||null;
                 setSelectedPrimary(val);
-                if(planSnapRef.current){
-                  const updated={...planSnapRef.current,selectedPrimary:val};
-                  setPlanSnap(updated);
-                  fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,updated);
-                }
               },
               style:{fontSize:12,padding:'4px 8px',border:'1px solid var(--border)',borderRadius:'var(--radius)',background:'var(--bg-primary)',color:'var(--text-primary)'}
             },
@@ -6046,6 +6056,12 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
             className:'btn btn-sm'+(showLoading?' btn-primary':''),
             onClick:()=>setShowLoading(s=>!s)
           },showLoading?'Planı Gizle':'📊 Yükleme Planı'),
+          React.createElement('button',{
+            className:'btn btn-sm',
+            style:{background:planSaved?'var(--success)':planSaving?'var(--bg-secondary)':'var(--info)',color:planSaved||!planSaving?'#fff':'var(--text-secondary)',border:'none',fontWeight:600},
+            onClick:savePlan,
+            disabled:planSaving
+          },planSaving?'⏳ Kaydediliyor...':planSaved?'✓ Kaydedildi':'💾 Planı Kaydet'),
         )
       )
     ),
