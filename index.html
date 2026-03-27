@@ -1304,7 +1304,14 @@ async function fbSet(key,val){
   try{
     await db.ref(key).set(val);
     lsSet(key,val); // yerel cache güncelle
-  }catch(e){console.warn('fbSet error',key,e);lsSet(key,val);}
+  }catch(e){
+    console.warn('fbSet error',key,e);
+    lsSet(key,val);
+    // plan_snapshots için hata önemliyse göster
+    if(key.includes('plan_snapshots')){
+      console.error('PLAN KAYIT HATASI:',e.message,e.code);
+    }
+  }
 }
 
 const lsGet=(k)=>{try{const v=localStorage.getItem(k);return v?JSON.parse(v):null}catch{return null}};
@@ -5916,12 +5923,24 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
     try{
       const toSave={...snap,weekKey,athId:athlete.id,selectedPrimary:selectedPrimary||null,lastSavedAt:new Date().toISOString()};
       const fbKey=`plan_snapshots/${athlete.id}/${weekKey}`;
-      await fbSet(fbKey,toSave);
-      // Doğrulama: hemen geri oku
-      const verify=await fbGet(fbKey);
-      if(!verify||!verify.lastSavedAt){
-        alert('UYARI: Firebase kaydı doğrulanamadı. localStorage kullanılıyor olabilir.');
+      // Önce Firebase'e direkt yaz
+      let fbSuccess=false;
+      if(db||initFirebase()){
+        try{
+          await db.ref(fbKey).set(toSave);
+          fbSuccess=true;
+        }catch(e){
+          alert('Firebase yazma hatası: '+e.message+'\n\nKod: '+(e.code||'?')+'\nBu hata genellikle Firebase güvenlik kurallarından kaynaklanır.');
+          setPlanSaving(false);
+          return;
+        }
       }
+      if(!fbSuccess){
+        alert('Firebase bağlantısı yok — plan kaydedilemedi.');
+        setPlanSaving(false);
+        return;
+      }
+      lsSet(fbKey,toSave);
       planSnapRef.current=toSave;
       setPlanSnapLocal(toSave);
       setPlanSaved(true);
@@ -10028,9 +10047,9 @@ function SporcuAnketi(){
     try{
       const mevcut=athletes.find(function(a){return a.id===selId;})||{};
       const ANKET_SNAP_FIELDS=['kilo','boy','rhr','mhr','lthr','vo2max','hrv_7gun','sakatlık'];
-      const snapChanged=ANKET_SNAP_FIELDS.some(function(f){return String(mevcut2[f]||'')!==String(form[f]||'');});
+      const snapChanged=ANKET_SNAP_FIELDS.some(function(f){return String(mevcut[f]||'')!==String(form[f]||'');});
       const formWithSnap=snapChanged?Object.assign({},form,{
-        profileHistory:[...((mevcut2.profileHistory||[]).filter(function(s){return s.date!==localDateStr(new Date());})),
+        profileHistory:[...((mevcut.profileHistory||[]).filter(function(s){return s.date!==localDateStr(new Date());})),
           {date:localDateStr(new Date()),vo2max:form.vo2max,lthr:form.lthr,mhr:form.mhr,rhr:form.rhr,
            kilo:form.kilo,boy:form.boy,hrv_7gun:form.hrv_7gun,sakatlık:form.sakatlık}
         ].slice(-50)
