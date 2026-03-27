@@ -3697,6 +3697,230 @@ function zoneInfoZ1(zones){
   return parts.join(' · ');
 }
 
+
+// yapi_notu string'inden şablonu yeniden üret
+function tplFromYapiNotu(tur, yapiNotu, band, sure_dk, zones, disiplin, phase, ctl){
+  if(!yapiNotu) return null;
+  // yapi_notu: "Tempo · S2 — 2×8 dk / 3dk dinlenme" gibi
+  // "—" sonrasındaki kısım sets bilgisi
+  const dashIdx=yapiNotu.indexOf(' — ');
+  const setsStr=dashIdx>=0?yapiNotu.slice(dashIdx+3).trim():'';
+
+  // Tempo: sets'i parse et, şablonu yeniden üret
+  if(tur==='tempo'&&setsStr){
+    const setsDin=setsStr.split('/').map(s=>s.trim());
+    const sets=setsDin[0]||'2×8 dk';
+    const din=setsDin[1]?setsDin[1].replace(/\s*dinlenme/,'').trim():'3 dk';
+    const extraMap={'S1':'Nefes konuş testi: cümleler kurabilmeli','S2':'Nefes konuş testi','S3':'Ritim sabit','S4':'Ritim sabit, hız artışı yok','S5':'Son blokta biraz sıkıştır','S6':'Ritim sabit','S7':'Sürdürülebilir maksimal tempo','S8':'Son blok en zor','S9':'Kümülatif tempo','S10':'Sürekli — negatif split dene','S11':'Sürekli — son 10dk sıkıştır'};
+    const seviyeM=yapiNotu.match(/·s*(Sd+)/);
+    const sev=seviyeM?seviyeM[1]:'';
+    const extra=extraMap[sev]||'';
+    const zT=zoneInfo(zones,2)||'Z3 tempo';
+    return{tip:'tempo',sure_dk,yapi_notu:yapiNotu,yapilar:[
+      {baslik:'Isınma',detay:'15 dk kolay koşu Z1 + dinamik ısınma'},
+      {baslik:'Tempo '+(sev||'')+' · '+phase,detay:sets+' '+zT+' · '+din+' dinlenme arası'+(extra?' · '+extra:'')},
+      {baslik:'Soğuma',detay:'10 dk Z1 kolay koşu'},
+    ]};
+  }
+
+  // Eşik
+  if(tur==='esik'&&setsStr){
+    const setsDin=setsStr.split('/').map(s=>s.trim());
+    const sets=setsDin[0]||'2×10 dk';
+    const din=setsDin[1]?setsDin[1].replace(/\s*ara/,'').trim():'2 dk';
+    const seviyeM=yapiNotu.match(/·s*(Sd+)/);
+    const sev=seviyeM?seviyeM[1]:'';
+    const zE=zoneInfo(zones,3)||'Z4 eşik';
+    return{tip:'esik',sure_dk,yapi_notu:yapiNotu,yapilar:[
+      {baslik:'Isınma',detay:'15 dk Z1 kolay koşu'},
+      {baslik:'💡 Strides Önerisi',detay:'4×100m ısınma sonu strides (opsiyonel)'},
+      {baslik:'Eşik '+(sev||'')+' · '+phase,detay:sets+' — '+zE+' · '+din+' dinlenme arası'},
+      {baslik:'Soğuma',detay:'10 dk Z1 kolay koşu'},
+    ]};
+  }
+
+  // İnterval
+  if(tur==='interval'&&setsStr){
+    const setsDin=setsStr.split('/').map(s=>s.trim());
+    const sets=setsDin[0]||'4×3 dk';
+    const din=setsDin[1]?setsDin[1].replace(/\s*dinlenme/,'').trim():'3 dk';
+    const seviyeM=yapiNotu.match(/·s*(Sd+)/);
+    const sev=seviyeM?seviyeM[1]:'';
+    const z5=zoneInfo(zones,4)||'Z5a VO₂max';
+    return{tip:'interval',sure_dk,yapi_notu:yapiNotu,yapilar:[
+      {baslik:'Isınma',detay:'15 dk Z1 kolay koşu'},
+      {baslik:'💡 Strides Önerisi',detay:'4×100m ısınma sonu strides'},
+      {baslik:'İnterval '+(sev||'')+' · '+phase,detay:sets+' '+z5+' · '+din+' dinlenme'},
+      {baslik:'Soğuma',detay:'10 dk Z1 kolay koşu'},
+    ]};
+  }
+
+  // Uzun: özel yapı
+  if(tur==='uzun'){
+    const uzunSure=sure_dk||90;
+    const zU=zoneInfo(zones,1)||'Z2 aerobik';
+    const zU3=zoneInfo(zones,2)||'Z3';
+    let bloklar=[
+      {baslik:'Isınma',detay:'15 dk — '+zoneInfoZ1(zones)},
+      {baslik:'Uzun Koşu',detay:(uzunSure-15)+' dk — '+zU},
+    ];
+    if(yapiNotu.includes('Son 20') || yapiNotu.includes('tempo artış')){
+      bloklar=[
+        {baslik:'Isınma',detay:'10 dk — '+zoneInfoZ1(zones)},
+        {baslik:'Aerobik Blok',detay:(uzunSure-30)+' dk — '+zU},
+        {baslik:'Tempo Finişi',detay:'20 dk — '+zU3+' · Kademeli hız artışı — kontrollü sıkıştırma'},
+      ];
+    } else if(yapiNotu.includes('Son %25') || yapiNotu.includes('yarış temposu')){
+      const yarisBlok=Math.round((uzunSure-15)*0.25);
+      const aeroBlok=uzunSure-15-yarisBlok;
+      bloklar=[
+        {baslik:'Isınma',detay:'10 dk — '+zoneInfoZ1(zones)},
+        {baslik:'Aerobik Blok',detay:aeroBlok+' dk — '+zU},
+        {baslik:'Yarış Temposu Finişi',detay:yarisBlok+' dk — hedef yarış pace · Son '+yarisBlok+' dk yarış simülasyonu'},
+      ];
+    } else if(yapiNotu.includes('Yürüyüş-koşu') || yapiNotu.includes('9:1') || yapiNotu.includes('4:1')){
+      const oran=yapiNotu.includes('9:1')?'9:1':'4:1';
+      bloklar=[
+        {baslik:'Yürüyüş-Koşu',detay:uzunSure+' dk — '+oran+' dk koşu/yürüyüş karması · Tüm süre boyunca · '+zU},
+      ];
+    } else if(yapiNotu.includes('Negatif split')){
+      const yari=Math.round((uzunSure-10)/2);
+      bloklar=[
+        {baslik:'Isınma',detay:'10 dk — '+zoneInfoZ1(zones)},
+        {baslik:'1. Yarı',detay:yari+' dk — '+zU+' · Kontrollü, rahat'},
+        {baslik:'2. Yarı (Negatif Split)',detay:yari+' dk — '+zU3+' · Her km biraz daha hızlı'},
+      ];
+    }
+    return{tip:'uzun',sure_dk,yapi_notu:yapiNotu,yapilar:bloklar};
+  }
+
+  // Aerobik
+  if(tur==='aerobik'){
+    const zA1=zoneInfoZ1(zones);
+    const zA2=zoneInfo(zones,1)||'Z2 aerobik';
+    const zA3=zoneInfo(zones,2)||'Z3';
+    let yapilar=[
+      {baslik:'Isınma',detay:'10 dk — '+zA1},
+      {baslik:'Aerobik Blok',detay:(sure_dk-15)+' dk — '+zA2},
+      {baslik:'Soğuma',detay:'5 dk Z1 kolay koşu'},
+    ];
+    if(yapiNotu.includes('Negatif split')){
+      const yari=Math.round((sure_dk-10)/2);
+      yapilar=[
+        {baslik:'Isınma',detay:'5 dk — '+zA1},
+        {baslik:'1. Yarı',detay:yari+' dk — '+zA2+' · Rahat hızda başla'},
+        {baslik:'2. Yarı (Negatif)',detay:yari+' dk — '+zA2+'/'+zA3+' · Yavaşça hızlan'},
+        {baslik:'Soğuma',detay:'5 dk Z1'},
+      ];
+    } else if(yapiNotu.includes('Fartlek')){
+      yapilar=[
+        {baslik:'Isınma',detay:'10 dk — '+zA1},
+        {baslik:'Fartlek Blokları',detay:(sure_dk-15)+' dk — Hisse göre hız değiştir: 2-3dk Z3 → 3-5dk Z2 · Kuralsız ama kontrollü'},
+        {baslik:'Soğuma',detay:'5 dk Z1'},
+      ];
+    } else if(yapiNotu.includes('Z1–Z2 karışık')){
+      yapilar=[
+        {baslik:'Z1–Z2 Karışık',detay:sure_dk+' dk — Z1 ve Z2 arasında serbest · Nabza bakma, his temelli · Aktif toparlanma niteliği'},
+      ];
+    }
+    return{tip:'aerobik',sure_dk,yapi_notu:yapiNotu,yapilar};
+  }
+
+  // Progressive
+  if(tur==='progressive'){
+    const zP1=zoneInfo(zones,1)||'Z2';
+    const zP2=zoneInfo(zones,2)||'Z3';
+    const zP3=zoneInfo(zones,3)||'Z4';
+    const zP5=zoneInfo(zones,4)||'Z5a';
+    const uc=Math.round((sure_dk-10)/3);
+    let yapilar=[
+      {baslik:'Isınma',detay:'5 dk — '+zoneInfoZ1(zones)},
+      {baslik:'Bölüm 1',detay:uc+' dk — '+zP1},
+      {baslik:'Bölüm 2',detay:uc+' dk — '+zP2},
+      {baslik:'Bölüm 3',detay:uc+' dk — '+zP3},
+      {baslik:'Soğuma',detay:'5 dk Z1'},
+    ];
+    if(yapiNotu.includes('S2') || yapiNotu.includes('serbest sprint')){
+      yapilar=[
+        {baslik:'Isınma',detay:'5 dk — '+zoneInfoZ1(zones)},
+        {baslik:'Bölüm 1',detay:uc+' dk — '+zP1},
+        {baslik:'Bölüm 2',detay:uc+' dk — '+zP2},
+        {baslik:'Bölüm 3',detay:uc+' dk — '+zP3},
+        {baslik:'Sprint Finişi',detay:'5 dk serbest sprint — maksimal efor'},
+        {baslik:'Soğuma',detay:'5 dk Z1'},
+      ];
+    } else if(yapiNotu.includes('S3') || yapiNotu.includes('giderek artan son 10dk')){
+      yapilar=[
+        {baslik:'Isınma',detay:'5 dk — '+zoneInfoZ1(zones)},
+        {baslik:'Bölüm 1',detay:uc+' dk — '+zP1},
+        {baslik:'Bölüm 2',detay:uc+' dk — '+zP2},
+        {baslik:'Giderek Artan Finiş',detay:'10 dk — '+zP3+' → '+zP5+' · Her 2 dk\u2019da hız artır'},
+        {baslik:'Soğuma',detay:'5 dk Z1'},
+      ];
+    } else if(yapiNotu.includes('S4')){
+      const d1=Math.round(sure_dk*0.30);
+      const d2=Math.round(sure_dk*0.40);
+      const d3=Math.round(sure_dk*0.20);
+      const d4=Math.round(sure_dk*0.10);
+      yapilar=[
+        {baslik:'%30 Z2',detay:d1+' dk — '+zP1},
+        {baslik:'%40 Z3',detay:d2+' dk — '+zP2},
+        {baslik:'%20 Z4',detay:d3+' dk — '+zP3},
+        {baslik:'%10 Z5a',detay:d4+' dk — '+zP5+' · Maksimal sürdürülebilir efor'},
+      ];
+    }
+    return{tip:'progressive',sure_dk,yapi_notu:yapiNotu,yapilar};
+  }
+
+  // Tempo Interval
+  if(tur==='tempo_interval'&&setsStr){
+    const setsDin=setsStr.split('/').map(s=>s.trim());
+    const sets=setsDin[0]||'2×10 dk';
+    const din=setsDin[1]?setsDin[1].replace(/\s*ara/,'').trim():'3 dk';
+    const seviyeM=yapiNotu.match(/·s*(Sd+)/);
+    const sev=seviyeM?seviyeM[1]:'';
+    const zTI=zoneInfo(zones,2)||'Z3 tempo';
+    return{tip:'tempo_interval',sure_dk,yapi_notu:yapiNotu,yapilar:[
+      {baslik:'Isınma',detay:'15 dk Z1 kolay koşu'},
+      {baslik:'Tempo İnterval '+(sev||''),detay:sets+' — '+zTI+' · '+din+' aktif toparlanma arası'},
+      {baslik:'Soğuma',detay:'10 dk Z1'},
+    ]};
+  }
+
+  // Cruise
+  if(tur==='cruise'&&setsStr){
+    const setsDin=setsStr.split('/').map(s=>s.trim());
+    const sets=setsDin[0]||'4×8 dk';
+    const din=setsDin[1]?setsDin[1].replace(/\s*ara/,'').trim():'90sn';
+    const seviyeM=yapiNotu.match(/·s*(Sd+)/);
+    const sev=seviyeM?seviyeM[1]:'';
+    const zC=zoneInfo(zones,3)||'Z4 eşik';
+    return{tip:'cruise',sure_dk,yapi_notu:yapiNotu,yapilar:[
+      {baslik:'Isınma',detay:'15 dk Z1'},
+      {baslik:'Cruise '+(sev||''),detay:sets+' — '+zC+' · '+din+' aktif toparlanma · Kısa aralar: laktik tamponlama'},
+      {baslik:'Soğuma',detay:'10 dk Z1'},
+    ]};
+  }
+
+  // Yarış Temposu
+  if(tur==='yaris_tempo'&&setsStr){
+    const setsDin=setsStr.split('/').map(s=>s.trim());
+    const sets=setsDin[0]||'3×8 dk';
+    const din=setsDin[1]?setsDin[1].replace(/\s*ara/,'').trim():'2 dk';
+    const seviyeM=yapiNotu.match(/·s*(Sd+)/);
+    const sev=seviyeM?seviyeM[1]:'';
+    const zYT=zoneInfo(zones,3)||'Z4 yarış temposu';
+    return{tip:'yaris_tempo',sure_dk,yapi_notu:yapiNotu,yapilar:[
+      {baslik:'Isınma',detay:'15 dk Z1 + strides'},
+      {baslik:'Yarış Temposu '+(sev||''),detay:sets+' — '+zYT+' · '+din+' aktif toparlanma · Hedef yarış pace'},
+      {baslik:'Soğuma',detay:'10 dk Z1'},
+    ]};
+  }
+
+  return null;
+}
+
+
 function tplKolay(band, sure_dk, zones){
   return{
     tip:'kolay', sure_dk,
@@ -5782,6 +6006,14 @@ function ManuelAtamaModal(props){
       setYapiNotu(tpl&&tpl.yapi_notu?tpl.yapi_notu:'');
     }catch(e){setPreview(null);}
   },[tur,phase,band]);
+
+  // yapiNotu seçilince şablonu yeniden üret
+  useEffect(function(){
+    if(!yapiNotu) return;
+    var dk=preview?preview.sure_dk:50;
+    var tplYeni=tplFromYapiNotu(tur,yapiNotu,band,dk,zones,dis,phase,ctl);
+    if(tplYeni) setPreview(tplYeni);
+  },[yapiNotu]);
   var gunLabel=new Date(date+'T12:00:00').toLocaleDateString('tr-TR',{weekday:'long',day:'2-digit',month:'long'});
   var handleAta=function(){
     if(!preview)return;
