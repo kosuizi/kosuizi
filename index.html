@@ -4803,19 +4803,68 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   const YOGUN_TURLER=['interval','esik','tempo','yokus_kisa','yokus_uzun',
     'piramit','kesintisiz_piramit','on_off','tempo_interval','cruise','yaris_tempo','hill_sprint','tirmanis'];
 
-  // forceEasy: planın üzerine kolay koşuya indir
+  // ── Toparlanma süresi kontrolü ───────────────────────────────────────────
+  // Son antrenmanın recovery_hedef'i geçmediyse yükü azalt
+  const now_plan=new Date();
+  const recoveryKalanSaat=wkStats.sonRecoveryHedef
+    ?Math.max(0,Math.round((wkStats.sonRecoveryHedef-now_plan)/3600000))
+    :0;
+  const henuzToparlanmadi=recoveryKalanSaat>0&&!isPast&&!isToday;
+  if(henuzToparlanmadi&&!forceEasy){
+    // Toparlanma bitmemiş — yükü %20-40 azalt, uyarı ver
+    const kalanOran=Math.min(1,recoveryKalanSaat/24);
+    tpl={...tpl,sure_dk:Math.round(tpl.sure_dk*(1-kalanOran*0.35))};
+    warnings.push({icon:'⏱',text:`Toparlanma süresi devam ediyor — ~${recoveryKalanSaat}sa kaldı. Süre kısaltıldı.`});
+  }
+
+  // ── İdeal antrenman tipi kararı: yük/yorgunluk/toparlanmaya göre ─────────
   if(forceEasy&&!['dinlenme','kolay','capraz'].includes(tpl.tip)){
     const orijinalTip=tpl.tip;
-    tpl={...tplKolay(band,Math.round(50*yMod),zones),
-      sure_dk:Math.round(50*yMod),
-      _downgraded:true, _originalTip:orijinalTip};
-    warnings.push({icon:'🔄',text:`Plan "${orijinalTip}" idi — aşırı yük sinyalleri nedeniyle kolay koşuya indirildi.`});
+    const gunSirasi=wkStats.count||0;
+    let nedenler=[];
+    let secilenTip='kolay';
+    let secilenSure=Math.round(40*yMod);
+
+    if(tsb< -20){nedenler.push('TSB '+tsb.toFixed(1)+' (çok yorgun)');secilenSure=Math.round(30*yMod);}
+    else if(acwr>1.4){nedenler.push('ACWR '+acwr.toFixed(2)+' (yük yüksek)');secilenSure=Math.round(35*yMod);}
+    else if(acwr>1.3){nedenler.push('ACWR '+acwr.toFixed(2)+' (yük biraz yüksek)');secilenSure=Math.round(45*yMod);}
+    if(henuzToparlanmadi){nedenler.push('toparlanma bitmedi ('+recoveryKalanSaat+'sa)');secilenSure=Math.round(secilenSure*0.8);}
+    if(inj>=5){nedenler.push('sakatlık puanı '+inj+'/10');secilenSure=Math.round(secilenSure*0.85);}
+
+    // Haftanın ilk günü kolay, ikinci gün aerobik (çeşitlilik)
+    if(gunSirasi===0||tsb< -20){
+      secilenTip='kolay';
+      tpl={...tplKolay(band,secilenSure,zones),sure_dk:secilenSure,_downgraded:true,_originalTip:orijinalTip};
+    } else if(gunSirasi===1&&tsb>-15&&acwr<1.4){
+      secilenTip='aerobik';
+      secilenSure=Math.round(50*yMod);
+      tpl={...tplAerobik(band,secilenSure,zones,disiplin),sure_dk:secilenSure,_downgraded:true,_originalTip:orijinalTip};
+    } else {
+      // 3. gün veya daha fazla — çok kısa kolay
+      secilenSure=Math.round(35*yMod);
+      tpl={...tplKolay(band,secilenSure,zones),sure_dk:secilenSure,_downgraded:true,_originalTip:orijinalTip};
+    }
+    warnings.push({icon:'🔄',text:`"${orijinalTip}" → ${secilenTip} (${secilenSure}dk): ${nedenler.join(', ')}`});
   } else if(forceLow&&YOGUN_TURLER.includes(tpl.tip)){
     const orijinalTip=tpl.tip;
-    tpl={...tplAerobik(band,Math.round(55*yMod),zones,disiplin),
-      sure_dk:Math.round(55*yMod),
-      _downgraded:true, _originalTip:orijinalTip};
-    warnings.push({icon:'🔄',text:`Plan "${orijinalTip}" idi — düşük aerobik oranı nedeniyle aerobik koşuya çevrildi.`});
+    const gunSirasi=wkStats.count||0;
+    const sureDk=Math.round([55,60,50][gunSirasi%3]*yMod);
+    let nedenler=[];
+    if(mechKardioImbalancePlan)nedenler.push('mekanik/kardio oranı düşük');
+    if(henuzToparlanmadi)nedenler.push('toparlanma bitmedi');
+    tpl={...tplAerobik(band,sureDk,zones,disiplin),sure_dk:sureDk,_downgraded:true,_originalTip:orijinalTip};
+    warnings.push({icon:'🔄',text:`"${orijinalTip}" → aerobik (${sureDk}dk): ${nedenler.join(', ')||'aerobik taban öncelikli'}`});
+  }
+
+  // ── Süre artırımı: toparlanma tamamsa ve TSB iyiyse ──────────────────────
+  if(!forceEasy&&!forceLow&&!isPast&&tsb>5&&acwr<1.1&&recoveryKalanSaat===0
+    &&['aerobik','uzun','kolay'].includes(tpl.tip)){
+    const bonus=tsb>15?10:5;
+    const eskiSure=tpl.sure_dk;
+    tpl={...tpl,sure_dk:Math.min(tpl.sure_dk+bonus,Math.round(130*yMod))};
+    if(tpl.sure_dk>eskiSure){
+      warnings.push({icon:'📈',text:`TSB ${tsb.toFixed(1)} iyi, ACWR ${acwr?.toFixed(2)||'—'} düşük — süre ${eskiSure}dk→${tpl.sure_dk}dk artırıldı`});
+    }
   }
 
   // ── Km hedefine göre süre düzeltmesi ─────────────────────────────────────
@@ -5163,6 +5212,11 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
     if(!kosuUyari&&acwr>1.3&&acwr<=1.5&&!isSimulatedFuture)
       kosuUyari='ACWR '+acwr.toFixed(2)+' — yük biraz yüksek, süre kısaltıldı';
     if(kosuUyari)kosuTpl.uyari=kosuUyari;
+    // forceEasy/toparlanma warnings'leri de ekle
+    if(warnings.length>0){
+      const extraUyari=warnings.map(w=>w.icon+' '+w.text).join(' · ');
+      kosuTpl.uyari=kosuTpl.uyari?kosuTpl.uyari+' · '+extraUyari:extraUyari;
+    }
   }
 
   // ── Çapraz antrenman planla ─────────────────────────────────────────────
@@ -5261,7 +5315,11 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
         .slice(0,6);
     })();
 
-    let wkStats={count:0,kaliteliYok:true,uzunYapildi:false,wkLoad:0,dpHedefHafta:wt?.targetDp||0,weekOff:rotIdx,isFutureWeek:weekOff>0,recentKaliteli,recentLongRuns,sonYogunGun:sonYogunGunGlobal,testPlanlar:testPlanlar||[]};
+    // Son antrenmanın toparlanma bilgisini hesapla
+    const sonAntrenman=athWorkouts.filter(w=>w.date).sort((a,b)=>b.date.localeCompare(a.date))[0];
+    const sonRecoveryHedef=sonAntrenman?.recovery_hedef?new Date(sonAntrenman.recovery_hedef):null;
+    const sonRecoverySaatler=sonAntrenman?.recovery_saatler||0;
+    let wkStats={count:0,kaliteliYok:true,uzunYapildi:false,wkLoad:0,dpHedefHafta:wt?.targetDp||0,weekOff:rotIdx,isFutureWeek:weekOff>0,recentKaliteli,recentLongRuns,sonYogunGun:sonYogunGunGlobal,testPlanlar:testPlanlar||[],sonAntrenmanDate:sonAntrenman?.date||null,sonRecoveryHedef,sonRecoverySaatler,athWorkouts};
 
     // ── Hafta İskeleti: Kaliteli antrenmanı en iyi TSB gününe ata ────────────
     // Sadece gelecek/mevcut haftalar için (geçmiş haftada gerçek veri var)
