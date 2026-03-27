@@ -5775,12 +5775,14 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
     (async()=>{
       const snap=planSnapRef.current;
       if(!snap){
+        // Hiç snap yok — ilk kez üret
         const newSnap=generatePlanSnapshot(athlete,history,races,workouts||[],testPlanlar||[]);
         setPlanSnap(newSnap);
         await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,newSnap);
         return;
       }
-      // Koşu/çapraz günleri veya disiplin değişmişse planı yeniden üret
+      // Koşu/çapraz günleri veya disiplin değişmişse sadece yeni günleri ekle
+      // — mevcut overrideMap ve cancelledDays KESINLIKLE korunur
       const savedProfile=snap.athleteProfile||{};
       const profileChanged=
         JSON.stringify(athlete.kosu_gunleri||[])!==JSON.stringify(savedProfile.kosu_gunleri||[])||
@@ -5788,19 +5790,36 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
         (athlete.disiplin||'')!==(savedProfile.disiplin||'')||
         JSON.stringify((Array.isArray(athlete.uzun_gun)?athlete.uzun_gun:[athlete.uzun_gun].filter(Boolean)).sort())!==JSON.stringify((Array.isArray(savedProfile.uzun_gun)?savedProfile.uzun_gun:[savedProfile.uzun_gun].filter(Boolean)).sort());
       if(profileChanged){
-        const newSnap=generatePlanSnapshot(athlete,history,races,workouts||[],testPlanlar||[]);
-        newSnap.athleteProfile={kosu_gunleri:athlete.kosu_gunleri,capraz_gunleri:athlete.capraz_gunleri,disiplin:athlete.disiplin,uzun_gun:athlete.uzun_gun};
+        // Profil değişti ama kullanıcı değişikliklerini koru
+        const freshSnap=generatePlanSnapshot(athlete,history,races,workouts||[],testPlanlar||[]);
+        // Sadece kullanıcı DOKUNMAMIŞ günleri güncelle
+        const mergedOverride={...freshSnap.overrideMap,...(snap.overrideMap||{})};
+        const newSnap={
+          ...freshSnap,
+          overrideMap:mergedOverride,
+          cancelledDays:snap.cancelledDays||{},
+          selectedPrimary:snap.selectedPrimary||null,
+          reviewLog:[...(snap.reviewLog||[]),{at:now.toISOString(),reason:'Profil değişti — plan güncellendi'}].slice(-10)
+        };
         setPlanSnap(newSnap);
         await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,newSnap);
         return;
       }
-      // Günde 1 kez: saat 22:00 sonrası, bugün henüz incelenmemişse planı güncelle
+      // Günde 1 kez: saat 22:00 sonrası review — yine de overrideMap koru
       const lastRev=snap.lastReviewAt?new Date(snap.lastReviewAt):new Date(0);
       if(now>=t22&&lastRev<t22){
         const{updated,reason,snap:reviewedSnap}=reviewPlanSnapshot(snap,athlete,history,races,workouts||[],testPlanlar||[]);
-        setPlanSnap(reviewedSnap);
+        // reviewPlanSnapshot overrideMap'i koruyorsa direkt kullan
+        // korumuyorsa mevcut ile merge et
+        const safeSnap={
+          ...reviewedSnap,
+          overrideMap:{...(reviewedSnap.overrideMap||{}),...(snap.overrideMap||{})},
+          cancelledDays:snap.cancelledDays||{},
+          selectedPrimary:snap.selectedPrimary||null,
+        };
+        setPlanSnap(safeSnap);
         if(updated)setReviewMsg(reason);
-        await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,reviewedSnap);
+        await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,safeSnap);
       }
     })();
   },[snapReady,athlete?.id,athlete?.kosu_gunleri,athlete?.capraz_gunleri,athlete?.disiplin,athlete?.uzun_gun]);
