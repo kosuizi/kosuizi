@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.03.28-1710'; // Her güncellemede otomatik değişir
+const APP_VERSION='v2026.03.28-1739'; // Her güncellemede otomatik değişir
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -3644,6 +3644,28 @@ function coachingCue(label, tip){
 }
 
 function ReceteTablosu({yapilar, zones, isYuruyus, tip}){
+  const [customCues, setCustomCues] = useState({});
+  const [editingLabel, setEditingLabel] = useState(null);
+  const [editText, setEditText] = useState('');
+
+  // Storage'dan özel cue'ları yükle
+  useEffect(()=>{
+    (async()=>{
+      try{
+        const res = await window.storage.get('coaching-cues');
+        if(res) setCustomCues(JSON.parse(res.value)||{});
+      }catch(e){}
+    })();
+  },[]);
+
+  const saveCue = async(label, text)=>{
+    const updated = {...customCues, [label]: text};
+    setCustomCues(updated);
+    try{ await window.storage.set('coaching-cues', JSON.stringify(updated)); }catch(e){}
+    setEditingLabel(null);
+  };
+
+  const getCue = (label)=> customCues[label] ?? coachingCue(label, tip);
   // _caprazNot olanlar tablo dışında yazılı gösterilir
   const caprazNotlar=(yapilar||[]).filter(y=>y._caprazNot);
   // Çapraz antrenman adımlarını tamamen filtrele
@@ -3714,7 +3736,39 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip}){
           return React.createElement('tr',{key:i,style:{background:r.color,borderBottom:'1px solid rgba(0,0,0,.08)'}},
             React.createElement('td',{style:{padding:'5px 6px',fontWeight:600,fontSize:11,color:r.textColor}},
               r.label,
-              (()=>{const cue=coachingCue(r.label,tip);return cue?React.createElement('div',{style:{fontWeight:400,fontStyle:'italic',fontSize:10,opacity:0.8,marginTop:2,lineHeight:1.4}},cue):null;})()
+              (()=>{
+                const cue=getCue(r.label);
+                const isEditing=editingLabel===r.label;
+                if(isEditing) return React.createElement('div',{style:{marginTop:4,display:'flex',gap:4,alignItems:'center'}},
+                  React.createElement('input',{
+                    autoFocus:true,
+                    value:editText,
+                    onChange:e=>setEditText(e.target.value),
+                    onKeyDown:e=>{if(e.key==='Enter')saveCue(r.label,editText);if(e.key==='Escape')setEditingLabel(null);},
+                    style:{flex:1,fontSize:10,padding:'2px 4px',borderRadius:3,border:'1px solid var(--info)',background:'var(--bg-primary)',color:'var(--text-primary)'}
+                  }),
+                  React.createElement('button',{
+                    onClick:()=>saveCue(r.label,editText),
+                    style:{fontSize:9,padding:'1px 6px',background:'var(--info)',color:'#fff',border:'none',borderRadius:3,cursor:'pointer'}
+                  },'✓'),
+                  React.createElement('button',{
+                    onClick:()=>setEditingLabel(null),
+                    style:{fontSize:9,padding:'1px 6px',background:'transparent',border:'1px solid var(--border)',borderRadius:3,cursor:'pointer',color:'var(--text-secondary)'}
+                  },'✕')
+                );
+                if(!cue) return React.createElement('button',{
+                  onClick:()=>{setEditingLabel(r.label);setEditText('');},
+                  style:{marginTop:2,fontSize:9,padding:'1px 5px',background:'transparent',border:'1px dashed var(--border)',borderRadius:3,cursor:'pointer',color:'var(--text-tertiary)',display:'block'}
+                },'+ açıklama ekle');
+                return React.createElement('div',{style:{display:'flex',alignItems:'flex-start',gap:4,marginTop:2}},
+                  React.createElement('div',{style:{fontWeight:400,fontStyle:'italic',fontSize:10,opacity:0.8,lineHeight:1.4,flex:1}},cue),
+                  React.createElement('button',{
+                    onClick:()=>{setEditingLabel(r.label);setEditText(cue);},
+                    title:'Açıklamayı düzenle',
+                    style:{fontSize:9,padding:'0 4px',background:'transparent',border:'none',cursor:'pointer',color:'var(--text-tertiary)',opacity:0.7,flexShrink:0,lineHeight:1}
+                  },'✏️')
+                );
+              })()
             ),
             React.createElement('td',{style:{...cell(),color:r.textColor}},r.h>0?r.h:0),
             React.createElement('td',{style:{...cell(true),color:r.textColor}},r.m),
