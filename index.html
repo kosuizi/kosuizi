@@ -5492,7 +5492,10 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
       ...kosuTpl.yapilar,
       {baslik:'➕ Çapraz Antrenman',detay:'Koşu antrenmanından bağımsız — bisiklet / yüzme / kürek / kuvvet (süre ve içerik serbest)',_caprazNot:true}
     ];
-    const yukHedef=yukHesapla(kosuTpl);
+    // Çapraz için varsayılan süre ve katsayı ekle
+    const caprazVarsayilanSure=Math.round(45*yMod);
+    const caprazYuk=Math.round(caprazVarsayilanSure*0.6); // yoga/bisiklet düşük yük
+    const yukHedef=yukHesapla(kosuTpl)+caprazYuk;
     return{...kosuTpl,baslik:tplBaslik(kosuTpl)+' + Çapraz',yapilar,yukHedef,
       caprazTpl,isKosuCapraz:true,isPast,isToday,simState,phase,yMod,date,dayTR,dayShort};
   } else if(kosuTpl){
@@ -6008,6 +6011,7 @@ function ManuelAtamaModal(props){
   var _phase=useState('Gelisme'),phase=_phase[0],setPhase=_phase[1];
   var _prev=useState(null),preview=_prev[0],setPreview=_prev[1];
   var _yapi=useState(''),yapiNotu=_yapi[0],setYapiNotu=_yapi[1];
+  var _sure=useState(50),sureDk=_sure[0],setSureDk=_sure[1];
   var zones=calcZones(athlete);
   var last=(history||[]).slice(-1)[0];
   var ctl=last&&last.ctl||0;
@@ -6018,7 +6022,7 @@ function ManuelAtamaModal(props){
   var yapiNotlari=YAPI_NOTLARI[tur]||[];
   useEffect(function(){
     try{
-      var dk=50,tpl=null;
+      var dk=sureDk||50,tpl=null;
       if(tur==='kolay')tpl=tplKolay(band,dk,zones);
       else if(tur==='aerobik')tpl=tplAerobik(band,dk,zones,dis);
       else if(tur==='uzun')tpl=tplUzun(band,ctl,zones,dis,0,[]);
@@ -6047,14 +6051,15 @@ function ManuelAtamaModal(props){
   // yapiNotu seçilince şablonu yeniden üret
   useEffect(function(){
     if(!yapiNotu) return;
-    var dk=preview?preview.sure_dk:50;
+    var dk=sureDk||preview&&preview.sure_dk||50;
     var tplYeni=tplFromYapiNotu(tur,yapiNotu,band,dk,zones,dis,phase,ctl);
     if(tplYeni) setPreview(tplYeni);
   },[yapiNotu]);
   var gunLabel=new Date(date+'T12:00:00').toLocaleDateString('tr-TR',{weekday:'long',day:'2-digit',month:'long'});
   var handleAta=function(){
     if(!preview)return;
-    var final=yapiNotu&&yapiNotlari.length>0?Object.assign({},preview,{yapi_notu:yapiNotu}):preview;
+    var tplWithSure=Object.assign({},preview,{sure_dk:sureDk||preview.sure_dk});
+    var final=yapiNotu&&yapiNotlari.length>0?Object.assign({},tplWithSure,{yapi_notu:yapiNotu}):tplWithSure;
     onSave(date,final);
   };
   var e=React.createElement;
@@ -6079,6 +6084,11 @@ function ManuelAtamaModal(props){
           FAZLAR.map(function(f){return e('option',{key:f,value:f},f);})
         )
       ),
+      e('div',{className:'form-group'},
+        e('label',null,'Süre (dk)'),
+        e('input',{type:'number',value:sureDk,min:10,max:300,style:{width:'100%'},
+          onChange:function(ev){setSureDk(parseInt(ev.target.value)||50);}})
+      ),
       yapiNotlari.length>0&&e('div',{className:'form-group'},
         e('label',null,'Seviye'),
         e('select',{value:yapiNotu,onChange:function(ev){setYapiNotu(ev.target.value);}},
@@ -6089,7 +6099,7 @@ function ManuelAtamaModal(props){
     preview&&e('div',{style:{background:'var(--bg-secondary)',borderRadius:'var(--radius)',padding:'10px 12px',marginBottom:12,fontSize:12}},
       e('div',{style:{fontWeight:700,fontSize:13,marginBottom:6,color:'var(--info)'}},preview.baslik||tur),
       e('div',{style:{display:'flex',gap:6,marginBottom:8,flexWrap:'wrap'}},
-        e('span',{className:'badge badge-info'},preview.sure_dk+' dk'),
+        e('span',{className:'badge badge-info'},sureDk+' dk'),
         e('span',{className:'badge badge-gray'},'Band '+band),
         preview.yapi_notu&&e('span',{className:'badge badge-good'},preview.yapi_notu.split(' - ')[0])
       ),
@@ -6333,7 +6343,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
     const baslik=tpl.baslik||(tpl.yapi_notu?tpl.yapi_notu.split(' — ')[0]:'')||(TIP_NAMES[tpl.tip]||tpl.tip||'');
     const newMap={...(curSnap?.overrideMap||{}),[dateStr]:{
       tip:tpl.tip,baslik,sure_dk:tpl.sure_dk||50,
-      yukHedef:Math.round((tpl.sure_dk||50)*1.2),
+      yukHedef:Math.round((tpl.sure_dk||50)*({kolay:0.8,aerobik:1.1,uzun:1.1,tempo:1.55,esik:1.7,interval:2.1,yokus_kisa:2.1,yokus_uzun:2.0,tirmanis:2.0,teknik:1.4,acici:1.2,capraz:0.8,progressive:1.3,cruise:1.65,yaris_tempo:1.8}[tpl.tip]||1.1)),
       yapi_notu:tpl.yapi_notu||'',
       yapilar:(tpl.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||'',_caprazNot:y._caprazNot}))
     }};
