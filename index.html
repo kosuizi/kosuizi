@@ -6191,6 +6191,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
           cancelledDays:snap.cancelledDays||{},
           selectedPrimary:snap.selectedPrimary||null,
           lastSavedAt:snap.lastSavedAt||null,
+          manualOverrides:snap.manualOverrides||{},
           reviewLog:[...(snap.reviewLog||[]),{at:now.toISOString(),reason:'Profil değişti — plan güncellendi'}].slice(-10)
         };
         setPlanSnap(newSnap);
@@ -6215,6 +6216,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
           cancelledDays:currentSnap.cancelledDays||{},
           selectedPrimary:currentSnap.selectedPrimary||null,
           lastSavedAt:currentSnap.lastSavedAt||null,
+          manualOverrides:currentSnap.manualOverrides||{},
         };
         setPlanSnap(safeSnap);
         if(updated)setReviewMsg(reason);
@@ -6243,11 +6245,17 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
     // Snapshot override: geçmiş günler gerçek veriyi korur, gelecek günler snapshot'tan gelir
     if(planSnap?.overrideMap){
       const todayStr=localDateStr(new Date());
+      // manualDates: kullanıcının Ata/İptal ile dokunduğu günler — her zaman tam override
+      const manualDates=new Set(Object.keys(planSnap.manualOverrides||{}));
       generated.weeks.forEach(wk=>{
         wk.days=wk.days.map(day=>{
           const ov=planSnap.overrideMap[day.date];
           if(!ov) return day;
-          // Geçmiş günlerde sadece yukHedef ve yapilar al — tip/baslik/sure_dk gerçek antrenmanı bozmasın
+          // Manuel atanmış günler: geçmiş/bugün/gelecek fark etmez — tam override
+          if(manualDates.has(day.date)){
+            return{...day,tip:ov.tip,baslik:ov.baslik,sure_dk:ov.sure_dk,yukHedef:ov.yukHedef,yapilar:ov.yapilar||day.yapilar};
+          }
+          // Sistem tarafından üretilmiş geçmiş günler: sadece yukHedef
           if(day.isPast||day.date===todayStr)
             return{...day, yukHedef:ov.yukHedef||day.yukHedef};
           return{...day,tip:ov.tip,baslik:ov.baslik,sure_dk:ov.sure_dk,yukHedef:ov.yukHedef,yapilar:ov.yapilar};
@@ -6329,10 +6337,12 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
       yapi_notu:tpl.yapi_notu||'',
       yapilar:(tpl.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||'',_caprazNot:y._caprazNot}))
     }};
+    const newManualOverrides={...(curSnap?.manualOverrides||{}),[dateStr]:{tip:tpl.tip,baslik,atAt:now.toISOString()}};
     const newSnap={...(curSnap||{}),weekKey,athId:athlete.id,lastReviewAt:now.toISOString(),
       cancelledDays:{...(curSnap?.cancelledDays||{})},
       selectedPrimary:selectedPrimary||null,
       overrideMap:newMap,
+      manualOverrides:newManualOverrides,
       reviewLog:[...(curSnap?.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} manuel: ${baslik}`}].slice(-10)
     };
     setPlanSnap(newSnap);
@@ -6351,7 +6361,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
       if(day.date>dateStr&&day.date>=todayStr&&!newCancelled[day.date])
         newMap[day.date]={tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,yapilar:(day.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||''}))};
     }));
-    const newSnap={...(planSnapRef.current||{}),weekKey,athId:athlete.id,lastReviewAt:now.toISOString(),cancelledDays:newCancelled,selectedPrimary:selectedPrimary||null,overrideMap:newMap,reviewLog:[...(planSnapRef.current?.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} iptal`}].slice(-10)};
+    const newSnap={...(planSnapRef.current||{}),weekKey,athId:athlete.id,lastReviewAt:now.toISOString(),cancelledDays:newCancelled,selectedPrimary:selectedPrimary||null,overrideMap:newMap,manualOverrides:{...(planSnapRef.current?.manualOverrides||{}),[dateStr]:{tip:'dinlenme',baslik:'İptal',atAt:now.toISOString()}},reviewLog:[...(planSnapRef.current?.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} iptal`}].slice(-10)};
     setPlanSnap(newSnap);setReviewMsg(`${dateStr} antrenmanı iptal edildi — Kaydetmek için 💾 Planı Kaydet butonuna bas`);
   };
 
