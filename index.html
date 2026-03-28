@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.03.28-1811'; // Her güncellemede otomatik değişir
+const APP_VERSION='v2026.03.28-1832'; // Her güncellemede otomatik değişir
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -3648,19 +3648,42 @@ const _cueCache = {data: null, loaded: false, listeners: []};
 async function loadCueCache(){
   if(_cueCache.loaded) return _cueCache.data;
   try{
-    const data = await fbGet('coaching_cues/global');
-    _cueCache.data = data || {};
+    // Önce Firebase'den dene
+    let jsonStr = null;
+    if(db||initFirebase()){
+      const snap = await db.ref('coaching_cues/json').get();
+      if(snap.exists()) jsonStr = snap.val();
+    }
+    // Firebase'den gelemediyse localStorage'dan al
+    if(!jsonStr) jsonStr = lsGet('coaching_cues/json');
+    _cueCache.data = jsonStr ? (typeof jsonStr==='string' ? JSON.parse(jsonStr) : jsonStr) : {};
     _cueCache.loaded = true;
     _cueCache.listeners.forEach(fn=>fn(_cueCache.data));
-  }catch(e){ _cueCache.data={}; _cueCache.loaded=true; }
+  }catch(e){ 
+    console.warn('loadCueCache error:', e);
+    _cueCache.data={}; 
+    _cueCache.loaded=true; 
+  }
   return _cueCache.data;
 }
 async function saveCueGlobal(label, text){
   if(!_cueCache.loaded) await loadCueCache();
   _cueCache.data = {...(_cueCache.data||{}), [label]: text};
   _cueCache.listeners.forEach(fn=>fn(_cueCache.data));
-  try{ await fbSet('coaching_cues/global', _cueCache.data); }
-  catch(e){ console.error('cue save error:', e); }
+  const jsonStr = JSON.stringify(_cueCache.data);
+  try{
+    // Firebase'e doğrudan yaz — fbSet'i bypass et (stripUndefined string'i bozmaz ama emin olalım)
+    if(db||initFirebase()){
+      await db.ref('coaching_cues/json').set(jsonStr);
+      lsSet('coaching_cues/json', jsonStr); // localStorage backup
+    } else {
+      lsSet('coaching_cues/json', jsonStr);
+    }
+  }
+  catch(e){
+    console.error('cue save error:', e);
+    lsSet('coaching_cues/json', jsonStr); // en azından localStorage'a yaz
+  }
 }
 
 function ReceteTablosu({yapilar, zones, isYuruyus, tip}){
