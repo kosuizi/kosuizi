@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.03.28-2322'; // Her güncellemede otomatik değişir
+const APP_VERSION='v2026.03.28-2333'; // Her güncellemede otomatik değişir
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -2609,6 +2609,19 @@ function calcWeeklyStats(workouts,athletes,weekOffset=0){
 function ProgramTab({athletes,workouts,allHistory,races,testPlanlar,teamName,teamLogo}){
   const today=new Date();
   const todayStr=today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0')+'-'+String(today.getDate()).padStart(2,'0');
+  const weekKey=getWeekKey(0);
+  const [planSnaps,setPlanSnaps]=useState({}); // {athId: snap}
+
+  // Tüm sporcular için planSnap'leri Firebase'den yükle
+  useEffect(()=>{
+    athletes.forEach(a=>{
+      fbGet(`plan_snapshots/${a.id}/${weekKey}`).then(snap=>{
+        if(snap&&snap.weekKey===weekKey){
+          setPlanSnaps(prev=>({...prev,[a.id]:snap}));
+        }
+      }).catch(()=>{});
+    });
+  },[athletes.map(a=>a.id).join(','),weekKey]);
   const dayNames=['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'];
   const monthNames=['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'];
   const dateLabel=dayNames[today.getDay()]+', '+today.getDate()+' '+monthNames[today.getMonth()];
@@ -2660,6 +2673,21 @@ function ProgramTab({athletes,workouts,allHistory,races,testPlanlar,teamName,tea
           const athRaces=(races||[]).filter(r=>athRaceIds.includes(r.id));
           const plan=generateTwoWeekPlan(a,athHistory,athRaces,athWorkouts,testPlanlar||[]);
           if(!plan||!plan.weeks)return null;
+          // planSnap varsa manualOverrides uygula
+          const snap=planSnaps[a.id];
+          if(snap?.overrideMap||snap?.manualOverrides){
+            const manualDates=new Set(Object.keys(snap.manualOverrides||{}));
+            plan.weeks.forEach(wk=>{
+              wk.days=wk.days.map(day=>{
+                const ov=snap.overrideMap?.[day.date];
+                if(manualDates.has(day.date)&&ov)
+                  return{...day,tip:ov.tip,baslik:ov.baslik,sure_dk:ov.sure_dk,yukHedef:ov.yukHedef,yapilar:ov.yapilar||day.yapilar};
+                if(manualDates.has(day.date)&&snap.manualOverrides[day.date]?.tip)
+                  return{...day,tip:snap.manualOverrides[day.date].tip,baslik:snap.manualOverrides[day.date].baslik||day.baslik};
+                return day;
+              });
+            });
+          }
           const allDays=plan.weeks.flatMap(w=>w.days);
           const day=allDays.find(d=>d.date===todayStr);
           if(!day||day.tip==='dinlenme')return null;
@@ -2673,7 +2701,7 @@ function ProgramTab({athletes,workouts,allHistory,races,testPlanlar,teamName,tea
         }catch(e){return null;}
       })
       .filter(Boolean);
-  },[athletes,workouts,allHistory,races,testPlanlar,todayStr]);
+  },[athletes,workouts,allHistory,races,testPlanlar,todayStr,planSnaps]);
 
   // Yarışa göre grupla, yarış yoksa ayrı grup
   const gruplar=React.useMemo(()=>{
