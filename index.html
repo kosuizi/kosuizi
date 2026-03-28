@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.03.28-1759'; // Her güncellemede otomatik değişir
+const APP_VERSION='v2026.03.28-1811'; // Her güncellemede otomatik değişir
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -3643,29 +3643,47 @@ function coachingCue(label, tip){
   return null;
 }
 
+// Global coaching cue cache — Firebase'den bir kez yükle, component re-mount'ta kaybolmaz
+const _cueCache = {data: null, loaded: false, listeners: []};
+async function loadCueCache(){
+  if(_cueCache.loaded) return _cueCache.data;
+  try{
+    const data = await fbGet('coaching_cues/global');
+    _cueCache.data = data || {};
+    _cueCache.loaded = true;
+    _cueCache.listeners.forEach(fn=>fn(_cueCache.data));
+  }catch(e){ _cueCache.data={}; _cueCache.loaded=true; }
+  return _cueCache.data;
+}
+async function saveCueGlobal(label, text){
+  if(!_cueCache.loaded) await loadCueCache();
+  _cueCache.data = {...(_cueCache.data||{}), [label]: text};
+  _cueCache.listeners.forEach(fn=>fn(_cueCache.data));
+  try{ await fbSet('coaching_cues/global', _cueCache.data); }
+  catch(e){ console.error('cue save error:', e); }
+}
+
 function ReceteTablosu({yapilar, zones, isYuruyus, tip}){
-  const [customCues, setCustomCues] = useState({});
+  const [customCues, setCustomCues] = useState(_cueCache.data||{});
   const [editingLabel, setEditingLabel] = useState(null);
   const [editText, setEditText] = useState('');
 
-  // Firebase'den özel cue'ları yükle
+  // Global cache'ten yükle — bir kez
   useEffect(()=>{
-    (async()=>{
-      try{
-        const data = await fbGet('coaching_cues/global');
-        if(data) setCustomCues(data);
-      }catch(e){}
-    })();
+    if(_cueCache.loaded){ setCustomCues(_cueCache.data||{}); return; }
+    loadCueCache().then(data=>setCustomCues(data||{}));
+    const listener=(data)=>setCustomCues({...data});
+    _cueCache.listeners.push(listener);
+    return ()=>{ _cueCache.listeners=_cueCache.listeners.filter(fn=>fn!==listener); };
   },[]);
 
   const saveCue = async(label, text)=>{
-    const updated = {...customCues, [label]: text};
-    setCustomCues(updated);
-    try{ await fbSet('coaching_cues/global', updated); }catch(e){}
     setEditingLabel(null);
+    await saveCueGlobal(label, text);
+    setCustomCues({..._cueCache.data});
   };
 
-  const getCue = (label)=> customCues[label] ?? coachingCue(label, tip);
+  const getCue = (label)=> (customCues[label]!==undefined ? customCues[label] : coachingCue(label, tip));
   // _caprazNot olanlar tablo dışında yazılı gösterilir
   const caprazNotlar=(yapilar||[]).filter(y=>y._caprazNot);
   // Çapraz antrenman adımlarını tamamen filtrele
@@ -3764,6 +3782,7 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip}){
                   React.createElement('div',{style:{fontWeight:400,fontStyle:'italic',fontSize:10,opacity:0.8,lineHeight:1.4,flex:1}},cue),
                   React.createElement('button',{
                     onClick:()=>{setEditingLabel(r.label);setEditText(cue);},
+                    'data-no-export':true,
                     title:'Açıklamayı düzenle',
                     style:{fontSize:9,padding:'0 4px',background:'transparent',border:'none',cursor:'pointer',color:'var(--text-tertiary)',opacity:0.7,flexShrink:0,lineHeight:1}
                   },'✏️')
