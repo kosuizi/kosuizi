@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.03.28-2303'; // Her güncellemede otomatik değişir
+const APP_VERSION='v2026.03.28-2322'; // Her güncellemede otomatik değişir
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1464,11 +1464,6 @@ const TUR_LABELS=Object.fromEntries(ANTRENMAN_TURLERI.map(t=>[t.v,t.l]));
 // Her antrenman türü için seçilebilir yapı notları
 // Faz sırası: Temel → Gelişme → Zirve / Taper
 const YAPI_NOTLARI={
-  kolay:      [
-    'Kolay · Z1 koşu',
-    'Kolay · Yürüyüş + koşu karması',
-    'Kolay · Aktif toparlanma',
-  ],
   aerobik:    [
     'Aerobik · Sabit Z2',
     'Aerobik · Negatif split (2. yarı hızlı)',
@@ -6631,19 +6626,25 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
         JSON.stringify((Array.isArray(athlete.uzun_gun)?athlete.uzun_gun:[athlete.uzun_gun].filter(Boolean)).sort())!==JSON.stringify((Array.isArray(savedProfile.uzun_gun)?savedProfile.uzun_gun:[savedProfile.uzun_gun].filter(Boolean)).sort())
       );
       if(profileChanged){
-        // Gerçek profil değişikliği — kullanıcı değişikliklerini koru, sadece yeni günleri ekle
         const freshSnap=generatePlanSnapshot(athlete,history,races,workouts||[],testPlanlar||[]);
         freshSnap.athleteProfile={kosu_gunleri:athlete.kosu_gunleri,capraz_gunleri:athlete.capraz_gunleri,disiplin:athlete.disiplin,uzun_gun:athlete.uzun_gun};
-        // Kullanıcının dokunduğu günleri koru — snap.overrideMap öncelikli
-        const mergedOverride={...freshSnap.overrideMap,...(snap.overrideMap||{})};
+        // manualOverrides MUTLAKA korunur — kullanıcının elle değiştirdikleri
+        const korunanManual=snap.manualOverrides||{};
+        // overrideMap: fresh üzerine snap.overrideMap ve manualOverrides'tan gelen günler öncelikli
+        const mergedOverride={
+          ...freshSnap.overrideMap,
+          ...(snap.overrideMap||{}),
+          // manualOverrides'taki günler kesinlikle korunur
+          ...Object.fromEntries(Object.keys(korunanManual).map(ds=>[ds,snap.overrideMap?.[ds]]).filter(([,v])=>v))
+        };
         const newSnap={
           ...freshSnap,
           overrideMap:mergedOverride,
           cancelledDays:snap.cancelledDays||{},
           selectedPrimary:snap.selectedPrimary||null,
           lastSavedAt:snap.lastSavedAt||null,
-          manualOverrides:snap.manualOverrides||{},
-          reviewLog:[...(snap.reviewLog||[]),{at:now.toISOString(),reason:'Profil değişti — plan güncellendi'}].slice(-10)
+          manualOverrides:korunanManual,
+          reviewLog:[...(snap.reviewLog||[]),{at:now.toISOString(),reason:'Profil değişti — manuel atamalar korundu'}].slice(-10)
         };
         setPlanSnap(newSnap);
         await fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,newSnap);
@@ -6694,23 +6695,26 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
       :races;
     const generated=generateTwoWeekPlan(athlete,history,racesOverride,workouts,testPlanlar||[]);
     // Snapshot override: geçmiş günler gerçek veriyi korur, gelecek günler snapshot'tan gelir
-    if(planSnap?.overrideMap){
+    if(planSnap?.overrideMap||planSnap?.manualOverrides){
       const todayStr=localDateStr(new Date());
-      // manualDates: sadece kullanıcının Ata/İptal ile dokunduğu günler uygulanır
       const manualDates=new Set(Object.keys(planSnap.manualOverrides||{}));
+      const manualOvMap=planSnap.manualOverrides||{};
       generated.weeks.forEach(wk=>{
         wk.days=wk.days.map(day=>{
           const ov=planSnap.overrideMap?.[day.date];
-          // Manuel atanmış günler — her zaman tam override
-          if(manualDates.has(day.date)&&ov){
-            return{...day,tip:ov.tip,baslik:ov.baslik,sure_dk:ov.sure_dk,yukHedef:ov.yukHedef,isKosuCapraz:ov.isKosuCapraz||false,yapilar:ov.yapilar||day.yapilar};
+          // Manuel atanmış günler — overrideMap'te olsun ya da olmasın uygula
+          if(manualDates.has(day.date)){
+            // overrideMap'ten al, yoksa manualOverrides'tan yeniden üretmeye çalış
+            if(ov) return{...day,tip:ov.tip,baslik:ov.baslik,sure_dk:ov.sure_dk,yukHedef:ov.yukHedef,isKosuCapraz:ov.isKosuCapraz||false,yapilar:ov.yapilar||day.yapilar};
+            // overrideMap kaydı yoksa en azından tip bilgisini koru
+            const mo=manualOvMap[day.date];
+            if(mo?.tip) return{...day,tip:mo.tip,baslik:mo.baslik||day.baslik};
           }
-          // Geçmiş günler — sadece yukHedef al, antrenman tipine dokunma
+          // Geçmiş günler — sadece yukHedef al
           if((day.isPast||day.date===todayStr)&&ov){
             return{...day, yukHedef:ov.yukHedef||day.yukHedef};
           }
-          // Gelecek günler — sistem üretimini kullan, overrideMap'i yoksay
-          // (sadece manuel override'lar uygulanır — yukarıda zaten ele alındı)
+          // Gelecek günler — sistem üretimi
           return day;
         });
       });
