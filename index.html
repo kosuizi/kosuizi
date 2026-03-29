@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.03.29-0617'; // Her güncellemede otomatik değişir
+const APP_VERSION='v2026.03.29-fix3'; // Snap persistence fix + swap + aerobik çeşitlendirme
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -5686,13 +5686,54 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
         kosuUyari='Bu hafta uzun koşu yapıldı — bugün aerobik toparlanma';
       }
     } else if(iskeleteGoreKolay||sonYogunGun){
-      // Yoğun sonrası aktif toparlanma: kolay koşu — Z1, kısa
-      const kolaySure=Math.round(40*yMod);
-      kosuTpl=tplKolay(band,kolaySure,zones);
-      kosuUyari=sonYogunGun?'Dün yoğun antrenman — aktif toparlanma (Z1 kolay koşu)':'Kaliteli antrenman öncesi/sonrası — Z1 aktif toparlanma';
+      // Kolay gün — sonYogunGun'a göre toparlanma / hazırlık ayrımı
+      if(sonYogunGun){
+        // Post-kaliteli toparlanma: Z1, kısa, çok kolay
+        const kolaySure=Math.round(35*yMod);
+        kosuTpl=tplKolay(band,kolaySure,zones);
+        kosuTpl.baslik='Toparlanma Koşusu';
+        kosuTpl.yapilar=[{baslik:'Aktif Toparlanma',detay:`${kolaySure} dk — Z1 çok kolay · Dün yoğun antrenman yapıldı, bugün kan dolaşımını artırarak kasların toparlanmasını hızlandır`}];
+        kosuUyari='Dün yoğun antrenman — aktif toparlanma (Z1, düşük tempo)';
+      } else {
+        // Pre-kaliteli hazırlık: Z1-Z2, biraz daha uzun, opsiyonel kısa süratlenmeler
+        const hazirlikSure=Math.round(40*yMod);
+        kosuTpl=tplKolay(band,hazirlikSure,zones);
+        kosuTpl.baslik='Hazırlık Koşusu';
+        kosuTpl.yapilar=[
+          {baslik:'Kolay Koşu',detay:`${Math.round(hazirlikSure*0.85)} dk — Z1-Z2 · Kasları ısıt, esnekliği koru`},
+          {baslik:'Hazırlık Süratlenmesi',detay:`Son ${Math.round(hazirlikSure*0.15)} dk içinde 3×15 sn süratlenmesi (Z4 pace), aralarında 45 sn kolay · Sinir-kas aktivasyonu — yarınki kaliteli antrenman için hazırlık`}
+        ];
+        kosuUyari='Yarınki kaliteli antrenman öncesi hazırlık — Z1-Z2, kısa süratlenmelerle aktivasyon';
+      }
     } else if(iskeleteGoreAerobik){
-      // Aerobik taban günü — Z2, orta süre
-      kosuTpl=tplAerobik(band,Math.round(55*yMod),zones,disiplin);
+      // Aerobik taban günü — hafta içi sıraya göre çeşitlendirme
+      const aeroIdx=wkStats.aerobikSayisi||0;
+      const aeroSure=Math.round(55*yMod);
+      if(aeroIdx===0){
+        // İlk aerobik: Standart aerobik taban koşusu
+        kosuTpl=tplAerobik(band,aeroSure,zones,disiplin);
+      } else if(aeroIdx===1){
+        // İkinci aerobik: Progressive aerobik — son bölümde Z3'e çıkış (laktat temizleme kapasitesi)
+        const z2Sure=Math.round(aeroSure*0.75);
+        const z3Sure=Math.round(aeroSure*0.25);
+        kosuTpl=tplAerobik(band,aeroSure,zones,disiplin);
+        kosuTpl.baslik='Progressive Aerobik';
+        kosuTpl.tip='aerobik';
+        kosuTpl.yapilar=[
+          {baslik:'Aerobik Taban',detay:`${z2Sure} dk — Z2 rahat tempo · Nefes konuş testi: cümleler kurabilmeli`},
+          {baslik:'Progressive Çıkış',detay:`${z3Sure} dk — Z3\'e kademeli çıkış · Tempoyu doğal hissettir, zorlanma yok · Laktat temizleme kapasitesini geliştirir`}
+        ];
+      } else {
+        // Üçüncü+ aerobik: Strides ile aerobik — nöromüsküler stimülasyon
+        const baseS=Math.round(aeroSure*0.85);
+        kosuTpl=tplAerobik(band,aeroSure,zones,disiplin);
+        kosuTpl.baslik='Aerobik + Strides';
+        kosuTpl.tip='aerobik';
+        kosuTpl.yapilar=[
+          {baslik:'Aerobik Koşu',detay:`${baseS} dk — Z2 rahat tempo`},
+          {baslik:'Strides',detay:`4×20 sn süratlenme (Z4 pace), aralarında 60 sn kolay yürüyüş · Koşu ekonomisini geliştirir, yorgunluk yaratmaz`}
+        ];
+      }
     } else if(mechKardioImbalancePlan){
       // Mekanik/kardiyovasküler denge bozuk → yoğun antrenman yerine aerobik
       kosuTpl=tplAerobik(band,Math.round(55*yMod),zones,disiplin);
@@ -5980,7 +6021,7 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
     const sonAntrenman=athWorkouts.filter(w=>w.date).sort((a,b)=>b.date.localeCompare(a.date))[0];
     const sonRecoveryHedef=sonAntrenman?.recovery_hedef?new Date(sonAntrenman.recovery_hedef):null;
     const sonRecoverySaatler=sonAntrenman?.recovery_saatler||0;
-    let wkStats={count:0,kaliteliYok:true,uzunYapildi:false,wkLoad:0,dpHedefHafta:wt?.targetDp||0,weekOff:rotIdx,isFutureWeek:weekOff>0,recentKaliteli,recentLongRuns,sonYogunGun:sonYogunGunGlobal,testPlanlar:testPlanlar||[],sonAntrenmanDate:sonAntrenman?.date||null,sonRecoveryHedef,sonRecoverySaatler,athWorkouts,buHaftaKaliteli:[],kaliteliSayisi:0};
+    let wkStats={count:0,kaliteliYok:true,uzunYapildi:false,wkLoad:0,dpHedefHafta:wt?.targetDp||0,weekOff:rotIdx,isFutureWeek:weekOff>0,recentKaliteli,recentLongRuns,sonYogunGun:sonYogunGunGlobal,testPlanlar:testPlanlar||[],sonAntrenmanDate:sonAntrenman?.date||null,sonRecoveryHedef,sonRecoverySaatler,athWorkouts,buHaftaKaliteli:[],kaliteliSayisi:0,aerobikSayisi:0};
 
     // ── Hafta İskeleti — Antrenman Bilimi Prensipleri ─────────────────────────
     // Temel prensipler:
@@ -6130,8 +6171,8 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
             });
           }).length||1},
         kosuGunleri,caprazGunleri,primary||null);
-      // kaliteliSayisi: kaliteli gün işlendikten SONRA artır (bir sonraki güne doğru sıra geçsin)
-      if(haftaIskeleti[dateStr]==='kaliteli') wkStats.kaliteliSayisi=(wkStats.kaliteliSayisi||0)+1;
+      // kaliteliSayisi artırımı: SADECE aşağıdaki isPast/!isPast bloklarında yapılır
+      // (satır 6134'teki eski artırım kaldırıldı — çift sayımı önlemek için)
       // wkStats güncelleme — geçmiş günlerde gerçek antrenman varsa onu kullan
       const isTestDay=(testPlanlar||[]).some(p=>p.athId===athlete.id&&p.date===dateStr);
       // Geçmiş günlerde tüm gerçek antrenmanları al
@@ -6186,6 +6227,11 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
           if(['uzun','tirmanis'].includes(t)) wkStats.uzunYapildi=true;
           wkStats.wkLoad += planned.yukHedef||0;
         }
+      }
+
+      // Aerobik/kolay gün sayacı — planDay'de çeşitlendirme için
+      if(!isPast && ['aerobik','kolay'].includes(haftaIskeleti[dateStr])){
+        wkStats.aerobikSayisi=(wkStats.aerobikSayisi||0)+1;
       }
 
       const isYogunTip=['interval','esik','yokus_kisa','yokus_uzun','tirmanis'].includes(effectiveTip);
@@ -6643,12 +6689,14 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
   const [expandDay,setExpandDay]=useState(null);
   const [manuelAtaGun,setManuelAtaGun]=useState(null);
   const [showNextWeek,setShowNextWeek]=useState(false);
+  const [swapSource,setSwapSource]=useState(null); // {date, tip, baslik, sure_dk, yukHedef, yapilar, isKosuCapraz}
 
   // ── Plan Snapshot ─────────────────────────────────────────────────────────
   const [planSnap,setPlanSnapLocal]=useState(planSnapInit||null);
   const planSnapRef=useRef(planSnapInit||null);
   const setPlanSnap=(snap)=>{setPlanSnapLocal(snap);planSnapRef.current=snap;if(onPlanSnapChange)onPlanSnapChange(snap);};
   const [snapReady,setSnapReady]=useState(!!planSnapInit);
+  const snapFetchOkRef=useRef(false); // Firebase fetch başarılı mı? (null dönse bile başarılı sayılır)
   const [reviewMsg,setReviewMsg]=useState(null);
   const weekKey=getWeekKey(0);
 
@@ -6658,24 +6706,36 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
     if(!athlete){setSnapReady(true);return;}
     setPlanSnap(null);
     setSnapReady(false);
+    snapFetchOkRef.current=false;
     fbGet(`plan_snapshots/${athlete.id}/${weekKey}`).then(stored=>{
       const snap=stored||null;
+      snapFetchOkRef.current=true; // Firebase erişimi başarılı (veri olsun olmasın)
       if(snap){
         setPlanSnap(snap);
         if(snap.selectedPrimary!==undefined) setSelectedPrimary(snap.selectedPrimary||null);
       }
       setSnapReady(true);
-    }).catch(()=>setSnapReady(true));
+    }).catch(()=>{
+      snapFetchOkRef.current=false; // Firebase erişimi başarısız — yeni snap üretme!
+      setSnapReady(true);
+    });
   },[athlete?.id,weekKey]);
 
   // 2. Snap yoksa ilk kez üret — lastSavedAt olan snap'e asla dokunma
+  //    SADECE Firebase başarılı şekilde null döndüyse yeni snap üret
+  //    Firebase erişim hatası varsa mevcut veriyi korumak için üretme
   useEffect(()=>{
     if(!snapReady||!athlete||!history.length) return;
     const snap=planSnapRef.current;
     // Kullanıcı kaydetmişse → sistem hiçbir şey yapmasın
     if(snap?.lastSavedAt) return;
-    // Snap hiç yok → ilk kez üret
+    // Snap hiç yok → ilk kez üret — AMA SADECE Firebase başarılıysa
     if(!snap){
+      if(!snapFetchOkRef.current){
+        // Firebase erişimi başarısız — mevcut Firebase verisini korumak için üretme
+        console.warn('planSnap: Firebase erişimi başarısız, yeni snap üretilmedi (mevcut veri korunuyor)');
+        return;
+      }
       const newSnap=generatePlanSnapshot(athlete,history,races,workouts||[],testPlanlar||[]);
       newSnap.athleteProfile={kosu_gunleri:athlete.kosu_gunleri,capraz_gunleri:athlete.capraz_gunleri,disiplin:athlete.disiplin,uzun_gun:athlete.uzun_gun};
       setPlanSnap(newSnap);
@@ -6808,11 +6868,11 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
       if(day.date>dateStr&&day.date>=todayStr&&!newCancelled[day.date])
         newMap[day.date]={tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,yapilar:(day.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||''}))};
     }));
-    const newSnap={...(planSnapRef.current||{}),weekKey,athId:athlete.id,lastReviewAt:now.toISOString(),cancelledDays:newCancelled,selectedPrimary:selectedPrimary||null,overrideMap:newMap,manualOverrides:{...(planSnapRef.current?.manualOverrides||{}),[dateStr]:{tip:'dinlenme',baslik:'İptal',atAt:now.toISOString()}},reviewLog:[...(planSnapRef.current?.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} iptal`}].slice(-10)};
+    const newSnap={...(planSnapRef.current||{}),weekKey,athId:athlete.id,lastReviewAt:now.toISOString(),lastSavedAt:now.toISOString(),cancelledDays:newCancelled,selectedPrimary:selectedPrimary||null,overrideMap:newMap,manualOverrides:{...(planSnapRef.current?.manualOverrides||{}),[dateStr]:{tip:'dinlenme',baslik:'İptal',atAt:now.toISOString()}},reviewLog:[...(planSnapRef.current?.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} iptal`}].slice(-10)};
     setPlanSnap(newSnap);
     setReviewMsg(`${dateStr} antrenmanı iptal edildi`);
     if(db||initFirebase()){
-      const _cancelSnap=stripUndefined({...newSnap,lastSavedAt:new Date().toISOString()});
+      const _cancelSnap=stripUndefined(newSnap);
       db.ref(`plan_snapshots/${athlete.id}/${weekKey}`).set(_cancelSnap)
         .then(()=>{ _planSnapsCache[athlete.id]=_cancelSnap; })
         .catch(e=>console.error('Cancel kayıt hatası:',e));
@@ -6830,14 +6890,104 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
       if(day.date>=dateStr&&day.date>=todayStr&&!newCancelled[day.date])
         newMap[day.date]={tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,yapilar:(day.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||''}))};
     }));
-    const newSnap={...(planSnapRef.current||{}),weekKey,athId:athlete.id,lastReviewAt:now.toISOString(),cancelledDays:newCancelled,selectedPrimary:selectedPrimary||null,overrideMap:newMap,reviewLog:[...(planSnapRef.current?.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} iptali geri alındı`}].slice(-10)};
+    const newSnap={...(planSnapRef.current||{}),weekKey,athId:athlete.id,lastReviewAt:now.toISOString(),lastSavedAt:now.toISOString(),cancelledDays:newCancelled,selectedPrimary:selectedPrimary||null,overrideMap:newMap,reviewLog:[...(planSnapRef.current?.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} iptali geri alındı`}].slice(-10)};
     setPlanSnap(newSnap);
     setReviewMsg(`${dateStr} iptali geri alındı`);
     if(db||initFirebase()){
-      const _uncancelSnap=stripUndefined({...newSnap,lastSavedAt:new Date().toISOString()});
+      const _uncancelSnap=stripUndefined(newSnap);
       db.ref(`plan_snapshots/${athlete.id}/${weekKey}`).set(_uncancelSnap)
         .then(()=>{ _planSnapsCache[athlete.id]=_uncancelSnap; })
         .catch(e=>console.error('Uncancel kayıt hatası:',e));
+    }
+  };
+
+  // ── Antrenman Yer Değiştirme (Swap) ──────────────────────────────────────
+  const handleSwapDays=(sourceDateStr, targetDateStr)=>{
+    if(sourceDateStr===targetDateStr){setSwapSource(null);return;}
+    const now=new Date();
+    const todayStr=localDateStr(now);
+
+    // Her iki günün mevcut antrenman verilerini bul
+    const allDays=(plan?.weeks||[]).flatMap(wk=>wk.days);
+    const sourceDay=allDays.find(d=>d.date===sourceDateStr);
+    const targetDay=allDays.find(d=>d.date===targetDateStr);
+    if(!sourceDay||!targetDay){setSwapSource(null);return;}
+
+    // Geçmiş günleri swap'a izin verme
+    if(sourceDateStr<todayStr||targetDateStr<todayStr){
+      setReviewMsg('Geçmiş günlerde değişiklik yapılamaz');
+      setSwapSource(null);
+      return;
+    }
+
+    // Dinlenme günleriyle swap'a izin ver (iptal edilmiş günler dahil)
+    // Antrenman verilerini ayıkla
+    const extractData=(day)=>({
+      tip:day.tip, baslik:day.baslik, sure_dk:day.sure_dk,
+      yukHedef:day.yukHedef||0, isKosuCapraz:day.isKosuCapraz||false,
+      yapilar:(day.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||'',_caprazNot:y._caprazNot})),
+      yapi_notu:day.yapi_notu||''
+    });
+    const srcData=extractData(sourceDay);
+    const tgtData=extractData(targetDay);
+
+    // OverrideMap güncelle: iki günün verisini çapraz ata
+    const curSnap=planSnapRef.current||{};
+    const newMap={...(curSnap.overrideMap||{})};
+    newMap[sourceDateStr]={...tgtData};
+    newMap[targetDateStr]={...srcData};
+
+    // ManualOverrides güncelle
+    const newManualOverrides={...(curSnap.manualOverrides||{})};
+    newManualOverrides[sourceDateStr]={tip:tgtData.tip,baslik:tgtData.baslik,atAt:now.toISOString(),swappedFrom:targetDateStr};
+    newManualOverrides[targetDateStr]={tip:srcData.tip,baslik:srcData.baslik,atAt:now.toISOString(),swappedFrom:sourceDateStr};
+
+    // İptal durumlarını da swap et
+    const newCancelled={...(curSnap.cancelledDays||{})};
+    const srcCancelled=!!newCancelled[sourceDateStr];
+    const tgtCancelled=!!newCancelled[targetDateStr];
+    if(srcCancelled&&!tgtCancelled){delete newCancelled[sourceDateStr];newCancelled[targetDateStr]=true;}
+    else if(!srcCancelled&&tgtCancelled){delete newCancelled[targetDateStr];newCancelled[sourceDateStr]=true;}
+
+    // Swap sonrası gelecek günleri yeniden hesapla (yük sıralaması değişti → TSB/ACWR etkilenir)
+    const laterDate=sourceDateStr>targetDateStr?sourceDateStr:targetDateStr;
+    const racesOv=selectedPrimary?races.map(r=>({...r,__force:r.id===selectedPrimary})):races;
+    const freshPlan=generateTwoWeekPlan(athlete,history,racesOv,workouts,testPlanlar||[]);
+
+    // Swap edilen günlerden SONRAKİ manuel atanmamış günleri taze planla güncelle
+    freshPlan.weeks.forEach(wk=>wk.days.forEach(day=>{
+      if(day.date>laterDate&&day.date>=todayStr&&!newCancelled[day.date]){
+        // Manuel atanmış günlere dokunma (swap hariç)
+        const mo=newManualOverrides[day.date];
+        if(mo&&!mo.swappedFrom) return;
+        newMap[day.date]={tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,
+          yapilar:(day.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||''}))};
+      }
+    }));
+
+    const fmtD=(ds)=>{const p=ds.split('-');return p[2]+'.'+p[1];};
+    const newSnap={
+      ...curSnap,weekKey,athId:athlete.id,
+      lastReviewAt:now.toISOString(),lastSavedAt:now.toISOString(),
+      cancelledDays:newCancelled,
+      selectedPrimary:selectedPrimary||null,
+      overrideMap:newMap,
+      manualOverrides:newManualOverrides,
+      reviewLog:[...(curSnap.reviewLog||[]),{
+        at:now.toISOString(),
+        reason:`🔄 ${fmtD(sourceDateStr)} ↔ ${fmtD(targetDateStr)} swap (${srcData.baslik} ↔ ${tgtData.baslik})`
+      }].slice(-10)
+    };
+    setPlanSnap(newSnap);
+    setSwapSource(null);
+    setReviewMsg(`🔄 ${srcData.baslik} (${fmtD(sourceDateStr)}) ↔ ${tgtData.baslik} (${fmtD(targetDateStr)}) yer değiştirildi`);
+
+    // Firebase kayıt
+    if(db||initFirebase()){
+      const _swapSnap=stripUndefined(newSnap);
+      db.ref(`plan_snapshots/${athlete.id}/${weekKey}`).set(_swapSnap)
+        .then(()=>{ _planSnapsCache[athlete.id]=_swapSnap; })
+        .catch(e=>console.error('Swap kayıt hatası:',e));
     }
   };
 
@@ -6857,6 +7007,22 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
   const snapInfo=planSnap?.lastReviewAt&&React.createElement('div',{
     style:{fontSize:10,color:'var(--text-tertiary)',marginTop:4}},
     '📌 Plan sabitlendi · Son inceleme: '+new Date(planSnap.lastReviewAt).toLocaleString('tr-TR')
+  );
+
+  // Swap modu aktifken bilgi bandı
+  const swapBanner=swapSource&&React.createElement('div',{
+    style:{marginBottom:10,padding:'10px 14px',borderRadius:'var(--radius)',
+      background:'linear-gradient(135deg, var(--info-bg), var(--warn-bg))',
+      border:'1px solid var(--info)',
+      display:'flex',alignItems:'center',gap:10,fontSize:12,
+      animation:'pulse 2s infinite'}},
+    React.createElement('span',{style:{fontSize:16}},'↔'),
+    React.createElement('span',null,
+      React.createElement('strong',null,swapSource.baslik||'Dinlenme'),
+      ' — yer değiştirmek için hedef güne tıklayın'
+    ),
+    React.createElement('button',{className:'btn btn-sm',style:{marginLeft:'auto',background:'var(--danger)',color:'#fff',border:'none'},
+      onClick:()=>setSwapSource(null)},'✕ Vazgeç')
   );
 
   const tipColor=(tip)=>({
@@ -6898,6 +7064,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
 
   return React.createElement('div',null,
     snapBanner,
+    swapBanner,
     snapInfo,
 
     // Yarış seçici + özet
@@ -7157,10 +7324,16 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
             const isDone=day.actual&&day.actual.length>0;
             const isCancelledDay=!!cancelledDays[day.date];
             const isYapilmamis=!isDone&&!isCancelledDay&&day.isPast&&!day.isToday&&day.tip!=='dinlenme';
+            const isSwapSource=swapSource?.date===day.date;
+            const isSwapTarget=swapSource&&swapSource.date!==day.date&&!day.isPast;
             return React.createElement('div',{key:day.date,style:{
-              borderLeft:'3px solid '+(isDone?'var(--success)':(isCancelledDay||isYapilmamis)?'var(--danger)':tipColor(day.tip)),
-              paddingLeft:10
-            }},
+              borderLeft:'3px solid '+(isSwapSource?'var(--warn)':isDone?'var(--success)':(isCancelledDay||isYapilmamis)?'var(--danger)':tipColor(day.tip)),
+              paddingLeft:10,
+              background:isSwapSource?'var(--warn-bg)':isSwapTarget?'rgba(59,130,246,0.04)':'transparent',
+              borderRadius:isSwapSource||isSwapTarget?'var(--radius)':0,
+              transition:'background 0.2s',
+              cursor:isSwapTarget?'pointer':'default'
+            },onClick:isSwapTarget?()=>handleSwapDays(swapSource.date,day.date):undefined},
               React.createElement('div',{style:{
                 display:'flex',alignItems:'center',gap:6,marginBottom:6
               }},
@@ -7264,6 +7437,30 @@ function HaftalikPlanTab({athlete,history,races,workouts,planMode,setPlanMode,te
                     style:{display:'block',width:'100%',marginTop:3,padding:'2px 0',fontSize:9,background:'var(--info-bg)',border:'1px solid var(--info)',borderRadius:'var(--radius)',color:'var(--info)',cursor:'pointer'},
                     onClick:function(){setManuelAtaGun(day.date);}
                   },'Ata'),
+                  // Swap butonu — geçmiş ve yarış günleri hariç
+                  !day.isPast&&!isRaceDay&&React.createElement('button',{
+                    style:{display:'block',width:'100%',marginTop:3,padding:'2px 0',fontSize:9,
+                      background:swapSource?.date===day.date?'var(--warn)':'transparent',
+                      border:'1px solid '+(swapSource?.date===day.date?'var(--warn)':'var(--border)'),
+                      borderRadius:'var(--radius)',
+                      color:swapSource?.date===day.date?'#fff':'var(--text-tertiary)',
+                      cursor:'pointer',fontWeight:swapSource?.date===day.date?'bold':'normal'},
+                    onClick:function(){
+                      if(!swapSource){
+                        // İlk tıklama — kaynak seç
+                        setSwapSource({date:day.date,tip:day.tip,baslik:day.baslik});
+                      } else if(swapSource.date===day.date){
+                        // Aynı güne tıklayınca iptal
+                        setSwapSource(null);
+                      } else {
+                        // İkinci tıklama — hedef seç, swap yap
+                        handleSwapDays(swapSource.date,day.date);
+                      }
+                    }
+                  },swapSource
+                    ?(swapSource.date===day.date?'✕ Swap İptal':'↔ Buraya Taşı')
+                    :'↔ Swap'
+                  ),
                 )
             )
           );
