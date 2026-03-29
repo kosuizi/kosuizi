@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.03.29-fix3'; // Snap persistence fix + swap + aerobik çeşitlendirme
+const APP_VERSION='v2026.03.29-fix4'; // Gelecek hafta tekrar sorunu + swap + snap persistence
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -5738,8 +5738,11 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
       // Mekanik/kardiyovasküler denge bozuk → yoğun antrenman yerine aerobik
       kosuTpl=tplAerobik(band,Math.round(55*yMod),zones,disiplin);
       kosuUyari='Mech/Kardio dengesi bozuk — aerobik öncelikli, yoğun antrenman ertelendi';
-    } else if(haftaGunTipi==='kaliteli'&&!yorgun){
+    } else if(haftaGunTipi==='kaliteli'&&(!yorgun||isSimulatedFuture)){
       // İskelet kaliteli atadı — faz + hafta rotasyonu ile çeşitlendir
+      // Not: isSimulatedFuture (gelecek hafta) için yorgunluk kontrolü gevşetilir
+      // çünkü simüle edilen TSB gerçek olmayan yüklere dayanır ve iskeletin
+      // oluşturduğu hard/easy yapısına güvenmek daha sağlıklıdır
       const wk=wkStats.weekOff||0;
       const recent=wkStats.recentKaliteli||[];
       const buHaftaKaliteli=wkStats.buHaftaKaliteli||[]; // Bu haftanın kaliteli tipleri
@@ -5797,6 +5800,16 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
     } else {
       // Varsayılan faz mantığı — haftaGunTipi atanmamış veya kaliteli koşul sağlanmadı
       const wk=(wkStats.weekOff||0)+(wkStats.kaliteliSayisi||0)+(wkStats.count||0);
+      // Fallback pickSeq — buHaftaKaliteli ve recentKaliteli ile tekrar önleme
+      const fallbackPick=(seq)=>{
+        const startIdx=wk%seq.length;
+        const yasak=[...(wkStats.recentKaliteli||[]).slice(0,2),...(wkStats.buHaftaKaliteli||[])];
+        for(let i=0;i<seq.length;i++){
+          const tpl=seq[(startIdx+i)%seq.length]();
+          if(!yasak.includes(tpl.tip)) return tpl;
+        }
+        return seq[startIdx]();
+      };
       if(daysToRace!==null&&daysToRace<=14&&haftaGunTipi==='kaliteli'){
         // Yarışa yakın taper: 1. kaliteli gün=tempo, 2. kaliteli gün=strides/açıcı
         const hIS=wkStats.kaliteliSayisi||0;
@@ -5808,7 +5821,6 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
         }
       } else if(phase==='Zirve'){
         if(wkStats.kaliteliYok&&(tsb> -10||isSimulatedFuture)&&(acwr<1.2||isSimulatedFuture)){
-          // Kaliteli henüz yapılmadıysa — rotasyonlu kaliteli ver
           const zirveSeq=[
             ()=>isTrail&&band>=3?tplYokusUzun(band,zones,phase):tplInterval(band,phase,zones),
             ()=>tplPiramit(band,zones,phase),
@@ -5816,7 +5828,7 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
             ()=>tplCruise(band,Math.round(55*yMod),zones,phase),
             ()=>isTrail?tplHillSprint(band,zones,phase):tplOnOff(band,zones,phase),
           ];
-          kosuTpl=zirveSeq[wk%zirveSeq.length]();
+          kosuTpl=fallbackPick(zirveSeq);
         } else if(!wkStats.uzunYapildi&&(!uzunGunTanimli||isUzunGun)){
           kosuTpl=isTrail?tplTirmanisAcik(band,Math.round(75*yMod),zones,dpGun):tplUzun(band,simState.ctl||0,zones,disiplin,dpGun,wkStats.recentLongRuns);
         } else {
@@ -5824,7 +5836,6 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
         }
       } else if(phase==='Gelişme'){
         if(wkStats.kaliteliYok&&(tsb> -10||isSimulatedFuture)&&(acwr<1.2||isSimulatedFuture)){
-          // Kaliteli henüz yapılmadıysa — rotasyonlu kaliteli ver
           const gelismeSeq=[
             ()=>isTrail&&band>=3?tplYokusKisa(band,zones,phase):tplInterval(band,phase,zones),
             ()=>tplTempoInterval(band,Math.round(50*yMod),zones,phase),
@@ -5834,7 +5845,7 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
             ()=>tplOnOff(band,zones,phase),
             ()=>isTrail?tplHillSprint(band,zones,phase):tplYarisTempo(band,Math.round(48*yMod),zones,phase),
           ];
-          kosuTpl=gelismeSeq[wk%gelismeSeq.length]();
+          kosuTpl=fallbackPick(gelismeSeq);
         } else if(isTrail&&band>=2&&!wkStats.kaliteliYok){
           kosuTpl=tplTeknikInis(band,40,zones);
         } else {
@@ -5849,7 +5860,7 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
             ()=>tplStrides(band,Math.round(50*yMod),zones,phase),
             ()=>tplCruise(band,Math.round(45*yMod),zones,phase),
           ];
-          kosuTpl=temelSeq[wk%temelSeq.length]();
+          kosuTpl=fallbackPick(temelSeq);
         } else {
           kosuTpl=tplAerobik(band,Math.round(55*yMod),zones,disiplin);
         }
@@ -5970,6 +5981,7 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
   const weeks=[];
   let simAtl=last?.atl||0, simCtl=last?.ctl||0;
   let sonYogunGunGlobal=false; // Haftalar arası korunur
+  let plannedKaliteliCarry=[]; // Hafta 0'da planlanan kaliteli tipler → hafta 1'de tekrar önleme
 
   for(let weekOff=0;weekOff<2;weekOff++){
     const {start}=getWeekBounds(weekOff);
@@ -5984,11 +5996,15 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
     const rotIdx = Math.abs(athHash % 97) + Math.floor((history.length||0)/7) + weekOff;
     
     // Son 4 haftada yapılan kaliteli antrenman tiplerini bul (tekrar önleme)
-    const recentKaliteli = athWorkouts
+    // weekOff=1 ise önceki haftanın PLANLANAN kaliteli tiplerini de dahil et
+    const recentKaliteliBase = athWorkouts
       .filter(w=>['interval','esik','tempo','piramit','kesintisiz_piramit','on_off','tempo_interval','cruise','yaris_tempo','hill_sprint','yokus_kisa','yokus_uzun'].includes(w.tur))
       .sort((a,b)=>new Date(b.date)-new Date(a.date))
       .slice(0,4)
       .map(w=>w.tur);
+    const recentKaliteli = weekOff>0
+      ? [...plannedKaliteliCarry, ...recentKaliteliBase].slice(0,6)
+      : recentKaliteliBase;
     
     // Son uzun koşular — tplUzun için progresyon hesabında kullanılır
     // Yaklaşım: etiketten bağımsız, her haftanın EN UZUN koşusunu al
@@ -6331,6 +6347,12 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
     const wkActualKm=round1(days.reduce((s,d2)=>s+d2.actualKm,0));
     const wkActualDp=Math.round(days.reduce((s,d2)=>s+d2.actualDp,0));
     weeks.push({weekOff,start,days,primary,intermediate,wkStats,wt,wkActualKm,wkActualDp});
+
+    // Bu haftanın planlanan kaliteli tiplerini bir sonraki haftaya taşı
+    // (gerçek antrenman verisine dayanmayan, sadece bu hafta planlanan tipler)
+    if(weekOff===0){
+      plannedKaliteliCarry=[...(wkStats.buHaftaKaliteli||[])];
+    }
   }
   return{weeks,primary,intermediate};
 }
