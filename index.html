@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.03.29-0021'; // Her güncellemede otomatik değişir
+const APP_VERSION='v2026.03.29-0046'; // Her güncellemede otomatik değişir
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -2610,16 +2610,21 @@ function ProgramTab({athletes,workouts,allHistory,races,testPlanlar,teamName,tea
   const today=new Date();
   const todayStr=today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0')+'-'+String(today.getDate()).padStart(2,'0');
   const weekKey=getWeekKey(0);
-  const [planSnaps,setPlanSnaps]=useState({}); // {athId: snap}
+  const [planSnaps,setPlanSnaps]=useState(_planSnapsCache); // Global cache ile başla
 
-  // Tüm sporcular için planSnap'leri Firebase'den yükle
+  // Tüm sporcular için planSnap'leri Firebase'den yükle — cache'e yaz
   useEffect(()=>{
-    athletes.forEach(a=>{
-      fbGet(`plan_snapshots/${a.id}/${weekKey}`).then(snap=>{
-        if(snap&&(snap.manualOverrides||snap.overrideMap)){
-          setPlanSnaps(prev=>({...prev,[a.id]:snap}));
+    let changed=false;
+    const promises=athletes.map(a=>{
+      return fbGet(`plan_snapshots/${a.id}/${weekKey}`).then(snap=>{
+        if(snap){
+          _planSnapsCache[a.id]=snap;
+          changed=true;
         }
       }).catch(()=>{});
+    });
+    Promise.all(promises).then(()=>{
+      if(changed) setPlanSnaps({..._planSnapsCache});
     });
   },[athletes.map(a=>a.id).join(','),weekKey]);
   const dayNames=['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'];
@@ -3624,6 +3629,9 @@ function zoneStatusColor(pct, min, max, idealMin, idealMax){
   // Çok uzak → kırmızı
   return{bg:'rgba(220,38,38,0.15)',border:'rgba(220,38,38,0.55)',text:'#7f1d1d'};
 }
+
+// Global plan snap cache — ProgramTab re-render'da kaybolmaz
+const _planSnapsCache = {};
 
 function coachingCue(label, tip){
   const l=(label||'').toLowerCase().replace(/i/g,'i').replace(/ı/g,'i');
