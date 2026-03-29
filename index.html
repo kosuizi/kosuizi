@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.03.30-0211'; // planMode sporcu bazlı snap'e kaydedildi, sureMod ile dinamik süre ölçekleme, aşama isimleri düzeltildi
+const APP_VERSION='v2026.03.30-0225'; // planMode sporcu bazlı snap'e kaydedildi, sureMod ile dinamik süre ölçekleme, aşama isimleri düzeltildi
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -5003,8 +5003,9 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary){
   const athWks=(workouts||[]).filter(w=>w.athleteId===athlete.id);
 
   // Önce tüm haftaları hesapla (telafi için önce plan gerekli)
+  // prepWeeks+1: son iterasyon yarış haftasının kendisi
   const baseWeeks=[];
-  for(let w=0;w<prepWeeks;w++){
+  for(let w=0;w<prepWeeks+1;w++){
     const weekStart=new Date(raceDate);
     weekStart.setDate(raceDate.getDate()-(prepWeeks-w)*7);
     const dow=weekStart.getDay();
@@ -5016,8 +5017,11 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary){
     const isCurrent=weekStart<=today&&weekEnd>=today;
     const isPast=weekEnd<today;
 
+    // Son iterasyon (w===prepWeeks): yarış haftası — her zaman Taper
+    const isRaceWeek=w===prepWeeks;
+
     let phase;
-    if(w>=prepWeeks-taperW)phase='Taper';
+    if(isRaceWeek||w>=prepWeeks-taperW)phase='Taper';
     else if(w>=prepWeeks-taperW-peakW)phase='Zirve';
     else if(w>=buildW*0.5)phase='Gelişme';
     else phase='Temel';
@@ -5029,10 +5033,11 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary){
     })();
 
     let kmPct;
-    if(phase==='Taper'){
+    if(isRaceWeek){
+      // Yarış haftası: çok düşük hacim — sadece açıcı koşular + yarış günü
+      kmPct=0.20;
+    } else if(phase==='Taper'){
       const taperIdx=w-buildW-peakW;
-      // Zirve haftasında yeterli uzun koşu yapılmış mı?
-      // Son 2 haftadaki en uzun koşuya bak (athWks mevcut değilse güvenli fallback)
       let peakMissed=false;
       try{
         const targetLongKm=(km||0)*0.32;
@@ -5074,7 +5079,7 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary){
     }
 
     baseWeeks.push({
-      weekIdx:w+1,weekStart,weekEnd,phase,isRecovery,
+      weekIdx:w+1,weekStart,weekEnd,phase,isRecovery,isRaceWeek,
       targetKm,targetDp,daysToRace,
       isPast,isCurrent:weekStart<=today&&weekEnd>=today,
       actualKm,actualDp,kmRatio,weekStatus,
@@ -7309,7 +7314,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   React.createElement('div',{style:{fontSize:9,color:'var(--text-tertiary)',fontWeight:400,marginTop:1}},
                     wt.weekStart.toLocaleDateString('tr-TR',{day:'2-digit',month:'short'})
                   ),
-                  wt.isRecovery&&React.createElement('span',{className:'badge badge-info',style:{marginLeft:4,fontSize:9}},wt.weekStatus==='dinlenme_otomatik'?'🔄 Otomatik Dinlenme':'Dinlenme'),
+                  wt.isRaceWeek&&React.createElement('span',{className:'badge badge-danger',style:{marginLeft:4,fontSize:9}},'🏁 Yarış'),
+                  !wt.isRaceWeek&&wt.isRecovery&&React.createElement('span',{className:'badge badge-info',style:{marginLeft:4,fontSize:9}},wt.weekStatus==='dinlenme_otomatik'?'🔄 Otomatik Dinlenme':'Dinlenme'),
                   wt.telafiUygulandı&&React.createElement('span',{className:'badge badge-warn',style:{marginLeft:4,fontSize:9}},'↑ Telafi +'+wt.telafiKm+'km'),
                   wt._optimize&&React.createElement('span',{
                     className:'badge badge-info',
@@ -7318,7 +7324,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   },'⚡')
                 ),
                 React.createElement('td',{style:{padding:'6px 8px',textAlign:'center'}},
-                  React.createElement('span',{className:'badge '+(PHASE_COLORS[wt.phase]||'badge-gray'),style:{fontSize:10}},wt.phase)
+                  React.createElement('span',{className:'badge '+(wt.isRaceWeek?'badge-danger':(PHASE_COLORS[wt.phase]||'badge-gray')),style:{fontSize:10}},wt.isRaceWeek?'Yarış Haftası':wt.phase)
                 ),
                 React.createElement('td',{style:{padding:'6px 8px',fontFamily:'monospace',textAlign:'center',fontWeight:600}},wt.targetKm),
                 React.createElement('td',{style:{padding:'6px 8px',fontFamily:'monospace',textAlign:'center',color:act.km>0?'var(--success)':'var(--text-tertiary)'}},act.km||'—'),
