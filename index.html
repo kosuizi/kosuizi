@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.03.29-fix4'; // Gelecek hafta tekrar sorunu + swap + snap persistence
+const APP_VERSION='v2026.03.29-fix5'; // Taper tüm günler aynı antrenman sorunu çözüldü
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -5631,16 +5631,17 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
     } else if(daysToIntermediate!==null&&daysToIntermediate<=7){
       kosuTpl=tplKolay(band,Math.round(35*yMod),zones);
     } else if(phase==='Taper'||(daysToRace!==null&&daysToRace<=7)){
-      // Taper'da uzun koşu günü seçilmişse:
-      // - İlk taper haftası (daysToRace > 14): hafifletilmiş uzun koşu
-      // - Son taper haftası (daysToRace <= 14): taper protokolü (tempo/açıcı)
+      // ── TAPER PERİYODU — Antrenman Bilimi Prensipleri ─────────────────────
+      // Taper'ın amacı: fitness'i korurken yorgunluğu süperkompanzasyon için boşaltmak.
+      // Hacim %40-60 düşer, yoğunluk korunur (nöromüsküler stimülasyon için).
+      // Hata: tüm günlere tempo vermek → yorgunluk boşalmaz.
+      // Doğru: 1 kaliteli (kısa tempo), 1 aktivasyon (strides/açıcı), geri kalan kolay Z1.
       const isTaperFirstWeek=daysToRace!==null&&daysToRace>14;
       const taperPeakMissed=isTaperFirstWeek&&daysToRace<=21
         &&isUzunGun&&!wkStats.uzunYapildi
         &&(wkStats.recentLongRuns||[]).filter(r=>(r?.km||0)>=(parseFloat(race?.mesafe||0)*0.30)).length===0;
       if(isUzunGun&&isTaperFirstWeek&&!cokYorgun){
-        // Kullanıcı bu günü uzun koşu günü olarak seçmiş — hafifletilmiş uzun koşu ver
-        // uzunYapildi olsa bile (Pazartesi yapıldı) seçili uzun koşu günlerine saygı göster
+        // Taper ilk haftası: uzun koşu günü → hafifletilmiş uzun koşu
         const isIkinciUzun=wkStats.uzunYapildi;
         const uzunYMod=Math.min(yMod,taperPeakMissed?0.75:isIkinciUzun?0.55:0.65);
         kosuTpl=isTrail&&dpGun>200
@@ -5650,9 +5651,44 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
           ?'Zirve antrenmanı eksik — taper\'da hafifletilmiş uzun koşu (%75 yoğunluk)'
           :isIkinciUzun?'Taper 2. uzun koşusu — yorgun bacak, %55 yoğunluk'
           :'Taper uzun koşusu — hacim düşük (%65), form koruma odaklı';
+      } else if(daysToRace!==null&&daysToRace<=2){
+        // Yarışa 0-2 gün: sadece açıcı veya tam dinlenme
+        const aciciSure=Math.round(20*yMod);
+        kosuTpl=tplAcici(aciciSure,phase);
+        kosuUyari='Yarışa '+daysToRace+' gün — kısa açıcı, sinir-kas aktivasyonu';
+      } else if(daysToRace!==null&&daysToRace===3){
+        // Yarışa 3 gün: hafif strides ile aktivasyon
+        const sure=Math.round(30*yMod);
+        kosuTpl=tplStrides(band,sure,zones,phase);
+        kosuUyari='Yarışa 3 gün — kısa strides ile nöromüsküler aktivasyon, form koruma';
+      } else if(haftaGunTipi==='kaliteli'&&daysToRace!==null&&daysToRace>=4){
+        // Kaliteli gün (iskelet atadı): kısa tempo blokları — hız hissini korumak için
+        // Hacim düşük (%40), yoğunluk korunuyor
+        const taperKaliteliSira=wkStats.kaliteliSayisi||0;
+        if(taperKaliteliSira===0){
+          // İlk kaliteli gün: kısa tempo
+          const taperSure=Math.round(35*yMod);
+          kosuTpl=tplTempo(band,taperSure,zones,phase);
+          kosuUyari='Taper kaliteli antrenman — kısa tempo blokları, hız hissini koru';
+        } else {
+          // İkinci kaliteli gün (varsa): açıcı/strides
+          const sure=Math.round(25*yMod);
+          kosuTpl=daysToRace<=5?tplAcici(sure,phase):tplStrides(band,sure,zones,phase);
+          kosuUyari='Taper 2. kaliteli gün — aktivasyon odaklı, yarışa hazırlık';
+        }
+      } else if(haftaGunTipi==='kolay'||haftaGunTipi==='aerobik'||(daysToRace!==null&&daysToRace>=4)){
+        // Aerobik/kolay günler VEYA iskelet tipi olmayan günler: hafif toparlanma koşusu
+        // Taper'da bu günler çok kısa ve çok kolay olmalı — süperkompanzasyon için
+        const kolayTaperSure=Math.round(((daysToRace!==null&&daysToRace<=5)?25:30)*yMod);
+        kosuTpl=tplKolay(band,kolayTaperSure,zones);
+        kosuTpl.baslik='Taper Toparlanma';
+        kosuTpl.yapilar=[{baslik:'Kolay Toparlanma',detay:`${kolayTaperSure} dk — Z1 çok kolay · Kan dolaşımını artırarak kasların dinlenmesini hızlandır · Pace önemsiz`}];
+        kosuUyari='Taper toparlanma — Z1 çok kolay, süperkompanzasyon için hacim düşük';
+        if(isUzunGun)kosuUyari='Son taper haftası (yarışa '+daysToRace+' gün) — uzun koşu yerine kısa toparlanma. Kaslar dinlenmeli, form zirveye çıkmalı.';
       } else {
-        kosuTpl=daysToRace<=3?tplAcici(25,phase):tplTempo(band,Math.round(40*yMod),zones,phase);
-        if(isUzunGun)kosuUyari='Son taper haftası (yarışa '+daysToRace+' gün) — uzun koşu antrenman bilimi açısından önerilmez. Kaslar dinlenmeli, form zirveye çıkmalı.';
+        // Fallback (normalde buraya düşmemeli)
+        kosuTpl=tplKolay(band,Math.round(25*yMod),zones);
+        kosuUyari='Taper dönemi — kolay toparlanma';
       }
     } else if((isUzunGun||(haftaGunTipi==='uzun'&&!uzunGunTanimli))&&(!wkStats.uzunYapildi||isUzunGun)){
       // Uzun koşu TSB'den bağımsız — her koşulda uzun koşu ver, sadece süre kısalır
@@ -5759,9 +5795,21 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
         return seq[startIdx]();
       };
       if(daysToRace!==null&&daysToRace<=14){
-        kosuTpl=tplAcici(Math.round(30*yMod),phase);
+        // Yarışa 8-14 gün (phase henüz Taper değil ama yakın): kaliteli sırasına göre farklılaştır
+        const kalSira=wkStats.kaliteliSayisi||0;
+        if(kalSira===0){
+          // İlk kaliteli: kısa tempo veya yarış temposu — hız hissini koru
+          kosuTpl=daysToRace<=10?tplTempo(band,Math.round(40*yMod),zones,phase):tplYarisTempo(band,Math.round(45*yMod),zones,phase);
+          kosuUyari='Yarışa '+daysToRace+' gün — kaliteli antrenman, yoğunluk korunur, hacim düşük';
+        } else {
+          // 2. kaliteli: açıcı veya strides — aktivasyon
+          kosuTpl=daysToRace<=10?tplAcici(Math.round(25*yMod),phase):tplStrides(band,Math.round(35*yMod),zones,phase);
+          kosuUyari='Yarışa '+daysToRace+' gün — 2. kaliteli, aktivasyon odaklı';
+        }
       } else if(phase==='Taper'){
-        kosuTpl=tplYarisTempo(band,Math.round(45*yMod),zones,phase);
+        // Taper ama daysToRace>14 (geniş taper) — kaliteli sırasına göre farklılaştır
+        const kalSira=wkStats.kaliteliSayisi||0;
+        kosuTpl=kalSira===0?tplYarisTempo(band,Math.round(45*yMod),zones,phase):tplStrides(band,Math.round(35*yMod),zones,phase);
       } else if(phase==='Zirve'){
         const zirveSeq=[
           ()=>isTrail&&band>=3?tplYokusUzun(band,zones,phase):tplInterval(band,phase,zones),
