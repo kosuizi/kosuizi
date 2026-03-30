@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.03.30-0337'; // Anket son giriş tarihi versiyon satırına eklendi
+const APP_VERSION='v2026.03.30-0345'; // Haftalık km hedefleri sporcunun CTL band'ına göre ölçekleniyor (Band1×0.60 → Band5×1.15)
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -4902,18 +4902,16 @@ function tplTeknikInis(band, sure_dk, zones){
 
 // ── Grade Adjusted Pace (GAP) ─────────────────────────────────────────────────
 
-function calcWeeklyTargets(athlete, races, workouts, optimizeMode=false){
+function calcWeeklyTargets(athlete, races, workouts, optimizeMode=false, history=[]){
   if(!athlete)return[];
   const {primary}=selectRaces(athlete,races);
   if(!primary||!primary.prep_weeks)return[];
 
   // ── Optimize mod: tüm yarışları entegre et ─────────────────────────────
-  // Önce orijinal planı hesapla
-  const orijinalPlan=calcWeeklyTargetsCore(athlete,races,workouts,primary);
+  const orijinalPlan=calcWeeklyTargetsCore(athlete,races,workouts,primary,history);
 
   if(!optimizeMode)return orijinalPlan;
 
-  // Diğer yaklaşan yarışları bul
   const today=new Date();
   const athIds=(athlete.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
   const digerYarislar=(races||[]).filter(r=>
@@ -4923,12 +4921,11 @@ function calcWeeklyTargets(athlete, races, workouts, optimizeMode=false){
     r.prep_weeks
   ).sort((a,b)=>new Date(a.tarih)-new Date(b.tarih));
 
-  if(!digerYarislar.length)return orijinalPlan; // Tek yarış — optimize gerekmez
+  if(!digerYarislar.length)return orijinalPlan;
 
-  // Her yarış için plan hesapla
   const digerPlanlar=digerYarislar.map(r=>({
     race:r,
-    plan:calcWeeklyTargetsCore(athlete,races.map(x=>({...x,__force:x.id===r.id})),workouts,r)
+    plan:calcWeeklyTargetsCore(athlete,races.map(x=>({...x,__force:x.id===r.id})),workouts,r,history)
   }));
 
   // Orijinal planın her haftasını diğer yarışlarla entegre et
@@ -4982,7 +4979,7 @@ function calcWeeklyTargets(athlete, races, workouts, optimizeMode=false){
   });
 }
 
-function calcWeeklyTargetsCore(athlete, races, workouts, primary){
+function calcWeeklyTargetsCore(athlete, races, workouts, primary, history=[]){
   if(!athlete||!primary)return[];
   const today=new Date();
   const raceDate=new Date(primary.tarih+'T12:00:00');
@@ -4998,6 +4995,12 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary){
 
   const siklikStr=athlete.dinlenme_siklik||'3x1';
   const [siklikBlok,siklikDin]=(siklikStr.split('x').map(Number));
+
+  // Sporcunun mevcut CTL'sinden band hesapla — baseKm'i ölçekler
+  const last=history&&history.length>0?history[history.length-1]:null;
+  const currentCtl=last?.ctl||0;
+  const currentBand=ctlBand(currentCtl);
+  const bandKmMod=currentBand<=1?0.60:currentBand===2?0.75:currentBand===3?0.90:currentBand===4?1.00:1.15;
 
   // Geçmiş haftaların gerçekleşme durumunu hesapla — telafi için
   const athWks=(workouts||[]).filter(w=>w.athleteId===athlete.id);
@@ -5064,9 +5067,9 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary){
       kmPct=isRecovery?prog*0.45:0.35+prog*0.30;
     }
 
-    // baseKm: gerçekçi haftalık zirve yükü — yarış mesafesine göre
-    // Kısa mesafelerde haftalık antrenman hacmi yarış mesafesinin çok üzerinde olur
-    const baseKm=km<=5?km*4.0:km<=10?km*3.5:km<=21?km*2.2:km<=42?km*1.2:km<=60?km*0.90:km<=80?km*0.80:km*0.70;
+    // baseKm: yarış mesafesine göre zirve hafta hedefi × sporcunun mevcut kondisyon band'ı
+    const baseKmRaw=km<=5?km*4.0:km<=10?km*3.5:km<=21?km*2.2:km<=42?km*1.2:km<=60?km*0.90:km<=80?km*0.80:km*0.70;
+    const baseKm=round1(baseKmRaw*bandKmMod);
     const minKmHafta=baseKm*0.25; // Dinlenme haftaları dahil hiçbir hafta bunun altına düşmesin
     const targetKm=round1(Math.max(minKmHafta,baseKm*kmPct));
     const baseDp=isTrail?dp*0.6:dp*0.2;
@@ -5226,7 +5229,7 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   const ctlNearCap=ctlVo2Ratio>1.8;
 
   // ── Haftalık km hedef ─────────────────────────────────────────────────────
-  const weekTargets=calcWeeklyTargets(athlete,races,allWorkouts||[],planMode==='optimize');
+  const weekTargets=calcWeeklyTargets(athlete,races,allWorkouts||[],planMode==='optimize',history||[]);
   const thisWeekTarget=weekTargets.find(wt=>wt.isCurrent);
   const targetKm=thisWeekTarget?.targetKm||0;
   // ── Haftalık km hedefi — ±%15 tolerans penceresi ─────────────────────────
@@ -6047,7 +6050,7 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
   const kosuGunleri=athlete.kosu_gunleri||[];
   const caprazGunleri=athlete.capraz_gunleri||[];
   const athWorkouts=actualWorkouts.filter(w=>w.athleteId===athlete.id);
-  const weekTargets=calcWeeklyTargets(athlete,races,actualWorkouts||[],optimizeMode);
+  const weekTargets=calcWeeklyTargets(athlete,races,actualWorkouts||[],optimizeMode,history);
 
   const weeks=[];
   let simAtl=last?.atl||0, simCtl=last?.ctl||0;
@@ -6896,8 +6899,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     const racesOverride=selectedPrimary
       ?races.map(r=>({...r,__force:r.id===selectedPrimary}))
       :races;
-    return calcWeeklyTargets(athlete,racesOverride,workouts||[],planMode==='optimize');
-  },[athlete,races,selectedPrimary,workouts,planMode]);
+    return calcWeeklyTargets(athlete,racesOverride,workouts||[],planMode==='optimize',history||[]);
+  },[athlete,history,races,selectedPrimary,workouts,planMode]);
 
   // Gerçekleşen haftalık km+D+ hesapla
   const athWks=(workouts||[]).filter(w=>w.athleteId===athlete?.id);
