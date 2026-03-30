@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.03.30-0233'; // Aşama satırı isimleri düzeltildi — antrenman adı yerine zone/aktivite bazlı
+const APP_VERSION='v2026.03.30-0304'; // Haftalık km/D+ hedefleri yeniden kurgulandı: baseKm artırıldı, Zirve dinlenme aktif, Taper kademeli, Temel/Gelişme farklılaştırıldı
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -5027,7 +5027,8 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary){
     else phase='Temel';
 
     const isRecovery=(()=>{
-      if(phase==='Taper'||phase==='Zirve')return false;
+      if(phase==='Taper')return false;
+      // Zirve fazında da dinlenme haftası aktif
       const posInBlock=(w%siklikBlok);
       return posInBlock>=(siklikBlok-siklikDin);
     })();
@@ -5048,15 +5049,24 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary){
         }).reduce((mx,w)=>Math.max(mx,parseFloat(w.mesafe)||0),0);
         peakMissed=taperIdx===0&&targetLongKm>0&&bestPeakKm<targetLongKm*0.7;
       }catch(e){}
-      kmPct=peakMissed?0.70:(taperIdx===0?0.6:taperIdx===1?0.45:0.30);
+      // Kademeli taper: %75 → %55 → %35 (önceki: %60 → %45 → %30)
+      kmPct=peakMissed?0.80:(taperIdx===0?0.75:taperIdx===1?0.55:0.35);
     } else if(phase==='Zirve'){
+      // Zirve: isRecovery aktif — dinlenme haftası %65, normal hafta %85–100
       kmPct=isRecovery?0.65:0.85+0.05*(w-buildW);
+    } else if(phase==='Gelişme'){
+      // Gelişme: Temel'den daha yüksek taban, daha hızlı artış
+      const prog=Math.min(1,(w-Math.floor(buildW*0.5)+1)/Math.ceil(buildW*0.5));
+      kmPct=isRecovery?prog*0.55:0.55+prog*0.35;
     } else {
-      const prog=Math.min(1,(w+1)/buildW);
-      kmPct=isRecovery?prog*0.5:0.40+prog*0.40;
+      // Temel: düşük taban, yavaş lineer artış
+      const prog=Math.min(1,(w+1)/Math.floor(buildW*0.5));
+      kmPct=isRecovery?prog*0.45:0.35+prog*0.30;
     }
 
-    const baseKm=km<=21?km*0.8:km<=42?km*0.7:km*0.55;
+    // baseKm: gerçekçi haftalık zirve yükü — yarış mesafesine göre
+    // Maraton: ~50km, 100km ultra: ~70km, kısa mesafe: yarış mesafesine yakın
+    const baseKm=km<=10?km*1.2:km<=21?km*1.0:km<=42?km*1.2:km<=60?km*0.90:km<=80?km*0.80:km*0.70;
     const targetKm=round1(baseKm*kmPct);
     const baseDp=isTrail?dp*0.6:dp*0.2;
     const targetDp=Math.round(baseDp*kmPct*(isRecovery?0.5:1));
