@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.03.30-1216'; // ACWR puanlaması faz bazlı — Taper/Zirve/Gelişme/Temel/Yarış Sonrası için ayrı ideal aralıklar
+const APP_VERSION='v2026.03.30-1832'; // vLT kalibrasyonu: tüm koşular dahil, D+ GAP düzeltmesi, yapısal antrenmanlara ağırlıklı regresyon
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -797,8 +797,10 @@ function pbToVlt(pbStr, distKm){
 }
 
 // ── vLT Otomatik Kalibrasyon (Antrenman Verilerinden) ─────────────────────────
-// Metodoloji: Sabit tempolu aerobik antrenmanlarda pace-HR doğrusal regresyonu
-// Referans: Conconi 1982, Carter 1999 — submaksimal HR-pace ilişkisi
+// Metodoloji: Tüm koşu antrenmanlarında GAP-düzeltmeli pace–HR regresyonu
+// Yapısal antrenmanlarda yüksek nabız değişkenliği → ağırlık düşürülür
+// D+ verisi varsa Minetti/Strava GAP faktörü ile düz eşdeğer pace hesaplanır
+// Referans: Conconi 1982, Carter 1999, Minetti 2002
 
 function calibrateVlt(workouts, ath){
   const lthr=parseSayi(ath?.lthr)||0;
@@ -809,119 +811,117 @@ function calibrateVlt(workouts, ath){
   // Eşik nabız — LTHR varsa onu kullan, yoksa %85 MHR
   const thresholdHR=lthr>0?lthr:Math.round(mhr*0.85);
 
-  // Uygun antrenmanları filtrele
-  // Sabit tempolu sayılan türler — bu listede olmayan türler dahil edilmez
-  const STEADY_TURLERI=['kolay','aerobik','uzun'];
-
+  // Tüm koşu antrenmanlarını filtrele — tek kriter: koşu sporu
   const eligible=workouts.filter(w=>{
     const km=parseFloat(w.mesafe)||0;
     const hr=parseFloat(w.ort_nabiz)||0;
-    const hrMax=parseFloat(w.maks_nabiz)||0;
     const durSec=toSec(w.sure_sa,w.sure_dk,w.sure_sn);
-    const rpe=parseFloat(w.rpe)||0;
-    const zemin=parseInt(w.zemin_zorluk)||1;
     const spor=w.spor||'kosu';
-    const tur=w.tur||'';
 
-    // 0. "Analiz için kullan" işareti — tüm diğer kriterleri bypass eder
-    //    (koç manuel olarak dahil etmek istediği antrenmanlar için)
-    if(w.analiz_icin===true){
-      return spor==='kosu'&&km>=3&&durSec>=1200&&hr>=100&&hr<=185;
-    }
-
-    // 1. Temel koşullar
+    // Koşu olmalı
     if(spor!=='kosu') return false;
+    // Minimum mesafe ve süre
     if(km<3) return false;
-    if(durSec<1200) return false;   // en az 20dk
-    if(hr<115||hr>165) return false; // aerobik bölge
-
-    // 2. Antrenman türü — ZORUNLU: sadece sabit tempolu türler dahil
-    //    Tür girilmemişse veya yapısal türse dışla
-    if(!STEADY_TURLERI.includes(tur)) return false;
-
-    // 3. Zemin — çok zor arazi dışla (pace güvenilirliği düşer)
-    if(zemin>2) return false;
-
-    // 4. Nabız değişkenliği — maks-ort farkı >25 bpm ise interval/fartlek
-    if(hrMax>0&&hr>0){
-      const hrRange=hrMax-hr;
-      if(hrRange>25) return false;
-    }
-
-    // 5. RPE — yüksek RPE yapısal antrenmanı işaret eder
-    if(rpe>0&&rpe>7) return false;
-
-    // 6. Pace makul aralıkta
-    const durMin=durSec/60;
-    const pace=km>0?durMin/km:0;
-    if(pace<3.0||pace>10.0) return false;
+    if(durSec<900) return false; // en az 15dk
+    // Nabız aerobik bölgede (100–185 bpm)
+    if(hr<100||hr>185) return false;
+    // Pace makul aralıkta (2–12 dk/km)
+    const paceMinKm=km>0?(durSec/60)/km:0;
+    if(paceMinKm<2.0||paceMinKm>12.0) return false;
 
     return true;
   });
 
   if(eligible.length<3)return{
-    error:`Yeterli veri yok. ${eligible.length} uygun sabit tempolu antrenman bulundu (en az 3 gerekli). İpucu: Kolay, Aerobik veya Uzun Koşu türündeki antrenmanlara tür atayın, ya da "Analize Dahil Et" kutusunu işaretleyin.`,
+    error:`Yeterli veri yok. ${eligible.length} uygun koşu antrenmanı bulundu (en az 3 gerekli). Mesafe, süre ve ortalama nabız bilgisi girilen koşular kullanılır.`,
     count:eligible.length
   };
 
-  // Her antrenman için pace (m/s) ve HR çifti
+  // Her antrenman için GAP-düzeltmeli pace (m/s), HR ve ağırlık hesapla
   const points=eligible.map(w=>{
     const km=parseFloat(w.mesafe);
     const durSec=toSec(w.sure_sa,w.sure_dk,w.sure_sn);
     const hr=parseFloat(w.ort_nabiz);
-    const pace=km*1000/durSec; // m/s
-    return{pace,hr,date:w.date};
+    const hrMax=parseFloat(w.maks_nabiz)||0;
+    const dp=parseFloat(w.irtifa)||0;
+    const rawPaceMS=km*1000/durSec; // m/s ham pace
+
+    // D+ varsa GAP düzeltmesi — Minetti/Strava faktörü
+    let gapPaceMS=rawPaceMS;
+    let gapApplied=false;
+    if(dp>0&&km>0){
+      const gradeP=Math.min(40,(dp/(km*1000))*100);
+      if(gradeP>=2){
+        const gapFactor=1+(0.033*gradeP+0.00055*gradeP*gradeP)/100*100;
+        gapPaceMS=rawPaceMS*gapFactor; // düz eşdeğer pace (daha hızlı)
+        gapApplied=true;
+      }
+    }
+
+    // Nabız değişkenliği — maks-ort farkı büyükse interval/yapısal (ağırlık düşür)
+    const hrVariability=hrMax>0&&hr>0?(hrMax-hr):0;
+    // Sabit tempo: fark <15bpm → ağırlık 1.0
+    // Orta değişkenlik: 15–30bpm → ağırlık 0.6
+    // Yüksek değişkenlik: >30bpm → ağırlık 0.3
+    const weight=hrVariability<=15?1.0:hrVariability<=30?0.6:0.3;
+
+    return{pace:gapPaceMS,hr,date:w.date,weight,gapApplied,hrVariability};
   }).filter(p=>p.pace>1&&p.pace<8);
 
   if(points.length<3)return{error:'Geçerli pace-HR çifti yeterli değil.',count:points.length};
 
-  // Doğrusal regresyon: HR = a + b*pace
-  const n=points.length;
-  const sumX=points.reduce((s,p)=>s+p.pace,0);
-  const sumY=points.reduce((s,p)=>s+p.hr,0);
-  const sumXY=points.reduce((s,p)=>s+p.pace*p.hr,0);
-  const sumX2=points.reduce((s,p)=>s+p.pace*p.pace,0);
-  const b=(n*sumXY-sumX*sumY)/(n*sumX2-sumX*sumX);
-  const a=sumY/n-b*(sumX/n);
+  // Ağırlıklı doğrusal regresyon: HR = a + b*pace
+  const sw=points.reduce((s,p)=>s+p.weight,0);
+  const swx=points.reduce((s,p)=>s+p.weight*p.pace,0);
+  const swy=points.reduce((s,p)=>s+p.weight*p.hr,0);
+  const swxy=points.reduce((s,p)=>s+p.weight*p.pace*p.hr,0);
+  const swx2=points.reduce((s,p)=>s+p.weight*p.pace*p.pace,0);
+  const b=(sw*swxy-swx*swy)/(sw*swx2-swx*swx);
+  const a=swy/sw-b*(swx/sw);
 
-  // R² güven skoru
-  const yMean=sumY/n;
-  const ssTot=points.reduce((s,p)=>s+(p.hr-yMean)**2,0);
-  const ssRes=points.reduce((s,p)=>s+(p.hr-(a+b*p.pace))**2,0);
+  // R² güven skoru (ağırlıklı)
+  const yMean=swy/sw;
+  const ssTot=points.reduce((s,p)=>s+p.weight*(p.hr-yMean)**2,0);
+  const ssRes=points.reduce((s,p)=>s+p.weight*(p.hr-(a+b*p.pace))**2,0);
   const r2=ssTot>0?Math.max(0,1-ssRes/ssTot):0;
 
-  if(b<=0)return{error:'Pace-HR ilişkisi ters çıktı. Daha fazla sabit tempolu koşu verisi gerekiyor.',count:n};
+  if(b<=0)return{error:'Pace-HR ilişkisi ters çıktı. Farklı hızlarda koşuları olan daha fazla veri gerekiyor.',count:points.length};
 
   // vLT = (thresholdHR - a) / b
   const vlt=(thresholdHR-a)/b;
 
   if(vlt<1.5||vlt>7)return{
     error:`Hesaplanan vLT (${round2(vlt)} m/s) makul aralık dışında. Veri kalitesi yetersiz.`,
-    count:n,r2:round2(r2)
+    count:points.length,r2:round2(r2)
   };
 
-  // Son 30 gün ve tüm zaman verisi ayrı göster
+  // Son 30 gün verisiyle ayrı hesap
   const recent=points.filter(p=>(new Date()-new Date(p.date+'T12:00:00'))<30*864e5);
   let vltRecent=null;
   if(recent.length>=3){
-    const rn=recent.length;
-    const rX=recent.reduce((s,p)=>s+p.pace,0);
-    const rY=recent.reduce((s,p)=>s+p.hr,0);
-    const rXY=recent.reduce((s,p)=>s+p.pace*p.hr,0);
-    const rX2=recent.reduce((s,p)=>s+p.pace*p.pace,0);
-    const rb=(rn*rXY-rX*rY)/(rn*rX2-rX*rX);
-    const ra=rY/rn-rb*(rX/rn);
+    const rsw=recent.reduce((s,p)=>s+p.weight,0);
+    const rswx=recent.reduce((s,p)=>s+p.weight*p.pace,0);
+    const rswy=recent.reduce((s,p)=>s+p.weight*p.hr,0);
+    const rswxy=recent.reduce((s,p)=>s+p.weight*p.pace*p.hr,0);
+    const rswx2=recent.reduce((s,p)=>s+p.weight*p.pace*p.pace,0);
+    const rb=(rsw*rswxy-rswx*rswy)/(rsw*rswx2-rswx*rswx);
+    const ra=rswy/rsw-rb*(rswx/rsw);
     if(rb>0){const v=(thresholdHR-ra)/rb;if(v>1.5&&v<7)vltRecent=round2(v);}
   }
+
+  const gapCount=points.filter(p=>p.gapApplied).length;
+  const highVarCount=points.filter(p=>p.hrVariability>15).length;
 
   return{
     vlt:round2(vlt),
     vltRecent,
     r2:round2(r2),
-    count:n,
+    count:points.length,
     recentCount:recent.length,
     thresholdHR,
     points,
+    gapCount, // GAP düzeltmesi uygulanan antrenman sayısı
+    highVarCount, // Yüksek nabız değişkenliği olan (yapısal) antrenman sayısı
     confidence:r2>=0.7?'Yüksek':r2>=0.5?'Orta':'Düşük',
     confidenceCls:r2>=0.7?'good':r2>=0.5?'warn':'danger',
   };
@@ -7759,9 +7759,8 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
         React.createElement('button',{className:'btn btn-primary btn-sm',onClick:runCalib},'Hesapla')
       ),
       React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:8}},
-        'Tamamlanan koşu antrenmanlarındaki pace-nabız ilişkisinden vLT hesaplanır. ',
-        React.createElement('strong',null,'Sabit tempolu'),
-        ', 20dk+ ve HR 115–165 bpm arası antrenmanlar kullanılır.'
+        'Tüm koşu antrenmanlarındaki GAP-düzeltmeli pace–nabız ilişkisinden vLT hesaplanır. ',
+        'Mesafe, süre ve ortalama nabız bilgisi olan koşular kullanılır. D+ verisi varsa eğim düzeltmesi uygulanır.'
       ),
       calib&&React.createElement('div',null,
         calib.error
@@ -7782,13 +7781,16 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
               React.createElement('div',{className:'metric',style:{padding:'8px 12px'}},
                 React.createElement('div',{className:'metric-label'},'Güven (R²)'),
                 React.createElement('div',{className:'metric-val '+calib.confidenceCls,style:{fontSize:16}},calib.r2),
-                React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},calib.confidence+' · '+calib.count+' ant.')
+                React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},calib.confidence+' · '+calib.count+' koşu'+(calib.gapCount>0?' · '+calib.gapCount+' GAP':''))
               ),
               React.createElement('div',{className:'metric',style:{padding:'8px 12px'}},
                 React.createElement('div',{className:'metric-label'},'Eşik HR Referansı'),
                 React.createElement('div',{style:{fontSize:16,fontWeight:600}},calib.thresholdHR+' bpm'),
                 React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},athlete.lthr?'LTHR':'%85 MHR tahmini')
               )
+            ),
+            calib.highVarCount>0&&React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:8}},
+              '⚖ '+calib.highVarCount+' yapısal antrenman (interval/tempo) düşük ağırlıkla dahil edildi.'
             ),
             // Mevcut vs yeni karşılaştırma
             athlete.vlt&&React.createElement('div',{className:'alert alert-info',style:{fontSize:12,marginBottom:8}},
