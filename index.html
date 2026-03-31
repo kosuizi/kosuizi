@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.03.31-2006'; // Reçete satırı düzenlemeleri kalıcı (Firebase), pace renk güncellenir, Planı Güncelle row override'ları korur
+const APP_VERSION='v2026.03.31-2137'; // Sporcu plan görünümü: ?form=plan&id=athId linki, anket sayfasında plan butonu
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -11562,7 +11562,21 @@ function SporcuAnketi(){
     saved?React.createElement('div',{style:{
       textAlign:'center',fontSize:12,color:'var(--success)',padding:'8px',
       background:'var(--success-bg)',borderRadius:'var(--radius)'
-    }},'Bilgilerin antrenörüne iletildi.'):null
+    }},'Bilgilerin antrenörüne iletildi.'):null,
+
+    // Haftalık plan linki
+    selId&&pinOk&&React.createElement('div',{style:{textAlign:'center',marginTop:16}},
+      React.createElement('a',{
+        href:'?form=plan&id='+selId,
+        target:'_blank',
+        style:{
+          display:'inline-block',padding:'10px 20px',
+          background:'var(--info)',color:'#fff',
+          borderRadius:'var(--radius)',fontSize:13,fontWeight:600,
+          textDecoration:'none'
+        }
+      },'📅 Bu Haftanın Antrenman Planımı Gör')
+    )
 
   ):null;
 
@@ -11577,15 +11591,123 @@ function SporcuAnketi(){
 }
 
 
+// ── Sporcu Haftalık Plan Görünümü (public link) ───────────────────────────────
+function SporcuPlanView(){
+  const [athlete,setAthlete]=useState(null);
+  const [planSnap,setPlanSnap]=useState(null);
+  const [loading,setLoading]=useState(true);
+  const [appName,setAppName]=useState('Koşu İzi');
+  const [logo,setLogo]=useState('');
+  const athId=new URLSearchParams(window.location.search).get('id');
+
+  useEffect(()=>{
+    if(!athId){setLoading(false);return;}
+    (async()=>{
+      try{
+        const cfg=await fbGet('app_config');
+        if(cfg?.teamName) setAppName(cfg.teamName);
+        if(cfg?.teamLogo) setLogo(cfg.teamLogo);
+        const aths=await fbGet('ath2');
+        const ath=(aths||[]).find(function(a){return a.id===athId;});
+        setAthlete(ath||null);
+        if(ath){
+          const weekKey=getWeekKey(0);
+          const snap=await fbGet('plan_snapshots/'+athId+'/'+weekKey);
+          setPlanSnap(snap||null);
+        }
+      }catch(e){console.warn(e);}
+      setLoading(false);
+    })();
+  },[athId]);
+
+  if(loading) return React.createElement('div',{style:{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'var(--text-tertiary)',fontSize:14}},'Yükleniyor...');
+  if(!athlete) return React.createElement('div',{style:{textAlign:'center',padding:40,color:'var(--text-secondary)'}},'Sporcu bulunamadı.');
+  if(!planSnap?.overrideMap) return React.createElement('div',{style:{textAlign:'center',padding:40,color:'var(--text-secondary)'}},'Bu hafta için henüz plan oluşturulmadı.');
+
+  const zones=calcZones(athlete);
+  const weekStart=new Date(getWeekKey(0)+'T00:00:00');
+  const days=[];
+  for(let i=0;i<7;i++){
+    const d=new Date(weekStart);d.setDate(weekStart.getDate()+i);
+    const ds=localDateStr(d);
+    const ov=planSnap.overrideMap[ds];
+    days.push({date:ds,dayName:['Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi','Pazar'][i],ov});
+  }
+
+  const fmtDate=(ds)=>{const d=new Date(ds+'T12:00:00');return d.getDate()+' '+['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'][d.getMonth()];};
+
+  return React.createElement('div',{style:{minHeight:'100vh',background:'var(--bg-tertiary)',padding:'20px 16px'}},
+    React.createElement('div',{style:{maxWidth:540,margin:'0 auto'}},
+      // Header
+      React.createElement('div',{style:{textAlign:'center',marginBottom:20}},
+        logo?React.createElement('img',{src:logo,style:{width:52,height:52,objectFit:'contain',borderRadius:10,marginBottom:8,border:'1px solid var(--border)',padding:3,background:'var(--bg-secondary)'}}):
+          React.createElement('div',{style:{fontSize:32,marginBottom:6}},'🏃'),
+        React.createElement('div',{style:{fontSize:16,fontWeight:700}},appName),
+        React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',marginTop:2}},
+          (athlete.ad||'')+' '+(athlete.soyad||'')+' — Haftalık Antrenman Planı'
+        ),
+        React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:2}},
+          weekStart.toLocaleDateString('tr-TR',{day:'2-digit',month:'long',year:'numeric'})+' haftası'
+        )
+      ),
+      // Plan güncelleme tarihi
+      planSnap.lastSavedAt&&React.createElement('div',{style:{textAlign:'center',fontSize:11,color:'var(--text-tertiary)',marginBottom:12}},
+        '🕐 Plan güncellendi: '+(()=>{
+          const d=new Date(planSnap.lastSavedAt);
+          return String(d.getDate()).padStart(2,'0')+'.'+String(d.getMonth()+1).padStart(2,'0')+'.'+d.getFullYear()+' - '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+        })()
+      ),
+      // Günler
+      days.map(({date,dayName,ov})=>{
+        if(!ov||ov.tip==='dinlenme') return React.createElement('div',{key:date,style:{
+          background:'var(--bg-primary)',borderRadius:'var(--radius)',padding:'10px 14px',
+          marginBottom:8,border:'1px solid var(--border)',
+          borderLeft:'3px solid var(--border)',opacity:0.6
+        }},
+          React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center'}},
+            React.createElement('span',{style:{fontSize:13,fontWeight:600,color:'var(--text-secondary)'}},dayName),
+            React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)'}},fmtDate(date))
+          ),
+          React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',marginTop:4}},'😴 Dinlenme')
+        );
+        const tipRenk=tipColor(ov.tip);
+        return React.createElement('div',{key:date,style:{
+          background:'var(--bg-primary)',borderRadius:'var(--radius)',padding:'12px 14px',
+          marginBottom:8,border:'1px solid var(--border)',
+          borderLeft:'3px solid '+tipRenk
+        }},
+          React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}},
+            React.createElement('span',{style:{fontSize:13,fontWeight:700}},dayName),
+            React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)'}},fmtDate(date))
+          ),
+          React.createElement('div',{style:{fontSize:13,fontWeight:600,color:'var(--text-primary)',marginBottom:4}},
+            dayEmoji({tip:ov.tip})+' '+ov.baslik
+          ),
+          ov.sure_dk>0&&React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:6}},
+            '⏱ '+(ov.sure_dk>=60?Math.floor(ov.sure_dk/60)+'s '+(ov.sure_dk%60>0?ov.sure_dk%60+'dk':''):ov.sure_dk+' dk')
+          ),
+          ov.yapilar?.length>0&&React.createElement(ReceteTablosu,{
+            yapilar:ov.yapilar,zones,tip:ov.tip
+          })
+        );
+      })
+    )
+  );
+}
+
+
 (async()=>{
   await loadScript('https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js');
   await loadScript('https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js');
   initFirebase();
-  // ?form=sporcu parametresi varsa sporcu anketini göster
+  // URL routing
   const urlParams=new URLSearchParams(window.location.search);
-  const component=urlParams.get('form')==='sporcu'
+  const formParam=urlParams.get('form');
+  const component=formParam==='sporcu'
     ?React.createElement(SporcuAnketi)
-    :React.createElement(AppWithAuth);
+    :formParam==='plan'
+      ?React.createElement(SporcuPlanView)
+      :React.createElement(AppWithAuth);
   ReactDOM.render(component,document.getElementById('root'));
 })();
 </script>
