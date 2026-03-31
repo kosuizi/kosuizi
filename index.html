@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.03.31-1604'; // Planı Güncelle: bugün yapılan antrenman gerçek veri olarak gösterilir, kalan günler buna göre planlanır
+const APP_VERSION='v2026.03.31-1849'; // Reçete tablosunda Mesafe/Pace dk/Pace sn hücreleri tıklanıp düzenlenebilir, değişiklik diğer alanları ve Toplamı günceller
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -3763,6 +3763,9 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip}){
   const [customCues, setCustomCues] = useState(_cueCache.data||{});
   const [editingLabel, setEditingLabel] = useState(null);
   const [editText, setEditText] = useState('');
+  const [editCell, setEditCell] = useState(null); // {rowIdx, field}
+  const [editVal, setEditVal] = useState('');
+  const [rowOverrides, setRowOverrides] = useState({}); // {rowIdx: {mesafe,pm,ps,h,m,s}}
 
   // Global cache'ten yükle — bir kez
   useEffect(()=>{
@@ -3798,8 +3801,64 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip}){
   const normalYapilar=(yapilar||[]).filter(y=>!(y.baslik||'').startsWith('💡'));
 
   // Satırları üret — header satırları toplama dahil edilmez
-  const rows=normalYapilar.flatMap(y=>{try{return adimToRows(y,zones);}catch(e){console.warn('adimToRows error:',e,y);return[];};});
-  if(!rows.length&&!oneriYapilar.length) return null;
+  const baseRows=normalYapilar.flatMap(y=>{try{return adimToRows(y,zones);}catch(e){console.warn('adimToRows error:',e,y);return[];};});
+  if(!baseRows.length&&!oneriYapilar.length) return null;
+
+  // Override'ları uygula
+  const rows=baseRows.map((r,i)=>rowOverrides[i]?{...r,...rowOverrides[i]}:r);
+
+  // Hücre güncelleme: mesafe, pm veya ps değişince diğerlerini hesapla
+  const updateCell=(rowIdx, field, rawVal)=>{
+    const r=rows[rowIdx];
+    if(!r||r.type==='header') return;
+    const val=parseInt(rawVal)||0;
+    let upd={};
+    if(field==='mesafe'){
+      // Mesafe değişti → süreyi yeniden hesapla (pace sabit)
+      const paceSec=(r.pm||0)*60+(r.ps||0);
+      if(paceSec>0&&val>0){
+        const newSec=Math.round(val/1000*paceSec);
+        upd={mesafe:val,...secToHMS(newSec)};
+      } else {
+        upd={mesafe:val};
+      }
+    } else if(field==='pm'||field==='ps'){
+      // Pace değişti → süreyi yeniden hesapla (mesafe sabit)
+      const pm=field==='pm'?val:(r.pm||0);
+      const ps=field==='ps'?val:(r.ps||0);
+      const paceSec=pm*60+ps;
+      const mesafe=r.mesafe||0;
+      if(paceSec>0&&mesafe>0){
+        const newSec=Math.round(mesafe/1000*paceSec);
+        upd={pm,ps,...secToHMS(newSec)};
+      } else {
+        upd={pm,ps};
+      }
+    }
+    setRowOverrides(prev=>({...prev,[rowIdx]:{...(prev[rowIdx]||{}), ...upd}}));
+    setEditCell(null);
+  };
+
+  // Düzenlenebilir hücre render yardımcısı
+  const editableCell=(rowIdx, field, displayVal)=>{
+    const isEditing=editCell?.rowIdx===rowIdx&&editCell?.field===field;
+    if(isEditing) return React.createElement('input',{
+      autoFocus:true,
+      type:'number',
+      defaultValue:displayVal,
+      style:{width:'100%',fontFamily:'monospace',fontSize:11,fontWeight:700,border:'1px solid var(--info)',borderRadius:3,padding:'1px 3px',background:'var(--bg-primary)',color:'#000',textAlign:'center'},
+      onBlur:e=>updateCell(rowIdx,field,e.target.value),
+      onKeyDown:e=>{
+        if(e.key==='Enter') updateCell(rowIdx,field,e.target.value);
+        if(e.key==='Escape') setEditCell(null);
+      }
+    });
+    return React.createElement('span',{
+      style:{cursor:'pointer',borderBottom:'1px dashed #aaa'},
+      title:'Düzenlemek için tıkla',
+      onClick:()=>{setEditCell({rowIdx,field});setEditVal(String(displayVal));}
+    },displayVal);
+  };
 
   // Toplam hesapla (header hariç, repeatCount ile çarp)
   let totSn=0, totMesafe=0, totWeightedPace=0, paceWeight=0;
@@ -3888,9 +3947,9 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip}){
             React.createElement('td',{style:{...cell(),color:'#000'}},r.h>0?r.h:0),
             React.createElement('td',{style:{...cell(),color:'#000'}},r.m),
             React.createElement('td',{style:{...cell(),color:'#000'}},String(r.s).padStart(2,'0')),
-            React.createElement('td',{style:{...cell(),color:'#000'}},r.mesafe>0?r.mesafe:0),
-            React.createElement('td',{style:{...cell(),color:'#000'}},r.rpe?'—':r.pm!=null?r.pm:0),
-            React.createElement('td',{style:{...cell(),color:'#000'}},r.rpe?'—':r.ps!=null?String(r.ps).padStart(2,'0'):'00'),
+            React.createElement('td',{style:{...cell(),color:'#000'}},r.rpe?'—':editableCell(i,'mesafe',r.mesafe>0?r.mesafe:0)),
+            React.createElement('td',{style:{...cell(),color:'#000'}},r.rpe?'—':editableCell(i,'pm',r.pm!=null?r.pm:0)),
+            React.createElement('td',{style:{...cell(),color:'#000'}},r.rpe?'—':editableCell(i,'ps',r.ps!=null?String(r.ps).padStart(2,'0'):'00')),
             React.createElement('td',{style:{...cell(),color:'#000',fontSize:r.rpe?12:11}},r.rpe||'—')
           );
         }),
