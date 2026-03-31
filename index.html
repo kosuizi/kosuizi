@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.03.31-1849'; // Reçete tablosunda Mesafe/Pace dk/Pace sn hücreleri tıklanıp düzenlenebilir, değişiklik diğer alanları ve Toplamı günceller
+const APP_VERSION='v2026.03.31-2006'; // Reçete satırı düzenlemeleri kalıcı (Firebase), pace renk güncellenir, Planı Güncelle row override'ları korur
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -3759,13 +3759,15 @@ async function saveCueGlobal(label, text){
   }
 }
 
-function ReceteTablosu({yapilar, zones, isYuruyus, tip}){
+function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOverrides}){
   const [customCues, setCustomCues] = useState(_cueCache.data||{});
   const [editingLabel, setEditingLabel] = useState(null);
   const [editText, setEditText] = useState('');
   const [editCell, setEditCell] = useState(null); // {rowIdx, field}
-  const [editVal, setEditVal] = useState('');
-  const [rowOverrides, setRowOverrides] = useState({}); // {rowIdx: {mesafe,pm,ps,h,m,s}}
+  const [rowOverrides, setRowOverrides] = useState(savedOverrides||{}); // {rowIdx: {mesafe,pm,ps,h,m,s,color,textColor}}
+
+  // savedOverrides dışarıdan güncellenirse sync et
+  useEffect(()=>{ if(savedOverrides) setRowOverrides(savedOverrides); },[savedOverrides]);
 
   // Global cache'ten yükle — bir kez
   useEffect(()=>{
@@ -3807,6 +3809,17 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip}){
   // Override'ları uygula
   const rows=baseRows.map((r,i)=>rowOverrides[i]?{...r,...rowOverrides[i]}:r);
 
+  // Pace (sn/km) → zone index bul
+  const paceToZoneIdx=(paceSec)=>{
+    if(!zones?.paceZones||!paceSec) return null;
+    const paceMs=1000/paceSec; // m/s
+    for(let i=zones.paceZones.length-1;i>=0;i--){
+      const z=zones.paceZones[i];
+      if(z&&z.lo_ms&&paceMs>=z.lo_ms) return i;
+    }
+    return 0;
+  };
+
   // Hücre güncelleme: mesafe, pm veya ps değişince diğerlerini hesapla
   const updateCell=(rowIdx, field, rawVal)=>{
     const r=rows[rowIdx];
@@ -3814,7 +3827,6 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip}){
     const val=parseInt(rawVal)||0;
     let upd={};
     if(field==='mesafe'){
-      // Mesafe değişti → süreyi yeniden hesapla (pace sabit)
       const paceSec=(r.pm||0)*60+(r.ps||0);
       if(paceSec>0&&val>0){
         const newSec=Math.round(val/1000*paceSec);
@@ -3823,7 +3835,6 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip}){
         upd={mesafe:val};
       }
     } else if(field==='pm'||field==='ps'){
-      // Pace değişti → süreyi yeniden hesapla (mesafe sabit)
       const pm=field==='pm'?val:(r.pm||0);
       const ps=field==='ps'?val:(r.ps||0);
       const paceSec=pm*60+ps;
@@ -3834,9 +3845,19 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip}){
       } else {
         upd={pm,ps};
       }
+      // Pace zone rengi güncelle
+      if(paceSec>0){
+        const zi=paceToZoneIdx(paceSec);
+        if(zi!=null){
+          upd.color=ZONE_COLORS_INLINE[zi];
+          upd.textColor=ZONE_TEXT_COLOR[zi];
+        }
+      }
     }
-    setRowOverrides(prev=>({...prev,[rowIdx]:{...(prev[rowIdx]||{}), ...upd}}));
+    const newOverrides={...rowOverrides,[rowIdx]:{...(rowOverrides[rowIdx]||{}), ...upd}};
+    setRowOverrides(newOverrides);
     setEditCell(null);
+    if(onSaveOverrides) onSaveOverrides(newOverrides);
   };
 
   // Düzenlenebilir hücre render yardımcısı
@@ -3846,7 +3867,7 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip}){
       autoFocus:true,
       type:'number',
       defaultValue:displayVal,
-      style:{width:'100%',fontFamily:'monospace',fontSize:11,fontWeight:700,border:'1px solid var(--info)',borderRadius:3,padding:'1px 3px',background:'var(--bg-primary)',color:'#000',textAlign:'center'},
+      style:{width:'100%',fontFamily:'monospace',fontSize:11,fontWeight:700,border:'2px solid var(--info)',borderRadius:3,padding:'2px 4px',background:'#ffffff',color:'#000',textAlign:'center'},
       onBlur:e=>updateCell(rowIdx,field,e.target.value),
       onKeyDown:e=>{
         if(e.key==='Enter') updateCell(rowIdx,field,e.target.value);
@@ -3854,9 +3875,9 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip}){
       }
     });
     return React.createElement('span',{
-      style:{cursor:'pointer',borderBottom:'1px dashed #aaa'},
+      style:{cursor:'pointer',borderBottom:'1px dashed #888'},
       title:'Düzenlemek için tıkla',
-      onClick:()=>{setEditCell({rowIdx,field});setEditVal(String(displayVal));}
+      onClick:()=>setEditCell({rowIdx,field})
     },displayVal);
   };
 
@@ -7288,6 +7309,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               newSnap.planMode=planMode;
               newSnap.selectedPrimary=selectedPrimary||null;
               newSnap.athleteProfile={kosu_gunleri:athlete.kosu_gunleri,capraz_gunleri:athlete.capraz_gunleri,disiplin:athlete.disiplin,uzun_gun:athlete.uzun_gun};
+              // Mevcut row override'larını koru — kullanıcı pace/mesafe düzenlemeleri
+              if(planSnapRef.current?.rowOverrides) newSnap.rowOverrides=planSnapRef.current.rowOverrides;
               setPlanSnap(newSnap);
               fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
             }
@@ -7550,7 +7573,15 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                 yapilar:kosuYapilarAl(day),
                 zones,
                 isYuruyus:day.isYuruyus,
-                tip:day.tip
+                tip:day.tip,
+                savedOverrides:(planSnap?.rowOverrides||{})[day.date],
+                onSaveOverrides:(overrides)=>{
+                  const curSnap=planSnapRef.current||{};
+                  const newRowOverrides={...(curSnap.rowOverrides||{}),[day.date]:overrides};
+                  const newSnap={...curSnap,rowOverrides:newRowOverrides,lastSavedAt:new Date().toISOString()};
+                  setPlanSnap(newSnap);
+                  fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
+                }
               })
             );
           })
