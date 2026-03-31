@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.03.31-2137'; // Sporcu plan görünümü: ?form=plan&id=athId linki, anket sayfasında plan butonu
+const APP_VERSION='v2026.03.31-2200'; // Plan linki formEl dışına taşındı; plan görünümü: haftalık hedef, tamamlananlar, bir sonraki antrenman
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -11562,22 +11562,22 @@ function SporcuAnketi(){
     saved?React.createElement('div',{style:{
       textAlign:'center',fontSize:12,color:'var(--success)',padding:'8px',
       background:'var(--success-bg)',borderRadius:'var(--radius)'
-    }},'Bilgilerin antrenörüne iletildi.'):null,
+    }},'Bilgilerin antrenörüne iletildi.'):null
 
-    // Haftalık plan linki
-    selId&&pinOk&&React.createElement('div',{style:{textAlign:'center',marginTop:16}},
-      React.createElement('a',{
-        href:'?form=plan&id='+selId,
-        target:'_blank',
-        style:{
-          display:'inline-block',padding:'10px 20px',
-          background:'var(--info)',color:'#fff',
-          borderRadius:'var(--radius)',fontSize:13,fontWeight:600,
-          textDecoration:'none'
-        }
-      },'📅 Bu Haftanın Antrenman Planımı Gör')
-    )
+  ):null;
 
+  // Plan linki — formEl dışında, pinOk olduğunda her zaman göster
+  const planLinkEl=selId&&pinOk?React.createElement('div',{style:{textAlign:'center',marginTop:12,marginBottom:8}},
+    React.createElement('a',{
+      href:'?form=plan&id='+selId,
+      target:'_blank',
+      style:{
+        display:'inline-block',padding:'12px 24px',
+        background:'var(--info)',color:'#fff',
+        borderRadius:'var(--radius)',fontSize:13,fontWeight:600,
+        textDecoration:'none',boxShadow:'0 2px 8px rgba(0,0,0,0.12)'
+      }
+    },'📅 Bu Haftanın Antrenman Planımı Gör')
   ):null;
 
   return React.createElement('div',{style:{minHeight:'100vh',background:'var(--bg-tertiary)',padding:'20px 16px',overflowX:'hidden'}},
@@ -11585,7 +11585,8 @@ function SporcuAnketi(){
       headerEl,
       selectEl,
       pinEl,
-      formEl
+      formEl,
+      planLinkEl
     )
   );
 }
@@ -11595,6 +11596,9 @@ function SporcuAnketi(){
 function SporcuPlanView(){
   const [athlete,setAthlete]=useState(null);
   const [planSnap,setPlanSnap]=useState(null);
+  const [workouts,setWorkouts]=useState([]);
+  const [races,setRaces]=useState([]);
+  const [history,setHistory]=useState([]);
   const [loading,setLoading]=useState(true);
   const [appName,setAppName]=useState('Koşu İzi');
   const [logo,setLogo]=useState('');
@@ -11608,12 +11612,19 @@ function SporcuPlanView(){
         if(cfg?.teamName) setAppName(cfg.teamName);
         if(cfg?.teamLogo) setLogo(cfg.teamLogo);
         const aths=await fbGet('ath2');
-        const ath=(aths||[]).find(function(a){return a.id===athId;});
+        const ath=(aths||[]).find(a=>a.id===athId);
         setAthlete(ath||null);
         if(ath){
-          const weekKey=getWeekKey(0);
-          const snap=await fbGet('plan_snapshots/'+athId+'/'+weekKey);
+          const [snap,wks,rcs,hist]=await Promise.all([
+            fbGet('plan_snapshots/'+athId+'/'+getWeekKey(0)),
+            fbGet('wks'),
+            fbGet('races'),
+            fbGet('ath_history'),
+          ]);
           setPlanSnap(snap||null);
+          setWorkouts((wks||[]).filter(w=>w.athleteId===athId));
+          setRaces(rcs||[]);
+          setHistory((hist||[]).filter(h=>h.athId===athId));
         }
       }catch(e){console.warn(e);}
       setLoading(false);
@@ -11624,73 +11635,141 @@ function SporcuPlanView(){
   if(!athlete) return React.createElement('div',{style:{textAlign:'center',padding:40,color:'var(--text-secondary)'}},'Sporcu bulunamadı.');
   if(!planSnap?.overrideMap) return React.createElement('div',{style:{textAlign:'center',padding:40,color:'var(--text-secondary)'}},'Bu hafta için henüz plan oluşturulmadı.');
 
+  const todayStr=localDateStr(new Date());
   const zones=calcZones(athlete);
-  const weekStart=new Date(getWeekKey(0)+'T00:00:00');
-  const days=[];
-  for(let i=0;i<7;i++){
-    const d=new Date(weekStart);d.setDate(weekStart.getDate()+i);
-    const ds=localDateStr(d);
-    const ov=planSnap.overrideMap[ds];
-    days.push({date:ds,dayName:['Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi','Pazar'][i],ov});
-  }
+  const {start:wkStart,end:wkEnd}=getWeekBounds(0);
 
-  const fmtDate=(ds)=>{const d=new Date(ds+'T12:00:00');return d.getDate()+' '+['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'][d.getMonth()];};
+  // Bu haftanın tamamlanan antrenmanları
+  const completedWks=workouts.filter(w=>{
+    const d=new Date(w.date+'T12:00:00');
+    return d>=wkStart&&d<=wkEnd;
+  }).sort((a,b)=>a.date.localeCompare(b.date));
+
+  // Gerçekleşen toplam km ve D+
+  const actualKm=round1(completedWks.reduce((s,w)=>s+(parseFloat(w.mesafe)||0),0));
+  const actualDp=Math.round(completedWks.reduce((s,w)=>s+(parseFloat(w.irtifa)||0),0));
+
+  // Haftalık hedef — calcWeeklyTargets kullan
+  const weekTargets=calcWeeklyTargets(athlete,races,workouts,false,history);
+  const thisWeekTarget=weekTargets.find(wt=>wt.isCurrent)||null;
+  const targetKm=thisWeekTarget?.targetKm||0;
+  const targetDp=thisWeekTarget?.targetDp||0;
+
+  // Bir sonraki antrenman — overrideMap'ten bugünden sonraki ilk antrenman günü
+  const sortedDates=Object.keys(planSnap.overrideMap).sort();
+  const nextDate=sortedDates.find(d=>d>todayStr&&planSnap.overrideMap[d]?.tip!=='dinlenme');
+  const nextOv=nextDate?planSnap.overrideMap[nextDate]:null;
+
+  const fmtDate=(ds)=>{
+    const d=new Date(ds+'T12:00:00');
+    const gunler=['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'];
+    return gunler[d.getDay()]+', '+d.getDate()+' '+['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'][d.getMonth()];
+  };
+
+  const fmtSure=(dk)=>dk>=60?Math.floor(dk/60)+'s'+(dk%60?' '+dk%60+'dk':''):dk+' dk';
+
+  // Tamamlanan antrenman için tur adı
+  const turAd=(w)=>TUR_LABELS[w.tur||'']||SPOR_MAP[w.spor]?.l||w.tur||w.spor||'Antrenman';
 
   return React.createElement('div',{style:{minHeight:'100vh',background:'var(--bg-tertiary)',padding:'20px 16px'}},
-    React.createElement('div',{style:{maxWidth:540,margin:'0 auto'}},
+    React.createElement('div',{style:{maxWidth:480,margin:'0 auto'}},
+
       // Header
       React.createElement('div',{style:{textAlign:'center',marginBottom:20}},
         logo?React.createElement('img',{src:logo,style:{width:52,height:52,objectFit:'contain',borderRadius:10,marginBottom:8,border:'1px solid var(--border)',padding:3,background:'var(--bg-secondary)'}}):
           React.createElement('div',{style:{fontSize:32,marginBottom:6}},'🏃'),
-        React.createElement('div',{style:{fontSize:16,fontWeight:700}},appName),
-        React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',marginTop:2}},
-          (athlete.ad||'')+' '+(athlete.soyad||'')+' — Haftalık Antrenman Planı'
-        ),
+        React.createElement('div',{style:{fontSize:17,fontWeight:700}},appName),
+        React.createElement('div',{style:{fontSize:13,color:'var(--text-secondary)',marginTop:2,fontWeight:600}},(athlete.ad||'')+' '+(athlete.soyad||'')),
         React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:2}},
-          weekStart.toLocaleDateString('tr-TR',{day:'2-digit',month:'long',year:'numeric'})+' haftası'
+          wkStart.toLocaleDateString('tr-TR',{day:'2-digit',month:'long'})+' – '+wkEnd.toLocaleDateString('tr-TR',{day:'2-digit',month:'long',year:'numeric'})
         )
       ),
-      // Plan güncelleme tarihi
-      planSnap.lastSavedAt&&React.createElement('div',{style:{textAlign:'center',fontSize:11,color:'var(--text-tertiary)',marginBottom:12}},
-        '🕐 Plan güncellendi: '+(()=>{
-          const d=new Date(planSnap.lastSavedAt);
-          return String(d.getDate()).padStart(2,'0')+'.'+String(d.getMonth()+1).padStart(2,'0')+'.'+d.getFullYear()+' - '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
-        })()
+
+      // Bu haftanın hedefi
+      React.createElement('div',{className:'card',style:{marginBottom:12,padding:'14px 16px'}},
+        React.createElement('div',{style:{fontSize:12,fontWeight:700,color:'var(--text-secondary)',marginBottom:10,textTransform:'uppercase',letterSpacing:'0.5px'}},'Bu Haftanın Hedefi'),
+        React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}},
+          // Km hedefi
+          React.createElement('div',{style:{background:'var(--bg-secondary)',borderRadius:'var(--radius)',padding:'10px 12px',textAlign:'center'}},
+            React.createElement('div',{style:{fontSize:22,fontWeight:700,fontFamily:'monospace',color:'var(--info)'}},targetKm>0?targetKm+'':' — '),
+            React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},'km hedef'),
+            targetKm>0&&React.createElement('div',{style:{fontSize:12,color:actualKm>=targetKm*0.9?'var(--success)':'var(--text-secondary)',fontWeight:600,marginTop:2}},
+              actualKm+' km yapıldı'
+            )
+          ),
+          // D+ hedefi
+          React.createElement('div',{style:{background:'var(--bg-secondary)',borderRadius:'var(--radius)',padding:'10px 12px',textAlign:'center'}},
+            React.createElement('div',{style:{fontSize:22,fontWeight:700,fontFamily:'monospace',color:'var(--info)'}},targetDp>0?targetDp+'m':'—'),
+            React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},'D+ hedef'),
+            targetDp>0&&React.createElement('div',{style:{fontSize:12,color:actualDp>=targetDp*0.9?'var(--success)':'var(--text-secondary)',fontWeight:600,marginTop:2}},
+              actualDp+'m yapıldı'
+            )
+          )
+        ),
+        // İlerleme barı (km)
+        targetKm>0&&React.createElement('div',{style:{marginTop:10}},
+          React.createElement('div',{style:{height:6,background:'var(--border)',borderRadius:3,overflow:'hidden'}},
+            React.createElement('div',{style:{
+              height:'100%',borderRadius:3,
+              width:Math.min(100,Math.round(actualKm/targetKm*100))+'%',
+              background:actualKm>=targetKm*0.9?'var(--success)':'var(--info)',
+              transition:'width 0.4s ease'
+            }})
+          ),
+          React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:4,textAlign:'right'}},
+            Math.min(100,Math.round(targetKm>0?actualKm/targetKm*100:0))+'% tamamlandı'
+          )
+        )
       ),
-      // Günler
-      days.map(({date,dayName,ov})=>{
-        if(!ov||ov.tip==='dinlenme') return React.createElement('div',{key:date,style:{
-          background:'var(--bg-primary)',borderRadius:'var(--radius)',padding:'10px 14px',
-          marginBottom:8,border:'1px solid var(--border)',
-          borderLeft:'3px solid var(--border)',opacity:0.6
+
+      // Bu hafta yapılanlar
+      completedWks.length>0&&React.createElement('div',{className:'card',style:{marginBottom:12,padding:'14px 16px'}},
+        React.createElement('div',{style:{fontSize:12,fontWeight:700,color:'var(--text-secondary)',marginBottom:10,textTransform:'uppercase',letterSpacing:'0.5px'}},'Bu Hafta Tamamlananlar'),
+        completedWks.map((w,i)=>React.createElement('div',{key:i,style:{
+          display:'flex',alignItems:'center',gap:10,
+          padding:'8px 0',
+          borderBottom:i<completedWks.length-1?'1px solid var(--border)':'none'
         }},
-          React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center'}},
-            React.createElement('span',{style:{fontSize:13,fontWeight:600,color:'var(--text-secondary)'}},dayName),
-            React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)'}},fmtDate(date))
-          ),
-          React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',marginTop:4}},'😴 Dinlenme')
-        );
-        const tipRenk=tipColor(ov.tip);
-        return React.createElement('div',{key:date,style:{
-          background:'var(--bg-primary)',borderRadius:'var(--radius)',padding:'12px 14px',
-          marginBottom:8,border:'1px solid var(--border)',
-          borderLeft:'3px solid '+tipRenk
-        }},
-          React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}},
-            React.createElement('span',{style:{fontSize:13,fontWeight:700}},dayName),
-            React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)'}},fmtDate(date))
-          ),
-          React.createElement('div',{style:{fontSize:13,fontWeight:600,color:'var(--text-primary)',marginBottom:4}},
-            dayEmoji({tip:ov.tip})+' '+ov.baslik
-          ),
-          ov.sure_dk>0&&React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:6}},
-            '⏱ '+(ov.sure_dk>=60?Math.floor(ov.sure_dk/60)+'s '+(ov.sure_dk%60>0?ov.sure_dk%60+'dk':''):ov.sure_dk+' dk')
-          ),
-          ov.yapilar?.length>0&&React.createElement(ReceteTablosu,{
-            yapilar:ov.yapilar,zones,tip:ov.tip
-          })
-        );
-      })
+          React.createElement('span',{style:{fontSize:18}},'✅'),
+          React.createElement('div',{style:{flex:1}},
+            React.createElement('div',{style:{fontSize:13,fontWeight:600}},turAd(w)),
+            React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},
+              fmtDate(w.date)+(w.mesafe?' · '+parseFloat(w.mesafe)+'km':'')+(w.irtifa?' · D+'+w.irtifa+'m':'')
+            )
+          )
+        ))
+      ),
+
+      // Bir sonraki antrenman
+      nextOv&&React.createElement('div',{className:'card',style:{
+        marginBottom:12,padding:'14px 16px',
+        border:'2px solid var(--info)',
+        background:'var(--info-bg)'
+      }},
+        React.createElement('div',{style:{fontSize:12,fontWeight:700,color:'var(--info)',marginBottom:10,textTransform:'uppercase',letterSpacing:'0.5px'}},'Sonraki Antrenmanın'),
+        React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:6}},fmtDate(nextDate)),
+        React.createElement('div',{style:{fontSize:15,fontWeight:700,marginBottom:4}},
+          dayEmoji({tip:nextOv.tip})+' '+nextOv.baslik
+        ),
+        nextOv.sure_dk>0&&React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:8}},
+          '⏱ '+fmtSure(nextOv.sure_dk)
+        ),
+        nextOv.yapilar?.length>0&&React.createElement(ReceteTablosu,{
+          yapilar:nextOv.yapilar,zones,tip:nextOv.tip
+        })
+      ),
+
+      !nextOv&&React.createElement('div',{style:{textAlign:'center',padding:'20px',color:'var(--text-tertiary)',fontSize:13}},
+        '🎉 Bu haftanın tüm antrenmanları tamamlandı!'
+      ),
+
+      // Güncelleme tarihi
+      planSnap.lastSavedAt&&React.createElement('div',{style:{textAlign:'center',fontSize:10,color:'var(--text-tertiary)',marginTop:8,paddingBottom:20}},
+        'Plan güncellendi: '+(()=>{
+          const d=new Date(planSnap.lastSavedAt);
+          return String(d.getDate()).padStart(2,'0')+'.'+String(d.getMonth()+1).padStart(2,'0')+'.'+d.getFullYear()+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+        })()
+      )
     )
   );
 }
