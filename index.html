@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.05-1830'; // OP-2: Aşama satırları _rows yapısal veri, OP-1: Yapısal tür filtreleme + test türleri, OP-4: Koşu günleri senkronizasyonu
+const APP_VERSION='v2026.04.06-0930'; // OP-2: _rows yapısal veri (tek satır tekrar), OP-1: Spor bazlı tür filtreleme + yapı notları + serbest yazın fix, OP-4: Koşu günleri senkronizasyonu
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1480,16 +1480,33 @@ const ANTRENMAN_TURLERI=[
 // Spora göre filtrelenmiş tür listesi döndür
 function getTurlerForSpor(spor){
   if(!spor||spor==='kosu') return ANTRENMAN_TURLERI.filter(t=>t.spor==='kosu'||t.spor==='tum');
-  // Koşu dışı sporlar: Sadece genel türler + boş
-  return ANTRENMAN_TURLERI.filter(t=>t.spor==='tum');
+  // Koşu dışı sporlar: genel türler + spor kendi adıyla
+  const sporInfo=SPOR_MAP[spor];
+  const sporLabel=sporInfo?sporInfo.l:spor;
+  const base=ANTRENMAN_TURLERI.filter(t=>t.spor==='tum');
+  // Spor kendi adıyla bir tür olarak ekle (en başa)
+  return [{v:spor,l:sporLabel,spor:spor},...base];
 }
 
 // Spor değiştiğinde otomatik tür eşleştirmesi
 function autoTurForSpor(spor){
   if(!spor||spor==='kosu') return '';
-  // Koşu dışı sporlar → 'capraz' otomatik seç
-  return 'capraz';
+  // Koşu dışı sporlar → spor kendi adıyla
+  return spor;
 }
+
+// Spora özgü yapı notu seçenekleri
+const SPOR_YAPI_NOTLARI={
+  bisiklet: ['Bisiklet · Düz tempo Z2','Bisiklet · Tırmanış tekrarları','Bisiklet · Sweet Spot (Z3-Z4)','Bisiklet · VO2max interval','Bisiklet · Toparlanma sürüşü','Bisiklet · Uzun mesafe (endurance)'],
+  yuzme: ['Yüzme · Teknik drill','Yüzme · Interval (100m tekrar)','Yüzme · Mesafe (sürekli)','Yüzme · Sprint tekrarları','Yüzme · Toparlanma serbest'],
+  kuvvet: ['Kuvvet · Alt gövde','Kuvvet · Üst gövde','Kuvvet · Core/denge','Kuvvet · Tam vücut','Kuvvet · Pliometrik','Kuvvet · Stabilizasyon/esneklik'],
+  kuerek: ['Kürek · Tempo sabit','Kürek · Interval (500m tekrar)','Kürek · Dayanıklılık','Kürek · Sprint tekrar'],
+  pilates: ['Pilates · Mat çalışması','Pilates · Reformer','Pilates · Core odaklı','Pilates · Esneklik/denge'],
+  yoga: ['Yoga · Vinyasa flow','Yoga · Hatha (sabit pozlar)','Yoga · Yin (derin esneme)','Yoga · Restoratif toparlanma'],
+  futbol: ['Futbol · Maç','Futbol · Taktik antrenman','Futbol · Çabuk ayak/çeviklik','Futbol · Küçük alan oyunu'],
+  basketbol: ['Basketbol · Maç','Basketbol · Şut çalışması','Basketbol · Çeviklik/çabukluk','Basketbol · Kondisyon koşusu'],
+  diger: ['Diğer · Genel kondisyon','Diğer · Toparlanma','Diğer · Esneklik/mobilite'],
+};
 const TUR_LABELS=Object.fromEntries(ANTRENMAN_TURLERI.map(t=>[t.v,t.l]));
 
 // Her antrenman türü için seçilebilir yapı notları
@@ -3493,17 +3510,22 @@ function adimToRows(adim, zones){
           ...cr,rpe:rr.rpe||null};
       };
       if(r.tekrar&&r.tekrar>1){
-        for(let i=0;i<r.tekrar;i++){
-          expanded.push(mkRow(r,r.label+' '+(i+1)));
-          if(i<r.tekrar-1&&r.din_sn>0){
-            const dinZi=r.dinZIdx||0;
-            const dinPSec=getPaceFromZone(dinZi,zones);
-            const dinCr=calcRowM(r.din_sn,dinPSec);
-            expanded.push({type:'rest',label:'Dinlenme',
-              color:ZONE_COLORS_INLINE[dinZi]||'#6ee7b7',
-              textColor:ZONE_TEXT_COLOR[dinZi]||'#064e3b',
-              ...dinCr,rpe:null});
-          }
+        // Tek satır: "Z3 Tempo · 2×8 dk" — toplam iş süresi
+        const totalWorkSn=r.sure_sn*r.tekrar;
+        const sureDkLabel=r.sure_sn>=60?Math.round(r.sure_sn/60)+'dk':r.sure_sn+'sn';
+        const dinLabel=r.din_sn?(r.din_sn>=60?Math.round(r.din_sn/60)+'dk':r.din_sn+'sn'):'';
+        const tekrarLabel=`${r.label} · ${r.tekrar}×${sureDkLabel}`;
+        expanded.push(mkRow({...r,sure_sn:totalWorkSn},tekrarLabel));
+        // Toplam dinlenme tek satır
+        if(r.din_sn>0){
+          const totalDinSn=r.din_sn*(r.tekrar-1);
+          const dinZi=r.dinZIdx||0;
+          const dinPSec=getPaceFromZone(dinZi,zones);
+          const dinCr=calcRowM(totalDinSn,dinPSec);
+          expanded.push({type:'rest',label:`Dinlenme · ${r.tekrar-1}×${dinLabel}`,
+            color:ZONE_COLORS_INLINE[dinZi]||'#6ee7b7',
+            textColor:ZONE_TEXT_COLOR[dinZi]||'#064e3b',
+            ...dinCr,rpe:null});
         }
       } else {
         expanded.push(mkRow(r));
@@ -9803,6 +9825,7 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,wor
   const [saved,setSaved]=useState(false);
   const [lastRec,setLastRec]=useState(null);
   const [planOneri,setPlanOneri]=useState(null);
+  const [yapiNotuCustom,setYapiNotuCustom]=useState(false);
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
   const durSec=toSec(form.sure_sa,form.sure_dk,form.sure_sn);
   const selectedAth=athletes.find(a=>a.id===selId)||null;
@@ -9873,8 +9896,10 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,wor
   };
   const fgi=(label,key,type='text',opts={})=>React.createElement('div',{className:'form-group'},React.createElement('label',null,label),React.createElement('input',{type,value:form[key],min:opts.min,max:opts.max,step:opts.step,onChange:e=>set(key,e.target.value)}));
 
-  // Seçili tur için yapi_notu seçenekleri
-  const yapiSecenekleri=YAPI_NOTLARI[form.tur]||[];
+  // Seçili tur ve spor için yapi_notu seçenekleri
+  const yapiSecenekleri=form.spor&&form.spor!=='kosu'
+    ? (SPOR_YAPI_NOTLARI[form.spor]||[])
+    : (YAPI_NOTLARI[form.tur]||[]);
 
   return React.createElement('div',null,
     React.createElement('div',{className:'card'},
@@ -9909,15 +9934,22 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,wor
       React.createElement('div',{className:'form-grid'},
         fsel('Spor',form.spor,v=>{
           set('spor',v);
+          setYapiNotuCustom(false);
           // OP-1: Spor değişince tur otomatik eşleştir
           if(v&&v!=='kosu'){
             const autoTur=autoTurForSpor(v);
             set('tur',autoTur);
+            // Spor bazlı yapı notu ilk seçenek
+            const sporNotlar=SPOR_YAPI_NOTLARI[v]||[];
+            if(sporNotlar.length>0) set('yapi_notu',sporNotlar[0]);
+            else set('yapi_notu','');
+          } else {
             set('yapi_notu','');
           }
         },SPOR_TURLERI.map(s=>({v:s.v,l:s.emoji+' '+s.l}))),
         fsel('Yapısal Tür',form.tur,v=>{
           set('tur',v);
+          setYapiNotuCustom(false);
           // Tür değişince yapi_notu'nu otomatik ilk seçeneğe ayarla
           const notlar=YAPI_NOTLARI[v]||[];
           if(notlar.length>0)set('yapi_notu',notlar[0]);
@@ -9927,33 +9959,40 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,wor
         // Yapı Notu — dropdown + serbest metin (OP-1: combo input)
         React.createElement('div',{className:'form-group'},
           React.createElement('label',null,'Yapı Notu'),
-          yapiSecenekleri.length>0
-            ? React.createElement(React.Fragment,null,
+          yapiSecenekleri.length>0&&!yapiNotuCustom
+            ? React.createElement('div',null,
                 React.createElement('select',{
-                  value:yapiSecenekleri.includes(form.yapi_notu)?form.yapi_notu:'__custom',
+                  value:yapiSecenekleri.includes(form.yapi_notu)?form.yapi_notu:'',
                   onChange:e=>{
-                    if(e.target.value==='__custom') return; // serbest yazıma geç
+                    if(e.target.value==='__custom'){
+                      setYapiNotuCustom(true);
+                      set('yapi_notu','');
+                      return;
+                    }
                     set('yapi_notu',e.target.value);
                   },
-                  style:{width:'100%',marginBottom:4}
+                  style:{width:'100%'}
                 },
                   React.createElement('option',{value:''},'— Seçin —'),
                   yapiSecenekleri.map((s,i)=>React.createElement('option',{key:i,value:s},s)),
                   React.createElement('option',{value:'__custom'},'✏ Serbest yazın...')
-                ),
-                // Serbest metin input her zaman göster
+                )
+              )
+            : React.createElement('div',{style:{display:'flex',gap:4,alignItems:'center'}},
                 React.createElement('input',{
                   type:'text',value:form.yapi_notu||'',
                   placeholder:'ör: 6×1km, 4×8dk, 3×20dk',
                   onChange:e=>set('yapi_notu',e.target.value),
-                  style:{width:'100%',fontSize:12,marginTop:2}
-                })
+                  autoFocus:yapiNotuCustom,
+                  style:{flex:1}
+                }),
+                yapiSecenekleri.length>0&&React.createElement('button',{
+                  type:'button',className:'btn btn-sm',
+                  style:{fontSize:11,whiteSpace:'nowrap',padding:'4px 8px'},
+                  onClick:()=>setYapiNotuCustom(false),
+                  title:'Listeden seç'
+                },'📋')
               )
-            : React.createElement('input',{
-                type:'text',value:form.yapi_notu,
-                placeholder:'ör: 6×1km, 4×8dk, 3×20dk',
-                onChange:e=>set('yapi_notu',e.target.value)
-              })
         )
       ),
       React.createElement('div',{className:'card-title',style:{marginTop:10}},'Temel Bilgiler'),
