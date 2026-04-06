@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.06-1430'; // OP-2: Tekrarlı koşu aşama satırlarına ↻ Tekrar header satırı eklendi (Tempo, Eşik, Yokuş, Cruise, On/Off, Hill Sprint, Teknik İniş, Açıcı vb.)
+const APP_VERSION='v2026.04.06-1800'; // SN-1..12 + Bug Fix: koşu dışı spor → yapısal tür = spor adı; Swap→Yer değiştir; açıklama ekle hidden; foto fix; plan link; kuvvet link; yarış listesi; çapraz bağımsız; zone renk swap; warmup pace; suggestion sync
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1480,15 +1480,18 @@ const ANTRENMAN_TURLERI=[
 // Spora göre filtrelenmiş tür listesi döndür
 function getTurlerForSpor(spor){
   if(!spor||spor==='kosu') return ANTRENMAN_TURLERI.filter(t=>t.spor==='kosu'||t.spor==='tum');
-  // Koşu dışı sporlar: Sadece genel türler + boş
-  return ANTRENMAN_TURLERI.filter(t=>t.spor==='tum');
+  // Koşu dışı sporlar: Spor ismiyle aynı tür + yaris + kuvvet + serbest
+  const sporInfo=SPOR_MAP[spor];
+  const sporEntry={v:spor, l:(sporInfo?.emoji||'🏅')+' '+(sporInfo?.l||spor), spor:'diger'};
+  const others=ANTRENMAN_TURLERI.filter(t=>t.spor==='tum'&&t.v!=='');
+  return [{v:'',l:'— Belirtilmemiş —'}, sporEntry, ...others];
 }
 
 // Spor değiştiğinde otomatik tür eşleştirmesi
 function autoTurForSpor(spor){
   if(!spor||spor==='kosu') return '';
-  // Koşu dışı sporlar → 'capraz' otomatik seç
-  return 'capraz';
+  // Koşu dışı sporlar → spor ismiyle aynı yapısal tür (Futbol→futbol, Yoga→yoga)
+  return spor;
 }
 const TUR_LABELS=Object.fromEntries(ANTRENMAN_TURLERI.map(t=>[t.v,t.l]));
 
@@ -1714,6 +1717,53 @@ const YAPI_NOTLARI={
     'Tırmanış · S4 — 50 dk / Z3–Z4 baskı, D+ hedefli',
     'Tırmanış · S5 — 60 dk / sürekli tırmanış',
     'Tırmanış · S6 — 2×30 dk / 5 dk aktif iniş arası',
+  ],
+  // ── Koşu dışı sporlar için yapı notları (Bug Fix) ──────────────────────────
+  bisiklet: [
+    'Bisiklet · Z2 Aerobik (sabit tempo)',
+    'Bisiklet · Z3 Tempo',
+    'Bisiklet · Interval (4×5dk Z4 / 3dk toparlanma)',
+    'Bisiklet · Uzun Sürüş Z1–Z2',
+    'Bisiklet · Dağ Bisikleti (arazi)',
+  ],
+  yuzme: [
+    'Yüzme · Aerobik (sabit tempo serbest stil)',
+    'Yüzme · Interval (10×50m / 20sn ara)',
+    'Yüzme · Karışık stil aerobik',
+    'Yüzme · Teknik çalışma (drill)',
+    'Yüzme · Uzun mesafe (1500m+)',
+  ],
+  kuerek: [
+    'Kürek · Z2 Aerobik',
+    'Kürek · Interval (500m × 4)',
+    'Kürek · Teknik + aerobik karışık',
+  ],
+  pilates: [
+    'Pilates · Core güçlendirme',
+    'Pilates · Rehabilitasyon odaklı',
+    'Pilates · Güç + esneklik',
+  ],
+  yoga: [
+    'Yoga · Güç Yoga (Power Yoga)',
+    'Yoga · Esneklik + mobilite',
+    'Yoga · Toparlanma / Yin Yoga',
+    'Yoga · Nefes + meditasyon',
+  ],
+  futbol: [
+    'Futbol · Maç',
+    'Futbol · Antrenman (teknik + kondisyon)',
+    'Futbol · Kondisyon odaklı',
+    'Futbol · Teknik çalışma',
+  ],
+  basketbol: [
+    'Basketbol · Maç',
+    'Basketbol · Antrenman (teknik + kondisyon)',
+    'Basketbol · Kondisyon odaklı',
+  ],
+  diger: [
+    'Serbest antrenman',
+    'Aktif toparlanma',
+    'Kondisyon',
   ],
 };
 
@@ -2202,6 +2252,17 @@ function SporcuModal({onClose,onSave,initial,races}){
           value:f.anket_pin||'',
           placeholder:'ör. 1234',
           onChange:e=>{const v=e.target.value.replace(/[^0-9]/g,'').slice(0,4);set('anket_pin',v);}
+        })
+      ),
+      React.createElement('div',{className:'divider'}),
+      React.createElement('div',{className:'card-title'},'💪 Kuvvet Antrenmanı Linki (SN-5)'),
+      React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:6}},'Sporcunun Koşu İzlerim sayfasında gösterilecek kuvvet antrenmanı programı linki.'),
+      React.createElement('div',{className:'form-group'},
+        React.createElement('label',null,'Link (URL)'),
+        React.createElement('input',{
+          type:'url',value:f.kuvvet_link||'',
+          placeholder:'https://docs.google.com/...',
+          onChange:e=>set('kuvvet_link',e.target.value)
         })
       ),
       React.createElement('div',{className:'flex-gap',style:{marginTop:16}},
@@ -3436,10 +3497,10 @@ const _R={
 };
 
 
-const ZONE_COLORS_INLINE={0:'#6ee7b7',1:'#34d399',2:'#fbbf24',3:'#f97316',4:'#ef4444',5:'#dc2626',6:'#991b1b'};
+const ZONE_COLORS_INLINE={0:'#34d399',1:'#6ee7b7',2:'#f97316',3:'#fbbf24',4:'#991b1b',5:'#dc2626',6:'#ef4444'}; // SN-10: Z1↔Z2, Z3↔Z4, Z5a↔Z5c renk swap
 const TIP_NAMES={kolay:'Kolay Koşu',aerobik:'Aerobik Koşu',uzun:'Uzun Koşu',tempo:'Tempo',esik:'Eşik',interval:'İnterval',piramit:'İnterval Piramit',kesintisiz_piramit:'Kesintisiz Piramit',yokus_kisa:'Kısa Yokuş Tekrarı',yokus_uzun:'Uzun Yokuş',tirmanis:'Tırmanış Koşusu',teknik:'Teknik İniş',acici:'Açıcı',capraz:'Çapraz Antrenman',dinlenme:'Dinlenme'};
 const fixBaslik=(b)=>TIP_NAMES[b]||b;
-const ZONE_TEXT_COLOR  ={0:'#064e3b',1:'#064e3b',2:'#78350f',3:'#7c2d12',4:'#7f1d1d',5:'#7f1d1d',6:'#7f1d1d'};
+const ZONE_TEXT_COLOR  ={0:'#064e3b',1:'#064e3b',2:'#7c2d12',3:'#78350f',4:'#7f1d1d',5:'#7f1d1d',6:'#7f1d1d'}; // SN-10: Z3↔Z4 text renk swap
 
 function detectZone(text){
   const t=(text||'').toLowerCase();
@@ -3484,7 +3545,10 @@ function adimToRows(adim, zones){
   if(adim._rows&&adim._rows.length){
     const expanded=[];
     adim._rows.forEach(r=>{
-      const pSec=r.pSec||getPaceFromZone(r.zIdx,zones);
+      // SN-11: pSec — ısınma/soğuma satırları için global fonksiyon kullan
+      const isIsinmaRow=/[iı]sınma|isinma/i.test(r.label||'');
+      const isSogumaRow=/soğuma/i.test(r.label||'');
+      const pSec=r.pSec||(isIsinmaRow?getWarmupPace(zones):isSogumaRow?getCooldownPace(zones):getPaceFromZone(r.zIdx,zones));
       const mkRow=(rr,lbl)=>{
         const cr=rr.rpe||rr.isSprint?{...calcRowM(rr.sure_sn,pSec),pm:null,ps:null}:calcRowM(rr.sure_sn,pSec);
         return{type:rr.type||'run',label:lbl||rr.label,
@@ -3528,6 +3592,11 @@ function getPaceFromZone(zi,zones){
   if(pz?.lo_ms&&pz?.hi_ms) return Math.round(1000/((pz.lo_ms+pz.hi_ms)/2));
   return [600,540,480,420,375,345,315][zi]||480;
 }
+// SN-11: Isınma/soğuma pace — global tutarlı formüller
+// Isınma  = Z1 ile Z2'nin ağırlıklı ortası (Z2'ye daha yakın) → ~Z1.75
+function getWarmupPace(zones){ return Math.round((getPaceFromZone(0,zones)+getPaceFromZone(1,zones)*3)/4); }
+// Soğuma  = Z1 ile Z2'nin ortası → ~Z1.5
+function getCooldownPace(zones){ return Math.round((getPaceFromZone(0,zones)+getPaceFromZone(1,zones))/2); }
 function calcRowM(sec,rawPaceSec){
   if(!sec||!rawPaceSec) return{mesafe:0,pm:0,ps:0,h:0,m:0,s:0};
   // 1. Ham mesafe
@@ -3561,10 +3630,9 @@ function adimToRowsFallback(adim, zones){
 
   const getPace=(zi)=>getPaceFromZone(zi,zones);
   const roundPaceSec2=(pSec)=>{const m=Math.floor(pSec/60);const s=Math.round((pSec%60)/5)*5;return s===60?{pm:m+1,ps:0}:{pm:m,ps:s};};
-  // Soğuma = (Z1+Z2)/2  → örn. Z1=6:58, Z2=5:53 → 6:25
-  // Isınma  = (soğuma+Z2)/2 = (Z1+3×Z2)/4 → örn. → 6:09
-  const getPaceCooldown2=()=>Math.round((getPace(0)+getPace(1))/2);
-  const getPaceWarmup2=()=>Math.round((getPace(0)+getPace(1)*3)/4);
+  // SN-11: Isınma/soğuma pace — global fonksiyonlar kullanılıyor (tutarlılık)
+  const getPaceCooldown2=()=>getCooldownPace(zones);
+  const getPaceWarmup2=()=>getWarmupPace(zones);
   const fmtHMS=(sec)=>fmtHMS2(sec);
   const calcRow=(sec,pSec)=>calcRowM(sec,pSec);
   const paceSec=getPace(zIdx);
@@ -4036,6 +4104,7 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
                   },'✕')
                 );
                 if(!cue) return React.createElement('button',{
+                  'data-no-export':true,
                   onClick:()=>{setEditingLabel(r.label);setEditText('');},
                   style:{marginTop:2,fontSize:9,padding:'1px 5px',background:'transparent',border:'1px dashed var(--border)',borderRadius:3,cursor:'pointer',color:'var(--text-tertiary)',display:'block'}
                 },'+ açıklama ekle');
@@ -6205,7 +6274,7 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
     const caprazVarsayilanSure=45; // sabit — yMod'dan bağımsız
     const caprazYuk=Math.round(caprazVarsayilanSure*0.6); // yoga/bisiklet düşük yük
     const yukHedef=yukHesapla(kosuTpl)+caprazYuk;
-    return{...kosuTpl,baslik:tplBaslik(kosuTpl)+' + Çapraz',yapilar,yukHedef,
+    return{...kosuTpl,baslik:tplBaslik(kosuTpl),yapilar,yukHedef,
       caprazTpl,isKosuCapraz:true,isPast,isToday,simState,phase,yMod,date,dayTR,dayShort};
   } else if(kosuTpl){
     const yukHedef=yukHesapla(kosuTpl);
@@ -7863,7 +7932,10 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     : (isCancelled||(day.isPast&&!day.isToday&&!day.actual?.length&&day.tip!=='dinlenme'))
                       ? React.createElement('div',{style:{fontSize:10,textAlign:'center',marginTop:2,color:'var(--text-tertiary)'}},
                           '✕ ',React.createElement('s',null,day.baslik))
-                      : React.createElement('div',{style:{fontSize:10,fontWeight:600,textAlign:'center',color:tipColor(day.tip),marginTop:2}},fixBaslik(day.baslik,day.tip)),
+                      : React.createElement('div',null,
+                          React.createElement('div',{style:{fontSize:10,fontWeight:600,textAlign:'center',color:tipColor(day.tip),marginTop:2}},fixBaslik(day.baslik,day.tip)),
+                          day.isKosuCapraz&&React.createElement('div',{style:{fontSize:9,fontWeight:600,textAlign:'center',color:'var(--success)',marginTop:1}},'➕ Çapraz')
+                        ),
                   day.sure_dk>0&&React.createElement('div',{style:{fontSize:9,color:'var(--text-tertiary)',textAlign:'center'}},day.sure_dk+' dk'),
                   day.uyari&&React.createElement('div',{'data-no-export':true,style:{fontSize:8,color:'var(--warn)',textAlign:'center',marginTop:2}},'⚠'),
                   day.comparison&&React.createElement('div',{style:{textAlign:'center',marginTop:3}},compBadge(day.comparison)),
@@ -7918,8 +7990,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                       }
                     }
                   },swapSource
-                    ?(swapSource.date===day.date?'✕ Swap İptal':'↔ Buraya Taşı')
-                    :'↔ Swap'
+                    ?(swapSource.date===day.date?'✕ Vazgeç':'↔ Buraya Taşı')
+                    :'↔ Yer değiştir'
                   ),
                 )
             )
@@ -8068,7 +8140,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
   );
 }
 
-const ZONE_COLORS={Z1:'#6ee7b7',Z2:'#34d399',Z3:'#fbbf24',Z4:'#f97316',Z5a:'#ef4444',Z5b:'#dc2626',Z5c:'#991b1b'};
+const ZONE_COLORS={Z1:'#34d399',Z2:'#6ee7b7',Z3:'#f97316',Z4:'#fbbf24',Z5a:'#991b1b',Z5b:'#dc2626',Z5c:'#ef4444'}; // SN-10
 
 
 function BolgeTab({athlete,workouts,onUpdateAthlete}){
@@ -9817,6 +9889,25 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,wor
     if(!selId||!form.date)return;
     const selAth=athletes.find(a=>a.id===selId);
     if(!selAth)return;
+
+    // SN-12: Önce o tarihte manuel atama var mı kontrol et
+    // _planSnapsCache[selId] → bu haftanın snap'i
+    const weekKey=getWeekKey(0);
+    const cachedSnap=_planSnapsCache[selId];
+    if(cachedSnap?.overrideMap?.[form.date]){
+      const ov=cachedSnap.overrideMap[form.date];
+      // Manuel atama: atAt field'ı varsa (Ata butonuyla yapıldı) veya swappedFrom varsa
+      if(ov.atAt||ov.swappedFrom){
+        const turVal=ov.tur||planTipToTur(ov.tip)||'';
+        setPlanOneri({
+          baslik:(ov.baslik||TUR_LABELS[turVal]||turVal||'—')+' ⟵ Manuel Atama',
+          tip:ov.tip,sure_dk:ov.sure_dk||0,
+          tur:turVal,yapi_notu:ov.yapi_notu||''
+        });
+        return;
+      }
+    }
+
     if(!selAth.kosu_gunleri||selAth.kosu_gunleri.length===0){setPlanOneri(null);return;}
     try{
       const athWorkouts=(workouts||[]).filter(w=>w.athleteId===selId);
@@ -9936,20 +10027,24 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,wor
                 React.createElement('select',{
                   value:yapiSecenekleri.includes(form.yapi_notu)?form.yapi_notu:'__custom',
                   onChange:e=>{
-                    if(e.target.value==='__custom') return; // serbest yazıma geç
+                    if(e.target.value==='__custom'){
+                      set('yapi_notu',''); // serbest yazıma geç — input'u temizle
+                      return;
+                    }
                     set('yapi_notu',e.target.value);
                   },
                   style:{width:'100%',marginBottom:4}
                 },
                   React.createElement('option',{value:''},'— Seçin —'),
                   yapiSecenekleri.map((s,i)=>React.createElement('option',{key:i,value:s},s)),
-                  React.createElement('option',{value:'__custom'},'✏ Serbest yazın...')
+                  React.createElement('option',{value:'__custom'},'✏ Serbest yaz...')
                 ),
-                // Serbest metin input her zaman göster
+                // Serbest metin input — her zaman göster, serbest yaz seçilince odaklanır
                 React.createElement('input',{
                   type:'text',value:form.yapi_notu||'',
-                  placeholder:'ör: 6×1km, 4×8dk, 3×20dk',
+                  placeholder:'Serbest yaz: ör. 6×1km, 4×8dk, 3×20dk',
                   onChange:e=>set('yapi_notu',e.target.value),
+                  autoFocus:!yapiSecenekleri.includes(form.yapi_notu)&&form.yapi_notu===''&&false,
                   style:{width:'100%',fontSize:12,marginTop:2}
                 })
               )
@@ -11540,6 +11635,7 @@ function SporcuAnketi(){
     const a=athletes.find(function(x){return x.id===id;});
     if(!a){setForm(null);return;}
     setForm({
+      foto:a.foto||'',
       kilo:a.kilo||'',
       boy:a.boy||'',
       rhr:a.rhr||'',
@@ -11837,7 +11933,7 @@ function SporcuAnketi(){
         borderRadius:'var(--radius)',fontSize:13,fontWeight:600,
         textDecoration:'none',boxShadow:'0 2px 8px rgba(0,0,0,0.12)'
       }
-    },'📅 Bu Haftanın Antrenman Planımı Gör')
+    },'🏃 Koşu İzlerim')
   ):null;
 
   return React.createElement('div',{style:{minHeight:'100vh',background:'var(--bg-tertiary)',padding:'20px 16px',overflowX:'hidden'}},
@@ -11937,6 +12033,16 @@ function SporcuPlanView(){
         )
       ),
 
+      // SN-7: Read-only bilgi bandı
+      React.createElement('div',{style:{
+        background:'var(--bg-secondary)',borderRadius:'var(--radius)',
+        padding:'6px 12px',marginBottom:12,
+        display:'flex',alignItems:'center',gap:6,fontSize:11,color:'var(--text-tertiary)'
+      }},
+        React.createElement('span',null,'👁'),
+        React.createElement('span',null,'Koşu İzlerim — Sistem yansıması (sadece görüntüleme)')
+      ),
+
       // Bu hafta yapılanlar
       completedWks.length>0&&React.createElement('div',{className:'card',style:{marginBottom:12,padding:'14px 16px'}},
         React.createElement('div',{style:{fontSize:12,fontWeight:700,color:'var(--text-secondary)',marginBottom:10,textTransform:'uppercase',letterSpacing:'0.5px'}},'Bu Hafta Tamamlananlar'),
@@ -11977,6 +12083,54 @@ function SporcuPlanView(){
         '🎉 Bu haftanın tüm antrenmanları tamamlandı!'
       ),
 
+      // SN-5: Kuvvet antrenmanı önerisi linki
+      athlete.kuvvet_link&&React.createElement('div',{className:'card',style:{marginBottom:12,padding:'14px 16px'}},
+        React.createElement('div',{style:{fontSize:12,fontWeight:700,color:'var(--text-secondary)',marginBottom:8,textTransform:'uppercase',letterSpacing:'0.5px'}},'💪 Önerilen Kuvvet Antrenmanı'),
+        React.createElement('a',{
+          href:athlete.kuvvet_link,target:'_blank',rel:'noopener noreferrer',
+          style:{fontSize:13,color:'var(--info)',wordBreak:'break-all',textDecoration:'underline'}
+        },athlete.kuvvet_link)
+      ),
+
+      // SN-6: Yarışlar listesi
+      (()=>{
+        const athRaceIds=(athlete.yarıslar||[]).map(x=>typeof x==='string'?x:x?.id).filter(Boolean);
+        const athRaces=(races||[]).filter(r=>athRaceIds.includes(r.id)&&r.tarih)
+          .sort((a,b)=>a.tarih.localeCompare(b.tarih));
+        const upcoming=athRaces.filter(r=>r.tarih>=localDateStr(new Date()));
+        if(!upcoming.length) return null;
+        return React.createElement('div',{className:'card',style:{marginBottom:12,padding:'14px 16px'}},
+          React.createElement('div',{style:{fontSize:12,fontWeight:700,color:'var(--text-secondary)',marginBottom:10,textTransform:'uppercase',letterSpacing:'0.5px'}},'🏁 Yarışlarım'),
+          upcoming.map((r,i)=>{
+            const gunKaldi=Math.ceil((new Date(r.tarih+'T12:00:00')-new Date())/864e5);
+            return React.createElement('div',{key:i,style:{
+              display:'flex',alignItems:'center',justifyContent:'space-between',
+              padding:'8px 0',
+              borderBottom:i<upcoming.length-1?'1px solid var(--border)':'none',
+              flexWrap:'wrap',gap:6
+            }},
+              React.createElement('div',null,
+                React.createElement('div',{style:{fontSize:13,fontWeight:600}},r.ad||'Yarış'),
+                React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},
+                  fmtDate(r.tarih)+(r.mesafe?' · '+r.mesafe+'km':'')
+                )
+              ),
+              React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8}},
+                React.createElement('span',{style:{
+                  fontSize:11,fontWeight:700,padding:'2px 8px',borderRadius:99,
+                  background:gunKaldi<=14?'var(--danger-bg)':gunKaldi<=30?'var(--warn-bg)':'var(--info-bg)',
+                  color:gunKaldi<=14?'var(--danger)':gunKaldi<=30?'var(--warn)':'var(--info)'
+                }},gunKaldi+' gün'),
+                r.url&&React.createElement('a',{
+                  href:r.url,target:'_blank',rel:'noopener noreferrer',
+                  style:{fontSize:11,color:'var(--info)',textDecoration:'none'}
+                },'🔗')
+              )
+            );
+          })
+        );
+      })(),
+
       // Güncelleme tarihi
       planSnap.lastSavedAt&&React.createElement('div',{style:{textAlign:'center',fontSize:10,color:'var(--text-tertiary)',marginTop:8,paddingBottom:20}},
         'Plan güncellendi: '+(()=>{
@@ -11993,6 +12147,84 @@ function SporcuPlanView(){
   }
 }
 
+// ── SN-8: Koşu İzi Sporcular Listesi ─────────────────────────────────────────
+function SporcuListView(){
+  const [athletes,setAthletes]=useState([]);
+  const [races,setRaces]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [appName,setAppName]=useState('Koşu İzi');
+  const [logo,setLogo]=useState('');
+
+  useEffect(()=>{
+    (async()=>{
+      try{
+        const cfg=await fbGet('app_config');
+        if(cfg?.teamName)setAppName(cfg.teamName);
+        if(cfg?.teamLogo)setLogo(cfg.teamLogo);
+        const [aths,rcs]=await Promise.all([fbGet('ath2'),fbGet('races')]);
+        const sorted=(aths||[]).sort((a,b)=>((a.ad||'')+' '+(a.soyad||'')).toLocaleLowerCase('tr').localeCompare(((b.ad||'')+' '+(b.soyad||'')).toLocaleLowerCase('tr'),'tr'));
+        setAthletes(sorted);
+        setRaces(rcs||[]);
+      }catch(e){console.warn(e);}
+      setLoading(false);
+    })();
+  },[]);
+
+  if(loading) return React.createElement('div',{style:{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'var(--text-tertiary)',fontSize:14}},'Yükleniyor...');
+
+  return React.createElement('div',{style:{minHeight:'100vh',background:'var(--bg-tertiary)',padding:'20px 16px'}},
+    React.createElement('div',{style:{maxWidth:480,margin:'0 auto'}},
+      React.createElement('div',{style:{textAlign:'center',marginBottom:20}},
+        logo?React.createElement('img',{src:logo,style:{width:52,height:52,objectFit:'contain',borderRadius:10,marginBottom:8,border:'1px solid var(--border)',padding:3,background:'var(--bg-secondary)'}}):
+          React.createElement('div',{style:{fontSize:32,marginBottom:6}},'🏃'),
+        React.createElement('div',{style:{fontSize:17,fontWeight:700}},appName),
+        React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',marginTop:2}},'Koşu İzi Sporcuları — '+athletes.length+' sporcu')
+      ),
+      athletes.length===0&&React.createElement('div',{style:{textAlign:'center',padding:40,color:'var(--text-tertiary)',fontSize:13}},'Henüz sporcu kaydı yok.'),
+      athletes.map((a,i)=>{
+        const athRaceIds=(a.yarıslar||[]).map(x=>typeof x==='string'?x:x?.id).filter(Boolean);
+        const today=localDateStr(new Date());
+        const athRaces=(races||[]).filter(r=>athRaceIds.includes(r.id)&&r.tarih&&r.tarih>=today)
+          .sort((a,b)=>a.tarih.localeCompare(b.tarih));
+        return React.createElement('div',{key:i,className:'card',style:{marginBottom:10,padding:'14px 16px'}},
+          React.createElement('div',{style:{display:'flex',alignItems:'center',gap:12}},
+            React.createElement('div',{style:{width:44,height:44,borderRadius:'50%',overflow:'hidden',border:'2px solid var(--border)',flexShrink:0,background:'var(--bg-secondary)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:20,fontWeight:700,color:'var(--info)'}},
+              a.foto?React.createElement('img',{src:a.foto,style:{width:'100%',height:'100%',objectFit:'cover'}}):
+                React.createElement('span',null,(a.ad||'?').charAt(0).toUpperCase())
+            ),
+            React.createElement('div',{style:{flex:1}},
+              React.createElement('div',{style:{fontSize:14,fontWeight:600}},(a.ad||'')+' '+(a.soyad||'')),
+              React.createElement('div',{style:{display:'flex',gap:8,marginTop:4,flexWrap:'wrap'}},
+                a.strava&&React.createElement('a',{
+                  href:a.strava,target:'_blank',rel:'noopener noreferrer',
+                  style:{fontSize:11,color:'#fc4c02',textDecoration:'none',fontWeight:600}
+                },'🟠 Strava'),
+                React.createElement('a',{
+                  href:'?form=plan&id='+a.id,target:'_blank',
+                  style:{fontSize:11,color:'var(--info)',textDecoration:'none'}
+                },'📅 Koşu İzlerim')
+              ),
+              athRaces.length>0&&React.createElement('div',{style:{marginTop:6,display:'flex',flexWrap:'wrap',gap:4}},
+                athRaces.slice(0,3).map((r,ri)=>{
+                  const gunKaldi=Math.ceil((new Date(r.tarih+'T12:00:00')-new Date())/864e5);
+                  return React.createElement('span',{key:ri,style:{
+                    display:'inline-block',fontSize:10,fontWeight:600,
+                    padding:'2px 8px',borderRadius:99,
+                    background:gunKaldi<=14?'var(--danger-bg)':gunKaldi<=30?'var(--warn-bg)':'var(--info-bg)',
+                    color:gunKaldi<=14?'var(--danger)':gunKaldi<=30?'var(--warn)':'var(--info)'
+                  }},
+                    (r.url?React.createElement('a',{href:r.url,target:'_blank',rel:'noopener noreferrer',style:{color:'inherit',textDecoration:'none'}},r.ad):r.ad)+' · '+gunKaldi+'g'
+                  );
+                })
+              )
+            )
+          )
+        );
+      })
+    )
+  );
+}
+
 (async()=>{
   await loadScript('https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js');
   await loadScript('https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js');
@@ -12004,7 +12236,9 @@ function SporcuPlanView(){
     ?React.createElement(SporcuAnketi)
     :formParam==='plan'
       ?React.createElement(SporcuPlanView)
-      :React.createElement(AppWithAuth);
+      :formParam==='sporcular'
+        ?React.createElement(SporcuListView)
+        :React.createElement(AppWithAuth);
   ReactDOM.render(component,document.getElementById('root'));
 })();
 </script>
