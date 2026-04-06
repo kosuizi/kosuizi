@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.06-2300'; // Fix: [object Object] hatası — React elementi string ile birleştirilmesine yol açan SporcuListView yarış badge kodu düzeltildi
+const APP_VERSION='v2026.04.07-0043'; // FAZE 3: OP-3 B2B Tur Antrenmanları, OP-6 Silme+Revize, OP-8 Pace Validation, OP-9 Tekrarlı Antrenman
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -3558,6 +3558,7 @@ function adimToRows(adim, zones){
         return{type:rr.type||'run',label:lbl||rr.label,
           color:ZONE_COLORS_INLINE[rr.zIdx]||'#34d399',
           textColor:ZONE_TEXT_COLOR[rr.zIdx]||'#064e3b',
+          _origZIdx:rr.zIdx, _origPaceSec:pSec, _isSprint:rr.isSprint||false,
           ...cr,rpe:rr.rpe||null};
       };
       if(r.tekrar&&r.tekrar>1){
@@ -3575,6 +3576,7 @@ function adimToRows(adim, zones){
           expanded.push({type:'rest',label:'Dinlenme',
             color:ZONE_COLORS_INLINE[dinZi]||'#6ee7b7',
             textColor:ZONE_TEXT_COLOR[dinZi]||'#064e3b',
+            _origZIdx:dinZi, _origPaceSec:dinPSec,
             ...dinCr,rpe:null,repeatCount:r.tekrar});
         }
       } else {
@@ -3921,6 +3923,8 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
   const [editText, setEditText] = useState('');
   const [editCell, setEditCell] = useState(null); // {rowIdx, field}
   const [rowOverrides, setRowOverrides] = useState(savedOverrides||{}); // {rowIdx: {mesafe,pm,ps,h,m,s,color,textColor}}
+  const [repeatOverrides, setRepeatOverrides] = useState({}); // OP-9: {headerRowIdx: newCount}
+  const [editingRepeat, setEditingRepeat] = useState(null); // OP-9: headerRowIdx being edited
 
   // savedOverrides dışarıdan güncellenirse sync et
   useEffect(()=>{ if(savedOverrides) setRowOverrides(savedOverrides); },[savedOverrides]);
@@ -3962,8 +3966,15 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
   const baseRows=normalYapilar.flatMap(y=>{try{return adimToRows(y,zones);}catch(e){console.warn('adimToRows error:',e,y);return[];};});
   if(!baseRows.length&&!oneriYapilar.length) return null;
 
-  // Override'ları uygula
-  const rows=baseRows.map((r,i)=>rowOverrides[i]?{...r,...rowOverrides[i]}:r);
+  // Override'ları uygula + OP-9: repeatOverrides'dan tekrar sayılarını güncelle
+  const rows=baseRows.map((r,i)=>{
+    let row=rowOverrides[i]?{...r,...rowOverrides[i]}:r;
+    // OP-9: Header için repeatOverrides varsa uygula
+    if(row.type==='header'&&repeatOverrides[i]){
+      row={...row,repeatCount:repeatOverrides[i]};
+    }
+    return row;
+  });
 
   // Pace (sn/km) → zone index bul
   const paceToZoneIdx=(paceSec)=>{
@@ -3974,6 +3985,48 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
       if(z&&z.lo_ms&&paceMs>=z.lo_ms) return i;
     }
     return 0;
+  };
+
+  // ── OP-8: Pace Validation — girilen pace ile hedef zone pace karşılaştır ──
+  const paceValidation=(row)=>{
+    if(!row||row.type==='header'||row.rpe||row._isSprint) return null;
+    const pm=row.pm; const ps=row.ps;
+    if(pm==null||pm===0&&(ps==null||ps===0)) return null;
+    const enteredSec=pm*60+(ps||0);
+    if(enteredSec<=0) return null;
+    // Orijinal zone pace
+    const origPace=row._origPaceSec;
+    if(!origPace||origPace<=0) return null;
+    const diff=enteredSec-origPace; // pozitif = yavaş, negatif = hızlı
+    const absDiff=Math.abs(diff);
+    if(absDiff<=25) return{label:'Hedef Bölge',color:'#22c55e',bg:'#f0fdf4',icon:'✓'};
+    if(absDiff<=50){
+      return diff>0
+        ?{label:'Biraz Yavaş',color:'#f59e0b',bg:'#fffbeb',icon:'▼'}
+        :{label:'Biraz Hızlı',color:'#f59e0b',bg:'#fffbeb',icon:'▲'};
+    }
+    return diff>0
+      ?{label:'Çok Yavaş',color:'#ef4444',bg:'#fef2f2',icon:'▼▼'}
+      :{label:'Çok Hızlı',color:'#ef4444',bg:'#fef2f2',icon:'▲▲'};
+  };
+
+  // ── OP-9: Tekrar sayısı değiştirme ──
+  const updateRepeatCount=(headerIdx, newCount)=>{
+    if(newCount<1||newCount>30) return;
+    const newRepeatOv={...repeatOverrides,[headerIdx]:newCount};
+    setRepeatOverrides(newRepeatOv);
+    setEditingRepeat(null);
+    // Sonraki run ve rest satırlarının repeatCount'ını güncelle
+    const newRowOv={...rowOverrides};
+    for(let ri=headerIdx+1;ri<baseRows.length;ri++){
+      const br=baseRows[ri];
+      if(br.type==='header') break; // bir sonraki header'a gelince dur
+      if(br.repeatCount){
+        newRowOv[ri]={...(newRowOv[ri]||{}),repeatCount:newCount};
+      }
+    }
+    setRowOverrides(newRowOv);
+    if(onSaveOverrides) onSaveOverrides(newRowOv);
   };
 
   // Hücre güncelleme: mesafe, pm veya ps değişince diğerlerini hesapla
@@ -4080,8 +4133,29 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
       React.createElement('tbody',null,
         rows.map((r,i)=>{
           if(r.type==='header'){
+            // OP-9: Tekrar sayısı düzenlenebilir
+            const origCount=r.repeatCount||1;
+            const effCount=repeatOverrides[i]||origCount;
+            const repeatLabel=r.label.replace(/↻ \d+ Tekrar/,`↻ ${effCount} Tekrar`).replace(/↻ \d+ Blok/,`↻ ${effCount} Blok`).replace(/↻ \d+ Strides/,`↻ ${effCount} Strides`);
             return React.createElement('tr',{key:i,style:{background:r.color}},
-              React.createElement('td',{colSpan:8,style:{padding:'4px 8px',fontWeight:700,fontSize:11,color:r.textColor,letterSpacing:'.3px'}},r.label)
+              React.createElement('td',{colSpan:8,style:{padding:'4px 8px',fontWeight:700,fontSize:11,color:r.textColor,letterSpacing:'.3px',display:'flex',alignItems:'center',gap:6}},
+                readOnly?repeatLabel:React.createElement(React.Fragment,null,
+                  repeatLabel.split(/\d+/).shift(),
+                  editingRepeat===i
+                    ?React.createElement('input',{
+                      autoFocus:true,type:'number',min:1,max:30,defaultValue:effCount,
+                      style:{width:40,fontFamily:'monospace',fontSize:12,fontWeight:700,border:'2px solid var(--info)',borderRadius:3,padding:'1px 4px',background:'#fff',color:'#000',textAlign:'center'},
+                      onBlur:e=>updateRepeatCount(i,parseInt(e.target.value)||origCount),
+                      onKeyDown:e=>{if(e.key==='Enter')updateRepeatCount(i,parseInt(e.target.value)||origCount);if(e.key==='Escape')setEditingRepeat(null);}
+                    })
+                    :React.createElement('span',{
+                      style:{cursor:'pointer',borderBottom:'2px dashed #94a3b8',padding:'0 2px',fontSize:12},
+                      title:'Tekrar sayısını düzenle',
+                      onClick:()=>setEditingRepeat(i)
+                    },effCount),
+                  ' '+repeatLabel.split(/\d+/).slice(1).join('')
+                )
+              )
             );
           }
           return React.createElement('tr',{key:i,style:{background:r.color,borderBottom:'1px solid rgba(0,0,0,.08)'}},
@@ -4130,7 +4204,17 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
             React.createElement('td',{style:{...cell(),color:'#000'}},r.rpe?'—':editableCell(i,'mesafe',r.mesafe>0?r.mesafe:0)),
             React.createElement('td',{style:{...cell(),color:'#000'}},r.rpe?'—':editableCell(i,'pm',r.pm!=null?r.pm:0)),
             React.createElement('td',{style:{...cell(),color:'#000'}},r.rpe?'—':editableCell(i,'ps',r.ps!=null?String(r.ps).padStart(2,'0'):'00')),
-            React.createElement('td',{style:{...cell(),color:'#000',fontSize:r.rpe?12:11}},r.rpe||'—')
+            React.createElement('td',{style:{...cell(),color:'#000',fontSize:r.rpe?12:10}},
+              r.rpe?r.rpe:(()=>{
+                // OP-8: Pace validation badge
+                const pv=paceValidation(r);
+                if(!pv) return '—';
+                return React.createElement('span',{
+                  style:{display:'inline-block',padding:'1px 4px',borderRadius:3,fontSize:8,fontWeight:700,
+                    color:pv.color,background:pv.bg,whiteSpace:'nowrap',lineHeight:1.3}
+                },pv.icon+' '+pv.label);
+              })()
+            )
           );
         }),
         // Toplam satırı
@@ -4590,20 +4674,40 @@ function tplUzun(band, ctl, zones, disiplin, dpHedef, recentLongRuns){
   return{tip:'uzun',sure_dk:dk,yapilar:parts,dpHedef};
 }
 
-// Ultra Trail: back-to-back uzun koşu (cumartesi-pazar tipi)
+// ── OP-3: Back-to-Back Tur Antrenmanları — Gün 1 ve Gün 2 ayrı şablonlar ──
+// Gün 1: Uzun Z2 koşu (ana yük)
 function tplBackToBack(band, zones, dpHedef){
   const gun1=band<=2?70:band===3?90:band===4?110:130;
-  const gun2=Math.round(gun1*0.65);
   const dpGun1=dpHedef>0?Math.round(dpHedef*0.6):0;
+  return{
+    tip:'back_to_back', sure_dk:gun1,
+    baslik:'Back-to-Back Gün 1 — Uzun Koşu',
+    yapi_notu:'Back-to-Back · Gün 1 — Uzun Z2 arazi koşusu',
+    yapilar:[
+      {baslik:'Isınma',detay:`10 dk — ${zoneInfoZ1(zones)||'Z1'} kolay koşu`,_rows:_R.isinma(10)},
+      {baslik:'Z2 Uzun Koşu',detay:`${gun1-15} dk — ${zoneInfo(zones,1)||'Z1–Z2 aerobik'} arazi${dpGun1>0?' · Hedef D+: ~'+dpGun1+'m':''} · Tırmanışlarda koşu/yürüyüş karması — efor hissini Z2’de tut`,_rows:_R.sabit('Z2 Uzun Koşu',gun1-15,1)},
+      {baslik:'Soğuma',detay:`5 dk — ${zoneInfoZ1(zones)||'Z1'} yürüyüş + esneme`,_rows:_R.soguma(5)},
+      {baslik:'Beslenme',detay:'Bitişte 30dk içinde karbonhidrat + protein alımı · Yarın yorgun bacak koşusu var — iyi uyu, iyi beslen'},
+    ],
+    dpHedef:dpGun1, isBackToBack:true, b2bGun:1
+  };
+}
+// Gün 2: Yorgun bacak koşusu (düşük yoğunluk, toparlanma stimülüsü)
+function tplBackToBackGun2(band, zones, dpHedef){
+  const gun1=band<=2?70:band===3?90:band===4?110:130;
+  const gun2=Math.round(gun1*0.65);
   const dpGun2=dpHedef>0?Math.round(dpHedef*0.4):0;
   return{
-    tip:'uzun', sure_dk:gun1,
+    tip:'back_to_back', sure_dk:gun2,
+    baslik:'Back-to-Back Gün 2 — Yorgun Bacak',
+    yapi_notu:'Back-to-Back · Gün 2 — Yorgun bacak toparlanma koşusu',
     yapilar:[
-      {baslik:'Z2 Uzun Koşu',detay:`${gun1-10} dk — ${zoneInfo(zones,1)||'Z1–Z2 aerobik'} arazi${dpGun1>0?' · Hedef D+: ~'+dpGun1+'m':''} · Tırmanışlarda koşu/yürüyüş karması — efor hissini Z2’de tut`,_rows:_R.sabit('Z2 Uzun Koşu',gun1-10,1)},
-      {baslik:'Z1–Z2 Yorgun Bacak Koşusu',detay:`${gun2} dk — ${zoneInfoZ1(zones)||'Z1 çok kolay'}${dpGun2>0?' · Hedef D+: ~'+dpGun2+'m':''} · Pace önemsiz, bitiş önemli`,_rows:_R.sabit('Z1 Yorgun Bacak',gun2,0)},
-      {baslik:'Beslenme & Toparlanma',detay:'Her iki gün sonrası: 30dk içinde karbonhidrat + protein alımı, ertesi gün dinlenme veya çok hafif aktif toparlanma'},
+      {baslik:'Isınma',detay:`5 dk — ${zoneInfoZ1(zones)||'Z1'} çok kolay yürüyüş`,_rows:_R.isinma(5)},
+      {baslik:'Z1 Yorgun Bacak Koşusu',detay:`${gun2-10} dk — ${zoneInfoZ1(zones)||'Z1 çok kolay'} · Pace önemsiz, bitiş önemli${dpGun2>0?' · Hedef D+: ~'+dpGun2+'m':''} · Glikojen depolarının boşalmış haliyle aerobik stimülüs`,_rows:_R.sabit('Z1 Yorgun Bacak',gun2-10,0)},
+      {baslik:'Soğuma',detay:`5 dk — yürüyüş + hafif esneme`,_rows:_R.soguma(5)},
+      {baslik:'Beslenme & Toparlanma',detay:'30dk içinde karbonhidrat + protein · Ertesi gün dinlenme veya çok hafif aktif toparlanma zorunlu'},
     ],
-    dpHedef, isBackToBack:true
+    dpHedef:dpGun2, isBackToBack:true, b2bGun:2
   };
 }
 
@@ -6505,6 +6609,7 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       });
     }
 
+    let _b2bNextDate=null; // OP-3: B2B Gün 1 tespit edilince ertesi günü işaretle
     for(let di=0;di<7;di++){
       const d=new Date(start);d.setDate(start.getDate()+di);
       // toISOString() UTC kullanır — yerel tarih bileşenlerini al
@@ -6532,7 +6637,7 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
         actualKm+=parseFloat(w.mesafe)||0;
         actualDp+=parseFloat(w.irtifa)||0;
       });
-      const planned=planDay(dateStr,athlete,simState,phase,dtR,dtInt,
+      let planned=planDay(dateStr,athlete,simState,phase,dtR,dtInt,
         {...wkStats, haftaGunTipi:haftaIskeleti[dateStr]||null,
           kalanKosuGun:kosuGunleri.filter(g=>{
             const gunler=['Paz','Pzt','Sal','Çar','Per','Cum','Cmt'];
@@ -6543,6 +6648,22 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
             });
           }).length||1},
         kosuGunleri,caprazGunleri,primary||null);
+      // ── OP-3: Back-to-Back Gün 2 oto-enjeksiyonu ──
+      if(_b2bNextDate===dateStr&&!(isPast&&actual.length>0)){
+        const _b2bZones=calcZones(athlete);
+        const _b2bBand=ctlBand(simState.ctl||0);
+        const _b2bDp=planned.dpHedef||0;
+        planned=tplBackToBackGun2(_b2bBand,_b2bZones,_b2bDp);
+        planned.date=dateStr;
+        planned.yukHedef=Math.round(planned.sure_dk*0.8);
+        planned._b2bAutoAssigned=true;
+      }
+      _b2bNextDate=null; // reset
+      if(planned.tip==='back_to_back'&&planned.b2bGun===1){
+        // Ertesi günü B2B Gün 2 olarak işaretle
+        const _nextD=new Date(d);_nextD.setDate(_nextD.getDate()+1);
+        _b2bNextDate=`${_nextD.getFullYear()}-${String(_nextD.getMonth()+1).padStart(2,'0')}-${String(_nextD.getDate()).padStart(2,'0')}`;
+      }
       // kaliteliSayisi artırımı: SADECE aşağıdaki isPast/!isPast bloklarında yapılır
       // (satır 6134'teki eski artırım kaldırıldı — çift sayımı önlemek için)
       // wkStats güncelleme — geçmiş günlerde gerçek antrenman varsa onu kullan
@@ -7245,17 +7366,30 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       yapilar:(tpl.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||'',_caprazNot:y._caprazNot}))
     }};
     const newManualOverrides={...(curSnap?.manualOverrides||{}),[dateStr]:{tip:tpl.tip,baslik,atAt:now.toISOString()}};
+    // ── OP-3: Back-to-Back Gün 2 oto-enjeksiyonu (manuel atama) ──
+    if(tpl.tip==='back_to_back'&&(!tpl.b2bGun||tpl.b2bGun===1)){
+      const _nextD=new Date(dateStr+'T12:00:00');_nextD.setDate(_nextD.getDate()+1);
+      const _nextStr=localDateStr(_nextD);
+      const _b2bZones=calcZones(athlete);
+      const _b2bBand=ctlBand(history[history.length-1]?.ctl||0);
+      const _gun2=tplBackToBackGun2(_b2bBand,_b2bZones,tpl.dpHedef||0);
+      const _gun2Baslik=_gun2.baslik||'B2B Gün 2 — Yorgun Bacak';
+      newMap[_nextStr]={tip:_gun2.tip,baslik:_gun2Baslik,sure_dk:_gun2.sure_dk,
+        yukHedef:Math.round(_gun2.sure_dk*0.8),yapi_notu:_gun2.yapi_notu||'',
+        yapilar:(_gun2.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||''}))};
+      newManualOverrides[_nextStr]={tip:_gun2.tip,baslik:_gun2Baslik,atAt:now.toISOString(),b2bAutoGun2:true};
+    }
     const newSnap={...(curSnap||{}),weekKey,athId:athlete.id,lastReviewAt:now.toISOString(),
       lastSavedAt:new Date().toISOString(),
       cancelledDays:{...(curSnap?.cancelledDays||{})},
       selectedPrimary:selectedPrimary||null,
       overrideMap:newMap,
       manualOverrides:newManualOverrides,
-      reviewLog:[...(curSnap?.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} manuel: ${baslik}`}].slice(-10)
+      reviewLog:[...(curSnap?.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} manuel: ${baslik}${tpl.tip==='back_to_back'?' + ertesi gün B2B Gün 2':''}`}].slice(-10)
     };
     setPlanSnap(newSnap);
     setManuelAtaGun(null);
-    setReviewMsg(`${dateStr} — ${baslik} atandı`);
+    setReviewMsg(`${dateStr} — ${baslik} atandı${tpl.tip==='back_to_back'?' (ertesi gün de B2B Gün 2 eklendi)':''}`);
     // Otomatik Firebase kaydı
     if(db||initFirebase()){
       const _ataSnap=stripUndefined(newSnap);
@@ -7271,14 +7405,49 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     const now=new Date();
     const racesOv=selectedPrimary?races.map(r=>({...r,__force:r.id===selectedPrimary})):races;
     const newPlan=generateTwoWeekPlan(athlete,history,racesOv,workouts,testPlanlar||[]);
-    const newMap={...(planSnap?.overrideMap||{}),[dateStr]:{tip:'dinlenme',baslik:'İptal Edildi',sure_dk:0,yukHedef:0,yapilar:[{baslik:'İptal',detay:'Antrenman iptal edildi'}]}};
+    // ── OP-6: İptal edilen günün yükünü hesapla ──
+    const iptalEdilen=planSnap?.overrideMap?.[dateStr];
+    const iptalYuk=iptalEdilen?.yukHedef||0;
+    const iptalSure=iptalEdilen?.sure_dk||0;
+    const iptalTip=iptalEdilen?.tip||'bilinmiyor';
+    const newMap={...(planSnap?.overrideMap||{}),[dateStr]:{tip:'dinlenme',baslik:'İptal Edildi',sure_dk:0,yukHedef:0,yapilar:[{baslik:'İptal',detay:`Antrenman iptal edildi (${TIP_NAMES[iptalTip]||iptalTip}, ${iptalSure}dk, yük:${iptalYuk})`}]}};
+    // Yeni planı uygula
+    const kalanGunler=[]; // yük dağıtılacak günler
     newPlan.weeks.forEach(wk=>wk.days.forEach(day=>{
-      if(day.date>dateStr&&day.date>=todayStr&&!newCancelled[day.date])
+      if(day.date>dateStr&&day.date>=todayStr&&!newCancelled[day.date]&&day.tip!=='dinlenme'){
         newMap[day.date]={tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,yapilar:(day.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||''}))};
+        kalanGunler.push(day.date);
+      } else if(day.date>dateStr&&day.date>=todayStr&&!newCancelled[day.date]){
+        newMap[day.date]={tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,yapilar:(day.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||''}))};
+      }
     }));
-    const newSnap={...(planSnapRef.current||{}),weekKey,athId:athlete.id,lastReviewAt:now.toISOString(),lastSavedAt:now.toISOString(),cancelledDays:newCancelled,selectedPrimary:selectedPrimary||null,overrideMap:newMap,manualOverrides:{...(planSnapRef.current?.manualOverrides||{}),[dateStr]:{tip:'dinlenme',baslik:'İptal',atAt:now.toISOString()}},reviewLog:[...(planSnapRef.current?.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} iptal`}].slice(-10)};
+    // ── OP-6: Yük redistribüsyonu ── iptal yükünü kalan günlere orantılı dağıt
+    let redistMsg='';
+    if(iptalYuk>0&&kalanGunler.length>0){
+      const yukPerGun=Math.round(iptalYuk/kalanGunler.length);
+      const YOGUN_TIPLER=['tempo','esik','interval','piramit','kesintisiz_piramit','on_off','tempo_interval','cruise','yaris_tempo','hill_sprint','yokus_kisa','yokus_uzun'];
+      kalanGunler.forEach(ds=>{
+        const ov=newMap[ds];
+        if(!ov) return;
+        // Yoğun antrenman süresini artma, sadece yük hedefini artır
+        // Kolay/aerobik/uzun antrenmanların süresini ufak artır
+        const isYogun=YOGUN_TIPLER.includes(ov.tip);
+        if(!isYogun){
+          const ekSure=Math.min(15,Math.round(yukPerGun/1.1)); // maks 15dk ekle
+          ov.sure_dk=(ov.sure_dk||45)+ekSure;
+          ov.yukHedef=(ov.yukHedef||0)+yukPerGun;
+          ov._redistNote=`+${ekSure}dk (iptal telafisi)`;
+        } else {
+          // Yoğun antrenmanda sadece yük hedefini artır, süre değişmez
+          ov.yukHedef=(ov.yukHedef||0)+Math.round(yukPerGun*0.5);
+        }
+      });
+      redistMsg=` · ${iptalYuk} yük ${kalanGunler.length} güne dağıtıldı`;
+    }
+    const cancelReason=`${dateStr} iptal (${TIP_NAMES[iptalTip]||iptalTip}, ${iptalSure}dk)${redistMsg}`;
+    const newSnap={...(planSnapRef.current||{}),weekKey,athId:athlete.id,lastReviewAt:now.toISOString(),lastSavedAt:now.toISOString(),cancelledDays:newCancelled,selectedPrimary:selectedPrimary||null,overrideMap:newMap,manualOverrides:{...(planSnapRef.current?.manualOverrides||{}),[dateStr]:{tip:'dinlenme',baslik:'İptal',atAt:now.toISOString()}},reviewLog:[...(planSnapRef.current?.reviewLog||[]),{at:now.toISOString(),reason:cancelReason}].slice(-10)};
     setPlanSnap(newSnap);
-    setReviewMsg(`${dateStr} antrenmanı iptal edildi`);
+    setReviewMsg(`${dateStr} antrenmanı iptal edildi${redistMsg}`);
     if(db||initFirebase()){
       const _cancelSnap=stripUndefined(newSnap);
       db.ref(`plan_snapshots/${athlete.id}/${weekKey}`).set(_cancelSnap)
