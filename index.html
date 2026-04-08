@@ -1,4 +1,4 @@
-<!-- Version: v2026.04.08-1720 -->
+<!-- Version: v2026.04.08-1950 -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.08-1720'; // Aralıklar: her tekrar ayrı düzenlenebilir + ayrı pace validation
+const APP_VERSION='v2026.04.08-1950'; // Yarış günü: antrenman yok → tek aşama satırı; tplFromYapiNotu zone fix; RPE-pace uyum
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -4659,7 +4659,7 @@ function tplFromYapiNotu(tur, yapiNotu, band, sure_dk, zones, disiplin, phase, c
     const din=setsDin[1]?setsDin[1].replace(/\s*ara/,'').trim():'3 dk';
     const seviyeM=yapiNotu.match(/·s*(Sd+)/);
     const sev=seviyeM?seviyeM[1]:'';
-    const zTI=zoneInfo(zones,2)||'Z3 tempo';
+    const zTI=zoneInfo(zones,3)||'Z4 tempo'; // Z4 (eşik üstü) — düzeltildi (önceki hatalı: zones,2=Z3)
     return{tip:'tempo_interval',sure_dk,yapi_notu:yapiNotu,yapilar:[
       {baslik:'Isınma',detay:'15 dk Z1 kolay koşu'},
       {baslik:'Z4 Tempo Blokları',detay:sets+' — '+zTI+' · '+din+' aktif toparlanma arası'},
@@ -4739,10 +4739,13 @@ function tplFromYapiNotu(tur, yapiNotu, band, sure_dk, zones, disiplin, phase, c
     const sevM=yapiNotu.match(/·\s*(S\d+)/);const sev=sevM?sevM[1]:'';
     const yapiM=yapiNotu.match(/—\s*(.+?)(?:\s*\/|$)/);const yapi=yapiM?yapiM[1].trim():'6×30sn';
     const dinM=yapiNotu.match(/\/\s*(.+)/);const din=dinM?dinM[1].trim():'2dk yürüyüş';
+    // _rows: sprint zone Z5b ataması — adimToRowsFallback'in Z1'e düşmesini (RPE-pace uyumsuzluğu) önler
+    const ps=parseSetsStr(yapi);
+    const yapisRows=ps?[{label:'Yokuş Sprint',sure_sn:ps.sure_sn,zIdx:5,tekrar:ps.tekrar,din_sn:parseDinStr(din),isSprint:true}]:[];
     return{tip:'yokus_kisa',sure_dk,yapi_notu:yapiNotu,yapilar:[
-      {baslik:'Isınma',detay:'15 dk Z1 + dinamik ısınma'},
-      {baslik:'Maks. Yokuş Çıkışları',detay:yapi+' — maksimal efor · '+din+' · %6-10 eğim'},
-      {baslik:'Soğuma',detay:'10 dk Z1'},
+      {baslik:'Isınma',detay:'15 dk Z1 + dinamik ısınma',_rows:_R.isinma(15)},
+      {baslik:'Maks. Yokuş Çıkışları',detay:yapi+' — maksimal efor · '+din+' · %6-10 eğim',_rows:yapisRows},
+      {baslik:'Soğuma',detay:'10 dk Z1',_rows:_R.soguma(10)},
     ]};
   }
 
@@ -4752,10 +4755,12 @@ function tplFromYapiNotu(tur, yapiNotu, band, sure_dk, zones, disiplin, phase, c
     const yapiM=yapiNotu.match(/—\s*(.+?)(?:\s*\/|$)/);const yapi=yapiM?yapiM[1].trim():'3×3 dk';
     const dinM=yapiNotu.match(/\/\s*(.+)/);const din=dinM?dinM[1].trim():'yürüyüş inişi';
     const z4=zoneInfo(zones,3)||'Z4 eşik';
+    // _rows: Z4 (zIdx=3) zone — uzun yokuş çıkışları eşik zonunda
+    const yusRows=parseSetsStr(yapi)?[{label:'Z4 Yokuş Çıkışı',sure_sn:parseSetsStr(yapi).sure_sn,zIdx:3,tekrar:parseSetsStr(yapi).tekrar,din_sn:parseDinStr(din)}]:[];
     return{tip:'yokus_uzun',sure_dk,yapi_notu:yapiNotu,yapilar:[
-      {baslik:'Isınma',detay:'15 dk Z1'},
-      {baslik:'Z4 Yokuş Çıkışları',detay:yapi+' — '+z4+' · '+din},
-      {baslik:'Soğuma',detay:'10 dk Z1'},
+      {baslik:'Isınma',detay:'15 dk Z1',_rows:_R.isinma(15)},
+      {baslik:'Z4 Yokuş Çıkışları',detay:yapi+' — '+z4+' · '+din,_rows:yusRows},
+      {baslik:'Soğuma',detay:'10 dk Z1',_rows:_R.soguma(10)},
     ]};
   }
 
@@ -4764,10 +4769,13 @@ function tplFromYapiNotu(tur, yapiNotu, band, sure_dk, zones, disiplin, phase, c
     const sevM=yapiNotu.match(/·\s*(S\d+)/);const sev=sevM?sevM[1]:'';
     const yapiM=yapiNotu.match(/—\s*(.+?)(?:\s*\/|$)/);const yapi=yapiM?yapiM[1].trim():'5×8sn';
     const dinM=yapiNotu.match(/\/\s*(.+)/);const din=dinM?dinM[1].trim():'2dk yürüyüş';
+    // _rows: Z5b sprint zone — "Sprintleri" kelimesi adimToRowsFallback'de isSprintType'ı tetikler ama zone Z5b'yi garantilemek için açık atama
+    const hsSets=parseSetsStr(yapi);
+    const hsRows=hsSets?[{label:'Hill Sprint',sure_sn:hsSets.sure_sn,zIdx:5,tekrar:hsSets.tekrar,din_sn:parseDinStr(din),isSprint:true}]:[];
     return{tip:'hill_sprint',sure_dk,yapi_notu:yapiNotu,yapilar:[
-      {baslik:'Isınma',detay:'15 dk Z1 + strides'},
-      {baslik:'Maks. Yokuş Sprintleri',detay:yapi+' — patlayıcı maksimal efor · '+din},
-      {baslik:'Soğuma',detay:'10 dk Z1'},
+      {baslik:'Isınma',detay:'15 dk Z1 + strides',_rows:_R.isinma(15)},
+      {baslik:'Maks. Yokuş Sprintleri',detay:yapi+' — patlayıcı maksimal efor · '+din,_rows:hsRows},
+      {baslik:'Soğuma',detay:'10 dk Z1',_rows:_R.soguma(10)},
     ]};
   }
 
@@ -4775,20 +4783,36 @@ function tplFromYapiNotu(tur, yapiNotu, band, sure_dk, zones, disiplin, phase, c
   if(tur==='strides'){
     const yapiM=yapiNotu.match(/·\s*(.+?)(?:\s*\(|$)/);const yapi=yapiM?yapiM[1].trim():'4×100m';
     const fazM=yapiNotu.match(/\((.+)\)/);const faz=fazM?fazM[1]:'';
+    // Mesafe veya süre parse: "4×100m" → metre→sn; "4×25sn"
+    const strParse=(s)=>{
+      let m=s.match(/(\d+)\s*[×x]\s*(\d+)\s*m\b/i);if(m){const pSec=getPaceFromZone(4,zones);return{n:+m[1],sn:Math.round(+m[2]/1000*pSec),unit:'m'};}
+      m=s.match(/(\d+)\s*[×x]\s*(\d+)\s*sn/i);if(m)return{n:+m[1],sn:+m[2],unit:'sn'};
+      return null;
+    };
+    const sp=strParse(yapi);
+    const strRows=sp?_R.strides('Strides',sp.n,sp.sn):[];
     return{tip:'strides',sure_dk,yapi_notu:yapiNotu,yapilar:[
-      {baslik:'Isınma',detay:'15 dk Z1'},
-      {baslik:'Strides',detay:yapi+' — kontrollü hızlanma, son 20m rahat · 45-60sn yürüyüş arası'},
-      {baslik:'Soğuma',detay:'10 dk Z1'},
+      {baslik:'Isınma',detay:'15 dk Z1',_rows:_R.isinma(15)},
+      {baslik:'Strides',detay:yapi+' — kontrollü hızlanma, son 20m rahat · 45-60sn yürüyüş arası',_rows:strRows},
+      {baslik:'Soğuma',detay:'10 dk Z1',_rows:_R.soguma(10)},
     ]};
   }
 
   // Açıcı
   if(tur==='acici'){
     const yapiM=yapiNotu.match(/·\s*(.+?)(?:\s*\(|$)/);const yapi=yapiM?yapiM[1].trim():'4×100m';
+    // _rows: Z5b sprint zone (aktivasyon hızlanmaları = sub-max sprint)
+    const acParse=(s)=>{
+      let m=s.match(/(\d+)\s*[×x]\s*(\d+)\s*m\b/i);if(m){const pSec=getPaceFromZone(5,zones);return{n:+m[1],sn:Math.round(+m[2]/1000*pSec)};}
+      m=s.match(/(\d+)\s*[×x]\s*(\d+)\s*sn/i);if(m)return{n:+m[1],sn:+m[2]};
+      return null;
+    };
+    const ap=acParse(yapi);
+    const acRows=ap?[{label:'Açıcı Sprint',sure_sn:ap.sn,zIdx:5,tekrar:ap.n,din_sn:60,isSprint:true}]:[];
     return{tip:'acici',sure_dk,yapi_notu:yapiNotu,yapilar:[
-      {baslik:'Isınma',detay:'15 dk Z1'},
-      {baslik:'Yarış Hızlanmaları',detay:yapi+' — yarış temposu · 60sn tam dinlenme arası'},
-      {baslik:'Soğuma',detay:'10 dk Z1'},
+      {baslik:'Isınma',detay:'15 dk Z1',_rows:_R.isinma(15)},
+      {baslik:'Yarış Hızlanmaları',detay:yapi+' — yarış temposu · 60sn tam dinlenme arası',_rows:acRows},
+      {baslik:'Soğuma',detay:'10 dk Z1',_rows:_R.soguma(5)},
     ]};
   }
 
@@ -4796,9 +4820,9 @@ function tplFromYapiNotu(tur, yapiNotu, band, sure_dk, zones, disiplin, phase, c
   if(tur==='teknik'){
     const yapiM=yapiNotu.match(/·\s*(.+)/);const yapi=yapiM?yapiM[1].trim():'Patika';
     return{tip:'teknik',sure_dk,yapi_notu:yapiNotu,yapilar:[
-      {baslik:'Isınma',detay:'10 dk Z1'},
-      {baslik:'Teknik Çalışma',detay:yapi+' · Form, adım ve yere basış odaklı · '+sure_dk+' dk'},
-      {baslik:'Soğuma',detay:'5 dk Z1'},
+      {baslik:'Isınma',detay:'10 dk Z1',_rows:_R.isinma(10)},
+      {baslik:'Teknik Çalışma',detay:yapi+' · Form, adım ve yere basış odaklı · '+sure_dk+' dk',_rows:_R.sabit('Teknik Koşu',sure_dk-15,1)},
+      {baslik:'Soğuma',detay:'5 dk Z1',_rows:_R.soguma(5)},
     ]};
   }
 
@@ -6154,6 +6178,49 @@ function selectRaces(athlete, races){
 }
 
 // Tek gün için plan üret (şablon motoru ile)
+// ── Yarış Günü Hedef Pace Hesaplayıcı ────────────────────────────────────────
+// Sporcunun PB'lerinden Riegel formülüyle hedef pace türetir
+function raceTargetPace(athlete, raceMesafe){
+  const km=parseFloat(raceMesafe)||0;
+  if(km<=0)return null;
+  // PB parse: "M:SS" veya "H:MM:SS" → saniye
+  const parsePBSec=(s)=>{
+    if(!s||typeof s!=='string')return null;
+    const parts=s.trim().split(':').map(Number);
+    if(parts.some(isNaN))return null;
+    if(parts.length===3)return parts[0]*3600+parts[1]*60+parts[2];
+    if(parts.length===2)return parts[0]*60+parts[1];
+    return null;
+  };
+  const pbs=[
+    {km:5.0,   sec:parsePBSec(athlete?.pb_5k)},
+    {km:10.0,  sec:parsePBSec(athlete?.pb_10k)},
+    {km:21.0975,sec:parsePBSec(athlete?.pb_hm)},
+    {km:42.195, sec:parsePBSec(athlete?.pb_m)},
+  ].filter(p=>p.sec&&p.sec>0);
+  if(!pbs.length)return null;
+  // En yakın mesafeli PB'yi bul
+  const closest=pbs.slice().sort((a,b)=>Math.abs(a.km-km)-Math.abs(b.km-km))[0];
+  // Riegel: T2 = T1 × (D2/D1)^1.06
+  const estimatedSec=closest.sec*Math.pow(km/closest.km,1.06);
+  const paceSec=estimatedSec/km;
+  const pm=Math.floor(paceSec/60);
+  const ps=Math.round(paceSec%60);
+  const psStr=String(ps).padStart(2,'0');
+  return{paceSec,paceStr:`${pm}:${psStr}`,estTotalSec:Math.round(estimatedSec)};
+}
+
+// Hedef pace'e göre yarış zone tahmini (raceTargetPace sonucundan)
+function raceZoneFromPace(paceSec,zones){
+  if(!zones?.paceZones||!paceSec)return 3; // Z4 default
+  const paceMs=1000/paceSec;
+  for(let i=zones.paceZones.length-1;i>=0;i--){
+    const z=zones.paceZones[i];
+    if(z&&z.lo_ms&&paceMs>=z.lo_ms)return i;
+  }
+  return 3;
+}
+
 function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate, wkStats, kosuGunleri, caprazGunleri, race=null){
   if(!athlete)return{tip:'dinlenme',baslik:'Dinlenme',sure_dk:0,yukHedef:0,yapilar:[],isPast:false,isToday:false};
   const today=new Date();
@@ -6248,6 +6315,64 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
   let kosuTpl=null;
   let kosuUyari=null;
   if(isKosu){
+    // ── YARIŞ GÜNÜ: antrenman önerilmez, yarış bilgisi döndürülür ────────────
+    // Birincil yarış günü (daysToRace===0) veya ara yarış günü (daysToIntermediate===0)
+    const isAnaYaris=daysToRace===0&&race;
+    const isAraYaris=daysToIntermediate===0; // ara yarış günü
+    if(isAnaYaris||isAraYaris){
+      // Hangi yarış?
+      const yarisObj=isAnaYaris?race:null; // ara yarış bilgisi yok, race=null
+      const yarisAd=yarisObj?.ad||'Yarış';
+      const yarisMesafe=parseFloat(yarisObj?.mesafe)||0;
+      // Hedef pace: PB'den Riegel hesabı
+      const paceData=yarisMesafe>0?raceTargetPace(athlete,yarisMesafe):null;
+      const targetPaceSec=paceData?.paceSec||null;
+      const paceStr=paceData?.paceStr||null;
+      // Tahmini bitiş süresi
+      const estSec=paceData?.estTotalSec||(yarisMesafe>0?Math.round(yarisMesafe*360):0);
+      const estHr=Math.floor(estSec/3600);
+      const estMn=Math.floor((estSec%3600)/60);
+      const sureDk=Math.round(estSec/60);
+      // Zone tespiti (pace'e göre)
+      const zonesDyn=calcZones(athlete);
+      const zIdx=targetPaceSec?raceZoneFromPace(targetPaceSec,zonesDyn):3;
+      // Aşama satırı için _rows oluştur
+      const yarisRows=yarisMesafe>0&&targetPaceSec?[{
+        label:'🏁 '+yarisAd+(yarisMesafe?' — '+yarisMesafe+' km':''),
+        sure_sn:estSec,
+        zIdx,
+        pSec:targetPaceSec,
+        rpe:'7–10',
+        type:'single'
+      }]:[{
+        label:'🏁 '+yarisAd+(yarisMesafe?' — '+yarisMesafe+' km':''),
+        sure_sn:estSec||3600,
+        zIdx:3,
+        type:'single'
+      }];
+      const yarisDetay=[
+        yarisMesafe?`Mesafe: ${yarisMesafe} km`:'',
+        paceStr?`Hedef Pace: ${paceStr} /km`:'',
+        estSec>0?`Tahmini Süre: ${estHr?estHr+'sa ':''}`+estMn+'dk':'',
+        'Bugün antrenman yok — yarış günü 🎯'
+      ].filter(Boolean).join(' · ');
+      const yarisYapilir=[{
+        baslik:'🏁 '+yarisAd,
+        detay:yarisDetay,
+        _rows:yarisRows
+      }];
+      return{
+        tip:'yaris', baslik:yarisAd,
+        yapi_notu:'Yarış Günü'+(isAraYaris?' (Ara Yarış)':''),
+        sure_dk:sureDk,
+        yukHedef:Math.round(sureDk*1.8), // yarış yük tahmini
+        yapilar:yarisYapilir,
+        isYarisGunu:true,
+        isPast,isToday,simState,phase,yMod:1,
+        date,dayTR,dayShort
+      };
+    }
+
     // Hafta iskeleti: 'aerobik' günse yoğun antrenman verme
     const iskeleteGoreAerobik=(haftaGunTipi==='aerobik'||haftaGunTipi==='kolay')&&!isUzunGun;
     const iskeleteGoreKolay=haftaGunTipi==='kolay';
