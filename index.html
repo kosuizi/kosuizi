@@ -1,4 +1,4 @@
-<!-- Version: v2026.04.08-1214 -->
+<!-- Version: v2026.04.08-1321 -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -3577,7 +3577,7 @@ function adimToRows(adim, zones){
       const isSogumaRow=/soğuma/i.test(r.label||'');
       const pSec=r.pSec||(isIsinmaRow?getWarmupPace(zones):isSogumaRow?getCooldownPace(zones):getPaceFromZone(r.zIdx,zones));
       const mkRow=(rr,lbl)=>{
-        const cr=rr.rpe||rr.isSprint?{...calcRowM(rr.sure_sn,pSec),pm:null,ps:null}:calcRowM(rr.sure_sn,pSec);
+        const cr=calcRowM(rr.sure_sn,pSec);
         return{type:rr.type||'run',label:lbl||rr.label,
           color:ZONE_COLORS_INLINE[rr.zIdx]||'#34d399',
           textColor:ZONE_TEXT_COLOR[rr.zIdx]||'#064e3b',
@@ -3743,7 +3743,7 @@ function adimToRowsFallback(adim, zones){
       const {h:sh,m:sm,s:ss}=fmtHMS(birSn);
       const ds=fmtHMS(dinSn);
       rows.push({type:'header',label:`↻ ${n} Strides`,color:'#1e293b',textColor:'#f8fafc',h:0,m:0,s:0,mesafe:0,pm:0,ps:0,repeatCount:n});
-      rows.push({type:'run',label:'Strides',color:ZONE_COLORS_INLINE[strideZIdx],textColor:ZONE_TEXT_COLOR[strideZIdx],h:sh,m:sm,s:ss,...calcRow(birSn,sPaceSec),pm:null,ps:null,rpe:'8–9',repeatCount:n});
+      rows.push({type:'run',label:'Strides',color:ZONE_COLORS_INLINE[strideZIdx],textColor:ZONE_TEXT_COLOR[strideZIdx],h:sh,m:sm,s:ss,...calcRow(birSn,sPaceSec),rpe:'8–9',_isSprint:true,repeatCount:n,_origPaceSec:sPaceSec,_origZIdx:strideZIdx});
       rows.push({type:'rest',label:'Strides Arası Dinlenme',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],...calcRow(dinSn,getPace(0)),rpe:null,repeatCount:n});
       return rows;
     }
@@ -3768,10 +3768,10 @@ function adimToRowsFallback(adim, zones){
     for(const p of dinPats){const dm=detay.match(p);if(dm){dinSn=Math.round(parseFloat(dm[1].replace(',','.'))*( dm[2].toLowerCase()==='dk'?60:1));break;}}
     if(detay.toLowerCase().includes('yürüyüş ini')) dinSn=120;
     const rpe=isSprintType?ZONE_RPE2[Math.min(zIdx,6)]||'':null;
-    const ctr=rpe?{...calcRow(birSn,paceSec),pm:null,ps:null}:calcRow(birSn,paceSec);
+    const ctr=calcRow(birSn,paceSec);
     rows.push({type:'header',label:`↻ ${n} Tekrar`,color:'#1e293b',textColor:'#f8fafc',h:0,m:0,s:0,mesafe:0,pm:0,ps:0,repeatCount:n});
-    rows.push({type:'run',label:baslik.split('·')[0].trim(),color,textColor,...ctr,rpe,repeatCount:n});
-    rows.push({type:'rest',label:'Dinlenme / Toparlanma',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],...calcRow(dinSn,getPaceFromZone(0,zones)),repeatCount:n});
+    rows.push({type:'run',label:baslik.split('·')[0].trim(),color,textColor,...ctr,rpe,_isSprint:isSprintType,repeatCount:n,_origPaceSec:paceSec,_origZIdx:zIdx});
+    rows.push({type:'rest',label:'Dinlenme / Toparlanma',color:ZONE_COLORS_INLINE[0],textColor:ZONE_TEXT_COLOR[0],...calcRow(dinSn,getPaceFromZone(0,zones)),repeatCount:n,_origPaceSec:getPaceFromZone(0,zones),_origZIdx:0});
     return rows;
   }
 
@@ -3793,9 +3793,9 @@ function adimToRowsFallback(adim, zones){
       if(avgPaceM) effectivePaceSec=paceToSec(avgPaceM[1]);
     }
   }
-  const csb=rpe?{...calcRow(totalSn,effectivePaceSec),pm:null,ps:null}:calcRow(totalSn,effectivePaceSec);
+  const csb=calcRow(totalSn,effectivePaceSec);
   const tirLabel=adim._tirmanisAna?baslik+' (tırmanışta)':baslik;
-  rows.push({type:'single',label:tirLabel,color,textColor,...csb,rpe});
+  rows.push({type:'single',label:tirLabel,color,textColor,...csb,rpe,_isSprint:isSprintType,_origPaceSec:effectivePaceSec,_origZIdx:zIdx});
   return rows;
 }
 
@@ -3940,14 +3940,122 @@ async function saveCueGlobal(label, text){
   }
 }
 
+// Aralıklar editörü — tekrarlı antrenmanlarda her bir tekrarın koşu+dinlenme pace'lerini ayrı düzenler
+function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange, paceValidation, paceToZoneIdx, readOnly}){
+  const [editKey, setEditKey] = React.useState(null); // 'rep:type:field'
+  const e = React.createElement;
+
+  // Bir tekrar için satır verisini hesapla — override varsa onu kullan, yoksa orijinal
+  const getRowData = (rep, type) => {
+    const base = type==='run' ? runRow : restRow;
+    if(!base) return null;
+    const ovr = overrides[rep]?.[type] || {};
+    const pm = ovr.pm != null ? ovr.pm : base.pm;
+    const ps = ovr.ps != null ? ovr.ps : base.ps;
+    return {
+      ...base,
+      pm, ps,
+      _origPaceSec: base._origPaceSec,
+      _origZIdx: base._origZIdx,
+    };
+  };
+
+  const editableCellAralik = (rep, type, field, displayVal) => {
+    if(readOnly) return displayVal;
+    const key = `${rep}:${type}:${field}`;
+    const isEditing = editKey === key;
+    if(isEditing) return e('input',{
+      autoFocus:true, type:'number',
+      defaultValue:displayVal,
+      style:{width:'100%',fontFamily:'monospace',fontSize:11,fontWeight:700,border:'2px solid var(--info)',borderRadius:3,padding:'2px 4px',background:'#fff',color:'#000',textAlign:'center'},
+      onBlur:ev=>{onChange(rep,type,field,ev.target.value);setEditKey(null);},
+      onKeyDown:ev=>{
+        if(ev.key==='Enter'){onChange(rep,type,field,ev.target.value);setEditKey(null);}
+        if(ev.key==='Escape')setEditKey(null);
+      }
+    });
+    return e('span',{
+      style:{cursor:'pointer',borderBottom:'1px dashed #94a3b8',fontFamily:'monospace',fontSize:11,fontWeight:700,color:'#000'},
+      title:'Düzenlemek için tıkla',
+      onClick:()=>setEditKey(key)
+    },displayVal);
+  };
+
+  const cellSt = {padding:'4px 4px',textAlign:'center',fontFamily:'monospace',fontSize:11,fontWeight:700};
+  const reps = [];
+  for(let r=1;r<=repCount;r++) reps.push(r);
+
+  return e('div',null,
+    e('div',{style:{fontSize:11,fontWeight:700,color:'#fbbf24',marginBottom:8,letterSpacing:0.3}},
+      `↻ ARALIKLAR — Her tekrarın koşu ve dinlenme pace'i ayrı girilebilir`
+    ),
+    e('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:10,background:'#1e293b',borderRadius:4,overflow:'hidden'}},
+      e('thead',null,
+        e('tr',{style:{background:'#0f172a'}},
+          ['#','Aşama','Hedef','Sa','Dk','Sn','Mesafe (m)','Pace dk','Pace sn'].map((h,i)=>
+            e('th',{key:i,style:{padding:'5px 4px',textAlign:i<2?'left':'center',fontWeight:600,fontSize:9,color:'#94a3b8'}},h)
+          )
+        )
+      ),
+      e('tbody',null,
+        reps.flatMap(rep=>{
+          const out = [];
+          // Run satırı
+          const runData = getRowData(rep,'run');
+          if(runData){
+            const pv = paceValidation(runData);
+            out.push(e('tr',{key:`r${rep}`,style:{background:runData.color,borderBottom:'1px solid rgba(0,0,0,.1)'}},
+              e('td',{style:{...cellSt,color:'#000'}},rep),
+              e('td',{style:{...cellSt,textAlign:'left',color:'#000'}},runData.label),
+              e('td',{style:{padding:'4px 4px',textAlign:'center'}},
+                pv ? e('span',{style:{display:'inline-block',padding:'2px 5px',borderRadius:3,fontSize:8,fontWeight:700,color:pv.color,background:pv.bg,whiteSpace:'nowrap',lineHeight:1.3}},pv.icon+' '+pv.label) : e('span',{style:{color:'#94a3b8',fontSize:9}},'—')
+              ),
+              e('td',{style:{...cellSt,color:'#000'}},runData.h>0?runData.h:0),
+              e('td',{style:{...cellSt,color:'#000'}},runData.m),
+              e('td',{style:{...cellSt,color:'#000'}},String(runData.s).padStart(2,'0')),
+              e('td',{style:{...cellSt,color:'#000'}},runData.mesafe>0?runData.mesafe:0),
+              e('td',{style:{...cellSt,color:'#000'}},editableCellAralik(rep,'run','pm',runData.pm!=null?runData.pm:0)),
+              e('td',{style:{...cellSt,color:'#000'}},editableCellAralik(rep,'run','ps',runData.ps!=null?String(runData.ps).padStart(2,'0'):'00'))
+            ));
+          }
+          // Rest satırı
+          const restData = getRowData(rep,'rest');
+          if(restData){
+            const pvR = paceValidation(restData);
+            out.push(e('tr',{key:`d${rep}`,style:{background:restData.color,borderBottom:'2px solid rgba(0,0,0,.15)'}},
+              e('td',{style:{...cellSt,color:'#000'}},''),
+              e('td',{style:{...cellSt,textAlign:'left',color:'#000',fontStyle:'italic',fontSize:10}},'↳ '+restData.label),
+              e('td',{style:{padding:'4px 4px',textAlign:'center'}},
+                pvR ? e('span',{style:{display:'inline-block',padding:'2px 5px',borderRadius:3,fontSize:8,fontWeight:700,color:pvR.color,background:pvR.bg,whiteSpace:'nowrap',lineHeight:1.3}},pvR.icon+' '+pvR.label) : e('span',{style:{color:'#94a3b8',fontSize:9}},'—')
+              ),
+              e('td',{style:{...cellSt,color:'#000'}},restData.h>0?restData.h:0),
+              e('td',{style:{...cellSt,color:'#000'}},restData.m),
+              e('td',{style:{...cellSt,color:'#000'}},String(restData.s).padStart(2,'0')),
+              e('td',{style:{...cellSt,color:'#000'}},restData.mesafe>0?restData.mesafe:0),
+              e('td',{style:{...cellSt,color:'#000'}},editableCellAralik(rep,'rest','pm',restData.pm!=null?restData.pm:0)),
+              e('td',{style:{...cellSt,color:'#000'}},editableCellAralik(rep,'rest','ps',restData.ps!=null?String(restData.ps).padStart(2,'0'):'00'))
+            ));
+          }
+          return out;
+        })
+      )
+    ),
+    e('div',{style:{fontSize:9,color:'#94a3b8',marginTop:6,fontStyle:'italic'}},
+      'Pace değerlerini düzenlemek için sayıların üzerine tıkla. Hedef bölgeye ±25sn → ✓ Hedef Bölge, ±50sn → Biraz Hızlı/Yavaş, üzeri → Çok Hızlı/Yavaş.'
+    )
+  );
+}
+
 function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOverrides, readOnly}){
   const [customCues, setCustomCues] = useState(_cueCache.data||{});
   const [editingLabel, setEditingLabel] = useState(null);
   const [editText, setEditText] = useState('');
-  const [editCell, setEditCell] = useState(null); // {rowIdx, field}
+  const [editCell, setEditCell] = useState(null); // {rowIdx, field, aralikKey?}
   const [rowOverrides, setRowOverrides] = useState(savedOverrides||{}); // {rowIdx: {mesafe,pm,ps,h,m,s,color,textColor}}
   const [repeatOverrides, setRepeatOverrides] = useState({}); // OP-9: {headerRowIdx: newCount}
   const [editingRepeat, setEditingRepeat] = useState(null); // OP-9: headerRowIdx being edited
+  const [aralikExpanded, setAralikExpanded] = useState({}); // {headerRowIdx: bool}
+  const [aralikOverrides, setAralikOverrides] = useState({}); // {headerRowIdx: {repNum: {run:{pm,ps,mesafe,h,m,s}, rest:{...}}}}
 
   // savedOverrides dışarıdan güncellenirse sync et
   useEffect(()=>{ if(savedOverrides) setRowOverrides(savedOverrides); },[savedOverrides]);
@@ -4092,6 +4200,19 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
     if(onSaveOverrides) onSaveOverrides(newOverrides);
   };
 
+  // Aralıklar editörü için per-rep cell güncelleme
+  const updateAralikCell=(headerIdx, rep, type, field, rawVal)=>{
+    const val=parseInt(rawVal)||0;
+    setAralikOverrides(prev=>{
+      const next={...prev};
+      if(!next[headerIdx]) next[headerIdx]={};
+      if(!next[headerIdx][rep]) next[headerIdx][rep]={};
+      if(!next[headerIdx][rep][type]) next[headerIdx][rep][type]={};
+      next[headerIdx][rep][type]={...next[headerIdx][rep][type],[field]:val};
+      return next;
+    });
+  };
+
   // Düzenlenebilir hücre render yardımcısı
   const editableCell=(rowIdx, field, displayVal)=>{
     if(readOnly) return displayVal;
@@ -4143,11 +4264,11 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
       // Başlık
       React.createElement('thead',null,
         React.createElement('tr',{style:{background:'#0f172a'}},
-          ['Aşama','Sa','Dk','Sn','Mesafe (m)','Pace dk','Pace sn','RPE'].map((h,i)=>
+          ['Aşama','Hedef','Sa','Dk','Sn','Mesafe (m)','Pace dk','Pace sn','RPE'].map((h,i)=>
             React.createElement('th',{key:i,style:{
               padding:'5px 4px',textAlign:i===0?'left':'center',
               fontWeight:600,fontSize:10,color:'#94a3b8',
-              width:i===0?'auto':[32,32,32,64,40,40,40][i-1]
+              width:i===0?'auto':[64,32,32,32,64,40,40,40][i-1]
             }},h)
           )
         )
@@ -4160,23 +4281,56 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
             const origCount=r.repeatCount||1;
             const effCount=repeatOverrides[i]||origCount;
             const repeatLabel=r.label.replace(/↻ \d+ Tekrar/,`↻ ${effCount} Tekrar`).replace(/↻ \d+ Blok/,`↻ ${effCount} Blok`).replace(/↻ \d+ Strides/,`↻ ${effCount} Strides`);
-            return React.createElement('tr',{key:i,style:{background:r.color}},
-              React.createElement('td',{colSpan:8,style:{padding:'4px 8px',fontWeight:700,fontSize:11,color:r.textColor,letterSpacing:'.3px',display:'flex',alignItems:'center',gap:6}},
-                readOnly?repeatLabel:React.createElement(React.Fragment,null,
-                  repeatLabel.split(/\d+/).shift(),
-                  editingRepeat===i
-                    ?React.createElement('input',{
-                      autoFocus:true,type:'number',min:1,max:30,defaultValue:effCount,
-                      style:{width:40,fontFamily:'monospace',fontSize:12,fontWeight:700,border:'2px solid var(--info)',borderRadius:3,padding:'1px 4px',background:'#fff',color:'#000',textAlign:'center'},
-                      onBlur:e=>updateRepeatCount(i,parseInt(e.target.value)||origCount),
-                      onKeyDown:e=>{if(e.key==='Enter')updateRepeatCount(i,parseInt(e.target.value)||origCount);if(e.key==='Escape')setEditingRepeat(null);}
-                    })
-                    :React.createElement('span',{
-                      style:{cursor:'pointer',borderBottom:'2px dashed #94a3b8',padding:'0 2px',fontSize:12},
-                      title:'Tekrar sayısını düzenle',
-                      onClick:()=>setEditingRepeat(i)
-                    },effCount),
-                  ' '+repeatLabel.split(/\d+/).slice(1).join('')
+            const isAralikOpen=!!aralikExpanded[i];
+            // Aralıklar tablosu için bu header'ın altındaki run+rest satırlarını bul
+            const runRow=rows[i+1];
+            const restRow=(rows[i+2]?.type==='rest')?rows[i+2]:null;
+            return React.createElement(React.Fragment,{key:'h'+i},
+              React.createElement('tr',{style:{background:r.color}},
+                React.createElement('td',{colSpan:9,style:{padding:'4px 8px',fontWeight:700,fontSize:11,color:r.textColor,letterSpacing:'.3px',display:'flex',alignItems:'center',gap:6}},
+                  readOnly?repeatLabel:React.createElement(React.Fragment,null,
+                    repeatLabel.split(/\d+/).shift(),
+                    editingRepeat===i
+                      ?React.createElement('input',{
+                        autoFocus:true,type:'number',min:1,max:30,defaultValue:effCount,
+                        style:{width:40,fontFamily:'monospace',fontSize:12,fontWeight:700,border:'2px solid var(--info)',borderRadius:3,padding:'1px 4px',background:'#fff',color:'#000',textAlign:'center'},
+                        onBlur:e=>updateRepeatCount(i,parseInt(e.target.value)||origCount),
+                        onKeyDown:e=>{if(e.key==='Enter')updateRepeatCount(i,parseInt(e.target.value)||origCount);if(e.key==='Escape')setEditingRepeat(null);}
+                      })
+                      :React.createElement('span',{
+                        style:{cursor:'pointer',borderBottom:'2px dashed #94a3b8',padding:'0 2px',fontSize:12},
+                        title:'Tekrar sayısını düzenle',
+                        onClick:()=>setEditingRepeat(i)
+                      },effCount),
+                    ' '+repeatLabel.split(/\d+/).slice(1).join('')
+                  ),
+                  // Aralıklar butonu — sadece tekrarlı satırlarda
+                  origCount>1&&React.createElement('button',{
+                    'data-no-export':true,
+                    onClick:()=>setAralikExpanded(prev=>({...prev,[i]:!prev[i]})),
+                    style:{
+                      marginLeft:'auto',fontSize:10,padding:'2px 8px',
+                      background:isAralikOpen?'#fbbf24':'rgba(255,255,255,0.1)',
+                      color:isAralikOpen?'#000':r.textColor,
+                      border:'1px solid '+(isAralikOpen?'#fbbf24':'rgba(255,255,255,0.3)'),
+                      borderRadius:3,cursor:'pointer',fontWeight:700
+                    }
+                  },isAralikOpen?'▼ Aralıklar':'▶ Aralıklar')
+                )
+              ),
+              // Genişletilmiş aralık editörü
+              isAralikOpen&&runRow&&React.createElement('tr',{style:{background:'#0f172a'}},
+                React.createElement('td',{colSpan:9,style:{padding:'10px 8px'}},
+                  React.createElement(AralikEditor,{
+                    headerIdx:i,
+                    repCount:effCount,
+                    runRow,restRow,
+                    overrides:aralikOverrides[i]||{},
+                    onChange:(rep,type,field,val)=>updateAralikCell(i,rep,type,field,val),
+                    paceValidation,
+                    paceToZoneIdx,
+                    readOnly
+                  })
                 )
               )
             );
@@ -4221,28 +4375,32 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
                 );
               })()
             ),
-            React.createElement('td',{style:{...cell(),color:'#000'}},r.h>0?r.h:0),
-            React.createElement('td',{style:{...cell(),color:'#000'}},r.m),
-            React.createElement('td',{style:{...cell(),color:'#000'}},String(r.s).padStart(2,'0')),
-            React.createElement('td',{style:{...cell(),color:'#000'}},r.rpe?'—':editableCell(i,'mesafe',r.mesafe>0?r.mesafe:0)),
-            React.createElement('td',{style:{...cell(),color:'#000'}},r.rpe?'—':editableCell(i,'pm',r.pm!=null?r.pm:0)),
-            React.createElement('td',{style:{...cell(),color:'#000'}},r.rpe?'—':editableCell(i,'ps',r.ps!=null?String(r.ps).padStart(2,'0'):'00')),
-            React.createElement('td',{style:{...cell(),color:'#000',fontSize:r.rpe?12:10}},
-              r.rpe?r.rpe:(()=>{
-                // OP-8: Pace validation badge
+            // HEDEF — Pace validation badge (sadece pace hedefli satırlarda)
+            React.createElement('td',{style:{padding:'4px 4px',textAlign:'center',verticalAlign:'middle'}},
+              (()=>{
                 const pv=paceValidation(r);
-                if(!pv) return '—';
+                if(!pv) return React.createElement('span',{style:{color:'#94a3b8',fontSize:9}},'—');
                 return React.createElement('span',{
-                  style:{display:'inline-block',padding:'1px 4px',borderRadius:3,fontSize:8,fontWeight:700,
+                  style:{display:'inline-block',padding:'2px 5px',borderRadius:3,fontSize:8,fontWeight:700,
                     color:pv.color,background:pv.bg,whiteSpace:'nowrap',lineHeight:1.3}
                 },pv.icon+' '+pv.label);
               })()
+            ),
+            React.createElement('td',{style:{...cell(),color:'#000'}},r.h>0?r.h:0),
+            React.createElement('td',{style:{...cell(),color:'#000'}},r.m),
+            React.createElement('td',{style:{...cell(),color:'#000'}},String(r.s).padStart(2,'0')),
+            React.createElement('td',{style:{...cell(),color:r.rpe||r._isSprint?'#475569':'#000',fontStyle:r.rpe||r._isSprint?'italic':'normal'}},editableCell(i,'mesafe',r.mesafe>0?r.mesafe:0)),
+            React.createElement('td',{style:{...cell(),color:r.rpe||r._isSprint?'#475569':'#000',fontStyle:r.rpe||r._isSprint?'italic':'normal'}},editableCell(i,'pm',r.pm!=null?r.pm:0)),
+            React.createElement('td',{style:{...cell(),color:r.rpe||r._isSprint?'#475569':'#000',fontStyle:r.rpe||r._isSprint?'italic':'normal'}},editableCell(i,'ps',r.ps!=null?String(r.ps).padStart(2,'0'):'00')),
+            React.createElement('td',{style:{...cell(),color:'#000',fontSize:12}},
+              r.rpe?r.rpe:'—'
             )
           );
         }),
         // Toplam satırı
         React.createElement('tr',{style:{background:'#1e293b',borderTop:'2px solid #475569'}},
           React.createElement('td',{style:{padding:'6px 6px',fontWeight:700,fontSize:11,color:'#f1f5f9'}},'TOPLAM'),
+          React.createElement('td',{style:{...cell(),color:'#94a3b8'}},'—'),
           React.createElement('td',{style:{...cell(true),color:'#f1f5f9'}},tot.h||0),
           React.createElement('td',{style:{...cell(true),color:'#fbbf24',fontSize:13}},tot.m),
           React.createElement('td',{style:{...cell(),color:'#f1f5f9'}},String(tot.s).padStart(2,'0')),
