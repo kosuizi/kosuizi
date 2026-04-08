@@ -6179,38 +6179,47 @@ function selectRaces(athlete, races){
 
 // Tek gün için plan üret (şablon motoru ile)
 // ── Yarış Günü Hedef Pace Hesaplayıcı ────────────────────────────────────────
-// Sporcunun PB'lerinden Riegel formülüyle hedef pace türetir
-function raceTargetPace(athlete, raceMesafe){
-  const km=parseFloat(raceMesafe)||0;
+// "Yarış Durumu" sekmesiyle aynı mantık: calcTargetTime + hazırlık iyileşme %'si → tHedef
+function raceHedefSure(race, athlete, ctl, acwr, athWorkouts){
+  if(!race||!athlete)return null;
+  const km=parseFloat(race.mesafe)||0;
   if(km<=0)return null;
-  // PB parse: "M:SS" veya "H:MM:SS" → saniye
-  const parsePBSec=(s)=>{
-    if(!s||typeof s!=='string')return null;
-    const parts=s.trim().split(':').map(Number);
-    if(parts.some(isNaN))return null;
-    if(parts.length===3)return parts[0]*3600+parts[1]*60+parts[2];
-    if(parts.length===2)return parts[0]*60+parts[1];
-    return null;
-  };
-  const pbs=[
-    {km:5.0,   sec:parsePBSec(athlete?.pb_5k)},
-    {km:10.0,  sec:parsePBSec(athlete?.pb_10k)},
-    {km:21.0975,sec:parsePBSec(athlete?.pb_hm)},
-    {km:42.195, sec:parsePBSec(athlete?.pb_m)},
-  ].filter(p=>p.sec&&p.sec>0);
-  if(!pbs.length)return null;
-  // En yakın mesafeli PB'yi bul
-  const closest=pbs.slice().sort((a,b)=>Math.abs(a.km-km)-Math.abs(b.km-km))[0];
-  // Riegel: T2 = T1 × (D2/D1)^1.06
-  const estimatedSec=closest.sec*Math.pow(km/closest.km,1.06);
-  const paceSec=estimatedSec/km;
+  // Mevcut tahmin (VO2max + CTL tabanlı)
+  const target=calcTargetTime(race,athlete,ctl||0,acwr||1.0,athWorkouts||[]);
+  if(!target||!target.totalMin||target.totalMin<=0)return null;
+
+  // ── Hazırlık iyileşme yüzdesi (Yarış Durumu sekmesiyle birebir) ──────────
+  const prepWeeks=parseInt(race.prep_weeks)||12;
+  const taperW=parseInt(race.taper_w)||(km>42?3:km>21?2:1);
+  const daysLeft=race.tarih?Math.ceil((new Date(race.tarih+'T12:00:00')-new Date())/864e5):999;
+  const trainingDaysLeft=Math.max(0,daysLeft-taperW*7);
+  const totalTrainingDays=Math.max(1,(prepWeeks-taperW)*7);
+  const prepPct=Math.min(1,(totalTrainingDays-trainingDaysLeft)/totalTrainingDays);
+
+  const dpPerKm=km>0?(parseFloat(race.d_plus)||0)/km:0;
+  let maxIyiPct=km<=5?6.0:km<=10?5.0:km<=21?4.0:km<=42?3.0:km<=60?2.5:2.0;
+  if(dpPerKm>100)maxIyiPct+=1.0;
+  else if(dpPerKm>50)maxIyiPct+=0.5;
+
+  const realizePct=prepPct<0.1?0.05:prepPct<0.3?0.15+(prepPct-0.1)*0.5:
+    prepPct<0.7?0.25+(prepPct-0.3)*1.5:prepPct<0.9?0.85+(prepPct-0.7)*0.5:0.95;
+  const expectedIyi=round1(maxIyiPct*realizePct);
+  const tHedef=round1(target.totalMin*(1-expectedIyi/100)); // dakika cinsinden hedef süre
+
+  // Pace hesapla
+  const paceSec=(tHedef*60)/km; // saniye/km
   const pm=Math.floor(paceSec/60);
   const ps=Math.round(paceSec%60);
-  const psStr=String(ps).padStart(2,'0');
-  return{paceSec,paceStr:`${pm}:${psStr}`,estTotalSec:Math.round(estimatedSec)};
+  return{
+    tHedefMin:tHedef,
+    totalSec:Math.round(tHedef*60),
+    paceSec,
+    paceStr:`${pm}:${String(ps).padStart(2,'0')}`,
+    expectedIyi,
+  };
 }
 
-// Hedef pace'e göre yarış zone tahmini (raceTargetPace sonucundan)
+// Hedef pace'e göre yarış zone tahmini
 function raceZoneFromPace(paceSec,zones){
   if(!zones?.paceZones||!paceSec)return 3; // Z4 default
   const paceMs=1000/paceSec;
@@ -6321,15 +6330,18 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
     const isAraYaris=daysToIntermediate===0; // ara yarış günü
     if(isAnaYaris||isAraYaris){
       // Hangi yarış?
-      const yarisObj=isAnaYaris?race:null; // ara yarış bilgisi yok, race=null
+      const yarisObj=isAnaYaris?race:null; // ara yarış bilgisi race param'da yok
       const yarisAd=yarisObj?.ad||'Yarış';
       const yarisMesafe=parseFloat(yarisObj?.mesafe)||0;
-      // Hedef pace: PB'den Riegel hesabı
-      const paceData=yarisMesafe>0?raceTargetPace(athlete,yarisMesafe):null;
-      const targetPaceSec=paceData?.paceSec||null;
-      const paceStr=paceData?.paceStr||null;
-      // Tahmini bitiş süresi
-      const estSec=paceData?.estTotalSec||(yarisMesafe>0?Math.round(yarisMesafe*360):0);
+      // "Yarış Durumu" sekmesiyle aynı hesap: calcTargetTime + hazırlık iyileşme %'si
+      const hedefData=yarisObj?raceHedefSure(
+        yarisObj, athlete,
+        simState.ctl||0, simState.acwr||1.0,
+        wkStats.athWorkouts||[]
+      ):null;
+      const targetPaceSec=hedefData?.paceSec||null;
+      const paceStr=hedefData?.paceStr||null;
+      const estSec=hedefData?.totalSec||(yarisMesafe>0?Math.round(yarisMesafe*360):3600);
       const estHr=Math.floor(estSec/3600);
       const estMn=Math.floor((estSec%3600)/60);
       const sureDk=Math.round(estSec/60);
@@ -6354,6 +6366,7 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
         yarisMesafe?`Mesafe: ${yarisMesafe} km`:'',
         paceStr?`Hedef Pace: ${paceStr} /km`:'',
         estSec>0?`Tahmini Süre: ${estHr?estHr+'sa ':''}`+estMn+'dk':'',
+        hedefData?.expectedIyi?`(−${hedefData.expectedIyi}% iyileşme dahil)`:'',
         'Bugün antrenman yok — yarış günü 🎯'
       ].filter(Boolean).join(' · ');
       const yarisYapilir=[{
