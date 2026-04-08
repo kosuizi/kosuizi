@@ -1,4 +1,4 @@
-<!-- Version: v2026.04.08-1630 -->
+<!-- Version: v2026.04.08-1720 -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.08-1630'; // Antrenmanlar read-only + Aralıklar 1. tekrar toplu + _origPaceSec calcRow düzeltmesi
+const APP_VERSION='v2026.04.08-1720'; // Aralıklar: her tekrar ayrı düzenlenebilir + ayrı pace validation
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -3946,16 +3946,22 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
   const [editKey, setEditKey] = React.useState(null); // 'rep:type:field'
   const e = React.createElement;
 
-  // Tüm tekrarlar aynı ana satırı kullanır — 1. tekrardaki değişiklik hepsine yansır
+  // Her tekrar için ayrı override uygula — mesafe, pm, ps ve süre (h/m/s) dahil
+  // _origPaceSec base'den korunur ki pace validation doğru hedefle karşılaştırsın
   const getRowData = (rep, type) => {
     const base = type==='run' ? runRow : restRow;
     if(!base) return null;
-    return base;
+    const ovr = overrides[rep]?.[type] || {};
+    return {
+      ...base,
+      ...ovr,
+      _origPaceSec: base._origPaceSec,
+      _origZIdx: base._origZIdx,
+    };
   };
 
   const editableCellAralik = (rep, type, field, displayVal) => {
-    // Sadece 1. koşu/1. dinlenme satırı düzenlenebilir; diğer tekrarlar sadece görüntülenir
-    if(readOnly || rep !== 1) return displayVal;
+    if(readOnly) return displayVal;
     const key = `${rep}:${type}:${field}`;
     const isEditing = editKey === key;
     if(isEditing) return e('input',{
@@ -3981,7 +3987,7 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
 
   return e('div',null,
     e('div',{style:{fontSize:11,fontWeight:700,color:'#fbbf24',marginBottom:8,letterSpacing:0.3}},
-      `↻ ARALIKLAR — Sadece 1. koşu ve 1. dinlenme satırı düzenlenebilir; değişiklik tüm tekrarlara yansır`
+      `↻ ARALIKLAR — Her tekrarın koşu ve dinlenme mesafesi ve pace'i ayrı girilebilir`
     ),
     e('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:10,background:'#1e293b',borderRadius:4,overflow:'hidden'}},
       e('thead',null,
@@ -4195,14 +4201,45 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
   };
 
   // Aralıklar editörü için per-rep cell güncelleme
+  // Mesafe↔pace↔süre tutarlılığını korur (updateCell mantığının per-rep versiyonu)
   const updateAralikCell=(headerIdx, rep, type, field, rawVal)=>{
     const val=parseInt(rawVal)||0;
+    // Ana satırı bul (runRow = headerIdx+1, restRow = headerIdx+2)
+    const base = type==='run' ? rows[headerIdx+1] : rows[headerIdx+2];
+    if(!base) return;
+    // Mevcut override değerleriyle birleştir
+    const curOv = aralikOverrides[headerIdx]?.[rep]?.[type] || {};
+    const curPm = curOv.pm != null ? curOv.pm : (base.pm || 0);
+    const curPs = curOv.ps != null ? curOv.ps : (base.ps || 0);
+    const curMesafe = curOv.mesafe != null ? curOv.mesafe : (base.mesafe || 0);
+
+    let upd = {};
+    if(field==='mesafe'){
+      const paceSec = curPm*60 + curPs;
+      if(paceSec>0 && val>0){
+        const newSec = Math.round(val/1000*paceSec);
+        upd = {mesafe:val, ...secToHMS(newSec)};
+      } else {
+        upd = {mesafe:val};
+      }
+    } else if(field==='pm' || field==='ps'){
+      const pm = field==='pm' ? val : curPm;
+      const ps = field==='ps' ? val : curPs;
+      const paceSec = pm*60 + ps;
+      if(paceSec>0 && curMesafe>0){
+        const newSec = Math.round(curMesafe/1000*paceSec);
+        upd = {pm, ps, ...secToHMS(newSec)};
+      } else {
+        upd = {pm, ps};
+      }
+    }
+
     setAralikOverrides(prev=>{
       const next={...prev};
       if(!next[headerIdx]) next[headerIdx]={};
       if(!next[headerIdx][rep]) next[headerIdx][rep]={};
       if(!next[headerIdx][rep][type]) next[headerIdx][rep][type]={};
-      next[headerIdx][rep][type]={...next[headerIdx][rep][type],[field]:val};
+      next[headerIdx][rep][type]={...next[headerIdx][rep][type], ...upd};
       return next;
     });
   };
@@ -4319,13 +4356,8 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
                     headerIdx:i,
                     repCount:effCount,
                     runRow,restRow,
-                    overrides:{}, // kullanılmıyor — 1. tekrar değişiklikleri doğrudan ana satıra yazılır
-                    onChange:(rep,type,field,val)=>{
-                      // Sadece 1. tekrardaki düzenleme kabul edilir; ana satıra yazılır, tüm tekrarlara yansır
-                      if(rep!==1) return;
-                      const targetRowIdx = type==='run' ? i+1 : i+2;
-                      updateCell(targetRowIdx, field, val);
-                    },
+                    overrides:aralikOverrides[i]||{},
+                    onChange:(rep,type,field,val)=>updateAralikCell(i,rep,type,field,val),
                     paceValidation,
                     paceToZoneIdx,
                     readOnly
