@@ -1,4 +1,4 @@
-<!-- Version: v2026.04.08-1321 -->
+<!-- Version: v2026.04.08-1530 -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.07-1100'; // OP-5: ACWR köşeli parantez değerleri yuvarlandı (toFixed 2)
+const APP_VERSION='v2026.04.08-1530'; // Antrenmanlar sekmesi read-only + Aralıklar 1. tekrar toplu güncelleme
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -3945,23 +3945,16 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
   const [editKey, setEditKey] = React.useState(null); // 'rep:type:field'
   const e = React.createElement;
 
-  // Bir tekrar için satır verisini hesapla — override varsa onu kullan, yoksa orijinal
+  // Tüm tekrarlar aynı ana satırı kullanır — 1. tekrardaki değişiklik hepsine yansır
   const getRowData = (rep, type) => {
     const base = type==='run' ? runRow : restRow;
     if(!base) return null;
-    const ovr = overrides[rep]?.[type] || {};
-    const pm = ovr.pm != null ? ovr.pm : base.pm;
-    const ps = ovr.ps != null ? ovr.ps : base.ps;
-    return {
-      ...base,
-      pm, ps,
-      _origPaceSec: base._origPaceSec,
-      _origZIdx: base._origZIdx,
-    };
+    return base;
   };
 
   const editableCellAralik = (rep, type, field, displayVal) => {
-    if(readOnly) return displayVal;
+    // Sadece 1. koşu/1. dinlenme satırı düzenlenebilir; diğer tekrarlar sadece görüntülenir
+    if(readOnly || rep !== 1) return displayVal;
     const key = `${rep}:${type}:${field}`;
     const isEditing = editKey === key;
     if(isEditing) return e('input',{
@@ -3987,7 +3980,7 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
 
   return e('div',null,
     e('div',{style:{fontSize:11,fontWeight:700,color:'#fbbf24',marginBottom:8,letterSpacing:0.3}},
-      `↻ ARALIKLAR — Her tekrarın koşu ve dinlenme pace'i ayrı girilebilir`
+      `↻ ARALIKLAR — Sadece 1. koşu ve 1. dinlenme satırı düzenlenebilir; değişiklik tüm tekrarlara yansır`
     ),
     e('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:10,background:'#1e293b',borderRadius:4,overflow:'hidden'}},
       e('thead',null,
@@ -4013,7 +4006,7 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
               e('td',{style:{...cellSt,color:'#000'}},runData.h>0?runData.h:0),
               e('td',{style:{...cellSt,color:'#000'}},runData.m),
               e('td',{style:{...cellSt,color:'#000'}},String(runData.s).padStart(2,'0')),
-              e('td',{style:{...cellSt,color:'#000'}},runData.mesafe>0?runData.mesafe:0),
+              e('td',{style:{...cellSt,color:'#000'}},editableCellAralik(rep,'run','mesafe',runData.mesafe>0?runData.mesafe:0)),
               e('td',{style:{...cellSt,color:'#000'}},editableCellAralik(rep,'run','pm',runData.pm!=null?runData.pm:0)),
               e('td',{style:{...cellSt,color:'#000'}},editableCellAralik(rep,'run','ps',runData.ps!=null?String(runData.ps).padStart(2,'0'):'00'))
             ));
@@ -4031,7 +4024,7 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
               e('td',{style:{...cellSt,color:'#000'}},restData.h>0?restData.h:0),
               e('td',{style:{...cellSt,color:'#000'}},restData.m),
               e('td',{style:{...cellSt,color:'#000'}},String(restData.s).padStart(2,'0')),
-              e('td',{style:{...cellSt,color:'#000'}},restData.mesafe>0?restData.mesafe:0),
+              e('td',{style:{...cellSt,color:'#000'}},editableCellAralik(rep,'rest','mesafe',restData.mesafe>0?restData.mesafe:0)),
               e('td',{style:{...cellSt,color:'#000'}},editableCellAralik(rep,'rest','pm',restData.pm!=null?restData.pm:0)),
               e('td',{style:{...cellSt,color:'#000'}},editableCellAralik(rep,'rest','ps',restData.ps!=null?String(restData.ps).padStart(2,'0'):'00'))
             ));
@@ -4325,8 +4318,13 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
                     headerIdx:i,
                     repCount:effCount,
                     runRow,restRow,
-                    overrides:aralikOverrides[i]||{},
-                    onChange:(rep,type,field,val)=>updateAralikCell(i,rep,type,field,val),
+                    overrides:{}, // kullanılmıyor — 1. tekrar değişiklikleri doğrudan ana satıra yazılır
+                    onChange:(rep,type,field,val)=>{
+                      // Sadece 1. tekrardaki düzenleme kabul edilir; ana satıra yazılır, tüm tekrarlara yansır
+                      if(rep!==1) return;
+                      const targetRowIdx = type==='run' ? i+1 : i+2;
+                      updateCell(targetRowIdx, field, val);
+                    },
                     paceValidation,
                     paceToZoneIdx,
                     readOnly
@@ -7619,7 +7617,7 @@ function AntrenmanlarTab({athlete}){
                     yapilar:r.tpl.yapilar,
                     zones,
                     tip:r.tpl.tip,
-                    readOnly:false
+                    readOnly:true
                   })
                 :e('div',{style:{fontSize:12,color:'var(--text-tertiary)',fontStyle:'italic'}},'Aşama satırı üretilemedi.')
           )
