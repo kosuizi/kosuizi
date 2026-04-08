@@ -1,3 +1,4 @@
+<!-- Version: v2026.04.08-0949 -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -1402,7 +1403,7 @@ function compressImage(file,{maxW=800,maxH=800,quality=0.75,onDone,onError}){
   reader.readAsDataURL(file);
 }
 
-const TABS=[{id:'dashboard',label:'Pano'},{id:'program',label:'📋 Program'},{id:'plan',label:'📅 Haftalık Plan'},{id:'lider',label:'🏆 Liderlik'},{id:'bolge',label:'Bölgeler'},{id:'test',label:'🧪 Testler'},{id:'yarislar',label:'Yarış Durumu'},{id:'karsilastir',label:'Karşılaştır'},{id:'ekle',label:'Antrenman Ekle'},{id:'gecmis',label:'Geçmiş'},{id:'analiz',label:'📊 Antrenman Analizi'},{id:'yukle',label:'Excel Yükle'},{id:'sporcular',label:'Sporcular ve Yarışlar'}];
+const TABS=[{id:'dashboard',label:'Pano'},{id:'program',label:'📋 Program'},{id:'plan',label:'📅 Haftalık Plan'},{id:'lider',label:'🏆 Liderlik'},{id:'bolge',label:'Bölgeler'},{id:'test',label:'🧪 Testler'},{id:'yarislar',label:'Yarış Durumu'},{id:'karsilastir',label:'Karşılaştır'},{id:'ekle',label:'Antrenman Ekle'},{id:'antrenmanlar',label:'📚 Antrenmanlar'},{id:'gecmis',label:'Geçmiş'},{id:'analiz',label:'📊 Antrenman Analizi'},{id:'yukle',label:'Excel Yükle'},{id:'sporcular',label:'Sporcular ve Yarışlar'}];
 
 const SPOR_TURLERI=[
   {v:'kosu',     l:'Koşu',       k:1.00, emoji:'🏃'},
@@ -7224,6 +7225,236 @@ const tipEmoji=(tip)=>({
   on_off:'🔄',yaris_tempo:'🏁',hill_sprint:'⛰',strides:'💫',
 }[tip]||'🏅');
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ANTRENMANLAR SEKMESİ — Sistem kütüphanesi + aşama satırı denetimi
+// ═══════════════════════════════════════════════════════════════════════════
+function _antBadgeStyle(variant){
+  const colors={
+    success:{bg:'var(--success-bg)',fg:'var(--success)'},
+    warn:{bg:'var(--warn-bg)',fg:'var(--warn)'},
+    danger:{bg:'var(--danger-bg)',fg:'var(--danger)'},
+  }[variant]||{bg:'var(--bg-secondary)',fg:'var(--text-secondary)'};
+  return{
+    fontSize:9,fontWeight:700,padding:'3px 7px',borderRadius:10,
+    background:colors.bg,color:colors.fg,whiteSpace:'nowrap',
+    textTransform:'uppercase',letterSpacing:0.3
+  };
+}
+
+function AntrenmanlarTab({athlete}){
+  const [filterTur,setFilterTur]=useState('');
+  const [filterFaz,setFilterFaz]=useState('Gelişme');
+  const [filterBand,setFilterBand]=useState(3);
+  const [expandedKey,setExpandedKey]=useState(null);
+  const [showOnlyGaps,setShowOnlyGaps]=useState(false);
+
+  // Sporcunun zones'u — yoksa boş
+  const zones=useMemo(()=>{
+    if(!athlete) return {hrZones:[],paceZones:[]};
+    try{return calcZones(athlete)||{hrZones:[],paceZones:[]};}catch(e){return{hrZones:[],paceZones:[]};}
+  },[athlete]);
+  const dis=athlete?.disiplin||'karma';
+  const ctl=50;
+
+  // Sadece koşu türleri
+  const kosuTurler=ANTRENMAN_TURLERI.filter(t=>t.v&&t.spor==='kosu');
+
+  // Bir (tur, yapiNotu) ikilisi için şablonu üret
+  const buildTpl=(tur,yapiNotu)=>{
+    const dk=50;
+    let base=null;
+    try{
+      if(tur==='kolay')base=tplKolay(filterBand,dk,zones);
+      else if(tur==='aerobik')base=tplAerobik(filterBand,dk,zones,dis);
+      else if(tur==='uzun')base=tplUzun(filterBand,ctl,zones,dis,0,[]);
+      else if(tur==='tempo')base=tplTempo(filterBand,dk,zones,filterFaz);
+      else if(tur==='esik')base=tplEsik(filterBand,dk,zones,filterFaz);
+      else if(tur==='interval')base=tplInterval(filterBand,filterFaz,zones);
+      else if(tur==='yokus_kisa')base=tplYokusKisa(filterBand,zones,filterFaz);
+      else if(tur==='yokus_uzun')base=tplYokusUzun(filterBand,zones,filterFaz);
+      else if(tur==='tirmanis')base=tplTirmanisAcik(filterBand,dk,zones,0);
+      else if(tur==='acici')base=tplAcici(dk,filterFaz);
+      else if(tur==='piramit')base=tplPiramit(filterBand,zones,filterFaz);
+      else if(tur==='kesintisiz_piramit')base=tplKesintisizPiramit(filterBand,zones,filterFaz);
+      else if(tur==='cruise')base=tplCruise(filterBand,dk,zones,filterFaz);
+      else if(tur==='progressive')base=tplProgressive(filterBand,dk,zones,filterFaz);
+      else if(tur==='on_off')base=tplOnOff(filterBand,zones,filterFaz);
+      else if(tur==='tempo_interval')base=tplTempoInterval(filterBand,dk,zones,filterFaz);
+      else if(tur==='yaris_tempo')base=tplYarisTempo(filterBand,dk,zones,filterFaz);
+      else if(tur==='hill_sprint')base=tplHillSprint(filterBand,zones,filterFaz);
+      else if(tur==='strides')base=tplStrides(filterBand,dk,zones,filterFaz);
+      else if(tur==='teknik'||tur==='teknik_inis')base=tplTeknikInis(filterBand,dk,zones);
+      else if(tur==='back_to_back')base=tplBackToBack(filterBand,zones,0);
+      else if(tur==='power_hiking')base=tplPowerHiking(filterBand,zones,0);
+      else if(tur==='karma_yol')base=tplKarmaYol(filterBand,dk,zones);
+    }catch(e){return{__error:e.message};}
+
+    // Yapı notu özelleşmesi varsa tplFromYapiNotu ile yeniden üret
+    if(yapiNotu&&base){
+      try{
+        const spec=tplFromYapiNotu(tur,yapiNotu,filterBand,base.sure_dk||dk,zones,dis,filterFaz,ctl);
+        if(spec) return {...spec,__matched:true};
+      }catch(e){}
+      return{...base,__matched:false,yapi_notu:yapiNotu};
+    }
+    return base;
+  };
+
+  // Tüm satırları oluştur
+  const rows=useMemo(()=>{
+    const out=[];
+    kosuTurler.forEach(t=>{
+      const notlar=YAPI_NOTLARI[t.v]||[];
+      if(notlar.length===0){
+        const tpl=buildTpl(t.v,'');
+        out.push({
+          tur:t.v,turLabel:t.l,yapiNotu:'(varsayılan)',
+          tpl,
+          gapNotlar:true,gapTpl:!tpl||tpl.__error,gapMatch:false
+        });
+      } else {
+        notlar.forEach(n=>{
+          const tpl=buildTpl(t.v,n);
+          out.push({
+            tur:t.v,turLabel:t.l,yapiNotu:n,
+            tpl,
+            gapNotlar:false,
+            gapTpl:!tpl||tpl.__error,
+            gapMatch:tpl&&tpl.__matched===false
+          });
+        });
+      }
+    });
+    return out;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[filterFaz,filterBand,athlete]);
+
+  const filteredRows=rows.filter(r=>{
+    if(filterTur&&r.tur!==filterTur)return false;
+    if(showOnlyGaps&&!(r.gapNotlar||r.gapTpl||r.gapMatch))return false;
+    return true;
+  });
+
+  // İstatistikler
+  const stats=useMemo(()=>{
+    const turSet=new Set(rows.map(r=>r.tur));
+    const missingNotlar=[...new Set(rows.filter(r=>r.gapNotlar).map(r=>r.tur))];
+    const missingTpl=[...new Set(rows.filter(r=>r.gapTpl).map(r=>r.tur))];
+    const missingMatch=[...new Set(rows.filter(r=>r.gapMatch).map(r=>r.tur))];
+    return{
+      turCount:turSet.size,
+      variantCount:rows.length,
+      missingNotlar,missingTpl,missingMatch,
+    };
+  },[rows]);
+
+  const e=React.createElement;
+
+  return e('div',null,
+    e('div',{className:'card'},
+      e('div',{className:'card-title'},'Antrenman Kütüphanesi'),
+      e('div',{style:{fontSize:13,color:'var(--text-secondary)',marginBottom:12}},
+        'Sistemde tanımlı tüm koşu antrenmanları. Her yapı notu varyantı için aşama satırları burada görünür. Kırmızı rozetli satırlar, sistem önerisiyle eşleştirmenin kırık olduğu noktalardır.'
+      ),
+      e('div',{className:'grid4',style:{marginBottom:12}},
+        e('div',{className:'metric'},
+          e('div',{className:'metric-label'},'Toplam Tür'),
+          e('div',{className:'metric-val'},stats.turCount)
+        ),
+        e('div',{className:'metric'},
+          e('div',{className:'metric-label'},'Toplam Varyant'),
+          e('div',{className:'metric-val'},stats.variantCount)
+        ),
+        e('div',{className:'metric',style:{borderLeft:'3px solid var(--warn)'}},
+          e('div',{className:'metric-label'},'Yapı Notu Eksik'),
+          e('div',{className:'metric-val',style:{color:'var(--warn)'}},stats.missingNotlar.length),
+          stats.missingNotlar.length>0&&e('div',{className:'metric-sub'},stats.missingNotlar.join(', '))
+        ),
+        e('div',{className:'metric',style:{borderLeft:'3px solid var(--danger)'}},
+          e('div',{className:'metric-label'},'Eşleşme Kırık'),
+          e('div',{className:'metric-val',style:{color:'var(--danger)'}},stats.missingMatch.length),
+          stats.missingMatch.length>0&&e('div',{className:'metric-sub'},stats.missingMatch.join(', '))
+        )
+      ),
+      e('div',{className:'form-grid'},
+        e('div',{className:'form-group'},
+          e('label',null,'Tür Filtre'),
+          e('select',{value:filterTur,onChange:ev=>setFilterTur(ev.target.value)},
+            e('option',{value:''},'— Tümü —'),
+            kosuTurler.map(t=>e('option',{key:t.v,value:t.v},t.l))
+          )
+        ),
+        e('div',{className:'form-group'},
+          e('label',null,'Faz'),
+          e('select',{value:filterFaz,onChange:ev=>setFilterFaz(ev.target.value)},
+            ['Temel','Gelişme','Zirve','Taper'].map(f=>e('option',{key:f,value:f},f))
+          )
+        ),
+        e('div',{className:'form-group'},
+          e('label',null,'Bant (1-5)'),
+          e('select',{value:filterBand,onChange:ev=>setFilterBand(parseInt(ev.target.value))},
+            [1,2,3,4,5].map(b=>e('option',{key:b,value:b},'Bant '+b))
+          )
+        ),
+        e('div',{className:'form-group'},
+          e('label',null,'Görünüm'),
+          e('label',{style:{display:'flex',alignItems:'center',gap:6,fontSize:12,cursor:'pointer',padding:'7px 0'}},
+            e('input',{type:'checkbox',checked:showOnlyGaps,onChange:ev=>setShowOnlyGaps(ev.target.checked)}),
+            'Sadece eksikleri göster'
+          )
+        )
+      )
+    ),
+
+    filteredRows.length===0
+      ?e('div',{className:'empty'},'Filtreye uyan antrenman yok.')
+      :filteredRows.map((r,i)=>{
+        const key=r.tur+'|'+i;
+        const isOpen=expandedKey===key;
+        const hasGap=r.gapNotlar||r.gapTpl||r.gapMatch;
+        return e('div',{key,className:'card',style:{
+          padding:'10px 14px',marginBottom:6,
+          borderLeft:hasGap?'3px solid var(--danger)':'3px solid var(--success)'
+        }},
+          e('div',{
+            style:{display:'flex',alignItems:'center',gap:10,cursor:'pointer',flexWrap:'wrap'},
+            onClick:()=>setExpandedKey(isOpen?null:key)
+          },
+            e('span',{style:{fontSize:18}},tipEmoji(r.tur)),
+            e('div',{style:{flex:1,minWidth:0}},
+              e('div',{style:{fontSize:13,fontWeight:600}},r.turLabel),
+              e('div',{style:{fontSize:11,color:'var(--text-secondary)'}},r.yapiNotu)
+            ),
+            r.gapNotlar&&e('span',{style:_antBadgeStyle('warn')},'YAPI NOTU YOK'),
+            r.gapTpl&&e('span',{style:_antBadgeStyle('danger')},'ÜRETECİ YOK'),
+            r.gapMatch&&e('span',{style:_antBadgeStyle('danger')},'EŞLEŞMEZ'),
+            !hasGap&&e('span',{style:_antBadgeStyle('success')},'✓'),
+            e('span',{style:{fontSize:11,color:'var(--text-tertiary)'}},isOpen?'▼':'▶')
+          ),
+          isOpen&&e('div',{style:{marginTop:10,paddingTop:10,borderTop:'1px solid var(--border)'}},
+            r.tpl&&r.tpl.__error
+              ?e('div',{style:{fontSize:12,color:'var(--danger)'}},'Hata: '+r.tpl.__error)
+              :r.tpl&&r.tpl.yapilar&&r.tpl.yapilar.length>0
+                ?e('div',{style:{display:'flex',flexDirection:'column',gap:6}},
+                    r.tpl.yapilar.map((y,yi)=>e('div',{key:yi,style:{
+                      background:'var(--bg-secondary)',padding:'8px 10px',
+                      borderRadius:'var(--radius)',fontSize:12,
+                      borderLeft:'3px solid '+(ZONE_COLORS_INLINE[detectZone((y.baslik||'')+' '+(y.detay||''))]||'var(--border)')
+                    }},
+                      e('div',{style:{fontWeight:600,marginBottom:2}},y.baslik),
+                      y.detay&&e('div',{style:{color:'var(--text-secondary)',fontSize:11}},y.detay)
+                    ))
+                  )
+                :e('div',{style:{fontSize:12,color:'var(--text-tertiary)',fontStyle:'italic'}},'Aşama satırı üretilemedi.'),
+            r.tpl&&r.tpl.sure_dk&&e('div',{style:{marginTop:8,fontSize:11,color:'var(--text-tertiary)'}},
+              'Süre: '+r.tpl.sure_dk+' dk · Tip: '+(r.tpl.tip||'?')
+            )
+          )
+        );
+      })
+  );
+}
+
 function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapInit,onPlanSnapChange,onSaveWorkout}){  const [showLoading,setShowLoading]=useState(false);
   const [selectedPrimary,setSelectedPrimary]=useState(null);
   const [planMode,setPlanModeLocal]=useState('optimize');
@@ -11604,6 +11835,7 @@ function App(){
           fbSet(`plan_snapshots/${ath?.id}/${planSnap.weekKey}`,updSnap).catch(()=>{});
         }
       },athlete,athletes,selId,onSelChange:setSelId,allHistory,workouts,races,testPlanlar}),
+      tab==='antrenmanlar'&&React.createElement(AntrenmanlarTab,{athlete}),
       tab==='gecmis'&&React.createElement(Gecmis,{workouts,athletes,onDelete:id=>setWorkouts(p=>p.filter(x=>x.id!==id)),onBulkDelete:ids=>setWorkouts(p=>p.filter(x=>!ids.includes(x.id))),onUpdate:handleUpdateWorkout}),
       tab==='analiz'&&React.createElement(AntrenmanAnalizTab,{workouts,athletes}),
       tab==='yukle'&&React.createElement(ExcelYukle,{onImport:list=>setWorkouts(p=>[...p,...list]),athletes,selId,onSelChange:setSelId,workouts}),
