@@ -4086,14 +4086,27 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
   const [editingLabel, setEditingLabel] = useState(null);
   const [editText, setEditText] = useState('');
   const [editCell, setEditCell] = useState(null); // {rowIdx, field, aralikKey?}
-  const [rowOverrides, setRowOverrides] = useState(savedOverrides||{}); // {rowIdx: {mesafe,pm,ps,h,m,s,color,textColor}}
+  // savedOverrides hem satır-düzeyi (sayısal anahtarlar) hem de aralık-düzeyi (__aralik anahtarı) verisi içerebilir
+  const _splitOv=(ov)=>{
+    if(!ov) return {rowOv:{},aralikOv:{}};
+    const {__aralik,...rest}=ov;
+    return {rowOv:rest,aralikOv:__aralik||{}};
+  };
+  const _initial=_splitOv(savedOverrides);
+  const [rowOverrides, setRowOverrides] = useState(_initial.rowOv); // {rowIdx: {mesafe,pm,ps,h,m,s,color,textColor}}
   const [repeatOverrides, setRepeatOverrides] = useState({}); // OP-9: {headerRowIdx: newCount}
   const [editingRepeat, setEditingRepeat] = useState(null); // OP-9: headerRowIdx being edited
   const [aralikExpanded, setAralikExpanded] = useState({}); // {headerRowIdx: bool}
-  const [aralikOverrides, setAralikOverrides] = useState({}); // {headerRowIdx: {repNum: {run:{pm,ps,mesafe,h,m,s}, rest:{...}}}}
+  const [aralikOverrides, setAralikOverrides] = useState(_initial.aralikOv); // {headerRowIdx: {repNum: {run:{pm,ps,mesafe,h,m,s}, rest:{...}}}}
 
   // savedOverrides dışarıdan güncellenirse sync et
-  useEffect(()=>{ if(savedOverrides) setRowOverrides(savedOverrides); },[savedOverrides]);
+  useEffect(()=>{
+    if(savedOverrides){
+      const {rowOv,aralikOv}=_splitOv(savedOverrides);
+      setRowOverrides(rowOv);
+      setAralikOverrides(aralikOv);
+    }
+  },[savedOverrides]);
 
   // Global cache'ten yükle — bir kez
   useEffect(()=>{
@@ -4192,7 +4205,7 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
       }
     }
     setRowOverrides(newRowOv);
-    if(onSaveOverrides) onSaveOverrides(newRowOv);
+    if(onSaveOverrides) onSaveOverrides({...newRowOv,__aralik:aralikOverrides});
   };
 
   // Hücre güncelleme: mesafe, pm veya ps değişince diğerlerini hesapla
@@ -4232,7 +4245,7 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
     const newOverrides={...rowOverrides,[rowIdx]:{...(rowOverrides[rowIdx]||{}), ...upd}};
     setRowOverrides(newOverrides);
     setEditCell(null);
-    if(onSaveOverrides) onSaveOverrides(newOverrides);
+    if(onSaveOverrides) onSaveOverrides({...newOverrides,__aralik:aralikOverrides});
   };
 
   // Aralıklar editörü için per-rep cell güncelleme
@@ -4275,6 +4288,8 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
       if(!next[headerIdx][rep]) next[headerIdx][rep]={};
       if(!next[headerIdx][rep][type]) next[headerIdx][rep][type]={};
       next[headerIdx][rep][type]={...next[headerIdx][rep][type], ...upd};
+      // Firebase'e yaz: rowOverrides + __aralik birleşimi
+      if(onSaveOverrides) onSaveOverrides({...rowOverrides,__aralik:next});
       return next;
     });
   };
