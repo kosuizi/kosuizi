@@ -1,4 +1,4 @@
-<!-- Version: v2026.04.09-1540 -->
+<!-- Version: v2026.04.09-2248 -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.09-1540'; // Yarış günü reçetesi (overrideMap-safe _yaris* alanlar); uyarı-antrenman tutarlılığı
+const APP_VERSION='v2026.04.09-2248'; // Pano: Son 24 hafta özeti tablosu (mesafe/süre/tempo/yük + bar grafikler)
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -10760,7 +10760,106 @@ function Dashboard({workouts,athlete,history,races}){
         );
       })()
     ),
+    // ── Son 24 Hafta Özeti (mesafe/süre/tempo sadece koşu, yük tüm sporlar) ──
+    React.createElement(Hafta24Karti,{workouts,athlete}),
+
     profHist.length>0&&React.createElement(MetrikGrafikKarti,{profHist,metrikList:METRIK_LIST})
+  );
+}
+
+// ── Son 24 Hafta Özet Tablosu ────────────────────────────────────────────────
+function Hafta24Karti({workouts,athlete}){
+  const KOSU_SPORLAR=['kosu','trail','yol','ultra'];
+  const rows=React.useMemo(()=>{
+    const out=[];
+    for(let i=0;i<24;i++){
+      const {start,end}=getWeekBounds(-i);
+      const inWeek=(workouts||[]).filter(w=>{
+        const d=new Date(w.date);
+        return d>=start&&d<=end;
+      });
+      const kosular=inWeek.filter(w=>KOSU_SPORLAR.includes(w.spor||'kosu'));
+      let km=0,dakKosu=0;
+      kosular.forEach(w=>{
+        km+=parseFloat(w.mesafe)||0;
+        dakKosu+=(toSec(w.sure_sa,w.sure_dk,w.sure_sn)/60);
+      });
+      let yuk=0;
+      inWeek.forEach(w=>{
+        const m=calcMetrics(w,athlete);
+        yuk+=(m.yukObj||0);
+      });
+      const paceSec=(km>0&&dakKosu>0)?(dakKosu/km)*60:null;
+      const label=`${start.getDate()} ${['Oca','Şub','Mar','Nis','May','Haz','Tem','Ağu','Eyl','Eki','Kas','Ara'][start.getMonth()]} - ${end.getDate()} ${['Oca','Şub','Mar','Nis','May','Haz','Tem','Ağu','Eyl','Eki','Kas','Ara'][end.getMonth()]}`;
+      out.push({label,km:round1(km),dak:round1(dakKosu),paceSec,yuk:round1(yuk),kosuCount:kosular.length,toplamCount:inWeek.length});
+    }
+    return out.reverse(); // En eski → en yeni
+  },[workouts,athlete]);
+
+  const maxKm=Math.max(1,...rows.map(r=>r.km));
+  const maxDak=Math.max(1,...rows.map(r=>r.dak));
+  const maxYuk=Math.max(1,...rows.map(r=>r.yuk));
+  // Pace için: küçük = hızlı (iyi). Bar boyutu hızlı olanlar daha uzun olsun.
+  const valid=rows.filter(r=>r.paceSec).map(r=>r.paceSec);
+  const minPace=valid.length?Math.min(...valid):0;
+  const maxPace=valid.length?Math.max(...valid):1;
+  const paceRange=Math.max(1,maxPace-minPace);
+
+  const Bar=({val,max,color,text,reverse=false,minVal=0,range=1})=>{
+    let pct;
+    if(reverse){
+      // Pace: hızlı (küçük değer) = uzun bar
+      pct=val?100-((val-minVal)/range)*70:0; // 30-100% aralığı
+      pct=Math.max(30,Math.min(100,pct));
+    }else{
+      pct=max>0?(val/max)*100:0;
+    }
+    return React.createElement('div',{style:{position:'relative',height:22,background:'var(--bg-secondary)',borderRadius:4,overflow:'hidden'}},
+      val>0&&React.createElement('div',{style:{position:'absolute',top:0,left:0,bottom:0,width:pct+'%',background:color,opacity:.85,transition:'width .3s'}}),
+      React.createElement('div',{style:{position:'relative',zIndex:1,fontSize:11,fontWeight:600,color:'var(--text-primary)',padding:'3px 8px',textShadow:'0 0 2px var(--bg-primary)'}},text)
+    );
+  };
+
+  const totals=rows.reduce((a,r)=>({km:a.km+r.km,dak:a.dak+r.dak,yuk:a.yuk+r.yuk}),{km:0,dak:0,yuk:0});
+
+  return React.createElement('div',{className:'card',style:{marginTop:12}},
+    React.createElement('div',{className:'card-title'},'📊 Son 24 Hafta Özeti'),
+    React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:10}},
+      'Mesafe, süre ve ortalama tempo sadece koşu antrenmanlarına aittir. Yük tüm antrenmanları kapsar. ',
+      React.createElement('strong',null,'Toplam: ',round1(totals.km),' km · ',fmtHMS(totals.dak),' · Yük ',round1(totals.yuk))
+    ),
+    React.createElement('div',{style:{overflowX:'auto'}},
+      React.createElement('table',{style:{width:'100%',minWidth:680,borderCollapse:'collapse',fontSize:12}},
+        React.createElement('thead',null,
+          React.createElement('tr',{style:{borderBottom:'1px solid var(--border)'}},
+            React.createElement('th',{style:{textAlign:'left',padding:'6px 8px',fontWeight:600,color:'var(--text-secondary)',width:130}},'Hafta'),
+            React.createElement('th',{style:{textAlign:'left',padding:'6px 8px',fontWeight:600,color:'var(--text-secondary)'}},'Mesafe (km)'),
+            React.createElement('th',{style:{textAlign:'left',padding:'6px 8px',fontWeight:600,color:'var(--text-secondary)'}},'Süre'),
+            React.createElement('th',{style:{textAlign:'left',padding:'6px 8px',fontWeight:600,color:'var(--text-secondary)'}},'Ort. Tempo'),
+            React.createElement('th',{style:{textAlign:'left',padding:'6px 8px',fontWeight:600,color:'var(--text-secondary)'}},'Yük')
+          )
+        ),
+        React.createElement('tbody',null,
+          rows.map((r,i)=>React.createElement('tr',{key:i,style:{borderBottom:'1px solid var(--border)'}},
+            React.createElement('td',{style:{padding:'5px 8px',color:'var(--text-secondary)',whiteSpace:'nowrap',fontSize:11}},r.label),
+            React.createElement('td',{style:{padding:'5px 8px'}},
+              React.createElement(Bar,{val:r.km,max:maxKm,color:'#60a5fa',text:r.km>0?r.km+' km':'—'})
+            ),
+            React.createElement('td',{style:{padding:'5px 8px'}},
+              React.createElement(Bar,{val:r.dak,max:maxDak,color:'#34d399',text:r.dak>0?fmtHMS(r.dak):'—'})
+            ),
+            React.createElement('td',{style:{padding:'5px 8px'}},
+              React.createElement(Bar,{val:r.paceSec||0,max:maxPace,color:'#fbbf24',
+                text:r.paceSec?`${Math.floor(r.paceSec/60)}:${String(Math.round(r.paceSec%60)).padStart(2,'0')} /km`:'—',
+                reverse:true,minVal:minPace,range:paceRange})
+            ),
+            React.createElement('td',{style:{padding:'5px 8px'}},
+              React.createElement(Bar,{val:r.yuk,max:maxYuk,color:'#a78bfa',text:r.yuk>0?r.yuk:'—'})
+            )
+          ))
+        )
+      )
+    )
   );
 }
 
