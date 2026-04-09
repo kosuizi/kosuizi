@@ -8719,8 +8719,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   day.sure_dk>0&&React.createElement('div',{style:{fontSize:9,color:'var(--text-tertiary)',textAlign:'center',marginBottom:2}},
                     day.sure_dk>=60?(Math.floor(day.sure_dk/60)+'s'+(day.sure_dk%60?' '+day.sure_dk%60+'dk':'')):(day.sure_dk+'dk')
                   ),
-                  // ▼ Reçete butonu — yarış gününde de hedef pace/süre tablosu gösterilebilir
-                  day.tip==='yaris'&&React.createElement('div',{
+                  // ▼ Reçete butonu — her zaman göster (day.tip bağımsız, isRaceDay yeterli)
+                  React.createElement('div',{
                     style:{fontSize:9,color:'var(--danger)',textAlign:'center',cursor:'pointer',opacity:0.8},
                     onClick:()=>setExpandDay(expandDay===day.date?null:day.date)
                   },'▼ Reçete')
@@ -8827,6 +8827,54 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       // Tam reçete paneli
       expandDay&&React.createElement('div',{style:{marginTop:8}},
         week.days.filter(d=>d.date===expandDay).map(day=>{
+          // Yarış günü kontrolü — isRaceDay bazlı (day.tip'e bağımlı değil, eski snapler için de çalışır)
+          const expandIsRaceDay=plan.primary?.tarih===day.date||plan.intermediate.some(r=>r.tarih===day.date);
+          const raceObj=plan.primary?.tarih===day.date?plan.primary:plan.intermediate.find(r=>r.tarih===day.date)||null;
+
+          // Yarış günü: on-the-fly recipe oluştur
+          if(expandIsRaceDay){
+            const yarisMesafe=parseFloat(raceObj?.mesafe)||0;
+            const last=history[history.length-1];
+            const hedefData=raceObj?raceHedefSure(raceObj,athlete,last?.ctl||0,last?.acwr||1.0,(workouts||[]).filter(w=>w.athleteId===athlete.id)):null;
+            const paceStr=hedefData?.paceStr||null;
+            const estSec=hedefData?.totalSec||(yarisMesafe>0?Math.round(yarisMesafe*360):0);
+            const estHr=Math.floor(estSec/3600);
+            const estMn=Math.floor((estSec%3600)/60);
+            const sureDk=Math.round(estSec/60);
+            const zonesDyn=calcZones(athlete);
+            const zIdx=hedefData?.paceSec?raceZoneFromPace(hedefData.paceSec,zonesDyn):3;
+            // Yarış reçete satırı
+            const yarisYapilar=yarisMesafe>0&&hedefData?.paceSec?[{
+              baslik:'🏁 '+(raceObj?.ad||'Yarış'),
+              detay:[
+                yarisMesafe?`Mesafe: ${yarisMesafe} km`:'',
+                paceStr?`Hedef Pace: ${paceStr} /km`:'',
+                estSec>0?`Tahmini Süre: ${estHr?estHr+'sa ':''}`+estMn+'dk':'',
+                hedefData?.expectedIyi?`(−${hedefData.expectedIyi}% iyileşme dahil)`:''
+              ].filter(Boolean).join(' · '),
+              _yaris:true,_yarisMesafe:yarisMesafe,_yarisPaceSec:hedefData.paceSec,
+              _yarisEstSec:estSec,_yarisPaceStr:paceStr
+            }]:[];
+            const receteRef2=React.createRef();
+            return React.createElement('div',{key:day.date,className:'card',style:{borderLeft:'4px solid var(--danger)'}},
+              React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}},
+                React.createElement('div',{style:{fontWeight:700,fontSize:14,color:'var(--danger)'}},
+                  '🏁 '+(raceObj?.ad||'Yarış')+' — '+day.dayTR+(sureDk>0?' · '+sureDk+' dk':'')
+                ),
+                React.createElement('button',{className:'btn btn-sm',onClick:()=>setExpandDay(null)},'Kapat')
+              ),
+              React.createElement('div',{ref:receteRef2},
+                React.createElement('div',{style:{background:'linear-gradient(135deg,var(--bg-secondary) 0%,var(--bg-primary) 100%)',borderRadius:'var(--radius-lg)',padding:'16px',marginBottom:8}},
+                  yarisYapilar.length>0
+                    ?React.createElement(ReceteTablosu,{yapilar:yarisYapilar,zones:calcZones(athlete),tip:'yaris',readOnly:true})
+                    :React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',fontStyle:'italic',padding:'8px 0'}},
+                        'Hedef süre hesaplanamadı. Sporcu profilinde VO₂max ve PB bilgilerini kontrol edin.'
+                      )
+                )
+              )
+            );
+          }
+
           if(day.tip==='dinlenme')return null;
           const receteRef=React.createRef();
           const shareRecete=async()=>{
