@@ -4155,6 +4155,54 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
     return row;
   });
 
+  // ── Aralık ortalaması: per-rep override varsa runRow/restRow'a ortalama yansıt ──
+  // Bir header'ın aralikOverrides'ı varsa, sonraki run+rest satırlarının
+  // gösterilen mesafe/pace/süre değerleri tüm rep'lerin ortalamasıyla güncellenir.
+  // Override edilmemiş rep'ler base satırın (rowOverrides uygulanmış) değerini kullanır.
+  rows.forEach((hdr,hi)=>{
+    if(hdr.type!=='header') return;
+    const ov=aralikOverrides[hi];
+    if(!ov||Object.keys(ov).length===0) return;
+    const repCount=hdr.repeatCount||1;
+    const computeAvg=(baseRow,kind)=>{
+      if(!baseRow) return null;
+      let totMesafe=0,totPaceSec=0,totDurSec=0,paceN=0,n=0;
+      for(let rep=0;rep<repCount;rep++){
+        const repOv=ov[rep]?.[kind]||{};
+        const m=repOv.mesafe!=null?repOv.mesafe:(baseRow.mesafe||0);
+        const pm=repOv.pm!=null?repOv.pm:(baseRow.pm||0);
+        const ps=repOv.ps!=null?repOv.ps:(baseRow.ps||0);
+        const dh=repOv.h!=null?repOv.h:(baseRow.h||0);
+        const dm=repOv.m!=null?repOv.m:(baseRow.m||0);
+        const ds=repOv.s!=null?repOv.s:(baseRow.s||0);
+        totMesafe+=m;
+        totDurSec+=dh*3600+dm*60+ds;
+        const pSec=pm*60+ps;
+        if(pSec>0){totPaceSec+=pSec;paceN++;}
+        n++;
+      }
+      if(n===0) return null;
+      const avgMesafe=Math.round(totMesafe/n);
+      const avgDurSec=Math.round(totDurSec/n);
+      const avgPaceSec=paceN>0?Math.round(totPaceSec/paceN):0;
+      const out={mesafe:avgMesafe,...secToHMS(avgDurSec)};
+      if(avgPaceSec>0){
+        out.pm=Math.floor(avgPaceSec/60);
+        out.ps=avgPaceSec%60;
+      }
+      return out;
+    };
+    const runIdx=hi+1,restIdx=hi+2;
+    if(rows[runIdx]&&rows[runIdx].type!=='header'){
+      const avg=computeAvg(rows[runIdx],'run');
+      if(avg) rows[runIdx]={...rows[runIdx],...avg,_aralikAveraged:true};
+    }
+    if(rows[restIdx]&&rows[restIdx].type!=='header'){
+      const avg=computeAvg(rows[restIdx],'rest');
+      if(avg) rows[restIdx]={...rows[restIdx],...avg,_aralikAveraged:true};
+    }
+  });
+
   // Pace (sn/km) → zone index bul
   const paceToZoneIdx=(paceSec)=>{
     if(!zones?.paceZones||!paceSec) return null;
@@ -13039,7 +13087,8 @@ function SporcuPlanView(){
         :ov?.yapilar?.length>0
           ?React.createElement(ReceteTablosu,{
               yapilar:kosuYapilarAl({tip:ov.tip,yapilar:ov.yapilar,isKosuCapraz:ov.isKosuCapraz}),
-              zones,tip:ov.tip,readOnly:true
+              zones,tip:ov.tip,readOnly:true,
+              savedOverrides:(planSnap?.rowOverrides||{})[info.date]
             })
           :info.actuals.length>0
             ?React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',paddingLeft:26,fontStyle:'italic'}},'Bu güne ait planlı reçete bulunamadı.')
