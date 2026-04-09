@@ -1,4 +1,4 @@
-<!-- Version: v2026.04.09-1130 -->
+<!-- Version: v2026.04.09-1540 -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.08-1950'; // Yarış günü: antrenman yok → tek aşama satırı; tplFromYapiNotu zone fix; RPE-pace uyum
+const APP_VERSION='v2026.04.09-1540'; // Yarış günü reçetesi (overrideMap-safe _yaris* alanlar); uyarı-antrenman tutarlılığı
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -3657,6 +3657,37 @@ function adimToRowsFallback(adim, zones){
   const baslik=adim.baslik||'';
   const detay=adim.detay||'';
   const full=baslik+' '+detay;
+
+  // ── YARIŞ GÜNÜ özel satırı ─────────────────────────────────────────────────
+  // _yaris:true: planDay'den gelen ve overrideMap'te korunan yarış bilgisi
+  // Bu daldan dönünce adimToRowsFallback'in geri kalanı atlanır
+  if(adim._yaris){
+    const pSec=adim._yarisPaceSec||null;
+    const estSec=adim._yarisEstSec||3600;
+    const zi=pSec?raceZoneFromPace(pSec,zones):3;
+    const rawMesafe=adim._yarisMesafe||0;
+    let cr;
+    if(pSec){
+      cr=calcRowM(estSec,pSec);
+      if(rawMesafe>0) cr={...cr,mesafe:Math.round(rawMesafe*1000)};
+    } else {
+      const h=Math.floor(estSec/3600),m=Math.floor((estSec%3600)/60),s=Math.round(estSec%60);
+      cr={h,m,s,mesafe:rawMesafe>0?Math.round(rawMesafe*1000):0,pm:0,ps:0};
+    }
+    const pm2=pSec?Math.floor(pSec/60):0;
+    const ps2=pSec?Math.round(pSec%60):0;
+    return[{
+      type:'single',label:baslik,
+      color:ZONE_COLORS_INLINE[zi]||'#fbbf24',
+      textColor:ZONE_TEXT_COLOR[zi]||'#78350f',
+      ...cr,
+      pm:pm2||cr.pm,ps:ps2||cr.ps,
+      rpe:'7–10',
+      _origPaceSec:pSec,_origZIdx:zi,
+      _isSprint:false
+    }];
+  }
+
   const zIdx=detectZone(full);
   const color=ZONE_COLORS_INLINE[zIdx];
   const textColor=ZONE_TEXT_COLOR[zIdx];
@@ -5887,7 +5918,13 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   if(tsb< -20) warnings.push({icon:'✨',text:'TSB '+tsb.toFixed(1)+' — ciddi yorgunluk.'});
   if(acwr>1.3) warnings.push({icon:'📈',text:'ACWR '+acwr.toFixed(2)+' — yük kontrolü.'});
   if(motiv<=2) warnings.push({icon:'✨',text:'Motivasyon düşük — kısa ve keyifli.'});
-  if(daysToRace!=null&&daysToRace<=7) warnings.push({icon:'🏁',text:'Yarışa '+daysToRace+' gün kaldı — taper.'});
+  if(daysToRace!=null&&daysToRace<=7){
+    // Jenerik "taper" yerine planDay'in verdiği spesifik uyarıyı kullan (varsa)
+    // planDay kosuUyari → tpl.uyari olarak taşınır; bu zaten antrenmanı tanımlar
+    // Eğer tpl.uyari yoksa (ör. override edildi) jenerik mesaj
+    const taperMesaj=tpl?.uyari||('Yarışa '+daysToRace+' gün kaldı — taper, yük düşük.');
+    warnings.push({icon:'🏁',text:taperMesaj});
+  }
   if(ifOverloaded) warnings.push({icon:'⚡',text:'Son hafta IF ortalaması '+meanIF+' — kronik yüksek yoğunluk. Aerobik taban gerekli.'});
   if(powerOverload) warnings.push({icon:'💪',text:'Güç yükü HR yükünden orantısız yüksek — nöromüsküler aşırı yük riski.'});
   if(aerEffDecline) warnings.push({icon:'📉',text:'Aerobik verimlilik son 4 haftada kötüleşiyor (aynı nabızda daha yavaş) — yorgunluk birikimi işareti.'});
@@ -6063,7 +6100,9 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
       secilenSure=Math.round(35*yMod);
       tpl={...tplKolay(band,secilenSure,zones),sure_dk:secilenSure,_downgraded:true,_originalTip:orijinalTip};
     }
-    warnings.push({icon:'🔄',text:`"${orijinalTip}" → ${secilenTip} (${secilenSure}dk): ${nedenler.join(', ')}`});
+    // tpl.uyari'yi yeni antrenmanla eşleştir — eski planDay uyarısı artık geçersiz
+    tpl.uyari=`${orijinalTip} → ${secilenTip} (${nedenler.join(', ')}) · Önerilen: ${secilenSure} dk ${secilenTip}`;
+    warnings.push({icon:'🔄',text:`"${TUR_LABELS[orijinalTip]||orijinalTip}" → ${TUR_LABELS[secilenTip]||secilenTip} (${secilenSure}dk): ${nedenler.join(', ')}`});
   } else if(forceLow&&YOGUN_TURLER.includes(tpl.tip)){
     const orijinalTip=tpl.tip;
     const gunSirasi=wkStats.count||0;
@@ -6072,7 +6111,9 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
     if(mechKardioImbalancePlan)nedenler.push('mekanik/kardio oranı düşük');
     if(henuzToparlanmadi)nedenler.push('toparlanma bitmedi');
     tpl={...tplAerobik(band,sureDk,zones,disiplin),sure_dk:sureDk,_downgraded:true,_originalTip:orijinalTip};
-    warnings.push({icon:'🔄',text:`"${orijinalTip}" → aerobik (${sureDk}dk): ${nedenler.join(', ')||'aerobik taban öncelikli'}`});
+    // tpl.uyari'yi yeni antrenmanla eşleştir
+    tpl.uyari=`${orijinalTip} → aerobik (${nedenler.join(', ')||'aerobik taban öncelikli'}) · Önerilen: ${sureDk} dk aerobik`;
+    warnings.push({icon:'🔄',text:`"${TUR_LABELS[orijinalTip]||orijinalTip}" → Aerobik (${sureDk}dk): ${nedenler.join(', ')||'aerobik taban öncelikli'}`});
   }
 
   // ── Süre artırımı: toparlanma tamamsa ve TSB iyiyse ──────────────────────
@@ -6376,6 +6417,13 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
       const yarisYapilir=[{
         baslik:'🏁 '+yarisAd,
         detay:yarisDetay,
+        // _yaris* alanlar primitif — JSON serileştirmeden (overrideMap) sağ çıkar
+        // adimToRowsFallback bu alanları okuyarak doğru aşama satırı üretir
+        _yaris:true,
+        _yarisMesafe:yarisMesafe||0,
+        _yarisPaceSec:targetPaceSec||null,
+        _yarisEstSec:estSec||3600,
+        _yarisPaceStr:paceStr||null,
         _rows:yarisRows
       }];
       return{
@@ -7219,7 +7267,11 @@ function generatePlanSnapshot(athlete,history,races,workouts,testPlanlar,targetW
         tip:day.tip,baslik:day.baslik,
         sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,
         isKosuCapraz:day.isKosuCapraz||false,
-        yapilar:(day.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||'',_caprazNot:y._caprazNot||false}))
+        yapilar:(day.yapilar||[]).map(y=>({
+          baslik:y.baslik,detay:y.detay||'',_caprazNot:y._caprazNot||false,
+          // Yarış günü özel alanları — primitif olduğu için JSON'da korunur
+          ...(y._yaris?{_yaris:true,_yarisMesafe:y._yarisMesafe||0,_yarisPaceSec:y._yarisPaceSec||null,_yarisEstSec:y._yarisEstSec||3600,_yarisPaceStr:y._yarisPaceStr||null}:{})
+        }))
       };
     }
   }));
@@ -8611,8 +8663,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               }},
                 React.createElement('span',{style:{fontSize:16}},dayEmoji(day)),
                 React.createElement('div',{style:{flex:1}},
-                  React.createElement('div',{style:{fontWeight:700,fontSize:12,color:'var(--text-primary)'}},
-                    day.dayTR+' — '+fixBaslik(day.baslik,day.tip)
+                  React.createElement('div',{style:{fontWeight:700,fontSize:12,color:day.tip==='yaris'?'var(--danger)':'var(--text-primary)'}},
+                    day.dayTR+' — '+(day.tip==='yaris'?'🏁 '+day.baslik:fixBaslik(day.baslik,day.tip))
                   )
                 ),
                 isDone&&React.createElement('span',{style:{fontSize:20,color:'var(--success)',fontWeight:900,lineHeight:1}},'✔'),
@@ -8658,8 +8710,20 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
             }},day.dayTR+(day.isToday?' ★':isRaceDay?' 🏁':testPlan?' 🧪':'')),
             React.createElement('div',{style:{padding:'6px'}},
               isRaceDay
-                ?React.createElement('div',{style:{textAlign:'center',fontSize:11,fontWeight:600,color:'var(--danger)'}},
-                  plan.primary?.tarih===day.date?plan.primary.ad:plan.intermediate.find(r=>r.tarih===day.date)?.ad||'Yarış'
+                ?React.createElement('div',null,
+                  // Yarış adı
+                  React.createElement('div',{style:{textAlign:'center',fontSize:11,fontWeight:700,color:'var(--danger)',lineHeight:1.3,marginBottom:2}},
+                    '🏁 '+(plan.primary?.tarih===day.date?plan.primary.ad:plan.intermediate.find(r=>r.tarih===day.date)?.ad||'Yarış')
+                  ),
+                  // Tahmini süre (tip=yaris ise planDay'den geliyor)
+                  day.sure_dk>0&&React.createElement('div',{style:{fontSize:9,color:'var(--text-tertiary)',textAlign:'center',marginBottom:2}},
+                    day.sure_dk>=60?(Math.floor(day.sure_dk/60)+'s'+(day.sure_dk%60?' '+day.sure_dk%60+'dk':'')):(day.sure_dk+'dk')
+                  ),
+                  // ▼ Reçete butonu — yarış gününde de hedef pace/süre tablosu gösterilebilir
+                  day.tip==='yaris'&&React.createElement('div',{
+                    style:{fontSize:9,color:'var(--danger)',textAlign:'center',cursor:'pointer',opacity:0.8},
+                    onClick:()=>setExpandDay(expandDay===day.date?null:day.date)
+                  },'▼ Reçete')
                 )
                 :React.createElement('div',null,
                   testPlan&&React.createElement('div',{style:{
