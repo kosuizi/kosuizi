@@ -12865,27 +12865,157 @@ function SporcuPlanView(){
   const zones=calcZones(athlete);
   const {start:wkStart,end:wkEnd}=getWeekBounds(0);
 
-  // Bu haftanın tamamlanan antrenmanları
-  const completedWks=workouts.filter(w=>{
-    const d=new Date(w.date+'T12:00:00');
-    return d>=wkStart&&d<=wkEnd;
-  }).sort((a,b)=>a.date.localeCompare(b.date));
-
-  // Bir sonraki antrenman — overrideMap'ten bugünden sonraki ilk antrenman günü
-  const sortedDates=Object.keys(planSnap.overrideMap).sort();
-  const nextDate=sortedDates.find(d=>d>todayStr&&planSnap.overrideMap[d]?.tip!=='dinlenme');
-  const nextOv=nextDate?planSnap.overrideMap[nextDate]:null;
-
   const fmtDate=(ds)=>{
     const d=new Date(ds+'T12:00:00');
     const gunler=['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'];
     return gunler[d.getDay()]+', '+d.getDate()+' '+['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'][d.getMonth()];
   };
-
   const fmtSure=(dk)=>dk>=60?Math.floor(dk/60)+'s'+(dk%60?' '+dk%60+'dk':''):dk+' dk';
-
-  // Tamamlanan antrenman için tur adı
   const turAd=(w)=>TUR_LABELS[w.tur||'']||SPOR_MAP[w.spor]?.l||w.tur||w.spor||'Antrenman';
+
+  // ── Gün bilgilerini topla: tamamlanan + bugün + sıradaki ───────────────────
+  // Bu haftanın tamamlanan antrenmanlarını tarihe göre grupla
+  const completedByDate={};
+  workouts.forEach(w=>{
+    const d=new Date(w.date+'T12:00:00');
+    if(d>=wkStart&&d<=wkEnd&&w.date<todayStr){
+      if(!completedByDate[w.date]) completedByDate[w.date]=[];
+      completedByDate[w.date].push(w);
+    }
+  });
+  const completedDayInfos=Object.keys(completedByDate).sort().map(date=>({
+    date,status:'completed',
+    ov:planSnap.overrideMap[date]||null,
+    actuals:completedByDate[date]
+  }));
+
+  // Bugünkü antrenman (varsa) — planlanan veya gerçekleşen
+  const todayActuals=workouts.filter(w=>w.date===todayStr);
+  const todayOv=planSnap.overrideMap[todayStr]||null;
+  const todayDayInfo=(todayOv&&todayOv.tip!=='dinlenme')||todayActuals.length>0
+    ?{date:todayStr,status:todayActuals.length>0?'today_done':'today',ov:todayOv,actuals:todayActuals}
+    :null;
+
+  // Sıradaki antrenman — overrideMap'ten bugünden sonraki ilk antrenman günü
+  const sortedDates=Object.keys(planSnap.overrideMap).sort();
+  const nextDate=sortedDates.find(d=>d>todayStr&&planSnap.overrideMap[d]?.tip!=='dinlenme');
+  const nextDayInfo=nextDate?{date:nextDate,status:'next',ov:planSnap.overrideMap[nextDate],actuals:[]}:null;
+
+  const dayInfos=[...completedDayInfos,todayDayInfo,nextDayInfo].filter(Boolean);
+
+  // Tek bir günü Haftalık Plan stilinde render et
+  const renderDayCard=(info,idx)=>{
+    const ov=info.ov;
+    const isCompleted=info.status==='completed'||info.status==='today_done';
+    const isToday=info.status==='today'||info.status==='today_done';
+    const isNext=info.status==='next';
+    // Çapraz mı? — planda capraz veya gerçekleşen koşu dışı bir spor
+    const isCaprazPlan=ov?.tip==='capraz';
+    const isCaprazActual=info.actuals.length>0&&info.actuals[0].spor&&info.actuals[0].spor!=='kosu';
+    const isCapraz=isCaprazPlan||(isCompleted&&isCaprazActual&&!ov);
+
+    // Başlık ve emoji
+    let title,emoji,titleColor;
+    if(ov){
+      title=ov.tip==='yaris'?'🏁 '+ov.baslik:fixBaslik(ov.baslik);
+      // Eğer fixBaslik eşleşme bulamazsa orijinal baslik döner
+      if(title===ov.baslik&&ov.baslik) title=ov.baslik;
+      emoji=tipEmoji(ov.tip);
+      titleColor=ov.tip==='yaris'?'var(--danger)':'var(--text-primary)';
+    } else if(info.actuals.length>0){
+      const w=info.actuals[0];
+      const t=w.tur||w.spor||'aerobik';
+      title=TUR_LABELS[t]||SPOR_MAP[w.spor]?.l||t;
+      emoji=SPOR_MAP[w.spor]?.emoji||tipEmoji(t);
+      titleColor='var(--text-primary)';
+    } else {
+      title='Antrenman';emoji='🏃';titleColor='var(--text-primary)';
+    }
+
+    // Sol kenar rengi
+    const borderColor=isCompleted?'var(--success)':isToday?'var(--info)':isNext?'var(--info)':(ov?tipColor(ov.tip):'var(--border)');
+
+    // Durum rozeti
+    const statusLabel=info.status==='completed'?'TAMAMLANDI':info.status==='today_done'?'BUGÜN · TAMAMLANDI':info.status==='today'?'BUGÜN':'SIRADAKİ';
+    const statusBg=isCompleted?'var(--success-bg)':'var(--info-bg)';
+    const statusFg=isCompleted?'var(--success)':'var(--info)';
+
+    // Çapraz notları (planda çapraz işaretli yapılar)
+    const caprazNotlar=(ov?.yapilar||[]).filter(y=>y._caprazNot);
+
+    return React.createElement('div',{
+      key:info.date+'_'+idx,
+      style:{
+        borderLeft:'3px solid '+borderColor,
+        paddingLeft:12,
+        paddingTop:10,paddingBottom:10,
+        marginBottom:4,
+        background:isToday?'var(--info-bg)':'transparent',
+        borderRadius:isToday?'0 var(--radius) var(--radius) 0':0
+      }
+    },
+      // Üst satır: durum rozeti + tarih + ✔
+      React.createElement('div',{style:{display:'flex',alignItems:'center',gap:6,marginBottom:6,flexWrap:'wrap'}},
+        React.createElement('span',{style:{
+          fontSize:9,fontWeight:700,padding:'2px 8px',borderRadius:99,
+          background:statusBg,color:statusFg,
+          textTransform:'uppercase',letterSpacing:0.3,whiteSpace:'nowrap'
+        }},statusLabel),
+        React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)',flex:1}},fmtDate(info.date)),
+        isCompleted&&React.createElement('span',{style:{fontSize:18,color:'var(--success)',fontWeight:900,lineHeight:1}},'✔')
+      ),
+      // Başlık satırı: emoji + isim + süre
+      React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:8}},
+        React.createElement('span',{style:{fontSize:18}},emoji),
+        React.createElement('div',{style:{flex:1,minWidth:0}},
+          React.createElement('div',{style:{fontWeight:700,fontSize:13,color:titleColor}},title),
+          ov?.sure_dk>0&&React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',marginTop:1}},'⏱ '+fmtSure(ov.sure_dk))
+        )
+      ),
+      // İçerik: çapraz ise sade görünüm, değilse ReceteTablosu
+      isCapraz
+        ?React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',paddingLeft:26}},
+            // Tamamlandıysa: gerçekleşen detaylar
+            info.actuals.length>0
+              ?info.actuals.map((w,wi)=>{
+                  const t=w.tur||w.spor||'aerobik';
+                  const sporlbl=SPOR_MAP[w.spor]?.emoji||tipEmoji(t);
+                  const turlbl=TUR_LABELS[t]||SPOR_MAP[w.spor]?.l||t;
+                  const sureDk=Math.round((toSec(w.sure_sa,w.sure_dk,w.sure_sn)||0)/60);
+                  return React.createElement('div',{key:wi,style:{marginTop:wi===0?0:3}},
+                    sporlbl+' '+turlbl+(sureDk>0?' · '+sureDk+' dk':'')+(w.mesafe?' · '+parseFloat(w.mesafe)+' km':'')
+                  );
+                })
+              // Planlı çapraz: çapraz notlarını göster
+              :caprazNotlar.length>0
+                ?caprazNotlar.map((y,yi)=>React.createElement('div',{key:yi,style:{marginTop:yi===0?0:3}},
+                    (y.baslik||'')+(y.detay?' — '+y.detay:'')))
+                :React.createElement('div',{style:{fontStyle:'italic',color:'var(--text-tertiary)'}},'Çapraz antrenman')
+          )
+        :ov?.yapilar?.length>0
+          ?React.createElement(ReceteTablosu,{
+              yapilar:kosuYapilarAl({tip:ov.tip,yapilar:ov.yapilar,isKosuCapraz:ov.isKosuCapraz}),
+              zones,tip:ov.tip,readOnly:true
+            })
+          :info.actuals.length>0
+            ?React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',paddingLeft:26,fontStyle:'italic'}},'Bu güne ait planlı reçete bulunamadı.')
+            :null,
+      // Tamamlanmış koşu antrenmanları için: gerçekleşen toplam istatistikler
+      isCompleted&&!isCapraz&&info.actuals.length>0&&React.createElement('div',{style:{
+        fontSize:11,color:'var(--success)',marginTop:8,paddingLeft:26,fontWeight:600
+      }},
+        info.actuals.map((w,wi)=>{
+          const km=parseFloat(w.mesafe)||0;
+          const sureDk=Math.round((toSec(w.sure_sa,w.sure_dk,w.sure_sn)||0)/60);
+          const parts=['✓'];
+          if(km>0)parts.push(km+' km');
+          if(sureDk>0)parts.push(fmtSure(sureDk));
+          if(w.irtifa>0)parts.push('D+'+w.irtifa+'m');
+          return React.createElement('span',{key:wi,style:{marginRight:10}},parts.join(' · '));
+        })
+      )
+    );
+  };
 
   return React.createElement('div',{style:{minHeight:'100vh',background:'var(--bg-tertiary)',padding:'20px 16px'}},
     React.createElement('div',{style:{maxWidth:480,margin:'0 auto'}},
@@ -12901,43 +13031,15 @@ function SporcuPlanView(){
         )
       ),
 
-      // Bu hafta yapılanlar
-      completedWks.length>0&&React.createElement('div',{className:'card',style:{marginBottom:12,padding:'14px 16px'}},
-        React.createElement('div',{style:{fontSize:12,fontWeight:700,color:'var(--text-secondary)',marginBottom:10,textTransform:'uppercase',letterSpacing:'0.5px'}},'Bu Hafta Tamamlananlar'),
-        completedWks.map((w,i)=>React.createElement('div',{key:i,style:{
-          display:'flex',alignItems:'center',gap:10,
-          padding:'8px 0',
-          borderBottom:i<completedWks.length-1?'1px solid var(--border)':'none'
-        }},
-          React.createElement('span',{style:{fontSize:18}},'✅'),
-          React.createElement('div',{style:{flex:1}},
-            React.createElement('div',{style:{fontSize:13,fontWeight:600}},turAd(w)),
-            React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},
-              fmtDate(w.date)+(w.mesafe?' · '+parseFloat(w.mesafe)+'km':'')+(w.irtifa?' · D+'+w.irtifa+'m':'')
-            )
-          )
-        ))
+      // Antrenman akışı — tamamlanan + bugün + sıradaki (Haftalık Plan stilinde)
+      dayInfos.length>0&&React.createElement('div',{className:'card',style:{marginBottom:12,padding:'14px 16px'}},
+        React.createElement('div',{style:{fontSize:12,fontWeight:700,color:'var(--text-secondary)',marginBottom:12,textTransform:'uppercase',letterSpacing:'0.5px'}},'Antrenmanlarım'),
+        React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:2}},
+          dayInfos.map((info,i)=>renderDayCard(info,i))
+        )
       ),
 
-      // Bir sonraki antrenman
-      nextOv&&React.createElement('div',{className:'card',style:{
-        marginBottom:12,padding:'14px 16px',
-        border:'2px solid var(--info)',
-        background:'var(--info-bg)'
-      }},
-        React.createElement('div',{style:{fontSize:12,fontWeight:700,color:'var(--info)',marginBottom:10,textTransform:'uppercase',letterSpacing:'0.5px'}},'Sonraki Antrenmanın'),
-        React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:6}},fmtDate(nextDate)),
-        React.createElement('div',{style:{fontSize:15,fontWeight:700,marginBottom:4}},
-          tipEmoji(nextOv.tip)+' '+nextOv.baslik        ),
-        nextOv.sure_dk>0&&React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:8}},
-          '⏱ '+fmtSure(nextOv.sure_dk)
-        ),
-        nextOv.yapilar?.length>0&&React.createElement(ReceteTablosu,{
-          yapilar:nextOv.yapilar,zones,tip:nextOv.tip,readOnly:true
-        })
-      ),
-
-      !nextOv&&React.createElement('div',{style:{textAlign:'center',padding:'20px',color:'var(--text-tertiary)',fontSize:13}},
+      dayInfos.length===0&&React.createElement('div',{style:{textAlign:'center',padding:'20px',color:'var(--text-tertiary)',fontSize:13}},
         '🎉 Bu haftanın tüm antrenmanları tamamlandı!'
       ),
 
