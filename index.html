@@ -12873,35 +12873,58 @@ function SporcuPlanView(){
   const fmtSure=(dk)=>dk>=60?Math.floor(dk/60)+'s'+(dk%60?' '+dk%60+'dk':''):dk+' dk';
   const turAd=(w)=>TUR_LABELS[w.tur||'']||SPOR_MAP[w.spor]?.l||w.tur||w.spor||'Antrenman';
 
-  // ── Gün bilgilerini topla: tamamlanan + bugün + sıradaki ───────────────────
-  // Bu haftanın tamamlanan antrenmanlarını tarihe göre grupla
-  const completedByDate={};
+  // ── Gün bilgilerini topla: bu hafta içindeki tüm anlamlı günler ───────────
+  // Bu hafta için tarih dizisini üret
+  const weekDateStrs=[];
+  for(let d=new Date(wkStart);d<=wkEnd;d.setDate(d.getDate()+1)){
+    weekDateStrs.push(localDateStr(d));
+  }
+  // Tarihe göre gerçekleşen antrenmanları grupla (sadece bu hafta)
+  const actualsByDate={};
   workouts.forEach(w=>{
-    const d=new Date(w.date+'T12:00:00');
-    if(d>=wkStart&&d<=wkEnd&&w.date<todayStr){
-      if(!completedByDate[w.date]) completedByDate[w.date]=[];
-      completedByDate[w.date].push(w);
+    if(weekDateStrs.includes(w.date)){
+      if(!actualsByDate[w.date]) actualsByDate[w.date]=[];
+      actualsByDate[w.date].push(w);
     }
   });
-  const completedDayInfos=Object.keys(completedByDate).sort().map(date=>({
-    date,status:'completed',
-    ov:planSnap.overrideMap[date]||null,
-    actuals:completedByDate[date]
-  }));
+  // Her gün için karar ver
+  const dayInfos=[];
+  // Sonraki günü tek seferlik işaretlemek için
+  let nextMarked=false;
+  weekDateStrs.forEach(date=>{
+    const ov=planSnap.overrideMap[date]||null;
+    const actuals=actualsByDate[date]||[];
+    const isPast=date<todayStr;
+    const isToday=date===todayStr;
+    const isFuture=date>todayStr;
+    const hasNonRestPlan=ov&&ov.tip!=='dinlenme';
+    const hasActuals=actuals.length>0;
 
-  // Bugünkü antrenman (varsa) — planlanan veya gerçekleşen
-  const todayActuals=workouts.filter(w=>w.date===todayStr);
-  const todayOv=planSnap.overrideMap[todayStr]||null;
-  const todayDayInfo=(todayOv&&todayOv.tip!=='dinlenme')||todayActuals.length>0
-    ?{date:todayStr,status:todayActuals.length>0?'today_done':'today',ov:todayOv,actuals:todayActuals}
-    :null;
-
-  // Sıradaki antrenman — overrideMap'ten bugünden sonraki ilk antrenman günü
-  const sortedDates=Object.keys(planSnap.overrideMap).sort();
-  const nextDate=sortedDates.find(d=>d>todayStr&&planSnap.overrideMap[d]?.tip!=='dinlenme');
-  const nextDayInfo=nextDate?{date:nextDate,status:'next',ov:planSnap.overrideMap[nextDate],actuals:[]}:null;
-
-  const dayInfos=[...completedDayInfos,todayDayInfo,nextDayInfo].filter(Boolean);
+    if(isPast){
+      // Geçmiş: gerçekleşen antrenman varsa veya planda yarış varsa göster
+      if(hasActuals){
+        dayInfos.push({date,status:'completed',ov,actuals});
+      } else if(ov&&ov.tip==='yaris'){
+        // Yapılmamış yarış (kayıt yok ama planda var) — yine de göster
+        dayInfos.push({date,status:'completed',ov,actuals:[]});
+      }
+    } else if(isToday){
+      // Bugün: plan var veya gerçekleşen var → göster
+      if(hasActuals||hasNonRestPlan){
+        dayInfos.push({date,status:hasActuals?'today_done':'today',ov,actuals});
+      }
+    } else if(isFuture){
+      // Gelecek: bu hafta içindeki TÜM yarış günleri + sıradaki antrenman
+      if(ov&&ov.tip==='yaris'){
+        // Yarışı her zaman göster
+        dayInfos.push({date,status:'race_upcoming',ov,actuals:[]});
+      } else if(hasNonRestPlan&&!nextMarked){
+        // İlk antrenman gününü "sıradaki" olarak işaretle
+        dayInfos.push({date,status:'next',ov,actuals:[]});
+        nextMarked=true;
+      }
+    }
+  });
 
   // Tek bir günü Haftalık Plan stilinde render et
   const renderDayCard=(info,idx)=>{
@@ -12909,6 +12932,8 @@ function SporcuPlanView(){
     const isCompleted=info.status==='completed'||info.status==='today_done';
     const isToday=info.status==='today'||info.status==='today_done';
     const isNext=info.status==='next';
+    const isRaceUpcoming=info.status==='race_upcoming';
+    const isRace=ov?.tip==='yaris';
     // Çapraz mı? — planda capraz veya gerçekleşen koşu dışı bir spor
     const isCaprazPlan=ov?.tip==='capraz';
     const isCaprazActual=info.actuals.length>0&&info.actuals[0].spor&&info.actuals[0].spor!=='kosu';
@@ -12917,11 +12942,11 @@ function SporcuPlanView(){
     // Başlık ve emoji
     let title,emoji,titleColor;
     if(ov){
-      title=ov.tip==='yaris'?'🏁 '+ov.baslik:fixBaslik(ov.baslik);
+      title=isRace?'🏁 '+ov.baslik:fixBaslik(ov.baslik);
       // Eğer fixBaslik eşleşme bulamazsa orijinal baslik döner
       if(title===ov.baslik&&ov.baslik) title=ov.baslik;
       emoji=tipEmoji(ov.tip);
-      titleColor=ov.tip==='yaris'?'var(--danger)':'var(--text-primary)';
+      titleColor=isRace?'var(--danger)':'var(--text-primary)';
     } else if(info.actuals.length>0){
       const w=info.actuals[0];
       const t=w.tur||w.spor||'aerobik';
@@ -12932,13 +12957,17 @@ function SporcuPlanView(){
       title='Antrenman';emoji='🏃';titleColor='var(--text-primary)';
     }
 
-    // Sol kenar rengi
-    const borderColor=isCompleted?'var(--success)':isToday?'var(--info)':isNext?'var(--info)':(ov?tipColor(ov.tip):'var(--border)');
+    // Sol kenar rengi — yarış kırmızı, tamamlanan yeşil, bugün/sıradaki mavi
+    const borderColor=isRace?'var(--danger)':isCompleted?'var(--success)':isToday?'var(--info)':isNext?'var(--info)':(ov?tipColor(ov.tip):'var(--border)');
 
     // Durum rozeti
-    const statusLabel=info.status==='completed'?'TAMAMLANDI':info.status==='today_done'?'BUGÜN · TAMAMLANDI':info.status==='today'?'BUGÜN':'SIRADAKİ';
-    const statusBg=isCompleted?'var(--success-bg)':'var(--info-bg)';
-    const statusFg=isCompleted?'var(--success)':'var(--info)';
+    let statusLabel,statusBg,statusFg;
+    if(isRace&&isCompleted){statusLabel='YARIŞ · TAMAMLANDI';statusBg='var(--danger-bg)';statusFg='var(--danger)';}
+    else if(isRaceUpcoming){statusLabel='YARIŞ';statusBg='var(--danger-bg)';statusFg='var(--danger)';}
+    else if(info.status==='completed'){statusLabel='TAMAMLANDI';statusBg='var(--success-bg)';statusFg='var(--success)';}
+    else if(info.status==='today_done'){statusLabel='BUGÜN · TAMAMLANDI';statusBg='var(--success-bg)';statusFg='var(--success)';}
+    else if(info.status==='today'){statusLabel='BUGÜN';statusBg='var(--info-bg)';statusFg='var(--info)';}
+    else {statusLabel='SIRADAKİ';statusBg='var(--info-bg)';statusFg='var(--info)';}
 
     // Çapraz notları (planda çapraz işaretli yapılar)
     const caprazNotlar=(ov?.yapilar||[]).filter(y=>y._caprazNot);
@@ -12950,8 +12979,8 @@ function SporcuPlanView(){
         paddingLeft:12,
         paddingTop:10,paddingBottom:10,
         marginBottom:4,
-        background:isToday?'var(--info-bg)':'transparent',
-        borderRadius:isToday?'0 var(--radius) var(--radius) 0':0
+        background:isToday?'var(--info-bg)':isRaceUpcoming?'var(--danger-bg)':'transparent',
+        borderRadius:isToday||isRaceUpcoming?'0 var(--radius) var(--radius) 0':0
       }
     },
       // Üst satır: durum rozeti + tarih + ✔
@@ -13018,7 +13047,7 @@ function SporcuPlanView(){
   };
 
   return React.createElement('div',{style:{minHeight:'100vh',background:'var(--bg-tertiary)',padding:'20px 16px'}},
-    React.createElement('div',{style:{maxWidth:480,margin:'0 auto'}},
+    React.createElement('div',{style:{maxWidth:760,margin:'0 auto'}},
 
       // Header
       React.createElement('div',{style:{textAlign:'center',marginBottom:20}},
