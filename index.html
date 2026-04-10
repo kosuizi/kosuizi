@@ -1,4 +1,4 @@
-<!-- Version: v2026.04.10-1830 -->
+<!-- Version: v2026.04.10-1845 -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -1974,7 +1974,30 @@ function YarısModal({onClose,onSave,initial}){
 function SporcuModal({onClose,onSave,initial,races}){
   const [f,setF]=useState(initial?{...initial}:{...EMPTY_A});
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
-  const toggleGun=(k,g)=>{const arr=f[k]||[];set(k,arr.includes(g)?arr.filter(x=>x!==g):[...arr,g]);};
+  // Madde 1: Bu haftaki yarış günlerini hesapla
+  const buHaftaYarisGunleri=React.useMemo(()=>{
+    const athRaceIds=(f.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
+    const {start:wkStart,end:wkEnd}=getWeekBounds(0);
+    const wkStartStr=localDateStr(wkStart);
+    const wkEndStr=localDateStr(wkEnd);
+    const result={};
+    (races||[]).forEach(r=>{
+      if(!athRaceIds.includes(r.id)||!r.tarih)return;
+      if(r.tarih>=wkStartStr&&r.tarih<=wkEndStr){
+        const ds=DAYS_SHORT[new Date(r.tarih+'T12:00:00').getDay()];
+        result[ds]=r.ad||'Yarış';
+      }
+    });
+    return result;
+  },[f.yarıslar,races]);
+
+  const toggleGun=(k,g)=>{
+    if(k==='kosu_gunleri'&&buHaftaYarisGunleri[g]&&!(f[k]||[]).includes(g)){
+      alert('⚠️ '+g+' günü bu hafta yarış günü ('+buHaftaYarisGunleri[g]+'). Yarış günü koşu günü olarak seçilemez.');
+      return;
+    }
+    const arr=f[k]||[];set(k,arr.includes(g)?arr.filter(x=>x!==g):[...arr,g]);
+  };
   // yarıslar: [{id, oncelik}] — geriye dönük uyumluluk: string id'leri de destekle
   const yarıslarNorm=(arr)=>(arr||[]).map(x=>typeof x==='string'?{id:x,oncelik:'A'}:x);
   const toggleYarış=(rid)=>{
@@ -2233,7 +2256,15 @@ function SporcuModal({onClose,onSave,initial,races}){
       ),
       React.createElement('div',{className:'form-group',style:{marginBottom:8}},
         React.createElement('label',null,'Koşu günleri'),
-        React.createElement('div',{className:'days-grid'},GUNLER.map(g=>React.createElement('div',{key:g,className:'day-btn'+((f.kosu_gunleri||[]).includes(g)?' run-active':''),onClick:()=>toggleGun('kosu_gunleri',g)},g)))
+        React.createElement('div',{className:'days-grid'},GUNLER.map(g=>{
+          const isRace=!!buHaftaYarisGunleri[g];
+          return React.createElement('div',{key:g,
+            className:'day-btn'+((f.kosu_gunleri||[]).includes(g)?' run-active':''),
+            style:isRace?{opacity:0.45,cursor:'not-allowed',border:'1px dashed var(--danger)'}:{},
+            title:isRace?'Bu hafta yarış: '+buHaftaYarisGunleri[g]:'',
+            onClick:()=>toggleGun('kosu_gunleri',g)
+          },g+(isRace?' 🏁':''));
+        }))
       ),
       React.createElement('div',{className:'form-group',style:{marginBottom:8}},
         React.createElement('label',null,'Uzun Koşu Günü'),
@@ -13146,7 +13177,32 @@ function SporcuAnketi(){
     });
   };
 
+  // Madde 1: Bu haftaki yarış günlerini hesapla
+  const buHaftaYarisGunleriAnket=React.useMemo(function(){
+    const ath=athletes.find(function(x){return x.id===selId;});
+    if(!ath)return{};
+    const athRaceIds=(ath.yarıslar||[]).map(function(x){return typeof x==='string'?x:x.id;});
+    const wb=getWeekBounds(0);
+    const wkStartStr=localDateStr(wb.start);
+    const wkEndStr=localDateStr(wb.end);
+    const result={};
+    (races||[]).forEach(function(r){
+      if(athRaceIds.indexOf(r.id)<0||!r.tarih)return;
+      if(r.tarih>=wkStartStr&&r.tarih<=wkEndStr){
+        result[DAYS_SHORT[new Date(r.tarih+'T12:00:00').getDay()]]=r.ad||'Yarış';
+      }
+    });
+    return result;
+  },[selId,athletes,races]);
+
   const toggleGun=(field,gun)=>{
+    if(field==='kosu_gunleri'&&buHaftaYarisGunleriAnket[gun]){
+      const currentArr=form?form[field]||[]:[];
+      if(currentArr.indexOf(gun)<0){
+        alert('⚠️ '+gun+' günü bu hafta yarış günü ('+buHaftaYarisGunleriAnket[gun]+'). Yarış günü koşu günü olarak seçilemez.');
+        return;
+      }
+    }
     setForm(function(f){
       const arr=f[field]||[];
       return Object.assign({},f,{[field]:arr.includes(gun)?arr.filter(function(x){return x!==gun;}):[...arr,gun]});
@@ -13367,11 +13423,14 @@ function SporcuAnketi(){
       React.createElement('div',{className:'card-title'},'Koşu Günleri'),
       React.createElement('div',{className:'days-grid'},
         GUNLER_LIST.map(function(g){
+          var isRace=!!buHaftaYarisGunleriAnket[g];
           return React.createElement('div',{
             key:g,
             className:'day-btn '+(form.kosu_gunleri.includes(g)?'run-active':''),
+            style:isRace?{opacity:0.45,cursor:'not-allowed',border:'1px dashed var(--danger)'}:{},
+            title:isRace?'Bu hafta yarış: '+buHaftaYarisGunleriAnket[g]:'',
             onClick:function(){toggleGun('kosu_gunleri',g);}
-          },g);
+          },g+(isRace?' 🏁':''));
         })
       ),
       React.createElement('div',{className:'card-title',style:{marginTop:14}},'Çapraz Antrenman Günleri'),
