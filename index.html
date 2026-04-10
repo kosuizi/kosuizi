@@ -1,4 +1,4 @@
-<!-- Version: v2026.04.10-0244 -->
+<!-- Version: v2026.04.10-1730 -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -1974,7 +1974,20 @@ function YarısModal({onClose,onSave,initial}){
 function SporcuModal({onClose,onSave,initial,races}){
   const [f,setF]=useState(initial?{...initial}:{...EMPTY_A});
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
-  const toggleGun=(k,g)=>{const arr=f[k]||[];set(k,arr.includes(g)?arr.filter(x=>x!==g):[...arr,g]);};
+  const toggleGun=(k,g)=>{
+    // Madde 1: Yarış günü koşu günü olarak seçilemez
+    if(k==='kosu_gunleri'){
+      const athRaceIds=(f.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
+      const athRaces=(races||[]).filter(r=>athRaceIds.includes(r.id)&&r.tarih);
+      const raceDayShorts=athRaces.map(r=>DAYS_SHORT[new Date(r.tarih+'T12:00:00').getDay()]);
+      if(raceDayShorts.includes(g)&&!(f[k]||[]).includes(g)){
+        const raceNames=athRaces.filter(r=>DAYS_SHORT[new Date(r.tarih+'T12:00:00').getDay()]===g).map(r=>r.ad||'Yarış').join(', ');
+        alert('⚠️ '+g+' günü yarış günü ('+raceNames+'). Yarış günü koşu günü olarak seçilemez.');
+        return;
+      }
+    }
+    const arr=f[k]||[];set(k,arr.includes(g)?arr.filter(x=>x!==g):[...arr,g]);
+  };
   // yarıslar: [{id, oncelik}] — geriye dönük uyumluluk: string id'leri de destekle
   const yarıslarNorm=(arr)=>(arr||[]).map(x=>typeof x==='string'?{id:x,oncelik:'A'}:x);
   const toggleYarış=(rid)=>{
@@ -2233,7 +2246,21 @@ function SporcuModal({onClose,onSave,initial,races}){
       ),
       React.createElement('div',{className:'form-group',style:{marginBottom:8}},
         React.createElement('label',null,'Koşu günleri'),
-        React.createElement('div',{className:'days-grid'},GUNLER.map(g=>React.createElement('div',{key:g,className:'day-btn'+((f.kosu_gunleri||[]).includes(g)?' run-active':''),onClick:()=>toggleGun('kosu_gunleri',g)},g)))
+        (()=>{
+          const athRaceIds=(f.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
+          const athRaces=(races||[]).filter(r=>athRaceIds.includes(r.id)&&r.tarih);
+          const raceDayShorts=new Set(athRaces.map(r=>DAYS_SHORT[new Date(r.tarih+'T12:00:00').getDay()]));
+          return React.createElement('div',{className:'days-grid'},GUNLER.map(g=>{
+            const isRaceDay=raceDayShorts.has(g);
+            const isActive=(f.kosu_gunleri||[]).includes(g);
+            return React.createElement('div',{key:g,
+              className:'day-btn'+(isActive?' run-active':''),
+              style:isRaceDay?{opacity:0.45,cursor:'not-allowed',position:'relative',border:'1px dashed var(--danger)'}:{},
+              onClick:()=>toggleGun('kosu_gunleri',g),
+              title:isRaceDay?'Yarış günü — koşu günü olarak seçilemez':''
+            },g+(isRaceDay?' 🏁':''));
+          }));
+        })()
       ),
       React.createElement('div',{className:'form-group',style:{marginBottom:8}},
         React.createElement('label',null,'Uzun Koşu Günü'),
@@ -7641,6 +7668,7 @@ function generatePlanSnapshot(athlete,history,races,workouts,testPlanlar,targetW
         tip:day.tip,baslik:day.baslik,
         sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,
         isKosuCapraz:day.isKosuCapraz||false,
+        approved:false,
         yapilar:(day.yapilar||[]).map(y=>({
           baslik:y.baslik,detay:y.detay||'',_caprazNot:y._caprazNot||false,
           // Yarış günü özel alanları — primitif olduğu için JSON'da korunur
@@ -7725,6 +7753,7 @@ function reviewPlanSnapshot(snapshot,athlete,history,races,workouts,testPlanlar)
       newMap[day.date]={
         tip:day.tip,baslik:day.baslik,
         sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,
+        approved:false,
         yapilar:(day.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||''}))
       };
     }
@@ -7753,6 +7782,7 @@ function reviewPlanSnapshot(snapshot,athlete,history,races,workouts,testPlanlar)
       baslik:'B2B Telafi — Kaçırılan Uzun Koşu',
       sure_dk:b2bTpl.sure_dk,
       yukHedef:Math.round(b2bTpl.sure_dk*0.8),
+      approved:false,
       yapilar:b2bTpl.yapilar.map(y=>({baslik:y.baslik,detay:y.detay||''})),
       isB2bCompensation:true
     };
@@ -8367,6 +8397,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       tip:tpl.tip,baslik,sure_dk:tpl.sure_dk||50,
       yukHedef:Math.round((tpl.sure_dk||50)*({kolay:0.8,aerobik:1.1,uzun:1.25,tempo:1.55,esik:1.7,interval:2.1,yokus_kisa:2.1,yokus_uzun:2.0,tirmanis:2.0,teknik:1.3,acici:1.0,capraz:0.8,progressive:1.4,cruise:1.65,yaris_tempo:1.8}[tpl.tip]||1.1)),
       yapi_notu:tpl.yapi_notu||'',
+      approved:false,
       yapilar:(tpl.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||'',_caprazNot:y._caprazNot}))
     }};
     const newManualOverrides={...(curSnap?.manualOverrides||{}),[dateStr]:{tip:tpl.tip,baslik,atAt:now.toISOString()}};
@@ -8379,7 +8410,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       const _gun2=tplBackToBackGun2(_b2bBand,_b2bZones,tpl.dpHedef||0);
       const _gun2Baslik=_gun2.baslik||'B2B Gün 2 — Yorgun Bacak';
       newMap[_nextStr]={tip:_gun2.tip,baslik:_gun2Baslik,sure_dk:_gun2.sure_dk,
-        yukHedef:Math.round(_gun2.sure_dk*0.8),yapi_notu:_gun2.yapi_notu||'',
+        yukHedef:Math.round(_gun2.sure_dk*0.8),yapi_notu:_gun2.yapi_notu||'',approved:false,
         yapilar:(_gun2.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||''}))};
       newManualOverrides[_nextStr]={tip:_gun2.tip,baslik:_gun2Baslik,atAt:now.toISOString(),b2bAutoGun2:true};
     }
@@ -8403,6 +8434,23 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     }
   };
 
+  // ── Madde 2: Antrenman Onay Kutusu ──────────────────────────────────────────
+  const handleToggleApproved=(dateStr)=>{
+    const curSnap=planSnapRef.current||{};
+    const ov=curSnap.overrideMap?.[dateStr];
+    if(!ov) return;
+    const newApproved=!ov.approved;
+    const newMap={...(curSnap.overrideMap||{}),[dateStr]:{...ov,approved:newApproved}};
+    const newSnap={...curSnap,overrideMap:newMap,lastSavedAt:new Date().toISOString()};
+    setPlanSnap(newSnap);
+    if(db||initFirebase()){
+      const _appSnap=stripUndefined(newSnap);
+      db.ref(`plan_snapshots/${athlete.id}/${weekKey}`).set(_appSnap)
+        .then(()=>{ _planSnapsCache[athlete.id]=_appSnap; })
+        .catch(e=>console.error('Onay kayıt hatası:',e));
+    }
+  };
+
     const handleCancelDay=async(dateStr)=>{
     const newCancelled={...cancelledDays,[dateStr]:true};
     const todayStr=localDateStr(new Date());
@@ -8414,15 +8462,20 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     const iptalYuk=iptalEdilen?.yukHedef||0;
     const iptalSure=iptalEdilen?.sure_dk||0;
     const iptalTip=iptalEdilen?.tip||'bilinmiyor';
-    const newMap={...(planSnap?.overrideMap||{}),[dateStr]:{tip:'dinlenme',baslik:'İptal Edildi',sure_dk:0,yukHedef:0,yapilar:[{baslik:'İptal',detay:`Antrenman iptal edildi (${TIP_NAMES[iptalTip]||iptalTip}, ${iptalSure}dk, yük:${iptalYuk})`}]}};
+    const newMap={...(planSnap?.overrideMap||{}),[dateStr]:{tip:'dinlenme',baslik:'İptal Edildi',sure_dk:0,yukHedef:0,approved:true,yapilar:[{baslik:'İptal',detay:`Antrenman iptal edildi (${TIP_NAMES[iptalTip]||iptalTip}, ${iptalSure}dk, yük:${iptalYuk})`}]}};
     // Yeni planı uygula
     const kalanGunler=[]; // yük dağıtılacak günler
     newPlan.weeks.forEach(wk=>wk.days.forEach(day=>{
       if(day.date>dateStr&&day.date>=todayStr&&!newCancelled[day.date]&&day.tip!=='dinlenme'){
-        newMap[day.date]={tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,yapilar:(day.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||''}))};
+        // Mevcut onay durumunu koru: aynı tip ise approved'u taşı, farklıysa sıfırla
+        const eskiOv=planSnap?.overrideMap?.[day.date];
+        const eskiApproved=(eskiOv?.approved===true&&eskiOv?.tip===day.tip);
+        newMap[day.date]={tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,approved:eskiApproved,yapilar:(day.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||''}))};
         kalanGunler.push(day.date);
       } else if(day.date>dateStr&&day.date>=todayStr&&!newCancelled[day.date]){
-        newMap[day.date]={tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,yapilar:(day.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||''}))};
+        const eskiOv2=planSnap?.overrideMap?.[day.date];
+        const eskiApproved2=(eskiOv2?.approved===true&&eskiOv2?.tip===day.tip);
+        newMap[day.date]={tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,approved:eskiApproved2,yapilar:(day.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||''}))};
       }
     }));
     // ── OP-6: Yük redistribüsyonu ── iptal yükünü kalan günlere orantılı dağıt
@@ -8469,7 +8522,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     const newMap={...(planSnap?.overrideMap||{})};
     newPlan.weeks.forEach(wk=>wk.days.forEach(day=>{
       if(day.date>=dateStr&&day.date>=todayStr&&!newCancelled[day.date])
-        newMap[day.date]={tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,yapilar:(day.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||''}))};
+        newMap[day.date]={tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,approved:false,yapilar:(day.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||''}))};
     }));
     const newSnap={...(planSnapRef.current||{}),weekKey,athId:athlete.id,lastReviewAt:now.toISOString(),lastSavedAt:now.toISOString(),cancelledDays:newCancelled,selectedPrimary:selectedPrimary||null,overrideMap:newMap,reviewLog:[...(planSnapRef.current?.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} iptali geri alındı`}].slice(-10)};
     setPlanSnap(newSnap);
@@ -8541,7 +8594,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         // Manuel atanmış günlere dokunma (swap hariç)
         const mo=newManualOverrides[day.date];
         if(mo&&!mo.swappedFrom) return;
-        newMap[day.date]={tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,
+        newMap[day.date]={tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,approved:false,
           yapilar:(day.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||''}))};
       }
     }));
@@ -8785,6 +8838,35 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
             }
           },'🔄 Planı Güncelle'),
+          // Madde 2: Tümünü Onayla butonu
+          planSnap?.overrideMap&&(()=>{
+            const todayStr2=localDateStr(new Date());
+            const unapproved=Object.entries(planSnap.overrideMap).filter(([ds,ov])=>
+              ds>=todayStr2&&ov.tip!=='dinlenme'&&ov.approved===false&&!cancelledDays[ds]
+            );
+            if(unapproved.length===0)return null;
+            return React.createElement('button',{
+              className:'btn btn-sm',
+              style:{background:'var(--success)',color:'#fff',border:'none'},
+              title:unapproved.length+' onaylanmamış antrenman var',
+              onClick:()=>{
+                const curSnap=planSnapRef.current||{};
+                const newMap={...(curSnap.overrideMap||{})};
+                unapproved.forEach(([ds])=>{
+                  if(newMap[ds]) newMap[ds]={...newMap[ds],approved:true};
+                });
+                const newSnap={...curSnap,overrideMap:newMap,lastSavedAt:new Date().toISOString()};
+                setPlanSnap(newSnap);
+                if(db||initFirebase()){
+                  const _allApprSnap=stripUndefined(newSnap);
+                  db.ref(`plan_snapshots/${athlete.id}/${weekKey}`).set(_allApprSnap)
+                    .then(()=>{_planSnapsCache[athlete.id]=_allApprSnap;})
+                    .catch(e=>console.error('Toplu onay hatası:',e));
+                }
+                setReviewMsg('✅ '+unapproved.length+' antrenman onaylandı');
+              }
+            },'✅ Tümünü Onayla ('+unapproved.length+')');
+          })(),
           // generatedAt + uyarılar
           planSnap?.lastSavedAt&&React.createElement('span',{style:{fontSize:10,color:'var(--text-tertiary)'}},
             '🕐 '+(()=>{
@@ -9069,6 +9151,27 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               React.createElement('div',{style:{
                 display:'flex',alignItems:'center',gap:6,marginBottom:6
               }},
+                // Madde 2: Onay kutusu — detay görünümü
+                (()=>{
+                  const ov=planSnap?.overrideMap?.[day.date];
+                  const isRaceDayDetail=day.tip==='yaris';
+                  if(!ov||isCancelledDay||day.tip==='dinlenme'||isRaceDayDetail)return null;
+                  const isApproved=ov.approved===true;
+                  return React.createElement('span',{
+                    style:{
+                      display:'inline-flex',alignItems:'center',justifyContent:'center',
+                      width:20,height:20,minWidth:20,
+                      borderRadius:4,cursor:'pointer',
+                      border:isApproved?'2px solid var(--success)':'2px solid var(--border)',
+                      background:isApproved?'var(--success)':'transparent',
+                      color:isApproved?'#fff':'var(--text-tertiary)',
+                      fontSize:13,fontWeight:700,
+                      transition:'all .15s'
+                    },
+                    title:isApproved?'Onaylandı — tıklayarak geri al':'Onaylanmadı — tıklayarak onayla',
+                    onClick:function(e){e.stopPropagation();handleToggleApproved(day.date);}
+                  },isApproved?'✓':'');
+                })(),
                 React.createElement('span',{style:{fontSize:16}},dayEmoji(day)),
                 React.createElement('div',{style:{flex:1}},
                   React.createElement('div',{style:{fontWeight:700,fontSize:12,color:day.tip==='yaris'?'var(--danger)':'var(--text-primary)'}},
@@ -9141,6 +9244,30 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   React.createElement('div',{style:{fontSize:18,textAlign:'center'}},
                     dayEmoji(day)
                   ),
+                  // Madde 2: Onay kutusu — gelecek günlerde, dinlenme/iptal dışı
+                  (()=>{
+                    const ov=planSnap?.overrideMap?.[day.date];
+                    const showApproval=ov&&!isCancelled&&day.tip!=='dinlenme'&&!isRaceDay;
+                    if(!showApproval)return null;
+                    const isApproved=ov.approved===true;
+                    return React.createElement('div',{
+                      style:{textAlign:'center',marginBottom:2,marginTop:1},
+                      onClick:function(e){e.stopPropagation();handleToggleApproved(day.date);},
+                      title:isApproved?'Onaylandı — tıklayarak geri al':'Onaylanmadı — tıklayarak onayla'
+                    },
+                      React.createElement('span',{style:{
+                        fontSize:12,cursor:'pointer',
+                        display:'inline-block',
+                        width:18,height:18,lineHeight:'18px',
+                        borderRadius:3,textAlign:'center',
+                        border:isApproved?'2px solid var(--success)':'2px solid var(--border)',
+                        background:isApproved?'var(--success)':'transparent',
+                        color:isApproved?'#fff':'var(--text-tertiary)',
+                        fontWeight:700,
+                        transition:'all .15s'
+                      }},isApproved?'✓':'')
+                    );
+                  })(),
                   // Geçmiş gün: tüm gerçek antrenmanları göster
                   (day.isPast || day.isToday) && day.actual?.length > 0
                     ? day.actual.map((w,wi) => {
@@ -9160,6 +9287,14 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                           day.isKosuCapraz&&React.createElement('div',{style:{fontSize:9,fontWeight:600,textAlign:'center',color:'var(--success)',marginTop:1}},'➕ Çapraz')
                         ),
                   day.sure_dk>0&&React.createElement('div',{style:{fontSize:9,color:'var(--text-tertiary)',textAlign:'center'}},day.sure_dk+' dk'),
+                  // Madde 3: İptal telafisi notu göster
+                  (()=>{
+                    const redistNote=planSnap?.overrideMap?.[day.date]?._redistNote;
+                    if(!redistNote)return null;
+                    return React.createElement('div',{style:{fontSize:8,color:'var(--warn)',textAlign:'center',marginTop:1,fontStyle:'italic'}},
+                      '🔄 '+redistNote
+                    );
+                  })(),
                   day.uyari&&React.createElement('div',{'data-no-export':true,style:{fontSize:8,color:'var(--warn)',textAlign:'center',marginTop:2}},'⚠'),
                   day.comparison&&React.createElement('div',{style:{textAlign:'center',marginTop:3}},compBadge(day.comparison)),
                   day.actual?.length>0&&React.createElement('div',{style:{fontSize:9,color:'var(--success)',textAlign:'center'}},
@@ -12987,6 +13122,7 @@ function parseSayi(v){ return parseFloat((v||'').toString().replace(',','.'))||0
 
 function SporcuAnketi(){
   const [athletes,setAthletes]=useState([]);
+  const [races,setRaces]=useState([]);
   const [selId,setSelId]=useState('');
   const [form,setForm]=useState(null);
   const [saved,setSaved]=useState(false);
@@ -13004,8 +13140,9 @@ function SporcuAnketi(){
         const cfg=await fbGet('app_config');
         if(cfg&&cfg.teamName)setAppName(cfg.teamName);
         if(cfg&&cfg.teamLogo)setLogo(cfg.teamLogo);
-        const aths=await fbGet('ath2');
+        const [aths,rcs]=await Promise.all([fbGet('ath2'),fbGet('races')]);
         setAthletes(aths||[]);
+        setRaces(rcs||[]);
       }catch(e){console.warn(e);}
       setLoading(false);
     })();
@@ -13037,6 +13174,21 @@ function SporcuAnketi(){
   };
 
   const toggleGun=(field,gun)=>{
+    // Madde 1: Yarış günü koşu günü olarak seçilemez
+    if(field==='kosu_gunleri'){
+      const ath=athletes.find(function(x){return x.id===selId;});
+      if(ath){
+        const athRaceIds=(ath.yarıslar||[]).map(function(x){return typeof x==='string'?x:x.id;});
+        const athRaces=(races||[]).filter(function(r){return athRaceIds.includes(r.id)&&r.tarih;});
+        const raceDayShorts=athRaces.map(function(r){return DAYS_SHORT[new Date(r.tarih+'T12:00:00').getDay()];});
+        const currentArr=form?form[field]||[]:[];
+        if(raceDayShorts.indexOf(gun)>=0&&currentArr.indexOf(gun)<0){
+          var raceNames=athRaces.filter(function(r){return DAYS_SHORT[new Date(r.tarih+'T12:00:00').getDay()]===gun;}).map(function(r){return r.ad||'Yarış';}).join(', ');
+          alert('⚠️ '+gun+' günü yarış günü ('+raceNames+'). Yarış günü koşu günü olarak seçilemez.');
+          return;
+        }
+      }
+    }
     setForm(function(f){
       const arr=f[field]||[];
       return Object.assign({},f,{[field]:arr.includes(gun)?arr.filter(function(x){return x!==gun;}):[...arr,gun]});
@@ -13255,15 +13407,25 @@ function SporcuAnketi(){
 
     React.createElement('div',{className:'card',style:{marginBottom:12}},
       React.createElement('div',{className:'card-title'},'Koşu Günleri'),
-      React.createElement('div',{className:'days-grid'},
-        GUNLER_LIST.map(function(g){
-          return React.createElement('div',{
-            key:g,
-            className:'day-btn '+(form.kosu_gunleri.includes(g)?'run-active':''),
-            onClick:function(){toggleGun('kosu_gunleri',g);}
-          },g);
-        })
-      ),
+      (function(){
+        var ath=athletes.find(function(x){return x.id===selId;});
+        var athRaceIds=ath?(ath.yarıslar||[]).map(function(x){return typeof x==='string'?x:x.id;}):[];
+        var athRaces=(races||[]).filter(function(r){return athRaceIds.indexOf(r.id)>=0&&r.tarih;});
+        var raceDaySet={};
+        athRaces.forEach(function(r){raceDaySet[DAYS_SHORT[new Date(r.tarih+'T12:00:00').getDay()]]=true;});
+        return React.createElement('div',{className:'days-grid'},
+          GUNLER_LIST.map(function(g){
+            var isRaceDay=!!raceDaySet[g];
+            return React.createElement('div',{
+              key:g,
+              className:'day-btn '+(form.kosu_gunleri.includes(g)?'run-active':''),
+              style:isRaceDay?{opacity:0.45,cursor:'not-allowed',border:'1px dashed var(--danger)'}:{},
+              onClick:function(){toggleGun('kosu_gunleri',g);},
+              title:isRaceDay?'Yarış günü — koşu günü olarak seçilemez':''
+            },g+(isRaceDay?' 🏁':''));
+          })
+        );
+      })(),
       React.createElement('div',{className:'card-title',style:{marginTop:14}},'Çapraz Antrenman Günleri'),
       React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',marginBottom:6}},'Bisiklet, yüzme, yoga gibi koşu dışı antrenman günleri'),
       React.createElement('div',{className:'days-grid'},
@@ -13417,6 +13579,9 @@ function SporcuPlanView(){
     const isToday=date===todayStr;
     const hasNonRestPlan=ov&&ov.tip!=='dinlenme';
     const hasActuals=actuals.length>0;
+    // Madde 2: Onaylanmamış antrenmanlar Koşu İzlerim'de gösterilmez (tamamlanmış hariç)
+    // Geriye dönük uyumluluk: approved alanı yoksa (eski planlar) onaylı say
+    const isApproved=ov?.approved!==false;
 
     if(isPast){
       // Geçmiş: gerçekleşen antrenman varsa veya planda yarış varsa göster
@@ -13427,23 +13592,26 @@ function SporcuPlanView(){
         dayInfos.push({date,status:'completed',ov,actuals:[]});
       }
     } else if(isToday){
-      // Bugün: plan var veya gerçekleşen var → göster
-      if(hasActuals||hasNonRestPlan){
-        dayInfos.push({date,status:hasActuals?'today_done':'today',ov,actuals});
+      // Bugün: tamamlanan her zaman gösterilir; tamamlanmamışsa sadece onaylı göster
+      if(hasActuals){
+        dayInfos.push({date,status:'today_done',ov,actuals});
+      } else if(hasNonRestPlan&&isApproved){
+        dayInfos.push({date,status:'today',ov,actuals});
       }
     }
   });
 
-  // Gelecek antrenman: TEK BİR tane göster
+  // Gelecek antrenman: TEK BİR tane göster — sadece onaylı
   // Kural: bugünün antrenmanı yapılmamış (today) varsa, gelecek antrenman gösterme
-  // Bugün yapıldıysa (today_done) veya bugün hiç antrenman yoksa → ilk yaklaşan antrenmanı göster
+  // Bugün yapıldıysa (today_done) veya bugün hiç antrenman yoksa → ilk yaklaşan onaylı antrenmanı göster
   const hasUnfinishedToday=dayInfos.some(d=>d.status==='today');
   if(!hasUnfinishedToday){
     for(const date of weekDateStrs){
       if(date<=todayStr) continue;
       const ov=planSnap.overrideMap[date]||null;
       const hasNonRestPlan=ov&&ov.tip!=='dinlenme';
-      if(hasNonRestPlan){
+      const isApprovedFuture=ov?.approved!==false;
+      if(hasNonRestPlan&&isApprovedFuture){
         const status=ov.tip==='yaris'?'race_upcoming':'next';
         dayInfos.push({date,status,ov,actuals:[]});
         break;
