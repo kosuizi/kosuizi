@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.13-1200'; // Yarış haftası optimizasyon bypass (çoklu yarış ortalaması ile sulandırma fix)
+const APP_VERSION='v2026.04.13-1230'; // Yarış haftası optimizasyon bypass (çoklu yarış ortalaması ile sulandırma fix)
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -4183,11 +4183,11 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
     return ()=>{ _cueCache.listeners=_cueCache.listeners.filter(fn=>fn!==listener); };
   },[]);
 
-  const saveCue = async(label, text)=>{
+  const saveCue = async(label, text, srcBaslik)=>{
     setEditingLabel(null);
     if(onSaveDetay){
-      // Sporcu+güne özgü kayıt — global cache'e dokunma
-      onSaveDetay(label, text);
+      // Sporcu+güne özgü kayıt: kaynak yapilar[i].baslik ile eşleştir
+      onSaveDetay(srcBaslik || label, text);
     } else {
       await saveCueGlobal(label, text);
       setCustomCues({..._cueCache.data});
@@ -4196,19 +4196,19 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
 
   // originalCueOnly=true ise (yalnızca Antrenmanlar sekmesi) her zaman orijinal otomatik açıklama gösterilir;
   // takvimde ve Koşu İzlerim'de özel düzenlemeler korunur.
-  // Önce bu sporcuya/güne özgü detay (overrideMap.yapilar'dan), sonra global cache, sonra otomatik
-  const getPerDayDetay = (label) => {
-    const found = (yapilar||[]).find(y => y.baslik === label);
-    return found && found.detay !== undefined ? found.detay : undefined;
-  };
-  const getCue = (label) => {
+  // srcBaslik: o row'u üreten yapilar[i].baslik (label ile farklı olabilir — interval header gibi)
+  const getCueForRow = (label, srcBaslik) => {
     if(originalCueOnly) return coachingCue(label, tip);
     if(onSaveDetay) {
-      const perDay = getPerDayDetay(label);
-      if(perDay !== undefined) return perDay || null;
+      // Önce sporcu/güne özgü detay: kaynak yapi'nin detay alanına bak
+      const key = srcBaslik || label;
+      const found = (yapilar||[]).find(y => y.baslik === key);
+      if(found) return found.detay || null; // '' → null (hiç gösterme)
     }
     return customCues[label] !== undefined ? customCues[label] : coachingCue(label, tip);
   };
+  // Geriye uyumluluk için eski çağrılar hâlâ çalışsın
+  const getCue = (label) => getCueForRow(label, label);
   // _caprazNot olanlar tablo dışında yazılı gösterilir
   const caprazNotlar=(yapilar||[]).filter(y=>y._caprazNot);
   // Çapraz antrenman adımlarını tamamen filtrele
@@ -4227,7 +4227,7 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
   const normalYapilar=(yapilar||[]).filter(y=>!(y.baslik||'').startsWith('💡'));
 
   // Satırları üret — header satırları toplama dahil edilmez
-  const baseRows=normalYapilar.flatMap(y=>{try{return adimToRows(y,zones);}catch(e){console.warn('adimToRows error:',e,y);return[];};});
+  const baseRows=normalYapilar.flatMap(y=>{try{return adimToRows(y,zones).map(r=>({...r,_srcBaslik:y.baslik}));}catch(e){console.warn('adimToRows error:',e,y);return[];};});
   if(!baseRows.length&&!oneriYapilar.length) return null;
 
   // Override'ları uygula + OP-9: repeatOverrides'dan tekrar sayılarını güncelle
@@ -4553,18 +4553,19 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
             React.createElement('td',{style:{padding:'5px 6px',fontWeight:700,fontSize:11,color:'#000'}},
               r.label,
               (()=>{
-                const cue=getCue(r.label);
+                const src=r._srcBaslik||r.label;
+                const cue=getCueForRow(r.label,src);
                 const isEditing=editingLabel===r.label;
                 if(isEditing) return React.createElement('div',{style:{marginTop:4,display:'flex',gap:4,alignItems:'center'}},
                   React.createElement('input',{
                     autoFocus:true,
                     value:editText,
                     onChange:e=>setEditText(e.target.value),
-                    onKeyDown:e=>{if(e.key==='Enter')saveCue(r.label,editText);if(e.key==='Escape')setEditingLabel(null);},
+                    onKeyDown:e=>{if(e.key==='Enter')saveCue(r.label,editText,src);if(e.key==='Escape')setEditingLabel(null);},
                     style:{flex:1,fontSize:10,padding:'2px 4px',borderRadius:3,border:'1px solid var(--info)',background:'var(--bg-primary)',color:'var(--text-primary)'}
                   }),
                   React.createElement('button',{
-                    onClick:()=>saveCue(r.label,editText),
+                    onClick:()=>saveCue(r.label,editText,src),
                     style:{fontSize:9,padding:'1px 6px',background:'var(--info)',color:'#fff',border:'none',borderRadius:3,cursor:'pointer'}
                   },'✓'),
                   React.createElement('button',{
@@ -9221,10 +9222,11 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                 onSaveDetay:(label, text)=>{
                     const curSnap=planSnapRef.current||{};
                     const curOv=curSnap.overrideMap?.[day.date];
-                    if(!curOv) return;
-                    const newYapilar=(curOv.yapilar||[]).map(y=>y.baslik===label?{...y,detay:text}:y);
+                    const baseYapilar=curOv?.yapilar||day.yapilar||[];
+                    const newYapilar=baseYapilar.map(y=>y.baslik===label?{...y,detay:text}:y);
+                    const entry=curOv||{tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk||0,yukHedef:day.yukHedef||0,approved:false};
                     const newOverrideMap={...(curSnap.overrideMap||{})};
-                    newOverrideMap[day.date]={...curOv,yapilar:newYapilar,_editedAt:new Date().toISOString()};
+                    newOverrideMap[day.date]={...entry,yapilar:newYapilar,_editedAt:new Date().toISOString()};
                     const newSnap={...curSnap,overrideMap:newOverrideMap,lastSavedAt:new Date().toISOString()};
                     setPlanSnap(newSnap);
                     fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
@@ -9517,10 +9519,11 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   onSaveDetay:(label, text)=>{
                   const curSnap=planSnapRef.current||{};
                   const curOv=curSnap.overrideMap?.[day.date];
-                  if(!curOv) return;
-                  const newYapilar=(curOv.yapilar||[]).map(y=>y.baslik===label?{...y,detay:text}:y);
+                  const baseYapilar=curOv?.yapilar||day.yapilar||[];
+                  const newYapilar=baseYapilar.map(y=>y.baslik===label?{...y,detay:text}:y);
+                  const entry=curOv||{tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk||0,yukHedef:day.yukHedef||0,approved:false};
                   const newOverrideMap={...(curSnap.overrideMap||{})};
-                  newOverrideMap[day.date]={...curOv,yapilar:newYapilar,_editedAt:new Date().toISOString()};
+                  newOverrideMap[day.date]={...entry,yapilar:newYapilar,_editedAt:new Date().toISOString()};
                   const newSnap={...curSnap,overrideMap:newOverrideMap,lastSavedAt:new Date().toISOString()};
                   setPlanSnap(newSnap);
                   fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
