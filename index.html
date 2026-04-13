@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.13-1145'; // Yarış haftası optimizasyon bypass (çoklu yarış ortalaması ile sulandırma fix)
+const APP_VERSION='v2026.04.13-1200'; // Yarış haftası optimizasyon bypass (çoklu yarış ortalaması ile sulandırma fix)
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -4147,7 +4147,7 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
   );
 }
 
-function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOverrides, readOnly, originalCueOnly}){
+function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOverrides, onSaveDetay, readOnly, originalCueOnly}){
   const [customCues, setCustomCues] = useState(_cueCache.data||{});
   const [editingLabel, setEditingLabel] = useState(null);
   const [editText, setEditText] = useState('');
@@ -4185,13 +4185,30 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
 
   const saveCue = async(label, text)=>{
     setEditingLabel(null);
-    await saveCueGlobal(label, text);
-    setCustomCues({..._cueCache.data});
+    if(onSaveDetay){
+      // Sporcu+güne özgü kayıt — global cache'e dokunma
+      onSaveDetay(label, text);
+    } else {
+      await saveCueGlobal(label, text);
+      setCustomCues({..._cueCache.data});
+    }
   };
 
   // originalCueOnly=true ise (yalnızca Antrenmanlar sekmesi) her zaman orijinal otomatik açıklama gösterilir;
   // takvimde ve Koşu İzlerim'de özel düzenlemeler korunur.
-  const getCue = (label)=> originalCueOnly ? coachingCue(label, tip) : (customCues[label]!==undefined ? customCues[label] : coachingCue(label, tip));
+  // Önce bu sporcuya/güne özgü detay (overrideMap.yapilar'dan), sonra global cache, sonra otomatik
+  const getPerDayDetay = (label) => {
+    const found = (yapilar||[]).find(y => y.baslik === label);
+    return found && found.detay !== undefined ? found.detay : undefined;
+  };
+  const getCue = (label) => {
+    if(originalCueOnly) return coachingCue(label, tip);
+    if(onSaveDetay) {
+      const perDay = getPerDayDetay(label);
+      if(perDay !== undefined) return perDay || null;
+    }
+    return customCues[label] !== undefined ? customCues[label] : coachingCue(label, tip);
+  };
   // _caprazNot olanlar tablo dışında yazılı gösterilir
   const caprazNotlar=(yapilar||[]).filter(y=>y._caprazNot);
   // Çapraz antrenman adımlarını tamamen filtrele
@@ -8745,11 +8762,12 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
 
               // ── Korunan günleri belirle (tamamlanmış, manuel atanmış, pace/mesafe düzenlenmiş) ──
               const protectedDates=new Set();
-              // 1) Geçmiş günler: SADECE gerçek antrenmanı olanları koru (condition 4 ile örtüşür)
-              // NOT: Tüm geçmiş/bugünü koru yaklaşımı kaldırıldı — eski snapshot'ta kalan
-              // sistem-generated geçmiş günler (koşu günü değişikliği sonrası) yanlış
-              // korunarak anket günlerine uymayan antrenmanların kalmasına neden oluyordu.
-              // Gerçek koruma conditions 2-5 tarafından sağlanır.
+              // 1) Geçmiş ve bugün: her zaman koru (bugün dahil — <= kullan)
+              if(curSnap.overrideMap){
+                Object.keys(curSnap.overrideMap).forEach(ds=>{
+                  if(ds<=todayStr) protectedDates.add(ds);
+                });
+              }
               // 2) Manuel atanmış günler (ata butonu ile değiştirilen — geçmiş+gelecek)
               if(curSnap.manualOverrides){
                 Object.keys(curSnap.manualOverrides).forEach(ds=>protectedDates.add(ds));
@@ -9199,7 +9217,18 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   const newSnap={...curSnap,rowOverrides:newRowOverrides,overrideMap:newOverrideMap,lastSavedAt:new Date().toISOString()};
                   setPlanSnap(newSnap);
                   fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
-                }
+                },
+                onSaveDetay:(label, text)=>{
+                    const curSnap=planSnapRef.current||{};
+                    const curOv=curSnap.overrideMap?.[day.date];
+                    if(!curOv) return;
+                    const newYapilar=(curOv.yapilar||[]).map(y=>y.baslik===label?{...y,detay:text}:y);
+                    const newOverrideMap={...(curSnap.overrideMap||{})};
+                    newOverrideMap[day.date]={...curOv,yapilar:newYapilar,_editedAt:new Date().toISOString()};
+                    const newSnap={...curSnap,overrideMap:newOverrideMap,lastSavedAt:new Date().toISOString()};
+                    setPlanSnap(newSnap);
+                    fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
+                  }
               })
             );
           })
@@ -9484,6 +9513,17 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     const newSnap={...curSnap,rowOverrides:newRowOverrides,overrideMap:newOverrideMap,lastSavedAt:new Date().toISOString()};
                     setPlanSnap(newSnap);
                     fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
+                  },
+                  onSaveDetay:(label, text)=>{
+                  const curSnap=planSnapRef.current||{};
+                  const curOv=curSnap.overrideMap?.[day.date];
+                  if(!curOv) return;
+                  const newYapilar=(curOv.yapilar||[]).map(y=>y.baslik===label?{...y,detay:text}:y);
+                  const newOverrideMap={...(curSnap.overrideMap||{})};
+                  newOverrideMap[day.date]={...curOv,yapilar:newYapilar,_editedAt:new Date().toISOString()};
+                  const newSnap={...curSnap,overrideMap:newOverrideMap,lastSavedAt:new Date().toISOString()};
+                  setPlanSnap(newSnap);
+                  fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
                   }
                 })
               ),
