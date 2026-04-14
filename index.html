@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.14-1030'; // Yarış haftası optimizasyon bypass (çoklu yarış ortalaması ile sulandırma fix)
+const APP_VERSION='v2026.04.14-1045'; // Yarış haftası optimizasyon bypass (çoklu yarış ortalaması ile sulandırma fix)
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -8865,6 +8865,28 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   reason:`Koşu günleri değişti: [${oldKosuGunleri.join(',')}] → [${newKosuGunleri.join(',')}] — ${ekKaliteli.length>0?ekKaliteli.length+' kaliteli antrenman redistribute edildi':'plan yeniden oluşturuldu'}`
                 });
               }
+
+              // ── Son temizlik: profilde olmayan gelecek günleri dinlemeye çek ──
+              // Koşu günleri değiştiğinde rowOverrides/_editedAt gibi korumalar
+              // eski antrenmanı yerinde bırakabilir. Bu adım kazanır.
+              const guncelKosuGunleri=athlete.kosu_gunleri||[];
+              const guncelCaprazGunleri=athlete.capraz_gunleri||[];
+              const gercekAntrenmanGunleri=new Set((workouts||[]).filter(w=>w.athleteId===athlete.id).map(w=>w.date));
+              Object.keys(newSnap.overrideMap||{}).forEach(ds=>{
+                if(ds<=todayStr) return; // geçmiş/bugüne dokunma
+                const ov=newSnap.overrideMap[ds];
+                if(!ov||ov.tip==='dinlenme') return;
+                if(ov.tip==='yaris') return; // yarış günlerine dokunma
+                if(gercekAntrenmanGunleri.has(ds)) return; // gerçek antrenman kaydı var
+                const dayShortClean=DAYS_SHORT[new Date(ds+'T12:00:00').getDay()];
+                const isAntrenmanGunu=guncelKosuGunleri.includes(dayShortClean)||guncelCaprazGunleri.includes(dayShortClean);
+                if(!isAntrenmanGunu){
+                  newSnap.overrideMap[ds]={tip:'dinlenme',baslik:'Dinlenme',sure_dk:0,yukHedef:0,yapilar:[],approved:true};
+                  // rowOverrides ve manualOverrides'tan da kaldır
+                  if(newSnap.rowOverrides?.[ds]) delete newSnap.rowOverrides[ds];
+                  if(newSnap.manualOverrides?.[ds]) delete newSnap.manualOverrides[ds];
+                }
+              });
 
               setPlanSnap(newSnap);
               fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
