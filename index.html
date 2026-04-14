@@ -2856,7 +2856,7 @@ function ProgramTab({athletes,workouts,allHistory,races,testPlanlar,teamName,tea
 
   const tipEmoji2=(tip)=>({
     kolay:'🚶',aerobik:'🏃',uzun:'🛤',tempo:'💨',tempo_sureli:'💨',esik:'🔥',esik_sureli:'🔥',
-    interval:'⚡',piramit:'⚡',kesintisiz_piramit:'⚡',
+    interval:'⚡',piramit:'🔺',kesintisiz_piramit:'🔺',
     yokus_kisa:'⛰',yokus_uzun:'⛰',tirmanis:'📈',
     teknik:'🎯',acici:'🚀',capraz:'➕',
     hill_sprint:'⛰',on_off:'⚡',tempo_interval:'💨',
@@ -4976,38 +4976,65 @@ function tplFromYapiNotu(tur, yapiNotu, band, sure_dk, zones, disiplin, phase, c
 
   // Piramit — sets string'den yapıyı parse et
   if(tur==='piramit'){
-    const sevM=yapiNotu.match(/·\s*(S\d+)/);const sev=sevM?sevM[1]:'';
-    const setsM=yapiNotu.match(/—\s*([^/]+)/);const sets=setsM?setsM[1].trim():'1–2–3–2–1 dk';
+    const setsM=yapiNotu.match(/—\s*([^/]+)/);const setsRaw=setsM?setsM[1].trim():'1–2–3–2–1 dk';
     const dinM=yapiNotu.match(/\/\s*(.+)/);const din=dinM?dinM[1].trim():'eşit yürüyüş';
     const z5=zoneInfo(zones,4)||'Z5a VO₂max';
+    const seqStr=setsRaw.replace(/\s*dk\s*$/i,'').trim(); // "1–2–3–2–1"
+    const dinSn=din.includes('eşit')?90:parseDinStr(din);
     return{tip:'piramit',sure_dk,yapi_notu:yapiNotu,yapilar:[
-      {baslik:'Isınma',detay:'15 dk Z1 kolay koşu'},
-      {baslik:'Z5 Piramit Blokları',detay:sets+' — '+z5+' · '+din+' arası'},
-      {baslik:'Soğuma',detay:'10 dk Z1'},
+      {baslik:'Isınma',detay:'15 dk Z1 kolay koşu',_rows:_R.isinma(15)},
+      {baslik:'💡 Strides Önerisi',detay:'4×20sn strides ısınma sonu (opsiyonel)',_rows:_R.strides('Strides',4,20)},
+      {baslik:'Z5 Piramit Blokları',detay:seqStr+' dk — '+z5+' · '+din+' arası',_rows:_R.piramitSeq('Z5a Piramit',seqStr,4,dinSn)},
+      {baslik:'Soğuma',detay:'10 dk Z1',_rows:_R.soguma(10)},
     ]};
   }
 
   // Kesintisiz Piramit
   if(tur==='kesintisiz_piramit'){
-    const sevM=yapiNotu.match(/·\s*(S\d+)/);const sev=sevM?sevM[1]:'';
-    const bolumM=yapiNotu.match(/—\s*(.+?)(?:\s*\(|$)/);const bolum=bolumM?bolumM[1].trim():'Z2→Z3→Z4→Z3→Z2';
-    const adetM=yapiNotu.match(/\((\d+) bölüm\)/);const adet=adetM?adetM[1]:'';
+    const bolumM=yapiNotu.match(/—\s*(.+?)(?:\s*\(|$)/);
+    const bolumStr=bolumM?bolumM[1].trim():'Z2→Z3→Z4→Z3→Z2';
+    const ZONE_IDX_MAP={'Z1':0,'Z2':1,'Z3':2,'Z4':3,'Z5a':4,'Z5b':5,'Z5c':6};
+    const bolumlar=bolumStr.split('→').map(z=>z.trim());
+    const segDk=Math.max(3,Math.round((sure_dk-20)/bolumlar.length));
+    const kpRows=bolumlar.map((z,i)=>({
+      label:z+' Segment '+(i+1),
+      sure_sn:segDk*60,
+      zIdx:ZONE_IDX_MAP[z]??1
+    }));
     return{tip:'kesintisiz_piramit',sure_dk,yapi_notu:yapiNotu,yapilar:[
-      {baslik:'Isınma',detay:'10 dk Z1 kolay koşu'},
-      {baslik:'Sürekli Tempo Değişimi',detay:bolum+(adet?' ('+adet+' bölüm)':'')+' · Durma yok · '+(sure_dk-15)+' dk'},
-      {baslik:'Soğuma',detay:'5 dk Z1'},
+      {baslik:'Isınma',detay:'10 dk Z1 kolay koşu — tempo değişimine hazırlık',_rows:_R.isinma(10)},
+      {baslik:'Sürekli Tempo Değişimi',detay:bolumStr+' · Durma yok — geçişler 30–60sn içinde yumuşak',_rows:kpRows},
+      {baslik:'Soğuma',detay:'10 dk Z1 hafif koşu + esneme',_rows:_R.soguma(10)},
     ]};
   }
 
   // On-Off
   if(tur==='on_off'){
-    const sevM=yapiNotu.match(/·\s*(S\d+)/);const sev=sevM?sevM[1]:'';
     const yapiM=yapiNotu.match(/—\s*(.+)/);const yapi=yapiM?yapiM[1].trim():'6 set: 30sn/45sn × 2 tur';
     const z5=zoneInfo(zones,4)||'Z5a';const z2=zoneInfo(zones,1)||'Z2';
+    // Parse: "6 set: 30sn/45sn × 2 tur"
+    const ooM=yapi.match(/(\d+)\s*set:\s*(\d+)\s*sn\s*\/\s*(\d+)\s*sn\s*[×x]\s*(\d+)\s*tur/i);
+    const sets=ooM?parseInt(ooM[1]):8;
+    const onSn=ooM?parseInt(ooM[2]):30;
+    const offSn=ooM?parseInt(ooM[3]):45;
+    const turCount=ooM?parseInt(ooM[4]):2;
+    const turBloklar=[];
+    for(let t=0;t<turCount;t++){
+      turBloklar.push({
+        baslik:`Tur ${t+1} — ${sets} set (${onSn}sn ON / ${offSn}sn OFF)`,
+        detay:`ON: ${z5} maksimal · OFF: ${z2} hafif koşu · Ayaklar durmuyor`,
+        _rows:[{label:`Tur ${t+1} — ON`,sure_sn:onSn,zIdx:4,tekrar:sets,din_sn:offSn,dinZIdx:1}]
+      });
+      if(t<turCount-1) turBloklar.push({
+        baslik:'Tur Arası Toparlanma',
+        detay:'3–5 dk Z1 yürüyüş · Nefes toparla, bir sonraki tura hazırlan',
+        _rows:[{label:'Tur Arası',sure_sn:240,zIdx:0}]
+      });
+    }
     return{tip:'on_off',sure_dk,yapi_notu:yapiNotu,yapilar:[
-      {baslik:'Isınma',detay:'15 dk Z1 kolay koşu'},
-      {baslik:'On Bloku (Z5a)',detay:yapi+' · ON: '+z5+' maksimal · OFF: '+z2+' hafif koşu'},
-      {baslik:'Soğuma',detay:'10 dk Z1'},
+      {baslik:'Isınma',detay:'15 dk Z1 kolay koşu',_rows:_R.isinma(15)},
+      ...turBloklar,
+      {baslik:'Soğuma',detay:'10 dk Z1',_rows:_R.soguma(10)},
     ]};
   }
 
@@ -5867,13 +5894,25 @@ function tplOnOff(band, zones, phase='Gelişme'){
   const ooTekrar=parseInt(cfg.sets)||8;
   const ooAcikSn=parseDinStr(cfg.acik);
   const ooKapaliSn=parseDinStr(cfg.kapali);
+  const turBloklar=[];
+  for(let t=0;t<cfg.tur;t++){
+    turBloklar.push({
+      baslik:`Tur ${t+1} — ${cfg.sets} set (${cfg.acik} ON / ${cfg.kapali} OFF)`,
+      detay:`ON: ${z5a} maksimal · OFF: ${z2} hafif koşu — ayaklar durmuyor · Form bozulmamalı`,
+      _rows:[{label:`Tur ${t+1} — ON`,sure_sn:ooAcikSn,zIdx:4,tekrar:ooTekrar,din_sn:ooKapaliSn,dinZIdx:1}]
+    });
+    if(t<cfg.tur-1) turBloklar.push({
+      baslik:'Tur Arası Toparlanma',
+      detay:'3–5 dk Z1 yürüyüş veya çok kolay koşu · Nefes toparla, bir sonraki tura hazırlan',
+      _rows:[{label:'Tur Arası',sure_sn:240,zIdx:0}]
+    });
+  }
   return{
     tip:'interval', sure_dk:cfg.sure,
     yapi_notu:yapiNotuOO,
     yapilar:[
       {baslik:'Isınma',detay:`10 dk Z1 kolay koşu`,_rows:_R.isinma(10)},
-      {baslik:'On Bloku (Z5a)',detay:`${cfg.acik} — ${z5a} · Maksimal ama kontrollü, form bozulmamalı`,_rows:[{label:'On (Z5a)',sure_sn:ooAcikSn,zIdx:4,tekrar:ooTekrar,din_sn:ooKapaliSn,dinZIdx:1}]},
-      {baslik:`Off (Dinlenme)`,detay:`${cfg.kapali} — ${z2} hafif koşu (yürüyüş değil, ayaklar hareketli kalır) · Nefes toparlan, tam durma`},
+      ...turBloklar,
       {baslik:'Soğuma',detay:`8 dk Z1 kolay koşu`,_rows:_R.soguma(8)},
     ]
   };
@@ -8537,7 +8576,7 @@ const tipColor=(tip)=>({
   yoga:'#db2777',pilates:'#ec4899',kuvvet:'#7c3aed',bisiklet:'#0284c7',
   yuzme:'#0891b2',kuerek:'#0369a1',futbol:'#15803d',basketbol:'#ea580c',
   progressive:'var(--warn)',tempo_interval:'var(--warn)',cruise:'var(--warn)',
-  piramit:'var(--danger)',on_off:'var(--danger)',yaris_tempo:'var(--danger)',
+  piramit:'var(--danger)',kesintisiz_piramit:'var(--danger)',on_off:'var(--danger)',yaris_tempo:'var(--danger)',
   hill_sprint:'var(--warn)',yokus:'var(--warn)',strides:'var(--success)',
 }[tip]||'var(--text-tertiary)');
 const tipEmoji=(tip)=>({
@@ -8546,7 +8585,7 @@ const tipEmoji=(tip)=>({
   tirmanis:'📈',teknik:'🎯',
   yoga:'🧘',pilates:'🤸',kuvvet:'💪',bisiklet:'🚴',yuzme:'🏊',
   kuerek:'🚣',futbol:'⚽',basketbol:'🏀',
-  progressive:'📈',tempo_interval:'💨',cruise:'🌊',piramit:'🔺',
+  progressive:'📈',tempo_interval:'💨',cruise:'🌊',piramit:'🔺',kesintisiz_piramit:'🔺',
   on_off:'🔄',yaris_tempo:'🏁',hill_sprint:'⛰',strides:'💫',
 }[tip]||'🏅');
 
