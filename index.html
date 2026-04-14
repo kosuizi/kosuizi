@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.13-1230'; // Yarış haftası optimizasyon bypass (çoklu yarış ortalaması ile sulandırma fix)
+const APP_VERSION='v2026.04.14-1000'; // Yarış haftası optimizasyon bypass (çoklu yarış ortalaması ile sulandırma fix)
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -3312,11 +3312,11 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
               ),
               (()=>{
                 const today=new Date();
+                const todayStr=today.toISOString().split('T')[0];
                 const athRaceIds=(row.ath.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
                 const nearest=(races||[])
-                  .filter(r=>athRaceIds.includes(r.id)&&r.tarih)
+                  .filter(r=>athRaceIds.includes(r.id)&&r.tarih&&r.tarih>=todayStr)
                   .map(r=>({...r,daysLeft:Math.ceil((new Date(r.tarih+'T12:00:00')-today)/864e5)}))
-                  .filter(r=>r.daysLeft>=0)
                   .sort((a,b)=>a.daysLeft-b.daysLeft)[0];
                 if(!nearest)return null;
                 const urgent=nearest.daysLeft<=14;
@@ -4186,7 +4186,6 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
   const saveCue = async(label, text, srcBaslik)=>{
     setEditingLabel(null);
     if(onSaveDetay){
-      // Sporcu+güne özgü kayıt: kaynak yapilar[i].baslik ile eşleştir
       onSaveDetay(srcBaslik || label, text);
     } else {
       await saveCueGlobal(label, text);
@@ -4196,18 +4195,16 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
 
   // originalCueOnly=true ise (yalnızca Antrenmanlar sekmesi) her zaman orijinal otomatik açıklama gösterilir;
   // takvimde ve Koşu İzlerim'de özel düzenlemeler korunur.
-  // srcBaslik: o row'u üreten yapilar[i].baslik (label ile farklı olabilir — interval header gibi)
+  // srcBaslik: o row'u üreten yapilar[i].baslik — label ile farklı olabilir (interval header gibi)
   const getCueForRow = (label, srcBaslik) => {
     if(originalCueOnly) return coachingCue(label, tip);
     if(onSaveDetay) {
-      // Önce sporcu/güne özgü detay: kaynak yapi'nin detay alanına bak
       const key = srcBaslik || label;
       const found = (yapilar||[]).find(y => y.baslik === key);
-      if(found) return found.detay || null; // '' → null (hiç gösterme)
+      if(found) return found.detay || null;
     }
     return customCues[label] !== undefined ? customCues[label] : coachingCue(label, tip);
   };
-  // Geriye uyumluluk için eski çağrılar hâlâ çalışsın
   const getCue = (label) => getCueForRow(label, label);
   // _caprazNot olanlar tablo dışında yazılı gösterilir
   const caprazNotlar=(yapilar||[]).filter(y=>y._caprazNot);
@@ -8763,12 +8760,11 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
 
               // ── Korunan günleri belirle (tamamlanmış, manuel atanmış, pace/mesafe düzenlenmiş) ──
               const protectedDates=new Set();
-              // 1) Geçmiş ve bugün: her zaman koru (bugün dahil — <= kullan)
-              if(curSnap.overrideMap){
-                Object.keys(curSnap.overrideMap).forEach(ds=>{
-                  if(ds<=todayStr) protectedDates.add(ds);
-                });
-              }
+              // 1) KALDIRILDI: Geçmiş/bugünü toptan koruma yaklaşımı kaldırıldı.
+              // Eski snapshot'taki sistem-üretimi geçmiş/bugün girişleri,
+              // anket koşu günleri değiştiğinde yanlış korunarak güncel profile
+              // uymayan antrenmanların (örn. bugün koşu günü olmadığı hâlde antrenman)
+              // kalmasına neden oluyordu. Gerçek koruma conditions 2-5 ile sağlanır.
               // 2) Manuel atanmış günler (ata butonu ile değiştirilen — geçmiş+gelecek)
               if(curSnap.manualOverrides){
                 Object.keys(curSnap.manualOverrides).forEach(ds=>protectedDates.add(ds));
@@ -13959,6 +13955,7 @@ function SporcuPlanView(){
         );
 
         // Orta: Antrenmanlarım
+        const isSunday=new Date().getDay()===0;
         const antrenmanCard=dayInfos.length>0
           ?React.createElement('div',{className:'card',style:{padding:'14px 16px',height:'100%'}},
               React.createElement('div',{style:{fontSize:12,fontWeight:700,color:'var(--text-secondary)',marginBottom:12,textTransform:'uppercase',letterSpacing:'0.5px'}},'Antrenmanlarım'),
@@ -13966,9 +13963,13 @@ function SporcuPlanView(){
                 dayInfos.map((info,i)=>renderDayCard(info,i))
               )
             )
-          :React.createElement('div',{className:'card',style:{padding:'20px',textAlign:'center',color:'var(--text-tertiary)',fontSize:13,height:'100%'}},
-              '🎉 Bu haftanın tüm antrenmanları tamamlandı!'
-            );
+          :isSunday
+            ?React.createElement('div',{className:'card',style:{padding:'20px',textAlign:'center',color:'var(--text-tertiary)',fontSize:13,height:'100%'}},
+                '🎉 Bu haftanın tüm antrenmanları tamamlandı!'
+              )
+            :React.createElement('div',{className:'card',style:{padding:'20px',textAlign:'center',color:'var(--text-tertiary)',fontSize:13,height:'100%'}},
+                '—'
+              );
 
         return React.createElement('div',{style:{
           display:'grid',
