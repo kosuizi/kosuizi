@@ -1,4 +1,4 @@
-<!-- Version: v2026.04.14-1530 -->
+<!-- Version: v2026.04.14-1700 -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.14-1530'; // Planı Güncelle: koşu günü olmayan günlerin temizlenmesi (bugün dahil)
+const APP_VERSION='v2026.04.14-1700'; // Haftalık yMod: HRV+sakatlık kalan haftalık hedefi ölçekler (kalan günlere yığılmayı önler)
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -6734,11 +6734,25 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
   const sonYogunGun=wkStats.sonYogunGun||false;
   const haftaGunTipi=wkStats.haftaGunTipi||null;
 
-  // ── targetKm → günlük süre ölçekleme ─────────────────────────────────────
-  // Haftalık km hedefini koşu günü sayısına bölerek tahmini günlük km hedefi
-  const targetKmHafta=wkStats.targetKmHafta||0;
-  const kosuGunSayisi=Math.max(1,(athlete.kosu_gunleri||[]).length);
-  const gunlukKmHedef=targetKmHafta>0?targetKmHafta/kosuGunSayisi:0;
+  // ── targetKm → günlük süre ölçekleme (S1 ağırlıklı dağıtım + S5 kalan hedef) ─
+  // Hafta iskeleti tipine göre günlük km hedefi:
+  //   - uzun gün: wkStats.uzunGunKm (kalan haftalık km'nin %28'i)
+  //   - kolay/aerobik gün: wkStats.gunlukKolayKm (kalan ÷ kolay/aerobik gün sayısı)
+  //   - kaliteli gün: 0 → kmSureMod=1.0 (şablon süresi korunur, S2: fizyolojik bütünlük)
+  //   - iskelet yoksa: eski eşit bölme fallback'i
+  let gunlukKmHedef=0;
+  if(haftaGunTipi==='uzun'&&(wkStats.uzunGunKm||0)>0){
+    gunlukKmHedef=wkStats.uzunGunKm;
+  } else if((haftaGunTipi==='kolay'||haftaGunTipi==='aerobik')&&(wkStats.gunlukKolayKm||0)>0){
+    gunlukKmHedef=wkStats.gunlukKolayKm;
+  } else if(haftaGunTipi==='kaliteli'){
+    gunlukKmHedef=0; // S2: kaliteli şablon süresi km hedefinden etkilenmez
+  } else {
+    // Fallback: iskelet yok veya diğer tip → eski eşit bölme
+    const targetKmHafta=wkStats.targetKmHafta||0;
+    const kosuGunSayisi=Math.max(1,(athlete.kosu_gunleri||[]).length);
+    gunlukKmHedef=targetKmHafta>0?targetKmHafta/kosuGunSayisi:0;
+  }
   // Varsayılan pace tahmini: band'a göre (dk/km) — süre = km * pace
   const tahminiPace=band<=1?7.5:band===2?7.0:band===3?6.5:band===4?6.0:5.5;
   // Hedef süre (dk) — band tabanlı varsayılandan sapma oranı
@@ -7429,6 +7443,73 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
           haftaIskeleti[g.ds]='aerobik';
         }
       });
+
+      // ── S1+S5: Ağırlıklı km/D+ dağıtımı — kalan hedef ile ────────────────
+      // Prensipler:
+      // 1. Mevcut hafta (weekOff===0): Bugüne kadar yapılan km/D+ haftalık hedeften düşülür → kalan hedef
+      // 2. Uzun gün: kalan km'nin %28'i (klasik 80/20 prensibi)
+      // 3. Kaliteli gün: km şablondan gelir, hedeften ölçekleme yok (S2 — fizyolojik bütünlüğü koru)
+      //    Ancak bütçe rezervasyonu için tahmini km düşülür
+      // 4. Kolay/aerobik gün: kalan km eşit bölünür
+      let kalanTargetKm=wt?.targetKm||0;
+      let kalanTargetDp=wt?.targetDp||0;
+      if(weekOff===0&&wt){
+        const wkS=new Date(start);wkS.setHours(0,0,0,0);
+        const wkE=new Date(start);wkE.setDate(start.getDate()+6);wkE.setHours(23,59,59,999);
+        const todayStrWk=`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+        const thisWeekDone=athWorkouts.filter(w=>{
+          if(!w.date)return false;
+          const d=new Date(w.date+'T12:00:00');
+          return d>=wkS&&d<=wkE&&w.date<=todayStrWk;
+        });
+        const doneKm=thisWeekDone.reduce((s,w)=>s+(parseFloat(w.mesafe)||0),0);
+        const doneDp=thisWeekDone.reduce((s,w)=>s+(parseFloat(w.irtifa)||0),0);
+        kalanTargetKm=Math.max(0,(wt.targetKm||0)-doneKm);
+        kalanTargetDp=Math.max(0,(wt.targetDp||0)-doneDp);
+      }
+
+      // ── Haftalık yMod: fizyolojik stres haftalık hedefe yansıtılır ────────
+      // HRV + sakatlık anket değerleri ile haftalık hedef ölçeklenir.
+      // Amaç: HRV düşükken daily süre kısaldığında kalan günlere yığılmayı önlemek.
+      // (TSB/ACWR günlük yMod'da zaten uygulanıyor — haftalık seviyede çift saymamak için dahil edilmedi)
+      const haftalikYMod=Math.min(
+        hrvMod(athlete.hrv_durum||''),
+        (parseInt(athlete.sakatlık)||1)>=5?0.80:1.0
+      );
+      if(haftalikYMod<1.0){
+        kalanTargetKm=kalanTargetKm*haftalikYMod;
+        kalanTargetDp=kalanTargetDp*haftalikYMod;
+      }
+
+      // Kalan gün tiplerini say (bugüne kadarki günleri hariç tut — current week)
+      const todayStrCount=`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+      let uzunKalanSayi=0,kaliteliKalanSayi=0,kolayAerobikKalanSayi=0;
+      Object.entries(haftaIskeleti).forEach(([ds,tip])=>{
+        if(weekOff===0&&ds<todayStrCount)return; // geçmişi sayma
+        if(tip==='uzun')uzunKalanSayi++;
+        else if(tip==='kaliteli')kaliteliKalanSayi++;
+        else if(tip==='kolay'||tip==='aerobik')kolayAerobikKalanSayi++;
+      });
+
+      // Kaliteli seans başına tahmini km (band'a göre) — bütçe rezervasyonu için
+      const kaliteliSessionKm=band<=1?5:band===2?6:band===3?7:band===4?8:9;
+      const tahminiKaliteliKm=kaliteliKalanSayi*kaliteliSessionKm;
+      // Uzun koşu payı: kalan hedefin %28'i
+      const uzunGunKm=uzunKalanSayi>0?kalanTargetKm*0.28:0;
+      // Kolay/aerobik günlere kalan km'yi eşit dağıt
+      const kolayKalanToplam=Math.max(0,kalanTargetKm-uzunGunKm-tahminiKaliteliKm);
+      const gunlukKolayKm=kolayAerobikKalanSayi>0?kolayKalanToplam/kolayAerobikKalanSayi:0;
+
+      // wkStats'e aktar — planDay bunları haftaGunTipi'ne göre kullanır
+      wkStats.kalanTargetKm=kalanTargetKm;
+      wkStats.kalanTargetDp=kalanTargetDp;
+      wkStats.uzunGunKm=uzunGunKm;
+      wkStats.gunlukKolayKm=gunlukKolayKm;
+      wkStats.kolayAerobikKalanSayi=kolayAerobikKalanSayi;
+      // dpHedefHafta'yı kalan D+ ile güncelle — uzun koşu planlamasında kullanılır
+      wkStats.dpHedefHafta=kalanTargetDp;
+      // targetKmHafta'yı da güncelle — fallback için
+      wkStats.targetKmHafta=kalanTargetKm;
     }
 
     let _b2bNextDate=null; // OP-3: B2B Gün 1 tespit edilince ertesi günü işaretle
