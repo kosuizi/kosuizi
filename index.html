@@ -1,4 +1,4 @@
-<!-- Version: v2026.04.10-1845 -->
+<!-- Version: v2026.04.14-1530 -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.14-1045'; // Yarış haftası optimizasyon bypass (çoklu yarış ortalaması ile sulandırma fix)
+const APP_VERSION='v2026.04.14-1530'; // Planı Güncelle: koşu günü olmayan günlerin temizlenmesi (bugün dahil)
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -8773,27 +8773,41 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               newSnap.athleteProfile={kosu_gunleri:athlete.kosu_gunleri,capraz_gunleri:athlete.capraz_gunleri,disiplin:athlete.disiplin,uzun_gun:athlete.uzun_gun};
 
               // ── Korunan günleri belirle (tamamlanmış, manuel atanmış, pace/mesafe düzenlenmiş) ──
+              // Güncel profil koşu/çapraz günleri — profil uyum kontrolü için
+              const guncelKosuGunleriProto=athlete.kosu_gunleri||[];
+              const guncelCaprazGunleriProto=athlete.capraz_gunleri||[];
+              const isProfilUyumlu=(ds)=>{
+                const dayShortProto=DAYS_SHORT[new Date(ds+'T12:00:00').getDay()];
+                return guncelKosuGunleriProto.includes(dayShortProto)||guncelCaprazGunleriProto.includes(dayShortProto);
+              };
               const protectedDates=new Set();
               // 1) KALDIRILDI: Geçmiş/bugünü toptan koruma yaklaşımı kaldırıldı.
               // Eski snapshot'taki sistem-üretimi geçmiş/bugün girişleri,
               // anket koşu günleri değiştiğinde yanlış korunarak güncel profile
               // uymayan antrenmanların (örn. bugün koşu günü olmadığı hâlde antrenman)
               // kalmasına neden oluyordu. Gerçek koruma conditions 2-5 ile sağlanır.
+              // ÖNEMLİ: Manuel/rowOverride/_editedAt bayrakları, gün güncel profile
+              // göre bir antrenman günü değilse (geçmiş+gerçek antrenman hariç)
+              // artık koruma sağlamaz — profil değişimi öncelikli.
               // 2) Manuel atanmış günler (ata butonu ile değiştirilen — geçmiş+gelecek)
               if(curSnap.manualOverrides){
-                Object.keys(curSnap.manualOverrides).forEach(ds=>protectedDates.add(ds));
+                Object.keys(curSnap.manualOverrides).forEach(ds=>{
+                  if(ds<todayStr||isProfilUyumlu(ds)) protectedDates.add(ds);
+                });
               }
               // 3) Row override'ları olan günler (pace/mesafe düzenlenmiş — geçmiş+gelecek)
               if(curSnap.rowOverrides){
-                Object.keys(curSnap.rowOverrides).forEach(ds=>protectedDates.add(ds));
+                Object.keys(curSnap.rowOverrides).forEach(ds=>{
+                  if(ds<todayStr||isProfilUyumlu(ds)) protectedDates.add(ds);
+                });
               }
-              // 4) Tamamlanmış antrenmanı olan günler (workouts'ta kayıt var)
+              // 4) Tamamlanmış antrenmanı olan günler (workouts'ta kayıt var) — her zaman korunur
               const athWkDates=new Set((workouts||[]).filter(w=>w.athleteId===athlete.id).map(w=>w.date));
               athWkDates.forEach(ds=>protectedDates.add(ds));
-              // 5) _editedAt damgası taşıyan overrideMap girişleri
+              // 5) _editedAt damgası taşıyan overrideMap girişleri — profil uyumluysa
               if(curSnap.overrideMap){
                 Object.entries(curSnap.overrideMap).forEach(([ds,ov])=>{
-                  if(ov?._editedAt) protectedDates.add(ds);
+                  if(ov?._editedAt&&(ds<todayStr||isProfilUyumlu(ds))) protectedDates.add(ds);
                 });
               }
 
@@ -8866,18 +8880,19 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                 });
               }
 
-              // ── Son temizlik: profilde olmayan gelecek günleri dinlemeye çek ──
+              // ── Son temizlik: profilde olmayan günleri dinlemeye çek ──
               // Koşu günleri değiştiğinde rowOverrides/_editedAt gibi korumalar
               // eski antrenmanı yerinde bırakabilir. Bu adım kazanır.
+              // BUGÜN dahil — sadece geçmiş günleri (yapılmış antrenmanlar için) atla.
               const guncelKosuGunleri=athlete.kosu_gunleri||[];
               const guncelCaprazGunleri=athlete.capraz_gunleri||[];
               const gercekAntrenmanGunleri=new Set((workouts||[]).filter(w=>w.athleteId===athlete.id).map(w=>w.date));
               Object.keys(newSnap.overrideMap||{}).forEach(ds=>{
-                if(ds<=todayStr) return; // geçmiş/bugüne dokunma
+                if(ds<todayStr) return; // geçmişe dokunma (bugün dahil edildi)
                 const ov=newSnap.overrideMap[ds];
                 if(!ov||ov.tip==='dinlenme') return;
                 if(ov.tip==='yaris') return; // yarış günlerine dokunma
-                if(gercekAntrenmanGunleri.has(ds)) return; // gerçek antrenman kaydı var
+                if(gercekAntrenmanGunleri.has(ds)) return; // gerçek antrenman kaydı var (bugün dahil)
                 const dayShortClean=DAYS_SHORT[new Date(ds+'T12:00:00').getDay()];
                 const isAntrenmanGunu=guncelKosuGunleri.includes(dayShortClean)||guncelCaprazGunleri.includes(dayShortClean);
                 if(!isAntrenmanGunu){
