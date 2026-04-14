@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.14-1000'; // Yarış haftası optimizasyon bypass (çoklu yarış ortalaması ile sulandırma fix)
+const APP_VERSION='v2026.04.14-1030'; // Yarış haftası optimizasyon bypass (çoklu yarış ortalaması ile sulandırma fix)
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -8353,6 +8353,10 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       const todayStr=localDateStr(new Date());
       const manualOvMap=planSnap.manualOverrides||{};
       const manualDates=new Set(Object.keys(manualOvMap));
+      // Sporcu koşu+çapraz günleri (güncel profil)
+      const planKosuGunleri=athlete.kosu_gunleri||[];
+      const planCaprazGunleri=athlete.capraz_gunleri||[];
+      const athActualDates=new Set((workouts||[]).filter(w=>w.athleteId===athlete.id).map(w=>w.date));
       generated.weeks.forEach(wk=>{
         wk.days=wk.days.map(day=>{
           if(day.isPast||day.date===todayStr){
@@ -8361,9 +8365,19 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
             if(ov?.yapilar?.length>0) return{...day,yapilar:ov.yapilar,tip:ov.tip||day.tip,baslik:ov.baslik||day.baslik};
             return day;
           }
-          // Gelecek: her zaman overrideMap'ten
+          // Gelecek: overrideMap'ten al — ama önce günün hâlâ antrenman günü olup olmadığını doğrula
           const ov=planSnap.overrideMap[day.date];
-          if(ov) return{...day,tip:ov.tip,baslik:ov.baslik,sure_dk:ov.sure_dk,yukHedef:ov.yukHedef,isKosuCapraz:ov.isKosuCapraz||false,yapilar:ov.yapilar||[]};
+          if(ov){
+            const dayShortOv=DAYS_SHORT[new Date(day.date+'T12:00:00').getDay()];
+            const isAntrenmanGunu=planKosuGunleri.includes(dayShortOv)||planCaprazGunleri.includes(dayShortOv);
+            const isManual=manualDates.has(day.date);
+            const hasActual=athActualDates.has(day.date);
+            // Antrenman günü değilse VE manuel atanmamışsa VE gerçek kayıt yoksa → dinlenme
+            if(!isAntrenmanGunu&&!isManual&&!hasActual){
+              return{...day,tip:'dinlenme',baslik:'Dinlenme',sure_dk:0,yukHedef:0,yapilar:[]};
+            }
+            return{...day,tip:ov.tip,baslik:ov.baslik,sure_dk:ov.sure_dk,yukHedef:ov.yukHedef,isKosuCapraz:ov.isKosuCapraz||false,yapilar:ov.yapilar||[]};
+          }
           // Manuel atama
           const mo=manualDates.has(day.date)?manualOvMap[day.date]:null;
           if(mo?.tip) return{...day,tip:mo.tip,baslik:mo.baslik||day.baslik};
