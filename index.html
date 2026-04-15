@@ -1,4 +1,4 @@
-<!-- Version: v2026.04.15-1700 -->
+<!-- Version: v2026.04.15-2030 -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.15-1700'; // Bottom-up revize hedef + tüm sebepler bildirimi (TSB, ACWR, recovery)
+const APP_VERSION='v2026.04.15-2030'; // Tarih norm. + plan_yaris fallback + reçete yanı revize hedef + debug breakdown
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -6167,33 +6167,63 @@ function tplTeknikInis(band, sure_dk, zones){
 // Yapı adımlarındaki _rows (sure_sn + zIdx) ile getPaceSec kullanarak mesafe çıkarımı.
 // Yarış günleri için yarış mesafesi + D+ direkt eklenir.
 // Tamamlanmış günler için gerçek mesafe/D+ kullanılır.
-function estimateDayKmDp(day, zones, athWorkouts, primary, intermediate){
-  if(!day) return {km:0, dp:0};
+// Tarih normalizasyonu — "2026-04-19" formatına çevir
+function _normDateStr(d){
+  if(!d)return null;
+  if(typeof d==='string'){
+    // ISO veya YYYY-MM-DD formatı
+    const m=d.match(/^(\d{4}-\d{2}-\d{2})/);
+    return m?m[1]:null;
+  }
+  if(d instanceof Date){
+    const y=d.getFullYear();
+    const mo=String(d.getMonth()+1).padStart(2,'0');
+    const dd=String(d.getDate()).padStart(2,'0');
+    return y+'-'+mo+'-'+dd;
+  }
+  return null;
+}
 
-  // Geçmiş + tamamlanmış: gerçek antrenmanlardan al
+function estimateDayKmDp(day, zones, athWorkouts, allRacesForAth){
+  if(!day) return {km:0, dp:0, src:'empty'};
+  const dayDateStr=_normDateStr(day.date);
+
+  // Geçmiş + tamamlanmış: gerçek antrenmanlardan al (yarış günü dahil)
   if(day.isPast || day.actual?.length){
-    const acts=athWorkouts.filter(w=>w.date===day.date);
+    const acts=athWorkouts.filter(w=>_normDateStr(w.date)===dayDateStr);
     if(acts.length){
       const km=acts.reduce((s,w)=>s+(parseFloat(w.mesafe)||0),0);
       const dp=acts.reduce((s,w)=>s+(parseFloat(w.irtifa)||0),0);
-      return {km:round1(km), dp:Math.round(dp)};
+      return {km:round1(km), dp:Math.round(dp), src:'actual'};
     }
-    if(day.isPast) return {km:0, dp:0}; // Yapılmamış geçmiş
+    if(day.isPast) return {km:0, dp:0, src:'past_empty'};
   }
 
-  // Yarış günü: yarış mesafesi + D+
-  if(day.tip==='yaris' || primary?.tarih===day.date){
-    const race=primary?.tarih===day.date?primary:(intermediate||[]).find(r=>r?.tarih===day.date);
-    if(race){
-      return {km:round1(parseFloat(race.mesafe)||0), dp:Math.round(parseFloat(race.d_plus)||0)};
+  // Yarış günü (gelecek): tarihle eşleşen yarış varsa direkt mesafe + D+
+  // Hem athlete'in yarışları hem plan'ın 'yaris' işaretine bak
+  const raceMatch=(allRacesForAth||[]).find(r=>r&&_normDateStr(r.tarih)===dayDateStr);
+  if(raceMatch){
+    const km=parseFloat(raceMatch.mesafe)||0;
+    const dp=parseFloat(raceMatch.d_plus)||0;
+    return {km:round1(km), dp:Math.round(dp), src:'race'};
+  }
+
+  // Plan tip='yaris' ama yarış allRacesForAth içinde bulunamadı (ID eşleşme sorunu vb.)
+  // Yapı içindeki _yarisMesafe alanından oku
+  if(day.tip==='yaris' && day.yapilar?.length){
+    const yarisYapi=day.yapilar.find(y=>y._yaris||y._yarisMesafe);
+    if(yarisYapi){
+      const km=parseFloat(yarisYapi._yarisMesafe)||0;
+      // D+ yapı içinde yoksa 0
+      return {km:round1(km), dp:0, src:'plan_yaris'};
     }
   }
 
   // Dinlenme veya boş gün
-  if(day.tip==='dinlenme' || !day.yapilar?.length) return {km:0, dp:0};
+  if(day.tip==='dinlenme' || !day.yapilar?.length) return {km:0, dp:0, src:'rest'};
 
   // Çapraz antrenman koşu mesafesi katmaz (D+ da öyle)
-  if(day.tip==='capraz') return {km:0, dp:0};
+  if(day.tip==='capraz') return {km:0, dp:0, src:'capraz'};
 
   // Yapı adımlarından mesafe tahmin et
   let totalKm=0;
@@ -6210,25 +6240,26 @@ function estimateDayKmDp(day, zones, athWorkouts, primary, intermediate){
 
   // D+: günün dpHedef alanı (uzun, tirmanis, back_to_back tiplerinde tanımlı)
   let dp=parseFloat(day.dpHedef)||0;
-  // Yapilarda dpHedef varsa onları da topla (back_to_back gibi)
   if(!dp){
     for(const yapi of day.yapilar||[]){
       dp += parseFloat(yapi.dpHedef)||0;
     }
   }
 
-  return {km:round1(totalKm), dp:Math.round(dp)};
+  return {km:round1(totalKm), dp:Math.round(dp), src:'plan_'+(day.tip||'?')};
 }
 
-function estimateWeekKmDp(week, zones, athWorkouts, primary, intermediate){
-  if(!week?.days) return {km:0, dp:0};
+function estimateWeekKmDp(week, zones, athWorkouts, allRacesForAth){
+  if(!week?.days) return {km:0, dp:0, breakdown:[]};
   let totalKm=0, totalDp=0;
+  const breakdown=[];
   for(const day of week.days){
-    const e=estimateDayKmDp(day, zones, athWorkouts, primary, intermediate);
+    const e=estimateDayKmDp(day, zones, athWorkouts, allRacesForAth);
     totalKm += e.km;
     totalDp += e.dp;
+    breakdown.push({date:day.date, tip:day.tip, km:e.km, dp:e.dp, src:e.src});
   }
-  return {km:round1(totalKm), dp:Math.round(totalDp)};
+  return {km:round1(totalKm), dp:Math.round(totalDp), breakdown};
 }
 
 // Mevcut hafta için tüm muhtemel azaltma sebeplerini topla.
@@ -9730,7 +9761,10 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         if(!curWeekPlan)return null;
         const zones=calcZones(athlete);
         const athW=(workouts||[]).filter(w=>w.athleteId===athlete?.id);
-        const eff=estimateWeekKmDp(curWeekPlan, zones, athW, plan.primary, plan.intermediate);
+        // Sporcunun tüm yarışları — primary/intermediate yerine doğrudan athlete.yarıslar kullan
+        const athRaceIds=(athlete?.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
+        const allRacesForAth=(races||[]).filter(r=>athRaceIds.includes(r.id));
+        const eff=estimateWeekKmDp(curWeekPlan, zones, athW, allRacesForAth);
         const lastH=history?.[history.length-1]||null;
         const factors=collectCurrentWeekFactors(athlete, lastH, cw);
         const allReasons=[...(cw._adjustReasons||[]), ...factors];
@@ -9771,6 +9805,15 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               React.createElement('strong',null,r.label+(r.value?' ('+r.value+')':'')),
               React.createElement('span',{style:{color:'var(--text-secondary)'}},' — '+r.detail)
             ))
+          ),
+          // Debug: Günlük döküm (geliştirme aşaması)
+          eff.breakdown&&eff.breakdown.length>0&&React.createElement('details',{style:{marginTop:8,fontSize:10}},
+            React.createElement('summary',{style:{cursor:'pointer',color:'var(--text-tertiary)'}},'🔍 Günlük döküm (debug)'),
+            React.createElement('div',{style:{marginTop:6,fontFamily:'monospace',fontSize:10,color:'var(--text-secondary)'}},
+              eff.breakdown.map((b,bi)=>React.createElement('div',{key:bi},
+                b.date+' · '+(b.tip||'?')+' · '+b.km+'km/D+'+b.dp+'m · ['+b.src+']'
+              ))
+            )
           )
         );
       })(),
@@ -9790,7 +9833,9 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               if(cwIdx>=0&&curWeekPlan){
                 const zones=calcZones(athlete);
                 const athW=(workouts||[]).filter(w=>w.athleteId===athlete?.id);
-                curEffective=estimateWeekKmDp(curWeekPlan,zones,athW,plan.primary,plan.intermediate);
+                const athRaceIds=(athlete?.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
+                const allRacesForAth=(races||[]).filter(r=>athRaceIds.includes(r.id));
+                curEffective=estimateWeekKmDp(curWeekPlan,zones,athW,allRacesForAth);
               }
               return weekTargets.map((wt,i)=>{
               const act=weekActuals[i]||{km:0,dp:0};
@@ -9922,6 +9967,20 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     plan.weeks.filter(week=>week.weekOff===0||(week.weekOff===1&&showNextWeek)).map(week=>{
       const haftalikReceteRef=React.createRef();
       const antrenmanGunleri=week.days.filter(d=>d.tip!=='dinlenme'&&d.yapilar?.length>0);
+      // Bu hafta için bottom-up effective hedef (mevcut hafta için strikethrough göstermek üzere)
+      const weekEff=(()=>{
+        if(week.weekOff!==0)return null; // sadece mevcut hafta
+        const zonesW=calcZones(athlete);
+        const athW=(workouts||[]).filter(w=>w.athleteId===athlete?.id);
+        const athRaceIds=(athlete?.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
+        const allRacesForAth=(races||[]).filter(r=>athRaceIds.includes(r.id));
+        return estimateWeekKmDp(week,zonesW,athW,allRacesForAth);
+      })();
+      const weekShowRevised=weekEff&&week.wt&&(
+        (week.wt.targetKm>0&&Math.abs(weekEff.km-week.wt.targetKm)/week.wt.targetKm>0.05)||
+        (week.wt.targetDp>0&&Math.abs(weekEff.dp-week.wt.targetDp)/week.wt.targetDp>0.10)||
+        week.wt.isRaceWeek
+      );
       const shareHaftalikRecete=async()=>{
         const el=haftalikReceteRef.current;
         if(!el)return;
@@ -9939,10 +9998,20 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
           )
         ),
         React.createElement('div',{className:'flex-gap',style:{alignItems:'center'}},
-          week.wt&&React.createElement('div',{className:'flex-gap',style:{fontSize:12}},
+          week.wt&&React.createElement('div',{className:'flex-gap',style:{fontSize:12,flexWrap:'wrap'}},
             React.createElement('span',{style:{color:'var(--text-secondary)'}},'Hedef:'),
-            React.createElement('span',{style:{fontWeight:600}},week.wt.targetKm+' km'),
-            week.wt.targetDp>0&&React.createElement('span',{style:{fontWeight:600}},'D+ '+week.wt.targetDp+'m'),
+            weekShowRevised
+              ?React.createElement('span',null,
+                React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',fontWeight:400,marginRight:4}},week.wt.targetKm+' km'),
+                React.createElement('span',{style:{fontWeight:700,color:'var(--warn)'}},weekEff.km+' km')
+              )
+              :React.createElement('span',{style:{fontWeight:600}},week.wt.targetKm+' km'),
+            week.wt.targetDp>0&&(weekShowRevised
+              ?React.createElement('span',null,
+                React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',fontWeight:400,marginRight:4}},'D+ '+week.wt.targetDp+'m'),
+                React.createElement('span',{style:{fontWeight:700,color:'var(--warn)'}},'D+ '+weekEff.dp+'m')
+              )
+              :React.createElement('span',{style:{fontWeight:600}},'D+ '+week.wt.targetDp+'m')),
             week.wkActualKm>0&&React.createElement('span',{style:{color:'var(--success)'}},'Gerçek: '+week.wkActualKm+' km'+(week.wkActualDp>0?' / D+'+week.wkActualDp+'m':''))
           ),
           antrenmanGunleri.length>0&&React.createElement('button',{
@@ -14525,7 +14594,9 @@ function SporcuPlanView(){
       let effective=null;
       if(curWeekPlan){
         const athW=(allWorkouts||[]).filter(w=>w.athleteId===athlete?.id);
-        effective=estimateWeekKmDp(curWeekPlan,zones,athW,plan.primary,plan.intermediate);
+        const athRaceIds=(athlete?.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
+        const allRacesForAth=(races||[]).filter(r=>athRaceIds.includes(r.id));
+        effective=estimateWeekKmDp(curWeekPlan,zones,athW,allRacesForAth);
       }
 
       // Tüm faktörleri topla
