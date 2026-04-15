@@ -4225,11 +4225,13 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
   // srcBaslik: o row'u üreten yapilar[i].baslik — label ile farklı olabilir (interval header gibi)
   const getCueForRow = (label, srcBaslik) => {
     if(originalCueOnly) return coachingCue(label, tip);
-    if(onSaveDetay) {
-      const key = srcBaslik || label;
-      const found = (yapilar||[]).find(y => y.baslik === key);
-      if(found) return found.detay || null;
-    }
+    // Her zaman önce yapilar[i].detay'a bak (antrenör özel açıklamaları)
+    // Bu hem coach modunda hem Koşu İzlerim'de çalışır
+    const key = srcBaslik || label;
+    const found = (yapilar||[]).find(y => y.baslik === key);
+    if(found?.detay) return found.detay;
+    if(onSaveDetay) return null; // Coach modu: özel açıklama yok → "+" butonu göster
+    // Read-only (Koşu İzlerim): global cue veya otomatik açıklama
     return customCues[label] !== undefined ? customCues[label] : coachingCue(label, tip);
   };
   const getCue = (label) => getCueForRow(label, label);
@@ -12774,6 +12776,21 @@ function Gecmis({workouts,athletes,onDelete,onBulkDelete,onUpdate}){
             style:{width:'100%',padding:'7px 10px',border:'1px solid var(--border)',borderRadius:'var(--radius)',background:'var(--bg-primary)',color:'var(--text-primary)',fontSize:13,fontFamily:'inherit',resize:'vertical'},
             onChange:e=>setF('notlar',e.target.value)})
         ),
+        React.createElement('div',{className:'card-title',style:{marginTop:8}},'Etiketler'),
+        React.createElement('div',{style:{display:'flex',flexWrap:'wrap',gap:8,marginBottom:4}},
+          React.createElement('label',{style:{display:'flex',alignItems:'center',gap:6,fontSize:13,padding:'6px 10px',border:'1px solid '+(editForm.analiz_icin?'var(--info)':'var(--border)'),borderRadius:'var(--radius)',background:editForm.analiz_icin?'var(--info-bg)':'var(--bg-secondary)',cursor:'pointer'}},
+            React.createElement('input',{type:'checkbox',checked:!!editForm.analiz_icin,onChange:e=>setF('analiz_icin',e.target.checked)}),
+            '🔬 Analiz için seç'
+          ),
+          React.createElement('label',{style:{display:'flex',alignItems:'center',gap:6,fontSize:13,padding:'6px 10px',border:'1px solid '+(editForm.yol_yarisi?'var(--info)':'var(--border)'),borderRadius:'var(--radius)',background:editForm.yol_yarisi?'var(--info-bg)':'var(--bg-secondary)',cursor:'pointer'}},
+            React.createElement('input',{type:'checkbox',checked:!!editForm.yol_yarisi,onChange:e=>setF('yol_yarisi',e.target.checked)}),
+            '🏅 Yol yarışı'
+          ),
+          React.createElement('label',{style:{display:'flex',alignItems:'center',gap:6,fontSize:13,padding:'6px 10px',border:'1px solid '+(editForm.trail_yarisi?'var(--success)':'var(--border)'),borderRadius:'var(--radius)',background:editForm.trail_yarisi?'var(--success-bg)':'var(--bg-secondary)',cursor:'pointer'}},
+            React.createElement('input',{type:'checkbox',checked:!!editForm.trail_yarisi,onChange:e=>setF('trail_yarisi',e.target.checked)}),
+            '⛰️ Trail yarışı'
+          )
+        ),
         React.createElement('div',{className:'flex-gap',style:{marginTop:12}},
           React.createElement('button',{className:'btn btn-primary',onClick:saveEdit},'Kaydet'),
           React.createElement('button',{className:'btn',onClick:()=>setEditW(null)},'İptal')
@@ -13758,25 +13775,55 @@ function SporcuAnketi(){
   const [saved,setSaved]=useState(false);
   const [loading,setLoading]=useState(true);
   const [saving,setSaving]=useState(false);
+  const [refreshing,setRefreshing]=useState(false);
   const [appName,setAppName]=useState('Kosu Izi');
   const [logo,setLogo]=useState('');
   const [pinInput,setPinInput]=useState('');
   const [pinOk,setPinOk]=useState(false);
   const [pinErr,setPinErr]=useState('');
+  const [dataLoadedAt,setDataLoadedAt]=useState(null);
+
+  const doLoad=async()=>{
+    try{
+      const cfg=await fbGet('app_config');
+      if(cfg&&cfg.teamName)setAppName(cfg.teamName);
+      if(cfg&&cfg.teamLogo)setLogo(cfg.teamLogo);
+      const [aths,rcs]=await Promise.all([fbGet('ath2'),fbGet('races')]);
+      setAthletes(aths||[]);
+      setRaces(rcs||[]);
+      setDataLoadedAt(new Date());
+      return aths||[];
+    }catch(e){console.warn(e);return [];}
+  };
 
   useEffect(()=>{
     (async()=>{
-      try{
-        const cfg=await fbGet('app_config');
-        if(cfg&&cfg.teamName)setAppName(cfg.teamName);
-        if(cfg&&cfg.teamLogo)setLogo(cfg.teamLogo);
-        const [aths,rcs]=await Promise.all([fbGet('ath2'),fbGet('races')]);
-        setAthletes(aths||[]);
-        setRaces(rcs||[]);
-      }catch(e){console.warn(e);}
+      await doLoad();
       setLoading(false);
     })();
   },[]);
+
+  // Seçili sporcu formu antrenman verileriyle senkron tut
+  // athletes state değiştiğinde (örn. yenileme sonrası) formu güncelle
+  const prevSelIdRef=React.useRef(selId);
+  useEffect(()=>{
+    if(!selId) return;
+    const a=athletes.find(function(x){return x.id===selId;});
+    if(!a) return;
+    // Form başlatılmadıysa veya sporcu değiştiyse — formu yeniden başlat
+    // PIN girilmişse formu sıfırlama (kullanıcı düzenleme ortasında olabilir)
+    if(!pinOk){
+      setForm({
+        foto:a.foto||'',kilo:a.kilo||'',boy:a.boy||'',rhr:a.rhr||'',
+        mhr:a.mhr||'',lthr:a.lthr||'',vo2max:a.vo2max||'',
+        hrv_durum:a.hrv_durum||'',hrv_7gun:a.hrv_7gun||'',
+        sakatlık:a.sakatlık||'1',
+        kosu_gunleri:a.kosu_gunleri||[],
+        capraz_gunleri:a.capraz_gunleri||[],
+        uzun_gun:Array.isArray(a.uzun_gun)?a.uzun_gun:[a.uzun_gun].filter(Boolean),
+      });
+    }
+  },[athletes,selId]);
 
   const selectAthlete=(id)=>{
     setSelId(id);
@@ -13787,20 +13834,35 @@ function SporcuAnketi(){
     const a=athletes.find(function(x){return x.id===id;});
     if(!a){setForm(null);return;}
     setForm({
-      foto:a.foto||'',
-      kilo:a.kilo||'',
-      boy:a.boy||'',
-      rhr:a.rhr||'',
-      mhr:a.mhr||'',
-      lthr:a.lthr||'',
-      vo2max:a.vo2max||'',
-      hrv_durum:a.hrv_durum||'',
-      hrv_7gun:a.hrv_7gun||'',
+      foto:a.foto||'',kilo:a.kilo||'',boy:a.boy||'',rhr:a.rhr||'',
+      mhr:a.mhr||'',lthr:a.lthr||'',vo2max:a.vo2max||'',
+      hrv_durum:a.hrv_durum||'',hrv_7gun:a.hrv_7gun||'',
       sakatlık:a.sakatlık||'1',
       kosu_gunleri:a.kosu_gunleri||[],
       capraz_gunleri:a.capraz_gunleri||[],
       uzun_gun:Array.isArray(a.uzun_gun)?a.uzun_gun:[a.uzun_gun].filter(Boolean),
     });
+  };
+
+  const handleRefresh=async()=>{
+    setRefreshing(true);
+    try{
+      const aths=await doLoad();
+      // Eğer sporcu seçiliyse ve PIN girilmediyse formu taze veriyle yenile
+      if(selId&&!pinOk){
+        const a=aths.find(x=>x.id===selId);
+        if(a) setForm({
+          foto:a.foto||'',kilo:a.kilo||'',boy:a.boy||'',rhr:a.rhr||'',
+          mhr:a.mhr||'',lthr:a.lthr||'',vo2max:a.vo2max||'',
+          hrv_durum:a.hrv_durum||'',hrv_7gun:a.hrv_7gun||'',
+          sakatlık:a.sakatlık||'1',
+          kosu_gunleri:a.kosu_gunleri||[],
+          capraz_gunleri:a.capraz_gunleri||[],
+          uzun_gun:Array.isArray(a.uzun_gun)?a.uzun_gun:[a.uzun_gun].filter(Boolean),
+        });
+      }
+    }catch(e){}
+    setRefreshing(false);
   };
 
   // Madde 1: Bu haftaki yarış günlerini hesapla
@@ -13846,7 +13908,11 @@ function SporcuAnketi(){
     if(!selId||!form)return;
     setSaving(true);
     try{
-      const mevcut=athletes.find(function(a){return a.id===selId;})||{};
+      // Race condition önlemi: kaydetmeden önce Firebase'den güncel veriyi çek
+      // Bu, coach tarafının eş zamanlı değişikliklerini korur
+      const freshAths=await fbGet('ath2');
+      const freshAll=freshAths||athletes;
+      const mevcut=freshAll.find(function(a){return a.id===selId;})||athletes.find(function(a){return a.id===selId;})||{};
 
       const ANKET_SNAP_FIELDS=['kilo','boy','rhr','mhr','lthr','vo2max','hrv_7gun','sakatlık'];
       const snapChanged=ANKET_SNAP_FIELDS.some(function(f){return String(mevcut[f]||'')!==String(form[f]||'');});
@@ -13856,13 +13922,15 @@ function SporcuAnketi(){
            kilo:form.kilo,boy:form.boy,hrv_7gun:form.hrv_7gun,sakatlık:form.sakatlık}
         ].slice(-50)
       }):form;
-      const updated=athletes.map(function(a){return a.id===selId?Object.assign({},a,formWithSnap,{anket_guncelleme:new Date().toISOString()}):a;});
+      // Fresh data üzerine sadece anket alanlarını yaz (diğer coach alanlarını koru)
+      const updated=freshAll.map(function(a){return a.id===selId?Object.assign({},a,formWithSnap,{anket_guncelleme:new Date().toISOString()}):a;});
       await fbSet('ath2',updated);
 
       setAthletes(updated);
+      setDataLoadedAt(new Date());
       setSaved(true);
       setTimeout(function(){setSaved(false);},3000);
-    }catch(e){alert('Kayit hatasi: '+e.message);}
+    }catch(e){alert('Kayıt hatası: '+e.message);}
     setSaving(false);
   };
 
@@ -13878,17 +13946,32 @@ function SporcuAnketi(){
     React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)'}},'Sporcu Bilgi Formu')
   );
 
+  const dataAgeMin=dataLoadedAt?Math.round((new Date()-dataLoadedAt)/60000):0;
+  const isStale=dataAgeMin>=5;
+
   const selectEl=React.createElement('div',{className:'card',style:{marginBottom:12}},
-    React.createElement('div',{className:'form-group'},
+    React.createElement('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}},
       React.createElement('label',{style:{fontSize:13,fontWeight:600}},'Adını Seç'),
-      React.createElement('select',{
-        value:selId,
-        onChange:function(e){selectAthlete(e.target.value);},
-        style:{fontSize:14,padding:'10px 12px'}
-      },
-        React.createElement('option',{value:''},'— Listeden Seç —'),
-        [...athletes].sort((a,b)=>((a.ad||'')+' '+(a.soyad||'')).toLocaleLowerCase('tr').localeCompare(((b.ad||'')+' '+(b.soyad||'')).toLocaleLowerCase('tr'),'tr')).map(function(a){return React.createElement('option',{key:a.id,value:a.id},(a.ad||'')+' '+(a.soyad||''));})
-      )
+      React.createElement('button',{
+        onClick:handleRefresh,
+        disabled:refreshing,
+        style:{
+          fontSize:11,padding:'4px 10px',
+          background:isStale?'var(--warn-bg)':'var(--bg-secondary)',
+          color:isStale?'var(--warn)':'var(--text-secondary)',
+          border:'1px solid '+(isStale?'var(--warn)':'var(--border)'),
+          borderRadius:'var(--radius)',cursor:'pointer',
+          fontWeight:isStale?700:400
+        }
+      },refreshing?'⏳ Yükleniyor...':(isStale?'⚠️ Güncelle ('+dataAgeMin+'dk)':'🔄 Yenile'))
+    ),
+    React.createElement('select',{
+      value:selId,
+      onChange:function(e){selectAthlete(e.target.value);},
+      style:{fontSize:14,padding:'10px 12px'}
+    },
+      React.createElement('option',{value:''},'— Listeden Seç —'),
+      [...athletes].sort((a,b)=>((a.ad||'')+' '+(a.soyad||'')).toLocaleLowerCase('tr').localeCompare(((b.ad||'')+' '+(b.soyad||'')).toLocaleLowerCase('tr'),'tr')).map(function(a){return React.createElement('option',{key:a.id,value:a.id},(a.ad||'')+' '+(a.soyad||''));})
     )
   );
 
