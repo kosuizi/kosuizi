@@ -1,4 +1,4 @@
-<!-- Version: v2026.04.16-2108 -->
+<!-- Version: v2026.04.16-2115 -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.16-2108'; // OP-4 tam: koç tarafı akıllı butonlar + sporcu tarafı "anketi güncelle" uyarısı
+const APP_VERSION='v2026.04.16-2115'; // Yarış kontrolü: yarış tamamlanmadan gelecek hafta uyarıları tetiklenmez (hem sporcu hem koç)
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -9928,10 +9928,23 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       const sonGunTamamlandi=sonPlanliGunTarih
         ? athWks.some(w=>w.date===sonPlanliGunTarih)
         : false;
-      // Koşul: son planlı gün geçmiş VE o gün antrenman kaydı var
-      const etkiTespitEdildi=sonPlanliGunTarih
+
+      // Bu haftada yarış var mı? Yarış tamamlanmadan gelecek hafta planlanmamalı
+      const athRaceIdsW=(athlete?.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
+      const wkStartStrB=localDateStr(getWeekBounds(0).start);
+      const wkEndStrB=localDateStr(getWeekBounds(0).end);
+      const buHaftakiYarislar=(races||[]).filter(r=>
+        athRaceIdsW.includes(r.id)&&r.tarih&&r.tarih>=wkStartStrB&&r.tarih<=wkEndStrB
+      );
+      const yarisTamamlanmamisCoach=buHaftakiYarislar.find(r=>{
+        if(r.tarih>todayStr) return true;
+        return !athWks.some(w=>w.date===r.tarih);
+      })||null;
+
+      // Koşul: (yarış varsa tamamlanmış) VE son planlı gün geçmiş VE o gün antrenman kaydı var
+      const etkiTespitEdildi=!yarisTamamlanmamisCoach&&(sonPlanliGunTarih
         ? (sonPlanliGunTarih<=todayStr&&sonGunTamamlandi)
-        : true; // hiç planlı gün yoksa kısıt yok
+        : true); // hiç planlı gün yoksa kısıt yok
 
       // OP-4: Snapshot bayat mı? (anket / koşu günleri / yeni antrenman değişikliği sonrası)
       let snapshotBayat=false, bayatSebep=null;
@@ -9955,10 +9968,19 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         }
       }
 
-      // Yardım metni — üç durum: son antrenman yapılmadı / snapshot bayat / hazır
+      // Yardım metni — durumlar: yarış bekleniyor / son antrenman yapılmadı / snapshot bayat / hazır
       let yardimMetni=null;
       if(!etkiTespitEdildi){
-        if(sonPlanliGunTarih&&sonPlanliGunTarih>todayStr){
+        if(yarisTamamlanmamisCoach){
+          // Yarış günü öncelikli mesaj
+          const rd=new Date(yarisTamamlanmamisCoach.tarih+'T12:00:00');
+          const gunAd=['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'][rd.getDay()];
+          if(yarisTamamlanmamisCoach.tarih>todayStr){
+            yardimMetni=`Gelecek hafta planı, bu haftadaki yarış (${gunAd}, ${yarisTamamlanmamisCoach.ad||'yarış'}) tamamlandıktan sonra gösterilir.`;
+          }else{
+            yardimMetni=`Bu haftadaki yarış (${yarisTamamlanmamisCoach.ad||'yarış'}) henüz antrenman olarak kaydedilmedi. Yarış kaydı yapıldıktan sonra gelecek hafta planı gösterilir.`;
+          }
+        }else if(sonPlanliGunTarih&&sonPlanliGunTarih>todayStr){
           const d=new Date(sonPlanliGunTarih+'T12:00:00');
           const gunAd=['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'][d.getDay()];
           yardimMetni=`Gelecek hafta planı, bu haftanın son antrenmanı (${gunAd}, ${sonPlanliGun.baslik||'antrenman'}) tamamlandıktan sonra gösterilir.`;
@@ -14944,7 +14966,24 @@ function SporcuPlanView(){
       // Sporcu bu haftaki son planlı antrenmanını tamamladı ve anket o
       // antrenmandan bu yana güncellenmedi → gelecek haftanın isabetli planlanması
       // için güncel veriler (HRV, RHR, sakatlık, uyku vb.) gerekir.
+      // NOT: Bu haftada yarış varsa, yarış tamamlanmadan uyarı çıkmaz
+      // (yarış haftanın en önemli etkinliği; öncesinde anket isteği motivasyonu bozar).
       (()=>{
+        // Bu haftaki sporcu yarışları — tamamlanmamış yarış varsa uyarıyı erteleyecek
+        const athRaceIds=(athlete.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
+        const wkStartStr=localDateStr(wkStart);
+        const wkEndStr=localDateStr(wkEnd);
+        const buHaftakiYarislar=(races||[]).filter(r=>
+          athRaceIds.includes(r.id)&&r.tarih&&r.tarih>=wkStartStr&&r.tarih<=wkEndStr
+        );
+        // Yarış günü geçmiş + o tarihte kayıtlı antrenman yok → yarış henüz tamamlanmamış kabul et
+        const yarisTamamlanmamis=buHaftakiYarislar.some(r=>{
+          if(r.tarih>todayStr) return true; // yarış gelecekte
+          // Yarış günü geçmiş — sporcu yarış antrenmanını kaydetmiş mi?
+          return !workouts.some(w=>w.date===r.tarih);
+        });
+        if(yarisTamamlanmamis) return null;
+
         // Bu haftaki planlı antrenman günleri (koşu + çapraz)
         const weekDateList=[];
         for(let d=new Date(wkStart);d<=wkEnd;d.setDate(d.getDate()+1)){
