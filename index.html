@@ -1,4 +1,4 @@
-<!-- Version: v2026.04.15-2145 -->
+<!-- Version: v2026.04.16-1030 -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.15-2145'; // Revize hedef bildirimi Durumum kartına taşındı + ilerleme barları revize hedefleri kullanıyor
+const APP_VERSION='v2026.04.16-1030'; // Revize hedef bildirimi Durumum kartına taşındı + ilerleme barları revize hedefleri kullanıyor
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -6188,24 +6188,26 @@ function estimateDayKmDp(day, zones, athWorkouts, allRacesForAth){
   if(!day) return {km:0, dp:0, src:'empty'};
   const dayDateStr=_normDateStr(day.date);
 
-  // Geçmiş + tamamlanmış: gerçek antrenmanlardan al (yarış günü dahil)
+  // Geçmiş günler: gerçek mesafe VARSA (>0) kullan; 0 veya loglanmamışsa plan tahminine düş.
+  // Amaç: boş/eksik loglama sebebiyle efektif hedefin yapay olarak 0'a düşmesini önlemek.
   if(day.isPast || day.actual?.length){
     const acts=athWorkouts.filter(w=>_normDateStr(w.date)===dayDateStr);
-    if(acts.length){
-      const km=acts.reduce((s,w)=>s+(parseFloat(w.mesafe)||0),0);
-      const dp=acts.reduce((s,w)=>s+(parseFloat(w.irtifa)||0),0);
-      return {km:round1(km), dp:Math.round(dp), src:'actual'};
+    // Gerçek mesafe ölçülmüş mu?
+    const realKm=acts.reduce((s,w)=>s+(parseFloat(w.mesafe)||0),0);
+    if(realKm>0){
+      // Gerçek km var — kullan (D+ da gerçek değerden al)
+      const realDp=acts.reduce((s,w)=>s+(parseFloat(w.irtifa)||0),0);
+      return {km:round1(realKm), dp:Math.round(realDp), src:'actual'};
     }
     if(day.isPast){
-      // Gerçek dinlenme veya boş planlı gün → 0 doğru
-      if(day.tip==='dinlenme'||day.tip==='capraz'||!day.yapilar?.length){
+      // km=0 (loglanmamış veya mesafe girilmemiş) → dinlenme/çapraz günleri için 0 doğru
+      if(day.tip==='dinlenme'||day.tip==='capraz'){
         return {km:0, dp:0, src:'past_rest'};
       }
-      // Planlı antrenman yapılmamış → hedef hesabı için plan tahminine düş
-      // src='past_planned' olarak işaretlenir (gerçekleşmedi ama planın parçası)
+      // Koşu günü loglanmamış veya mesafe girilmemiş → plan tahminine düş
+      // (efektif hedef hesabı için, gerçek km eksikliği hedefi çökertmemeli)
     }
   }
-
 
   // Yarış günü (gelecek): tarihle eşleşen yarış varsa direkt mesafe + D+
   // Hem athlete'in yarışları hem plan'ın 'yaris' işaretine bak
@@ -6244,6 +6246,13 @@ function estimateDayKmDp(day, zones, athWorkouts, allRacesForAth){
       const paceSec=getPaceSec(zones, r.zIdx||1);
       if(paceSec>0) totalKm += sure_sn / paceSec;
     }
+  }
+
+  // Yapı _rows'dan km çıkmadıysa sure_dk üzerinden Z2 pace ile fallback tahmin
+  // (override'lı günlerde yapilar dolu ama _rows yok olabilir)
+  if(totalKm===0 && day.sure_dk>0 && day.tip!=='dinlenme' && day.tip!=='capraz'){
+    const z2pace=getPaceSec(zones,2)||360; // Z2 pace sn/km (fallback 6:00/km)
+    totalKm=round1((day.sure_dk*60)/z2pace);
   }
 
   // D+: günün dpHedef alanı (uzun, tirmanis, back_to_back tiplerinde tanımlı)
@@ -14547,6 +14556,13 @@ function SporcuPlanView(){
       const lastH=history?.[history.length-1]||null;
       const factors=collectCurrentWeekFactors(athlete,lastH,cw);
       const allReasons=[...(cw._adjustReasons||[]),...factors];
+
+      // Floor koruması: efektif hedef orijinalin %30'unun altına düşüyorsa
+      // büyük ihtimalle loglama eksikliği var — cw orijinal hedefini kullan.
+      if(effective&&cw.targetKm>0){
+        const floor=cw.targetKm*0.3;
+        if(effective.km<floor) effective={...effective,km:cw.targetKm,dp:cw.targetDp,_floored:true};
+      }
 
       return{cw,effective,allReasons};
     }catch(e){return null;}
