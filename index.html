@@ -1,4 +1,4 @@
-<!-- Version: v2026.04.15-2130 -->
+<!-- Version: v2026.04.15-2145 -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.15-2130'; // Revize hedef bildirimi Durumum kartına taşındı + ilerleme barları revize hedefleri kullanıyor
+const APP_VERSION='v2026.04.15-2145'; // Revize hedef bildirimi Durumum kartına taşındı + ilerleme barları revize hedefleri kullanıyor
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -6196,8 +6196,16 @@ function estimateDayKmDp(day, zones, athWorkouts, allRacesForAth){
       const dp=acts.reduce((s,w)=>s+(parseFloat(w.irtifa)||0),0);
       return {km:round1(km), dp:Math.round(dp), src:'actual'};
     }
-    if(day.isPast) return {km:0, dp:0, src:'past_empty'};
+    if(day.isPast){
+      // Gerçek dinlenme veya boş planlı gün → 0 doğru
+      if(day.tip==='dinlenme'||day.tip==='capraz'||!day.yapilar?.length){
+        return {km:0, dp:0, src:'past_rest'};
+      }
+      // Planlı antrenman yapılmamış → hedef hesabı için plan tahminine düş
+      // src='past_planned' olarak işaretlenir (gerçekleşmedi ama planın parçası)
+    }
   }
+
 
   // Yarış günü (gelecek): tarihle eşleşen yarış varsa direkt mesafe + D+
   // Hem athlete'in yarışları hem plan'ın 'yaris' işaretine bak
@@ -14801,9 +14809,17 @@ function SporcuPlanView(){
         const _origDp=thisWk?.targetDp||0;
         const _kmDiffPct=_origKm>0&&_effKm!=null?Math.abs(_effKm-_origKm)/_origKm:0;
         const _dpDiffPct=_origDp>0&&_effDp!=null?Math.abs(_effDp-_origDp)/_origDp:0;
-        const isRevised=!!(_cwa&&(_kmDiffPct>0.05||_dpDiffPct>0.10||_cwa.cw?.isRaceWeek));
-        const targetKm=isRevised?_effKm:_origKm;
-        const targetDp=isRevised?_effDp:_origDp;
+        // Revize geçerli mi? Eğer efektif hedef orijinalin %30'unun altına düşüyorsa
+        // büyük ihtimalle hesap hatası — revizyonu uygulama.
+        const _minKmFloor=round1(_origKm*0.3);
+        const _effKmSafe=(_effKm!=null&&_effKm>_minKmFloor)?_effKm:null;
+        const _effDpSafe=(_effDp!=null&&(_origDp===0||_effDp>_origDp*0.2))?_effDp:null;
+        const _kmDiffPctSafe=_origKm>0&&_effKmSafe!=null?Math.abs(_effKmSafe-_origKm)/_origKm:0;
+        const _dpDiffPctSafe=_origDp>0&&_effDpSafe!=null?Math.abs(_effDpSafe-_origDp)/_origDp:0;
+        const isRevised=!!(_cwa&&_effKmSafe!=null&&(_kmDiffPctSafe>0.05||_dpDiffPctSafe>0.10||_cwa.cw?.isRaceWeek));
+        // Revize hedef: actual'dan da küçük olamaz (zaten yapılmış antrenmanlar var)
+        const targetKm=isRevised?Math.max(_effKmSafe,actualKm):_origKm;
+        const targetDp=isRevised?Math.max(_effDpSafe!=null?_effDpSafe:0,actualDp):_origDp;
 
         const ProgressBar=({val,max,color,label,unit=''})=>{
           const pct=max>0?Math.min(110,(val/max)*100):0;
