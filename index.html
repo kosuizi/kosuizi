@@ -1,4 +1,4 @@
-<!-- Version: v2026.04.16-1030 -->
+<!-- Version: v2026.04.16-2108 -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.16-1030'; // Revize hedef bildirimi Durumum kartına taşındı + ilerleme barları revize hedefleri kullanıyor
+const APP_VERSION='v2026.04.16-2108'; // OP-4 tam: koç tarafı akıllı butonlar + sporcu tarafı "anketi güncelle" uyarısı
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -4329,8 +4329,9 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
   const paceValidation=(row)=>{
     if(!row||row.type==='header'||row.rpe||row._isSprint) return null;
     const pm=row.pm; const ps=row.ps;
-    if(pm==null||pm===0&&(ps==null||ps===0)) return null;
-    const enteredSec=pm*60+(ps||0);
+    // Hem pm hem ps boş/sıfır → henüz giriş yok, validasyon yapma
+    if((pm==null||pm===0)&&(ps==null||ps===0)) return null;
+    const enteredSec=(pm||0)*60+(ps||0);
     if(enteredSec<=0) return null;
     // Orijinal zone pace
     const origPace=row._origPaceSec;
@@ -8445,11 +8446,9 @@ function reviewPlanSnapshot(snapshot,athlete,history,races,workouts,testPlanlar)
   let reason=null;
 
   // ── Uzun koşu telafisi: bu hafta uzun koşu atlandıysa bir sonraki haftaya B2B ekle ──
-  // Bugün Pazar veya Cumartesi → haftanın sonu, uzun koşu denetimi yapılabilir
-  const dayOfWeek=now.getDay(); // 0=Paz, 6=Cmt
-  const isWeekEnd=(dayOfWeek===0||dayOfWeek===6);
+  // Her gece kontrol edilir — uzun koşu herhangi bir gün olabilir
   let b2bCompensationReason=null;
-  if(isWeekEnd||true){ // Her gece kontrol et, çünkü uzun koşu herhangi bir gün olabilir
+  {
     const thisWeekStart=getWeekBounds(0).start;
     const thisWeekEnd=getWeekBounds(0).end;
     // Bu hafta uzun koşu yapılmış mı?
@@ -8488,6 +8487,7 @@ function reviewPlanSnapshot(snapshot,athlete,history,races,workouts,testPlanlar)
   const newPlan=generateTwoWeekPlan(athlete,history,races,workouts,testPlanlar||[]);
   const newMap={...snapshot.overrideMap};
   // Atlandı durumunda bugünü de Manuel iptal gibi işaretle (üzeri çizili görünsün)
+  const snapToday=snapshot.overrideMap?.[todayStr];
   if(reason&&reason.includes('atlandı')&&snapToday){
     newMap[todayStr]={tip:'dinlenme',baslik:'İptal Edildi',sure_dk:0,yukHedef:0,
       yapilar:[{baslik:'İptal',detay:'Antrenman yapılmadı (otomatik)'}]};
@@ -9149,8 +9149,123 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
   // cancelledDays: planSnap'ten türetilir — ayrı state yok, sporcu değişince otomatik temizlenir
   const cancelledDays = React.useMemo(()=>planSnap?.cancelledDays||{},[planSnap]);
 
+  // ── OP-4: Plan Güncelleme — hem buton hem uyarı tıklaması kullanır ──────
+  // Anket değişikliği, yeni antrenman girişi veya koşu günü değişimi sonrası
+  // planı yenilemek için. Koruma kuralları:
+  //   • Tamamlanmış antrenmanlar (workouts'ta kayıt) → korunur
+  //   • Manuel atanmış günler → profilde uyumluysa korunur
+  //   • rowOverrides (pace/mesafe düzenlemeleri) → profilde uyumluysa korunur
+  //   • Geçmiş _editedAt damgalı günler → profilde uyumluysa korunur
+  //   • Saf öneri olan gelecek günler → yenilenir
+  const handlePlanGuncelle=()=>{
+    const curSnap=planSnapRef.current||{};
+    const todayStr=localDateStr(new Date());
+    const newSnap=generatePlanSnapshot(athlete,history,races,workouts||[],testPlanlar||[]);
+    newSnap.planMode=planMode;
+    newSnap.selectedPrimary=selectedPrimary||null;
+    newSnap.athleteProfile={kosu_gunleri:athlete.kosu_gunleri,capraz_gunleri:athlete.capraz_gunleri,disiplin:athlete.disiplin,uzun_gun:athlete.uzun_gun};
 
+    // Korunan günleri belirle
+    const guncelKosuGunleriProto=athlete.kosu_gunleri||[];
+    const guncelCaprazGunleriProto=athlete.capraz_gunleri||[];
+    const isProfilUyumlu=(ds)=>{
+      const dayShortProto=DAYS_SHORT[new Date(ds+'T12:00:00').getDay()];
+      return guncelKosuGunleriProto.includes(dayShortProto)||guncelCaprazGunleriProto.includes(dayShortProto);
+    };
+    const protectedDates=new Set();
+    if(curSnap.manualOverrides){
+      Object.keys(curSnap.manualOverrides).forEach(ds=>{
+        if(ds<todayStr||isProfilUyumlu(ds)) protectedDates.add(ds);
+      });
+    }
+    if(curSnap.rowOverrides){
+      Object.keys(curSnap.rowOverrides).forEach(ds=>{
+        if(ds<todayStr||isProfilUyumlu(ds)) protectedDates.add(ds);
+      });
+    }
+    const athWkDates=new Set((workouts||[]).filter(w=>w.athleteId===athlete.id).map(w=>w.date));
+    athWkDates.forEach(ds=>protectedDates.add(ds));
+    if(curSnap.overrideMap){
+      Object.entries(curSnap.overrideMap).forEach(([ds,ov])=>{
+        if(ov?._editedAt&&(ds<todayStr||isProfilUyumlu(ds))) protectedDates.add(ds);
+      });
+    }
 
+    // Korunan günlerin overrideMap girişlerini geri yükle
+    protectedDates.forEach(dateStr=>{
+      if(curSnap.overrideMap?.[dateStr]){
+        newSnap.overrideMap[dateStr]=curSnap.overrideMap[dateStr];
+      }
+    });
+
+    // manualOverrides ve rowOverrides eksiksiz koru
+    if(curSnap.manualOverrides){
+      newSnap.manualOverrides={...(newSnap.manualOverrides||{}),...curSnap.manualOverrides};
+    }
+    if(curSnap.rowOverrides){
+      newSnap.rowOverrides={...(newSnap.rowOverrides||{}),...curSnap.rowOverrides};
+    }
+    if(curSnap.cancelledDays) newSnap.cancelledDays=curSnap.cancelledDays;
+
+    // Koşu günleri senkronizasyonu — kaliteli antrenmanları redistribute et
+    const oldProfile=curSnap.athleteProfile||{};
+    const oldKosuGunleri=(oldProfile.kosu_gunleri||[]).sort();
+    const newKosuGunleri=(athlete.kosu_gunleri||[]).sort();
+    const kosuGunleriDegisti=JSON.stringify(oldKosuGunleri)!==JSON.stringify(newKosuGunleri);
+
+    if(kosuGunleriDegisti&&curSnap.overrideMap&&Object.keys(curSnap.overrideMap).length>0){
+      const YOGUN_TIPLER=['tempo','tempo_sureli','esik','esik_sureli','interval','piramit','kesintisiz_piramit','on_off','tempo_interval','cruise','yaris_tempo','hill_sprint','yokus_kisa','yokus_uzun'];
+      const eskiKaliteli=[];
+      Object.entries(curSnap.overrideMap).forEach(([ds,ov])=>{
+        if(protectedDates.has(ds))return;
+        if(ds<=todayStr)return;
+        if(!ov||ov.tip==='dinlenme')return;
+        if(YOGUN_TIPLER.includes(ov.tip)) eskiKaliteli.push(ov);
+      });
+      const yeniGunler=Object.entries(newSnap.overrideMap)
+        .filter(([ds])=>!protectedDates.has(ds)&&ds>todayStr)
+        .sort((a,b)=>a[0].localeCompare(b[0]));
+      const yeniKaliteliCount=yeniGunler.filter(([,ov])=>YOGUN_TIPLER.includes(ov.tip)).length;
+      const ekKaliteli=eskiKaliteli.slice(yeniKaliteliCount);
+      if(ekKaliteli.length>0){
+        const bosGunler=yeniGunler.filter(([,ov])=>!YOGUN_TIPLER.includes(ov.tip)&&ov.tip!=='dinlenme'&&ov.tip!=='uzun');
+        ekKaliteli.forEach((kal,i)=>{
+          if(i<bosGunler.length){
+            const [ds]=bosGunler[i];
+            newSnap.overrideMap[ds]={...newSnap.overrideMap[ds],tip:kal.tip,baslik:kal.baslik,yapilar:kal.yapilar,sure_dk:kal.sure_dk,_syncedFrom:'kosu_gunleri_degisimi'};
+          }
+        });
+      }
+      if(!newSnap.reviewLog)newSnap.reviewLog=[];
+      newSnap.reviewLog.push({
+        at:new Date().toISOString(),
+        reason:`Koşu günleri değişti: [${oldKosuGunleri.join(',')}] → [${newKosuGunleri.join(',')}] — ${ekKaliteli.length>0?ekKaliteli.length+' kaliteli antrenman redistribute edildi':'plan yeniden oluşturuldu'}`
+      });
+    }
+
+    // Son temizlik: profilde olmayan günleri dinlenmeye çek
+    const guncelKosuGunleri=athlete.kosu_gunleri||[];
+    const guncelCaprazGunleri=athlete.capraz_gunleri||[];
+    const gercekAntrenmanGunleri=new Set((workouts||[]).filter(w=>w.athleteId===athlete.id).map(w=>w.date));
+    Object.keys(newSnap.overrideMap||{}).forEach(ds=>{
+      if(ds<todayStr) return;
+      const ov=newSnap.overrideMap[ds];
+      if(!ov||ov.tip==='dinlenme') return;
+      if(ov.tip==='yaris') return;
+      if(gercekAntrenmanGunleri.has(ds)) return;
+      const dayShortClean=DAYS_SHORT[new Date(ds+'T12:00:00').getDay()];
+      const isAntrenmanGunu=guncelKosuGunleri.includes(dayShortClean)||guncelCaprazGunleri.includes(dayShortClean);
+      if(!isAntrenmanGunu){
+        newSnap.overrideMap[ds]={tip:'dinlenme',baslik:'Dinlenme',sure_dk:0,yukHedef:0,yapilar:[],approved:true};
+        if(newSnap.rowOverrides?.[ds]) delete newSnap.rowOverrides[ds];
+        if(newSnap.manualOverrides?.[ds]) delete newSnap.manualOverrides[ds];
+      }
+    });
+
+    setPlanSnap(newSnap);
+    fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
+    setReviewMsg('✅ Plan güncellendi');
+  };
 
   const handleManuelAta=(dateStr,tpl)=>{
     const now=new Date();
@@ -9494,148 +9609,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
             className:'btn btn-sm',
             style:{background:'var(--info)',color:'#fff',border:'none'},
             title:'Planı mevcut antrenman ve sporcu verilerine göre yeniden oluştur',
-            onClick:async()=>{
-              const curSnap=planSnapRef.current||{};
-              const todayStr=localDateStr(new Date());
-              const newSnap=generatePlanSnapshot(athlete,history,races,workouts||[],testPlanlar||[]);
-              newSnap.planMode=planMode;
-              newSnap.selectedPrimary=selectedPrimary||null;
-              newSnap.athleteProfile={kosu_gunleri:athlete.kosu_gunleri,capraz_gunleri:athlete.capraz_gunleri,disiplin:athlete.disiplin,uzun_gun:athlete.uzun_gun};
-
-              // ── Korunan günleri belirle (tamamlanmış, manuel atanmış, pace/mesafe düzenlenmiş) ──
-              // Güncel profil koşu/çapraz günleri — profil uyum kontrolü için
-              const guncelKosuGunleriProto=athlete.kosu_gunleri||[];
-              const guncelCaprazGunleriProto=athlete.capraz_gunleri||[];
-              const isProfilUyumlu=(ds)=>{
-                const dayShortProto=DAYS_SHORT[new Date(ds+'T12:00:00').getDay()];
-                return guncelKosuGunleriProto.includes(dayShortProto)||guncelCaprazGunleriProto.includes(dayShortProto);
-              };
-              const protectedDates=new Set();
-              // 1) KALDIRILDI: Geçmiş/bugünü toptan koruma yaklaşımı kaldırıldı.
-              // Eski snapshot'taki sistem-üretimi geçmiş/bugün girişleri,
-              // anket koşu günleri değiştiğinde yanlış korunarak güncel profile
-              // uymayan antrenmanların (örn. bugün koşu günü olmadığı hâlde antrenman)
-              // kalmasına neden oluyordu. Gerçek koruma conditions 2-5 ile sağlanır.
-              // ÖNEMLİ: Manuel/rowOverride/_editedAt bayrakları, gün güncel profile
-              // göre bir antrenman günü değilse (geçmiş+gerçek antrenman hariç)
-              // artık koruma sağlamaz — profil değişimi öncelikli.
-              // 2) Manuel atanmış günler (ata butonu ile değiştirilen — geçmiş+gelecek)
-              if(curSnap.manualOverrides){
-                Object.keys(curSnap.manualOverrides).forEach(ds=>{
-                  if(ds<todayStr||isProfilUyumlu(ds)) protectedDates.add(ds);
-                });
-              }
-              // 3) Row override'ları olan günler (pace/mesafe düzenlenmiş — geçmiş+gelecek)
-              if(curSnap.rowOverrides){
-                Object.keys(curSnap.rowOverrides).forEach(ds=>{
-                  if(ds<todayStr||isProfilUyumlu(ds)) protectedDates.add(ds);
-                });
-              }
-              // 4) Tamamlanmış antrenmanı olan günler (workouts'ta kayıt var) — her zaman korunur
-              const athWkDates=new Set((workouts||[]).filter(w=>w.athleteId===athlete.id).map(w=>w.date));
-              athWkDates.forEach(ds=>protectedDates.add(ds));
-              // 5) _editedAt damgası taşıyan overrideMap girişleri — profil uyumluysa
-              if(curSnap.overrideMap){
-                Object.entries(curSnap.overrideMap).forEach(([ds,ov])=>{
-                  if(ov?._editedAt&&(ds<todayStr||isProfilUyumlu(ds))) protectedDates.add(ds);
-                });
-              }
-
-              // ── Korunan günlerin overrideMap girişlerini eski snapshot'tan geri yükle ──
-              protectedDates.forEach(dateStr=>{
-                if(curSnap.overrideMap?.[dateStr]){
-                  newSnap.overrideMap[dateStr]=curSnap.overrideMap[dateStr];
-                }
-              });
-
-              // ── manualOverrides ve rowOverrides'ı eksiksiz koru ──
-              if(curSnap.manualOverrides){
-                newSnap.manualOverrides={...(newSnap.manualOverrides||{}),...curSnap.manualOverrides};
-              }
-              if(curSnap.rowOverrides){
-                newSnap.rowOverrides={...(newSnap.rowOverrides||{}),...curSnap.rowOverrides};
-              }
-
-              // cancelledDays koru
-              if(curSnap.cancelledDays) newSnap.cancelledDays=curSnap.cancelledDays;
-
-              // ── OP-4: Koşu Günleri Senkronizasyonu ──────────────────────────
-              // Anket koşu günleri değiştiyse, korunan günleri yerinde tut,
-              // eski günlerdeki kaliteli antrenmanları yeni günlere taşı
-              const oldProfile=curSnap.athleteProfile||{};
-              const oldKosuGunleri=(oldProfile.kosu_gunleri||[]).sort();
-              const newKosuGunleri=(athlete.kosu_gunleri||[]).sort();
-              const kosuGunleriDegisti=JSON.stringify(oldKosuGunleri)!==JSON.stringify(newKosuGunleri);
-              
-              if(kosuGunleriDegisti&&curSnap.overrideMap&&Object.keys(curSnap.overrideMap).length>0){
-                // Eski plandaki korunmayan gelecek günlerin antrenman tiplerini topla
-                const YOGUN_TIPLER=['tempo','tempo_sureli','esik','esik_sureli','interval','piramit','kesintisiz_piramit','on_off','tempo_interval','cruise','yaris_tempo','hill_sprint','yokus_kisa','yokus_uzun'];
-                const eskiKaliteli=[];
-                const eskiKolay=[];
-                Object.entries(curSnap.overrideMap).forEach(([ds,ov])=>{
-                  if(protectedDates.has(ds))return; // Korunan güne dokunma
-                  if(ds<=todayStr)return; // Geçmiş güne dokunma
-                  if(!ov||ov.tip==='dinlenme')return;
-                  if(YOGUN_TIPLER.includes(ov.tip)) eskiKaliteli.push(ov);
-                  else eskiKolay.push(ov);
-                });
-
-                // Yeni plandaki korunmayan gelecek günlere redistribute
-                // Kaliteli antrenmanları dağıt: yeni overrideMap'teki korunmayan günlere yerleştir
-                const yeniGunler=Object.entries(newSnap.overrideMap)
-                  .filter(([ds])=>!protectedDates.has(ds)&&ds>todayStr)
-                  .sort((a,b)=>a[0].localeCompare(b[0]));
-                
-                // İlk geçiş: yeni plan zaten kaliteli dağıtmış, ama eski kalitelileri kaybetmeyelim
-                // Eğer yeni planın kaliteli sayısı < eski kaliteli sayısı ise, eksikleri yerleştir
-                const yeniKaliteliCount=yeniGunler.filter(([,ov])=>YOGUN_TIPLER.includes(ov.tip)).length;
-                const ekKaliteli=eskiKaliteli.slice(yeniKaliteliCount); // Fazla olanları dağıt
-                
-                if(ekKaliteli.length>0){
-                  // Boş (kolay/aerobik) günlere kaliteli antrenman yerleştir
-                  const bosGunler=yeniGunler.filter(([,ov])=>!YOGUN_TIPLER.includes(ov.tip)&&ov.tip!=='dinlenme'&&ov.tip!=='uzun');
-                  ekKaliteli.forEach((kal,i)=>{
-                    if(i<bosGunler.length){
-                      const [ds]=bosGunler[i];
-                      newSnap.overrideMap[ds]={...newSnap.overrideMap[ds],tip:kal.tip,baslik:kal.baslik,yapilar:kal.yapilar,sure_dk:kal.sure_dk,_syncedFrom:'kosu_gunleri_degisimi'};
-                    }
-                  });
-                }
-
-                // Senkronizasyon log'u
-                if(!newSnap.reviewLog)newSnap.reviewLog=[];
-                newSnap.reviewLog.push({
-                  at:new Date().toISOString(),
-                  reason:`Koşu günleri değişti: [${oldKosuGunleri.join(',')}] → [${newKosuGunleri.join(',')}] — ${ekKaliteli.length>0?ekKaliteli.length+' kaliteli antrenman redistribute edildi':'plan yeniden oluşturuldu'}`
-                });
-              }
-
-              // ── Son temizlik: profilde olmayan günleri dinlemeye çek ──
-              // Koşu günleri değiştiğinde rowOverrides/_editedAt gibi korumalar
-              // eski antrenmanı yerinde bırakabilir. Bu adım kazanır.
-              // BUGÜN dahil — sadece geçmiş günleri (yapılmış antrenmanlar için) atla.
-              const guncelKosuGunleri=athlete.kosu_gunleri||[];
-              const guncelCaprazGunleri=athlete.capraz_gunleri||[];
-              const gercekAntrenmanGunleri=new Set((workouts||[]).filter(w=>w.athleteId===athlete.id).map(w=>w.date));
-              Object.keys(newSnap.overrideMap||{}).forEach(ds=>{
-                if(ds<todayStr) return; // geçmişe dokunma (bugün dahil edildi)
-                const ov=newSnap.overrideMap[ds];
-                if(!ov||ov.tip==='dinlenme') return;
-                if(ov.tip==='yaris') return; // yarış günlerine dokunma
-                if(gercekAntrenmanGunleri.has(ds)) return; // gerçek antrenman kaydı var (bugün dahil)
-                const dayShortClean=DAYS_SHORT[new Date(ds+'T12:00:00').getDay()];
-                const isAntrenmanGunu=guncelKosuGunleri.includes(dayShortClean)||guncelCaprazGunleri.includes(dayShortClean);
-                if(!isAntrenmanGunu){
-                  newSnap.overrideMap[ds]={tip:'dinlenme',baslik:'Dinlenme',sure_dk:0,yukHedef:0,yapilar:[],approved:true};
-                  // rowOverrides ve manualOverrides'tan da kaldır
-                  if(newSnap.rowOverrides?.[ds]) delete newSnap.rowOverrides[ds];
-                  if(newSnap.manualOverrides?.[ds]) delete newSnap.manualOverrides[ds];
-                }
-              });
-
-              setPlanSnap(newSnap);
-              fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
-            }
+            onClick:handlePlanGuncelle
           },'🔄 Planı Güncelle'),
           // Madde 2: Tümünü Onayla butonu
           planSnap?.overrideMap&&(()=>{
@@ -9675,7 +9649,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
           ),
           !planSnap?.lastSavedAt&&React.createElement('span',{style:{fontSize:10,color:'var(--warn)'}},'⚠ Plan henüz oluşturulmadı.')
         ),
-        // Uyarılar — yeni satırda
+        // Uyarılar — yeni satırda, tıklanabilir: planı güncelle
         (()=>{
           const uyarilar=[];
           if(planSnap?.lastSavedAt&&athlete?.anket_guncelleme){
@@ -9686,7 +9660,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
           if(planSnap?.athleteProfile?.kosu_gunleri){
             const snapGunler=(planSnap.athleteProfile.kosu_gunleri||[]).sort().join(',');
             const athGunler=(athlete.kosu_gunleri||[]).sort().join(',');
-            if(snapGunler!==athGunler) uyarilar.push('📅 Koşu günleri değişmiş! Plan: ['+snapGunler+'] → Anket: ['+athGunler+']. Planı güncelleyin.');
+            if(snapGunler!==athGunler) uyarilar.push('📅 Koşu günleri değişmiş! Plan: ['+snapGunler+'] → Anket: ['+athGunler+']');
           }
           if(planSnap?.lastSavedAt){
             const planTarih=new Date(planSnap.lastSavedAt);
@@ -9698,8 +9672,31 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
             }
           }
           if(!uyarilar.length)return null;
-          return React.createElement('div',{style:{display:'flex',flexWrap:'wrap',gap:6,marginTop:6}},
-            uyarilar.map((u,i)=>React.createElement('span',{key:i,style:{fontSize:11,color:'var(--warn)',background:'var(--warn-bg)',padding:'3px 8px',borderRadius:4}},u))
+          // OP-4: Uyarı kutusu tıklanabilir — tüm korumaları uygulayarak planı yeniler
+          return React.createElement('div',{
+            style:{
+              marginTop:8,padding:'10px 12px',
+              background:'var(--warn-bg)',border:'1px solid var(--warn)',
+              borderRadius:'var(--radius)',
+              display:'flex',alignItems:'center',justifyContent:'space-between',
+              flexWrap:'wrap',gap:8
+            }
+          },
+            React.createElement('div',{style:{flex:'1 1 200px',minWidth:0}},
+              React.createElement('div',{style:{fontSize:12,fontWeight:600,color:'var(--warn)',marginBottom:4}},
+                '⚠ Plan güncel değil'
+              ),
+              uyarilar.map((u,i)=>React.createElement('div',{
+                key:i,
+                style:{fontSize:11,color:'var(--text-secondary)',lineHeight:1.5}
+              },u))
+            ),
+            React.createElement('button',{
+              className:'btn btn-sm',
+              style:{background:'var(--warn)',color:'#fff',border:'none',fontWeight:600,whiteSpace:'nowrap'},
+              onClick:handlePlanGuncelle,
+              title:'Tamamlanmış antrenmanlar ve manuel atamalar korunarak gelecek günler yeniden oluşturulur'
+            },'🔄 Planı Şimdi Güncelle')
           );
         })()
       )
@@ -9911,12 +9908,111 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       )
     ),
 
-    // ── Gelecek hafta planı ────────────────────────────────────────────────
-    !showNextWeek&&React.createElement('button',{
-      className:'btn btn-sm',
-      style:{marginBottom:12,background:'var(--info)',color:'#fff',border:'none'},
-      onClick:()=>setShowNextWeek(true)
-    },'📅 Gelecek Hafta Planını Göster'),
+    // ── Gelecek hafta planı — "son antrenman yapıldı" kapısı ────────────────
+    // Mantık: Bu hafta planlı son antrenman günü (koşu veya çapraz) tamamlanmadan
+    // gelecek hafta planı gösterilmez — çünkü son antrenmanın ATL/CTL etkisi
+    // tespit edilmeden yapılacak planlama hatalı olur.
+    !showNextWeek&&(()=>{
+      const todayStr=localDateStr(new Date());
+      const curWeek=plan.weeks.find(w=>w.weekOff===0);
+      // Bu haftaki planlı antrenman günleri (koşu + çapraz, dinlenme dışında)
+      const planliGunler=(curWeek?.days||[]).filter(d=>{
+        const ov=planSnap?.overrideMap?.[d.date];
+        const tip=ov?.tip||d.tip;
+        return tip&&tip!=='dinlenme';
+      });
+      const sonPlanliGun=planliGunler.length?planliGunler[planliGunler.length-1]:null;
+      const sonPlanliGunTarih=sonPlanliGun?.date||null;
+      // Sporcunun o tarihte kayıtlı gerçek antrenmanı var mı?
+      const athWks=(workouts||[]).filter(w=>w.athleteId===athlete?.id);
+      const sonGunTamamlandi=sonPlanliGunTarih
+        ? athWks.some(w=>w.date===sonPlanliGunTarih)
+        : false;
+      // Koşul: son planlı gün geçmiş VE o gün antrenman kaydı var
+      const etkiTespitEdildi=sonPlanliGunTarih
+        ? (sonPlanliGunTarih<=todayStr&&sonGunTamamlandi)
+        : true; // hiç planlı gün yoksa kısıt yok
+
+      // OP-4: Snapshot bayat mı? (anket / koşu günleri / yeni antrenman değişikliği sonrası)
+      let snapshotBayat=false, bayatSebep=null;
+      if(planSnap?.lastSavedAt){
+        const planTarih=new Date(planSnap.lastSavedAt);
+        if(athlete?.anket_guncelleme&&new Date(athlete.anket_guncelleme)>planTarih){
+          snapshotBayat=true; bayatSebep='anket güncellemesi';
+        }
+        if(!snapshotBayat&&planSnap?.athleteProfile?.kosu_gunleri){
+          const snapG=(planSnap.athleteProfile.kosu_gunleri||[]).sort().join(',');
+          const athG=(athlete.kosu_gunleri||[]).sort().join(',');
+          if(snapG!==athG){snapshotBayat=true; bayatSebep='koşu günleri değişimi';}
+        }
+        if(!snapshotBayat){
+          const sonWk=[...athWks].sort((a,b)=>b.date.localeCompare(a.date))[0];
+          if(sonWk){
+            const wTime=sonWk.time?sonWk.time:'00:00';
+            const wTarih=new Date(sonWk.date+'T'+wTime+':00');
+            if(wTarih>planTarih){snapshotBayat=true; bayatSebep='yeni antrenman girişi';}
+          }
+        }
+      }
+
+      // Yardım metni — üç durum: son antrenman yapılmadı / snapshot bayat / hazır
+      let yardimMetni=null;
+      if(!etkiTespitEdildi){
+        if(sonPlanliGunTarih&&sonPlanliGunTarih>todayStr){
+          const d=new Date(sonPlanliGunTarih+'T12:00:00');
+          const gunAd=['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'][d.getDay()];
+          yardimMetni=`Gelecek hafta planı, bu haftanın son antrenmanı (${gunAd}, ${sonPlanliGun.baslik||'antrenman'}) tamamlandıktan sonra gösterilir.`;
+        }else if(sonPlanliGunTarih&&!sonGunTamamlandi){
+          yardimMetni=`Bu haftanın son planlı antrenmanı (${sonPlanliGun.baslik||'antrenman'}) henüz kaydedilmedi. Gelecek hafta planı, son antrenmanın yükü history'ye işlendikten sonra anlamlı olur.`;
+        }
+      }
+
+      // Üç durum:
+      // 1) Son antrenman yapılmadı → buton disable
+      // 2) Son antrenman yapıldı + snapshot bayat → "Planı güncelle & göster" (turuncu, confirm)
+      // 3) Son antrenman yapıldı + snapshot güncel → normal buton
+      const butonAktif=etkiTespitEdildi;
+      const butonGuncelleGerek=etkiTespitEdildi&&snapshotBayat;
+      const handleGelecekHaftaClick=()=>{
+        if(butonGuncelleGerek){
+          // Bayatsa: önce güncelle, sonra göster
+          handlePlanGuncelle();
+          setShowNextWeek(true);
+        }else{
+          setShowNextWeek(true);
+        }
+      };
+
+      return React.createElement('div',{style:{marginBottom:12}},
+        React.createElement('button',{
+          className:'btn btn-sm',
+          disabled:!butonAktif,
+          style:{
+            background:!butonAktif?'var(--bg-tertiary)':(butonGuncelleGerek?'var(--warn)':'var(--info)'),
+            color:butonAktif?'#fff':'var(--text-tertiary)',
+            border:'none',
+            cursor:butonAktif?'pointer':'not-allowed',
+            opacity:butonAktif?1:0.7,
+            fontWeight:butonGuncelleGerek?600:400
+          },
+          onClick:butonAktif?handleGelecekHaftaClick:undefined,
+          title:butonAktif?(butonGuncelleGerek?'Plan bayat — güncellenip gösterilecek':''):(yardimMetni||'')
+        },
+          !butonAktif?'🔒 Gelecek Hafta Planı':
+          (butonGuncelleGerek?'🔄 Planı Güncelle & Gelecek Haftayı Göster':'📅 Gelecek Hafta Planını Göster')
+        ),
+        yardimMetni&&React.createElement('div',{style:{
+          marginTop:6,padding:'8px 10px',
+          background:'var(--warn-bg)',color:'var(--warn)',
+          borderRadius:'var(--radius)',fontSize:11,lineHeight:1.5
+        }},'ℹ️ '+yardimMetni),
+        butonAktif&&butonGuncelleGerek&&React.createElement('div',{style:{
+          marginTop:6,padding:'8px 10px',
+          background:'var(--warn-bg)',color:'var(--warn)',
+          borderRadius:'var(--radius)',fontSize:11,lineHeight:1.5
+        }},`ℹ️ ${bayatSebep.charAt(0).toUpperCase()+bayatSebep.slice(1)} sonrası plan güncel değil. Butona basınca tamamlanmış antrenmanlar ve manuel atamalar korunarak gelecek günler yeniden oluşturulur.`)
+      );
+    })(),
     plan.weeks.filter(week=>week.weekOff===0||(week.weekOff===1&&showNextWeek)).map(week=>{
       const haftalikReceteRef=React.createRef();
       const antrenmanGunleri=week.days.filter(d=>d.tip!=='dinlenme'&&d.yapilar?.length>0);
@@ -9974,6 +10070,74 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
           },'📤 Haftalık Reçete')
         )
       ),
+      // ── Gelecek hafta Pazartesi ATL/CTL/TSB projeksiyonu ────────────────
+      // Son antrenmanın etkisinin (ATL yükselişi) doğal decay ile gelecek
+      // hafta başına nasıl taşınacağını göster. Antrenman bilimi açısından:
+      // ATL τ=7 gün (hızlı söner), CTL τ=42 gün (yavaş söner) → aradaki her
+      // dinlenme günü ATL'yi daha çok düşürür, sporcu "fresh" başlar.
+      week.weekOff===1&&(()=>{
+        const last=history?.[history.length-1];
+        if(!last) return null;
+        const todayStr=localDateStr(new Date());
+        // Gelecek haftanın Pazartesi'sine kaç gün var? (bugün dahil değil)
+        const nextMonday=new Date(week.start); // week.start zaten Pazartesi
+        const gunFark=Math.round((nextMonday-new Date(todayStr+'T00:00:00'))/864e5);
+        if(gunFark<=0) return null; // gelecek hafta zaten başlamışsa gösterme
+        // Son antrenman tarihi (gerçek)
+        const athWks=(workouts||[]).filter(w=>w.athleteId===athlete?.id&&w.date<=todayStr);
+        const sonWk=athWks.length?athWks.sort((a,b)=>b.date.localeCompare(a.date))[0]:null;
+        // Bugünden Pazartesi'ye kadar dinlenme günleri (load=0) ile decay
+        let projAtl=last.atl||0, projCtl=last.ctl||0;
+        for(let i=0;i<gunFark;i++){
+          projAtl=projAtl*(1-λ_atl);
+          projCtl=projCtl*(1-λ_ctl);
+        }
+        projAtl=Math.round(projAtl*10)/10;
+        projCtl=Math.round(projCtl*10)/10;
+        const projTsb=Math.round((projCtl-projAtl)*10)/10;
+        const curTsb=Math.round(((last.ctl||0)-(last.atl||0))*10)/10;
+        // TSB yorumu
+        let tsbYorum='Nötr';
+        if(projTsb>10) tsbYorum='Taze — yüksek kapasiteyle başlayabilir';
+        else if(projTsb>5) tsbYorum='Dinlenmiş — iyi bir başlangıç';
+        else if(projTsb>-5) tsbYorum='Nötr — standart hafta';
+        else if(projTsb>-15) tsbYorum='Hafif yorgun — ilk günleri hafif tut';
+        else tsbYorum='Yorgun — rejeneratif başla';
+        return React.createElement('div',{style:{
+          background:'var(--info-bg)',border:'1px solid var(--info)',
+          borderRadius:'var(--radius)',padding:'10px 12px',marginBottom:10,fontSize:12
+        }},
+          React.createElement('div',{style:{fontWeight:600,color:'var(--info)',marginBottom:6}},
+            '📊 Pazartesi projeksiyonu — '+gunFark+' gün sonra'
+          ),
+          React.createElement('div',{style:{color:'var(--text-secondary)',marginBottom:8,fontSize:11,lineHeight:1.5}},
+            'Son antrenman: '+(sonWk?sonWk.date:'—')+' · '+
+            'Bugünkü ATL/CTL/TSB: '+(last.atl||0).toFixed(1)+' / '+(last.ctl||0).toFixed(1)+' / '+curTsb.toFixed(1)+
+            ' → Pazartesi tahmini (doğal decay, antrenmansız): '
+          ),
+          React.createElement('div',{className:'grid4',style:{gap:8}},
+            React.createElement('div',{className:'metric',style:{padding:'8px 10px'}},
+              React.createElement('div',{className:'metric-label'},'ATL'),
+              React.createElement('div',{className:'metric-val',style:{fontSize:16}},projAtl.toFixed(1)),
+              React.createElement('div',{className:'metric-sub'},'Yorgunluk')
+            ),
+            React.createElement('div',{className:'metric',style:{padding:'8px 10px'}},
+              React.createElement('div',{className:'metric-label'},'CTL'),
+              React.createElement('div',{className:'metric-val',style:{fontSize:16}},projCtl.toFixed(1)),
+              React.createElement('div',{className:'metric-sub'},'Fitness')
+            ),
+            React.createElement('div',{className:'metric',style:{padding:'8px 10px'}},
+              React.createElement('div',{className:'metric-label'},'TSB'),
+              React.createElement('div',{className:'metric-val',style:{fontSize:16,color:projTsb>0?'var(--success)':projTsb<-10?'var(--danger)':'var(--text-primary)'}},(projTsb>=0?'+':'')+projTsb.toFixed(1)),
+              React.createElement('div',{className:'metric-sub'},'Form')
+            ),
+            React.createElement('div',{className:'metric',style:{padding:'8px 10px'}},
+              React.createElement('div',{className:'metric-label'},'DURUM'),
+              React.createElement('div',{style:{fontSize:11,fontWeight:600,marginTop:4,lineHeight:1.3}},tsbYorum)
+            )
+          )
+        );
+      })(),
       // Paylaşılacak haftalık reçete kartı (gizli)
       React.createElement('div',{ref:haftalikReceteRef,style:{
         background:'var(--bg-primary)',borderRadius:'var(--radius-lg)',
@@ -12452,7 +12616,6 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,wor
                   type:'text',value:form.yapi_notu||'',
                   placeholder:'Serbest yaz: ör. 6×1km, 4×8dk, 3×20dk',
                   onChange:e=>set('yapi_notu',e.target.value),
-                  autoFocus:!yapiSecenekleri.includes(form.yapi_notu)&&form.yapi_notu===''&&false,
                   style:{width:'100%',fontSize:12,marginTop:2}
                 })
               )
@@ -14776,6 +14939,64 @@ function SporcuPlanView(){
           wkStart.toLocaleDateString('tr-TR',{day:'2-digit',month:'long'})+' – '+wkEnd.toLocaleDateString('tr-TR',{day:'2-digit',month:'long',year:'numeric'})
         )
       ),
+
+      // ── Anket güncelleme uyarısı ──────────────────────────────────────────
+      // Sporcu bu haftaki son planlı antrenmanını tamamladı ve anket o
+      // antrenmandan bu yana güncellenmedi → gelecek haftanın isabetli planlanması
+      // için güncel veriler (HRV, RHR, sakatlık, uyku vb.) gerekir.
+      (()=>{
+        // Bu haftaki planlı antrenman günleri (koşu + çapraz)
+        const weekDateList=[];
+        for(let d=new Date(wkStart);d<=wkEnd;d.setDate(d.getDate()+1)){
+          weekDateList.push(localDateStr(d));
+        }
+        const planliGunler=weekDateList.filter(ds=>{
+          const ov=planSnap?.overrideMap?.[ds];
+          return ov&&ov.tip&&ov.tip!=='dinlenme';
+        });
+        if(!planliGunler.length) return null;
+        const sonPlanliTarih=planliGunler[planliGunler.length-1];
+        // Son planlı gün geçmişte olmalı
+        if(sonPlanliTarih>todayStr) return null;
+        // O günde kayıtlı gerçek antrenman var mı?
+        const sonGunWk=workouts.find(w=>w.date===sonPlanliTarih);
+        if(!sonGunWk) return null;
+        // Son antrenmanın ne zaman girildiği (workout timestamp yoksa tarih+saat)
+        const wkTime=sonGunWk.time||'23:59';
+        const sonAntrenmanZaman=new Date(sonPlanliTarih+'T'+wkTime+':00');
+        // Anket güncellemesi son antrenmandan sonra mı?
+        const anketZaman=athlete.anket_guncelleme?new Date(athlete.anket_guncelleme):null;
+        const anketGuncel=anketZaman&&anketZaman>sonAntrenmanZaman;
+        if(anketGuncel) return null; // hazır — uyarı gerekmez
+        // Anket sayfasına geçiş URL'si — routing ?form=sporcu ile çalışır
+        const anketUrl='?form=sporcu&id='+athlete.id;
+        return React.createElement('div',{style:{
+          background:'linear-gradient(135deg, #fef3c7, #fed7aa)',
+          border:'1px solid #f59e0b',
+          borderRadius:'var(--radius-lg)',
+          padding:'14px 16px',marginBottom:16,
+          display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'
+        }},
+          React.createElement('div',{style:{fontSize:28,flexShrink:0}},'📋'),
+          React.createElement('div',{style:{flex:'1 1 200px',minWidth:0}},
+            React.createElement('div',{style:{fontSize:14,fontWeight:700,color:'#92400e',marginBottom:3}},
+              'Gelecek hafta antrenmanların için anketini güncelle'
+            ),
+            React.createElement('div',{style:{fontSize:12,color:'#78350f',lineHeight:1.5}},
+              'Bu haftaki son antrenmanını tamamladın 👏 Gelecek haftanın planı; güncel dinlenme durumu, HRV, nabız ve sakatlık bilgilerine göre şekillenir. Ankette birkaç alan güncelleyerek antrenörünün daha isabetli plan yapmasına yardımcı ol.'
+            )
+          ),
+          React.createElement('a',{
+            href:anketUrl,
+            style:{
+              background:'#f59e0b',color:'#fff',
+              padding:'8px 16px',borderRadius:'var(--radius)',
+              fontSize:13,fontWeight:600,textDecoration:'none',
+              whiteSpace:'nowrap',flexShrink:0
+            }
+          },'✏️ Anketi Güncelle')
+        );
+      })(),
 
       // 3-sütun: [Durumum] [Antrenmanlarım] [Liderlik]
       (()=>{
