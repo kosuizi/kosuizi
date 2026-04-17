@@ -1,4 +1,4 @@
-<!-- Version: v2026.04.17-0658 -->
+<!-- Version: v2026.04.17-0820 -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.17-0658'; // handlePlanGuncelle stale-state fix: Firebase'den taze ath2 çekiliyor
+const APP_VERSION='v2026.04.17-0820'; // Bugün için öneri fix: plan useMemo bugün antrenman yoksa overrideMap'i kullanır + parent athletes yenileme
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -9007,7 +9007,7 @@ function AntrenmanlarTab({athlete}){
   );
 }
 
-function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapInit,onPlanSnapChange,onSaveWorkout}){  const [showLoading,setShowLoading]=useState(false);
+function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapInit,onPlanSnapChange,onAthletesRefresh,onSaveWorkout}){  const [showLoading,setShowLoading]=useState(false);
   const [selectedPrimary,setSelectedPrimary]=useState(null);
   const [planMode,setPlanModeLocal]=useState('optimize');
   const [expandDay,setExpandDay]=useState(null);
@@ -9089,13 +9089,24 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       const athActualDates=new Set((workouts||[]).filter(w=>w.athleteId===athlete.id).map(w=>w.date));
       generated.weeks.forEach(wk=>{
         wk.days=wk.days.map(day=>{
-          if(day.isPast||day.date===todayStr){
-            // Tamamlanmış günde ata ile değişiklik yapıldıysa yapilar'ı overrideMap'ten al
+          // Geçmiş: yapılar doluysa overrideMap'ten al (koç atama değişikliği için), aksi halde day'i koru
+          if(day.isPast){
             const ov=planSnap.overrideMap?.[day.date];
             if(ov?.yapilar?.length>0) return{...day,yapilar:ov.yapilar,tip:ov.tip||day.tip,baslik:ov.baslik||day.baslik};
             return day;
           }
-          // Gelecek: overrideMap'ten al — ama önce günün hâlâ antrenman günü olup olmadığını doğrula
+          // Bugün: gerçek antrenman kaydı varsa day'i koru (tamamlanmış antrenman gösterilsin),
+          // yoksa overrideMap'ten öneriyi çek (bugün de antrenman planı olabilir)
+          if(day.date===todayStr){
+            const hasActualToday=athActualDates.has(day.date);
+            if(hasActualToday){
+              const ov=planSnap.overrideMap?.[day.date];
+              if(ov?.yapilar?.length>0) return{...day,yapilar:ov.yapilar,tip:ov.tip||day.tip,baslik:ov.baslik||day.baslik};
+              return day;
+            }
+            // Bugün antrenman yok — overrideMap'teki öneriyi göster (aşağıdaki gelecek dalına düş)
+          }
+          // Gelecek (ve bugün antrenman kaydı olmayan durum): overrideMap'ten al
           const ov=planSnap.overrideMap[day.date];
           if(ov){
             const dayShortOv=DAYS_SHORT[new Date(day.date+'T12:00:00').getDay()];
@@ -9166,6 +9177,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       if(Array.isArray(freshList)){
         const found=freshList.find(a=>a.id===athlete.id);
         if(found) freshAthlete=found;
+        // Parent state'i de güncelle — yoksa plan useMemo eski athlete ile re-render olur
+        if(onAthletesRefresh) onAthletesRefresh(freshList);
       }
     }catch(e){console.warn('handlePlanGuncelle: taze veri alınamadı, mevcut state kullanılıyor',e);}
 
@@ -14027,7 +14040,7 @@ function App(){
     ),
     React.createElement('div',{className:'content'},
       tab==='dashboard'&&React.createElement(Dashboard,{workouts:athWks,athlete,history,races}),
-      tab==='plan'&&React.createElement(HaftalikPlanTab,{athlete,history,races,workouts,testPlanlar,planSnapInit:planSnap,onPlanSnapChange:setPlanSnapApp,onSaveWorkout:w=>{const ath=athletes.find(a=>a.id===w.athleteId);const m=calcMetrics(w,ath);const rec=calcRecovery(w,ath,m.yukObj);setWorkouts(p=>[...p,{...w,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:rec.hedefISO}]);}}),
+      tab==='plan'&&React.createElement(HaftalikPlanTab,{athlete,history,races,workouts,testPlanlar,planSnapInit:planSnap,onPlanSnapChange:setPlanSnapApp,onAthletesRefresh:freshList=>setAthletes(freshList),onSaveWorkout:w=>{const ath=athletes.find(a=>a.id===w.athleteId);const m=calcMetrics(w,ath);const rec=calcRecovery(w,ath,m.yukObj);setWorkouts(p=>[...p,{...w,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:rec.hedefISO}]);}}),
       tab==='program'&&React.createElement(ProgramTab,{athletes,workouts,allHistory,races,testPlanlar,teamName,teamLogo}),
       tab==='lider'&&React.createElement(LiderlikTab,{athletes,workouts,teamName,teamLogo,races}),
       tab==='bolge'&&React.createElement(BolgeTab,{athlete,workouts:athWks,onUpdateAthlete:handleUpdateAthlete}),
