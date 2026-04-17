@@ -1,4 +1,4 @@
-<!-- Version: v2026.04.16-2143 -->
+<!-- Version: v2026.04.17-0658 -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.16-2143'; // Yarış fix temiz: planlıGünler'e yarış tarihleri eklendi (debug log kaldırıldı)
+const APP_VERSION='v2026.04.17-0658'; // handlePlanGuncelle stale-state fix: Firebase'den taze ath2 çekiliyor
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -9157,17 +9157,28 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
   //   • rowOverrides (pace/mesafe düzenlemeleri) → profilde uyumluysa korunur
   //   • Geçmiş _editedAt damgalı günler → profilde uyumluysa korunur
   //   • Saf öneri olan gelecek günler → yenilenir
-  const handlePlanGuncelle=()=>{
+  const handlePlanGuncelle=async()=>{
+    // Önce Firebase'den en taze athlete verisini çek — anket güncellemesi sonrası
+    // state henüz yenilenmemiş olabilir, eski kosu_gunleri ile plan üretilmemeli
+    let freshAthlete=athlete;
+    try{
+      const freshList=await fbGet('ath2');
+      if(Array.isArray(freshList)){
+        const found=freshList.find(a=>a.id===athlete.id);
+        if(found) freshAthlete=found;
+      }
+    }catch(e){console.warn('handlePlanGuncelle: taze veri alınamadı, mevcut state kullanılıyor',e);}
+
     const curSnap=planSnapRef.current||{};
     const todayStr=localDateStr(new Date());
-    const newSnap=generatePlanSnapshot(athlete,history,races,workouts||[],testPlanlar||[]);
+    const newSnap=generatePlanSnapshot(freshAthlete,history,races,workouts||[],testPlanlar||[]);
     newSnap.planMode=planMode;
     newSnap.selectedPrimary=selectedPrimary||null;
-    newSnap.athleteProfile={kosu_gunleri:athlete.kosu_gunleri,capraz_gunleri:athlete.capraz_gunleri,disiplin:athlete.disiplin,uzun_gun:athlete.uzun_gun};
+    newSnap.athleteProfile={kosu_gunleri:freshAthlete.kosu_gunleri,capraz_gunleri:freshAthlete.capraz_gunleri,disiplin:freshAthlete.disiplin,uzun_gun:freshAthlete.uzun_gun};
 
     // Korunan günleri belirle
-    const guncelKosuGunleriProto=athlete.kosu_gunleri||[];
-    const guncelCaprazGunleriProto=athlete.capraz_gunleri||[];
+    const guncelKosuGunleriProto=freshAthlete.kosu_gunleri||[];
+    const guncelCaprazGunleriProto=freshAthlete.capraz_gunleri||[];
     const isProfilUyumlu=(ds)=>{
       const dayShortProto=DAYS_SHORT[new Date(ds+'T12:00:00').getDay()];
       return guncelKosuGunleriProto.includes(dayShortProto)||guncelCaprazGunleriProto.includes(dayShortProto);
@@ -9183,7 +9194,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         if(ds<todayStr||isProfilUyumlu(ds)) protectedDates.add(ds);
       });
     }
-    const athWkDates=new Set((workouts||[]).filter(w=>w.athleteId===athlete.id).map(w=>w.date));
+    const athWkDates=new Set((workouts||[]).filter(w=>w.athleteId===freshAthlete.id).map(w=>w.date));
     athWkDates.forEach(ds=>protectedDates.add(ds));
     if(curSnap.overrideMap){
       Object.entries(curSnap.overrideMap).forEach(([ds,ov])=>{
@@ -9210,7 +9221,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     // Koşu günleri senkronizasyonu — kaliteli antrenmanları redistribute et
     const oldProfile=curSnap.athleteProfile||{};
     const oldKosuGunleri=(oldProfile.kosu_gunleri||[]).sort();
-    const newKosuGunleri=(athlete.kosu_gunleri||[]).sort();
+    const newKosuGunleri=(freshAthlete.kosu_gunleri||[]).sort();
     const kosuGunleriDegisti=JSON.stringify(oldKosuGunleri)!==JSON.stringify(newKosuGunleri);
 
     if(kosuGunleriDegisti&&curSnap.overrideMap&&Object.keys(curSnap.overrideMap).length>0){
@@ -9244,9 +9255,9 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     }
 
     // Son temizlik: profilde olmayan günleri dinlenmeye çek
-    const guncelKosuGunleri=athlete.kosu_gunleri||[];
-    const guncelCaprazGunleri=athlete.capraz_gunleri||[];
-    const gercekAntrenmanGunleri=new Set((workouts||[]).filter(w=>w.athleteId===athlete.id).map(w=>w.date));
+    const guncelKosuGunleri=freshAthlete.kosu_gunleri||[];
+    const guncelCaprazGunleri=freshAthlete.capraz_gunleri||[];
+    const gercekAntrenmanGunleri=new Set((workouts||[]).filter(w=>w.athleteId===freshAthlete.id).map(w=>w.date));
     Object.keys(newSnap.overrideMap||{}).forEach(ds=>{
       if(ds<todayStr) return;
       const ov=newSnap.overrideMap[ds];
@@ -9263,7 +9274,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     });
 
     setPlanSnap(newSnap);
-    fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
+    fbSet(`plan_snapshots/${freshAthlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
     setReviewMsg('✅ Plan güncellendi');
   };
 
