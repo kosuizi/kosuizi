@@ -1,4 +1,4 @@
-<!-- Version: v2026.04.17-0833 -->
+<!-- Version: v2026.04.17-0842 -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.17-0833'; // Final temiz: bayat override fix doğrulandı, tanı log kaldırıldı
+const APP_VERSION='v2026.04.17-0842'; // Açıklamadaki dk düzenleme: cue'daki "X dk" ifadesi değişince süre ve mesafe otomatik güncellenir
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -4218,6 +4218,34 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
       await saveCueGlobal(label, text);
       setCustomCues({..._cueCache.data});
     }
+
+    // ── Açıklamadaki "X dk" ifadesinden satır süresini ve mesafesini güncelle ──
+    // Örnek: "40 dk — Z2 · 144–150 bpm · 6:52–6:03 (6:28) /km"
+    // Kullanıcı "40" → "30" yaparsa, ilgili satırın h/m/s ve mesafesi pace'e göre yeniden hesaplanır.
+    try{
+      const dkMatch=String(text||'').match(/(\d+(?:[.,]\d+)?)\s*dk/i);
+      if(!dkMatch) return;
+      const yeniDk=parseFloat(dkMatch[1].replace(',','.'));
+      if(!(yeniDk>0&&yeniDk<600)) return; // makul aralık
+      const yeniSec=Math.round(yeniDk*60);
+      // İlgili satırı bul: label eşleşen ilk non-header satırı
+      const rowIdx=rows.findIndex(rr=>rr.type!=='header'&&rr.label===label);
+      if(rowIdx<0) return;
+      const r=rows[rowIdx];
+      const paceSec=(r.pm||0)*60+(r.ps||0);
+      const h=Math.floor(yeniSec/3600);
+      const m=Math.floor((yeniSec%3600)/60);
+      const s=yeniSec%60;
+      let upd={h,m,s};
+      // Pace biliniyorsa mesafeyi de güncelle
+      if(paceSec>0){
+        const yeniMesafe=Math.round(yeniSec/paceSec*1000);
+        upd.mesafe=yeniMesafe;
+      }
+      const newOverrides={...rowOverrides,[rowIdx]:{...(rowOverrides[rowIdx]||{}), ...upd}};
+      setRowOverrides(newOverrides);
+      if(onSaveOverrides) onSaveOverrides({...newOverrides,__aralik:aralikOverrides});
+    }catch(e){console.warn('cue→süre/mesafe senkronu başarısız:',e);}
   };
 
   // originalCueOnly=true ise (yalnızca Antrenmanlar sekmesi) her zaman orijinal otomatik açıklama gösterilir;
