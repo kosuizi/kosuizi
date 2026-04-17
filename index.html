@@ -1,4 +1,4 @@
-<!-- Version: v2026.04.17-0857 -->
+<!-- Version: v2026.04.17-0920 -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.17-0857'; // Koşu İzlerim süre revize fix: computeEffectiveSureDk override'lardan toplam süre hesaplıyor
+const APP_VERSION='v2026.04.17-0920'; // (1) saveCue tek snapshot — onSaveDetay rowUpdate ile birlikte kaydediliyor (detay artık geri dönmüyor) (2) handleToggleApproved bayat override için taze öneriyle snapshot tazeler (Cuma onay→sporcu görünümü)
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -4212,40 +4212,53 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
 
   const saveCue = async(label, text, srcBaslik)=>{
     setEditingLabel(null);
+
+    // ── Açıklamadaki "X dk" ifadesinden satır süresini ve mesafesini çıkar ──
+    // Örnek: "40 dk — Z2 · 144–150 bpm · 6:52–6:03 (6:28) /km"
+    // Eğer metin "X dk" içeriyorsa satırın h/m/s ve mesafesi pace'e göre güncellenir.
+    let pendingRowUpdate=null; // {rowIdx, upd}
+    try{
+      const dkMatch=String(text||'').match(/(\d+(?:[.,]\d+)?)\s*dk/i);
+      if(dkMatch){
+        const yeniDk=parseFloat(dkMatch[1].replace(',','.'));
+        if(yeniDk>0&&yeniDk<600){
+          const yeniSec=Math.round(yeniDk*60);
+          // İlgili satırı bul: label eşleşen ilk non-header satırı
+          const rowIdx=rows.findIndex(rr=>rr.type!=='header'&&rr.label===label);
+          if(rowIdx>=0){
+            const r=rows[rowIdx];
+            const paceSec=(r.pm||0)*60+(r.ps||0);
+            const h=Math.floor(yeniSec/3600);
+            const m=Math.floor((yeniSec%3600)/60);
+            const s=yeniSec%60;
+            const upd={h,m,s};
+            if(paceSec>0){
+              const yeniMesafe=Math.round(yeniSec/paceSec*1000);
+              upd.mesafe=yeniMesafe;
+            }
+            pendingRowUpdate={rowIdx,upd};
+          }
+        }
+      }
+    }catch(e){console.warn('cue parse hatası:',e);}
+
+    // Ana kaydetme: detay + row override'ı birlikte ilet
     if(onSaveDetay){
-      onSaveDetay(srcBaslik || label, text);
+      // İkinci parametre: detay + isteğe bağlı row override (tek snapshot güncellemesi)
+      onSaveDetay(srcBaslik || label, text, pendingRowUpdate);
     } else {
       await saveCueGlobal(label, text);
       setCustomCues({..._cueCache.data});
     }
 
-    // ── Açıklamadaki "X dk" ifadesinden satır süresini ve mesafesini güncelle ──
-    // Örnek: "40 dk — Z2 · 144–150 bpm · 6:52–6:03 (6:28) /km"
-    // Kullanıcı "40" → "30" yaparsa, ilgili satırın h/m/s ve mesafesi pace'e göre yeniden hesaplanır.
-    try{
-      const dkMatch=String(text||'').match(/(\d+(?:[.,]\d+)?)\s*dk/i);
-      if(!dkMatch) return;
-      const yeniDk=parseFloat(dkMatch[1].replace(',','.'));
-      if(!(yeniDk>0&&yeniDk<600)) return; // makul aralık
-      const yeniSec=Math.round(yeniDk*60);
-      // İlgili satırı bul: label eşleşen ilk non-header satırı
-      const rowIdx=rows.findIndex(rr=>rr.type!=='header'&&rr.label===label);
-      if(rowIdx<0) return;
-      const r=rows[rowIdx];
-      const paceSec=(r.pm||0)*60+(r.ps||0);
-      const h=Math.floor(yeniSec/3600);
-      const m=Math.floor((yeniSec%3600)/60);
-      const s=yeniSec%60;
-      let upd={h,m,s};
-      // Pace biliniyorsa mesafeyi de güncelle
-      if(paceSec>0){
-        const yeniMesafe=Math.round(yeniSec/paceSec*1000);
-        upd.mesafe=yeniMesafe;
-      }
+    // Row override state'ini lokalde de güncelle (ReceteTablosu re-render için)
+    if(pendingRowUpdate){
+      const {rowIdx,upd}=pendingRowUpdate;
       const newOverrides={...rowOverrides,[rowIdx]:{...(rowOverrides[rowIdx]||{}), ...upd}};
       setRowOverrides(newOverrides);
-      if(onSaveOverrides) onSaveOverrides({...newOverrides,__aralik:aralikOverrides});
-    }catch(e){console.warn('cue→süre/mesafe senkronu başarısız:',e);}
+      // onSaveOverrides ARTIK ÇAĞRILMIYOR — onSaveDetay zaten her şeyi kaydetti.
+      // Aksi halde iki setPlanSnap çakışmasıyla detay güncellemesi eziliyordu.
+    }
   };
 
   // originalCueOnly=true ise (yalnızca Antrenmanlar sekmesi) her zaman orijinal otomatik açıklama gösterilir;
@@ -9438,7 +9451,32 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
   // ── Madde 2: Antrenman Onay Kutusu ──────────────────────────────────────────
   const handleToggleApproved=(dateStr)=>{
     const curSnap=planSnapRef.current||{};
-    const ov=curSnap.overrideMap?.[dateStr];
+    let ov=curSnap.overrideMap?.[dateStr];
+    // ── Bayat override koruması ──
+    // Eğer override yok veya dinlenme ama gün artık koşu günü ise, plan useMemo'sundan
+    // taze öneriyi al ve snapshot'a yaz. Aksi halde dinlenme'yi onaylamış oluyoruz
+    // ve sporcu görünmesi gereken antrenmanı göremiyor.
+    try{
+      const dayShort=DAYS_SHORT[new Date(dateStr+'T12:00:00').getDay()];
+      const isAntrenmanGunu=(athlete?.kosu_gunleri||[]).includes(dayShort)||(athlete?.capraz_gunleri||[]).includes(dayShort);
+      const ovYapilarBos=!ov?.yapilar||ov.yapilar.length===0;
+      const isStale=!ov||ov.tip==='dinlenme'||ovYapilarBos;
+      if(isAntrenmanGunu&&isStale){
+        // plan useMemo'dan taze günü bul
+        const freshDay=plan?.weeks?.[0]?.days?.find(d=>d.date===dateStr);
+        if(freshDay&&freshDay.tip&&freshDay.tip!=='dinlenme'&&freshDay.yapilar?.length>0){
+          ov={
+            tip:freshDay.tip,
+            baslik:freshDay.baslik,
+            sure_dk:freshDay.sure_dk||0,
+            yukHedef:freshDay.yukHedef||0,
+            isKosuCapraz:freshDay.isKosuCapraz||false,
+            yapilar:freshDay.yapilar,
+            approved:false // henüz onaylanmadı; aşağıda toggle edilecek
+          };
+        }
+      }
+    }catch(e){console.warn('bayat override fallback hatası:',e);}
     if(!ov) return;
     const newApproved=!ov.approved;
     const newMap={...(curSnap.overrideMap||{}),[dateStr]:{...ov,approved:newApproved}};
@@ -10371,7 +10409,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   setPlanSnap(newSnap);
                   fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
                 },
-                onSaveDetay:(label, text)=>{
+                onSaveDetay:(label, text, rowUpdate)=>{
                     const curSnap=planSnapRef.current||{};
                     const curOv=curSnap.overrideMap?.[day.date];
                     const baseYapilar=curOv?.yapilar||day.yapilar||[];
@@ -10395,7 +10433,13 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     const entry=curOv||{tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk||0,yukHedef:day.yukHedef||0,approved:false};
                     const newOverrideMap={...(curSnap.overrideMap||{})};
                     newOverrideMap[day.date]={...entry,yapilar:newYapilar,_editedAt:new Date().toISOString()};
-                    const newSnap={...curSnap,overrideMap:newOverrideMap,lastSavedAt:new Date().toISOString()};
+                    // Row override güncellemesi varsa aynı snapshot içinde uygula
+                    let newRowOverrides=curSnap.rowOverrides||{};
+                    if(rowUpdate){
+                      const dayRowOv=newRowOverrides[day.date]||{};
+                      newRowOverrides={...newRowOverrides,[day.date]:{...dayRowOv,[rowUpdate.rowIdx]:{...(dayRowOv[rowUpdate.rowIdx]||{}),...rowUpdate.upd}}};
+                    }
+                    const newSnap={...curSnap,overrideMap:newOverrideMap,rowOverrides:newRowOverrides,lastSavedAt:new Date().toISOString()};
                     setPlanSnap(newSnap);
                     fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
                   }
@@ -10684,7 +10728,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     setPlanSnap(newSnap);
                     fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
                   },
-                  onSaveDetay:(label, text)=>{
+                  onSaveDetay:(label, text, rowUpdate)=>{
                   const curSnap=planSnapRef.current||{};
                   const curOv=curSnap.overrideMap?.[day.date];
                   const baseYapilar=curOv?.yapilar||day.yapilar||[];
@@ -10706,7 +10750,12 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   const entry=curOv||{tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk||0,yukHedef:day.yukHedef||0,approved:false};
                   const newOverrideMap={...(curSnap.overrideMap||{})};
                   newOverrideMap[day.date]={...entry,yapilar:newYapilar,_editedAt:new Date().toISOString()};
-                  const newSnap={...curSnap,overrideMap:newOverrideMap,lastSavedAt:new Date().toISOString()};
+                  let newRowOverrides=curSnap.rowOverrides||{};
+                  if(rowUpdate){
+                    const dayRowOv=newRowOverrides[day.date]||{};
+                    newRowOverrides={...newRowOverrides,[day.date]:{...dayRowOv,[rowUpdate.rowIdx]:{...(dayRowOv[rowUpdate.rowIdx]||{}),...rowUpdate.upd}}};
+                  }
+                  const newSnap={...curSnap,overrideMap:newOverrideMap,rowOverrides:newRowOverrides,lastSavedAt:new Date().toISOString()};
                   setPlanSnap(newSnap);
                   fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
                   }
