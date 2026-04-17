@@ -1,4 +1,4 @@
-<!-- Version: v2026.04.17-0820 -->
+<!-- Version: v2026.04.17-0828 -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.17-0820'; // Bugün için öneri fix: plan useMemo bugün antrenman yoksa overrideMap'i kullanır + parent athletes yenileme
+const APP_VERSION='v2026.04.17-0828'; // Bayat override düzeltmesi: koç useMemo ov.tip=dinlenme ise taze day kullan + tanı log
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -9117,6 +9117,12 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
             if(!isAntrenmanGunu&&!isManual&&!hasActual){
               return{...day,tip:'dinlenme',baslik:'Dinlenme',sure_dk:0,yukHedef:0,yapilar:[]};
             }
+            // Override bayat olabilir: profil değişmiş ama Planı Güncelle henüz basılmamış.
+            // Override 'dinlenme' veya yapılar boş + gün artık antrenman günü → taze day'i kullan
+            const ovYapilarBos=!ov.yapilar||ov.yapilar.length===0;
+            if(isAntrenmanGunu&&!isManual&&(ov.tip==='dinlenme'||ovYapilarBos)&&day.tip&&day.tip!=='dinlenme'&&day.yapilar?.length>0){
+              return day; // taze generateTwoWeekPlan önerisi
+            }
             return{...day,tip:ov.tip,baslik:ov.baslik,sure_dk:ov.sure_dk,yukHedef:ov.yukHedef,isKosuCapraz:ov.isKosuCapraz||false,yapilar:ov.yapilar||[]};
           }
           // Manuel atama
@@ -9289,6 +9295,23 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     setPlanSnap(newSnap);
     fbSet(`plan_snapshots/${freshAthlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
     setReviewMsg('✅ Plan güncellendi');
+
+    // TANI: kullanıcı bug bildirdiğinde console'da gerçek verileri görelim
+    try{
+      const td=localDateStr(new Date());
+      const bugunDayShort=DAYS_SHORT[new Date(td+'T12:00:00').getDay()];
+      const ovToday=newSnap.overrideMap?.[td];
+      console.log('🔍 [planGüncelle-TANI]',{
+        bugun:td,
+        bugunKisaltma:bugunDayShort,
+        'freshAthlete.kosu_gunleri':freshAthlete.kosu_gunleri,
+        'athlete.kosu_gunleri (prop, state eski olabilir)':athlete.kosu_gunleri,
+        'bugun koşu günü mü (fresh)?':(freshAthlete.kosu_gunleri||[]).includes(bugunDayShort),
+        'overrideMap[bugun]':ovToday?{tip:ovToday.tip,baslik:ovToday.baslik,yapilarSayisi:(ovToday.yapilar||[]).length,sure_dk:ovToday.sure_dk}:'YOK',
+        'protectedDates bugun içeriyor mu':protectedDates.has(td),
+        'curSnap.overrideMap[bugun] (eski)':curSnap.overrideMap?.[td]?{tip:curSnap.overrideMap[td].tip,baslik:curSnap.overrideMap[td].baslik}:'YOK'
+      });
+    }catch(e){console.warn('tanı log hatası:',e);}
   };
 
   const handleManuelAta=(dateStr,tpl)=>{
