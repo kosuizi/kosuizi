@@ -1,4 +1,4 @@
-<!-- Version: v2026.04.17-0842 -->
+<!-- Version: v2026.04.17-0857 -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.17-0842'; // Açıklamadaki dk düzenleme: cue'daki "X dk" ifadesi değişince süre ve mesafe otomatik güncellenir
+const APP_VERSION='v2026.04.17-0857'; // Koşu İzlerim süre revize fix: computeEffectiveSureDk override'lardan toplam süre hesaplıyor
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -8600,6 +8600,71 @@ function kosuYapilarAl(day){
   return yapilar;
 }
 
+// Aşama satırları + override'lardan toplam süreyi (dakika) hesapla
+// Sporcu paneli ve koç paneli aynı fonksiyonu kullanabilir.
+// savedOverrides hem satır-düzeyi (sayısal anahtarlar) hem aralık-düzeyi (__aralik) içerebilir.
+// Dönen değer: override'lar uygulanmış, repeatCount ile çarpılmış toplam dk.
+// Fallback (override yoksa veya hesap başarısız): ov.sure_dk
+function computeEffectiveSureDk(yapilar, zones, savedOverrides, fallbackSureDk){
+  try{
+    if(!yapilar||!yapilar.length) return fallbackSureDk||0;
+    const {__aralik,...rowOv}=savedOverrides||{};
+    const aralikOv=__aralik||{};
+    // Tüm yapıların satırlarını üret
+    const baseRows=yapilar.flatMap(y=>{
+      try{return adimToRows(y,zones);}catch(e){return[];}
+    });
+    if(!baseRows.length) return fallbackSureDk||0;
+    // Row override'ları uygula + repeatOverrides
+    const rows=baseRows.map((r,i)=>{
+      let row=rowOv[i]?{...r,...rowOv[i]}:r;
+      return row;
+    });
+    // Aralık ortalamasını uygula — aralikOv varsa run/rest satırlarını güncelle
+    rows.forEach((hdr,hi)=>{
+      if(hdr.type!=='header') return;
+      const ov=aralikOv[hi];
+      if(!ov||Object.keys(ov).length===0) return;
+      const repCount=hdr.repeatCount||1;
+      const avg=(baseRow,kind)=>{
+        if(!baseRow) return null;
+        let totDur=0,n=0;
+        for(let rep=0;rep<repCount;rep++){
+          const repOv=ov[rep]?.[kind]||{};
+          const dh=repOv.h!=null?repOv.h:(baseRow.h||0);
+          const dm=repOv.m!=null?repOv.m:(baseRow.m||0);
+          const ds=repOv.s!=null?repOv.s:(baseRow.s||0);
+          totDur+=dh*3600+dm*60+ds; n++;
+        }
+        return n>0?Math.round(totDur/n):null;
+      };
+      const runIdx=hi+1,restIdx=hi+2;
+      if(rows[runIdx]&&rows[runIdx].type!=='header'){
+        const avgSec=avg(rows[runIdx],'run');
+        if(avgSec!=null){
+          rows[runIdx]={...rows[runIdx],h:Math.floor(avgSec/3600),m:Math.floor((avgSec%3600)/60),s:avgSec%60};
+        }
+      }
+      if(rows[restIdx]&&rows[restIdx].type!=='header'){
+        const avgSec=avg(rows[restIdx],'rest');
+        if(avgSec!=null){
+          rows[restIdx]={...rows[restIdx],h:Math.floor(avgSec/3600),m:Math.floor((avgSec%3600)/60),s:avgSec%60};
+        }
+      }
+    });
+    // Toplam süre: header hariç, repeatCount ile çarp
+    let totSn=0;
+    rows.forEach(r=>{
+      if(r.type==='header') return;
+      const rep=r.repeatCount||1;
+      totSn+=((r.h||0)*3600+(r.m||0)*60+(r.s||0))*rep;
+    });
+    return totSn>0?Math.round(totSn/60):(fallbackSureDk||0);
+  }catch(e){
+    return fallbackSureDk||0;
+  }
+}
+
 
 
 // ── Hızlı Antrenman Ekle (Haftalık Plan'dan) ─────────────────────────────────
@@ -10310,7 +10375,23 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     const curSnap=planSnapRef.current||{};
                     const curOv=curSnap.overrideMap?.[day.date];
                     const baseYapilar=curOv?.yapilar||day.yapilar||[];
-                    const newYapilar=baseYapilar.map(y=>y.baslik===label?{...y,detay:text}:y);
+                    // Eşleştirme: önce tam, yoksa trim + lowercase
+                    const lblNorm=String(label||'').trim().toLocaleLowerCase('tr');
+                    let hit=false;
+                    const newYapilar=baseYapilar.map(y=>{
+                      if(y.baslik===label){hit=true;return{...y,detay:text};}
+                      return y;
+                    });
+                    if(!hit){
+                      // Tam eşleşme olmadı — normalize edip dene
+                      baseYapilar.forEach((y,i)=>{
+                        if(hit) return;
+                        if(String(y.baslik||'').trim().toLocaleLowerCase('tr')===lblNorm){
+                          newYapilar[i]={...y,detay:text};
+                          hit=true;
+                        }
+                      });
+                    }
                     const entry=curOv||{tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk||0,yukHedef:day.yukHedef||0,approved:false};
                     const newOverrideMap={...(curSnap.overrideMap||{})};
                     newOverrideMap[day.date]={...entry,yapilar:newYapilar,_editedAt:new Date().toISOString()};
@@ -10607,7 +10688,21 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   const curSnap=planSnapRef.current||{};
                   const curOv=curSnap.overrideMap?.[day.date];
                   const baseYapilar=curOv?.yapilar||day.yapilar||[];
-                  const newYapilar=baseYapilar.map(y=>y.baslik===label?{...y,detay:text}:y);
+                  const lblNorm=String(label||'').trim().toLocaleLowerCase('tr');
+                  let hit=false;
+                  const newYapilar=baseYapilar.map(y=>{
+                    if(y.baslik===label){hit=true;return{...y,detay:text};}
+                    return y;
+                  });
+                  if(!hit){
+                    baseYapilar.forEach((y,i)=>{
+                      if(hit) return;
+                      if(String(y.baslik||'').trim().toLocaleLowerCase('tr')===lblNorm){
+                        newYapilar[i]={...y,detay:text};
+                        hit=true;
+                      }
+                    });
+                  }
                   const entry=curOv||{tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk||0,yukHedef:day.yukHedef||0,approved:false};
                   const newOverrideMap={...(curSnap.overrideMap||{})};
                   newOverrideMap[day.date]={...entry,yapilar:newYapilar,_editedAt:new Date().toISOString()};
@@ -14954,7 +15049,15 @@ function SporcuPlanView(){
         React.createElement('span',{style:{fontSize:18}},emoji),
         React.createElement('div',{style:{flex:1,minWidth:0}},
           React.createElement('div',{style:{fontWeight:700,fontSize:13,color:titleColor}},title),
-          ov?.sure_dk>0&&React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',marginTop:1}},'⏱ '+fmtSure(ov.sure_dk))
+          (()=>{
+            // Override uygulanmış etkili süre — aşamalar revize edildiğinde doğru toplam
+            const savedOv=(planSnap?.rowOverrides||{})[info.date];
+            const effSure=computeEffectiveSureDk(
+              kosuYapilarAl({tip:ov?.tip,yapilar:ov?.yapilar||[],isKosuCapraz:ov?.isKosuCapraz}),
+              zones, savedOv, ov?.sure_dk||0
+            );
+            return effSure>0&&React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',marginTop:1}},'⏱ '+fmtSure(effSure));
+          })()
         )
       ),
       // İçerik: çapraz ise sade görünüm, değilse ReceteTablosu
