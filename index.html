@@ -1,4 +1,4 @@
-<!-- Version: v2026.04.19-1245 -->
+<!-- Version: v2026.04.19-1500 -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.19-1245'; // (1) saveCue tek snapshot — onSaveDetay rowUpdate ile birlikte kaydediliyor (detay artık geri dönmüyor) (2) handleToggleApproved bayat override için taze öneriyle snapshot tazeler (Cuma onay→sporcu görünümü)
+const APP_VERSION='v2026.04.19-1500'; // Program sekmesi kaldırıldı; koşu yapısal tür dropdown kütüphane ile uyumlu (kuvvet/çapraz hariç)
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1428,7 +1428,7 @@ function compressImage(file,{maxW=800,maxH=800,quality=0.75,onDone,onError}){
   reader.readAsDataURL(file);
 }
 
-const TABS=[{id:'dashboard',label:'Pano'},{id:'program',label:'📋 Program'},{id:'plan',label:'📅 Haftalık Plan'},{id:'lider',label:'🏆 Liderlik'},{id:'bolge',label:'Bölgeler'},{id:'test',label:'🧪 Testler'},{id:'yarislar',label:'Yarış Durumu'},{id:'karsilastir',label:'Karşılaştır'},{id:'ekle',label:'Antrenman Ekle'},{id:'antrenmanlar',label:'📚 Antrenmanlar'},{id:'gecmis',label:'Geçmiş'},{id:'analiz',label:'📊 Antrenman Analizi'},{id:'yukle',label:'Excel Yükle'},{id:'sporcular',label:'Sporcular ve Yarışlar'}];
+const TABS=[{id:'dashboard',label:'Pano'},{id:'plan',label:'📅 Haftalık Plan'},{id:'lider',label:'🏆 Liderlik'},{id:'bolge',label:'Bölgeler'},{id:'test',label:'🧪 Testler'},{id:'yarislar',label:'Yarış Durumu'},{id:'karsilastir',label:'Karşılaştır'},{id:'ekle',label:'Antrenman Ekle'},{id:'antrenmanlar',label:'📚 Antrenmanlar'},{id:'gecmis',label:'Geçmiş'},{id:'analiz',label:'📊 Antrenman Analizi'},{id:'yukle',label:'Excel Yükle'},{id:'sporcular',label:'Sporcular ve Yarışlar'}];
 
 const SPOR_TURLERI=[
   {v:'kosu',     l:'Koşu',       k:1.00, emoji:'🏃'},
@@ -1507,7 +1507,10 @@ const ANTRENMAN_TURLERI=[
 
 // Spora göre filtrelenmiş tür listesi döndür
 function getTurlerForSpor(spor){
-  if(!spor||spor==='kosu') return ANTRENMAN_TURLERI.filter(t=>t.spor==='kosu'||t.spor==='tum');
+  if(!spor||spor==='kosu'){
+    // Koşu: sadece koşu antrenman tipleri + yarış. Kuvvet/Çapraz hariç (kütüphane uyumu)
+    return ANTRENMAN_TURLERI.filter(t=>t.v===''||t.spor==='kosu'||t.v==='yaris');
+  }
   // Koşu dışı sporlar: Spor ismiyle aynı tür + yaris + kuvvet + serbest
   const sporInfo=SPOR_MAP[spor];
   const sporEntry={v:spor, l:(sporInfo?.emoji||'🏅')+' '+(sporInfo?.l||spor), spor:'diger'};
@@ -2848,303 +2851,6 @@ function calcWeeklyStats(workouts,athletes,weekOffset=0){
   }).sort((a,b)=>b.sporSkoru-a.sporSkoru);
 }
 
-// ── Günün Programı ────────────────────────────────────────────────────────────
-function ProgramTab({athletes,workouts,allHistory,races,testPlanlar,teamName,teamLogo}){
-  const today=new Date();
-  const todayStr=today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0')+'-'+String(today.getDate()).padStart(2,'0');
-  const weekKey=getWeekKey(0);
-  const [planSnaps,setPlanSnaps]=useState(_planSnapsCache); // Global cache ile başla
-
-  // Tüm sporcular için planSnap'leri Firebase'den yükle — cache'e yaz
-  useEffect(()=>{
-    let changed=false;
-    const promises=athletes.map(a=>{
-      return fbGet(`plan_snapshots/${a.id}/${weekKey}`).then(snap=>{
-        if(snap){
-          _planSnapsCache[a.id]=snap;
-          changed=true;
-        }
-      }).catch(()=>{});
-    });
-    Promise.all(promises).then(()=>{
-      if(changed) setPlanSnaps({..._planSnapsCache});
-    });
-  },[athletes.map(a=>a.id).join(','),weekKey]);
-  const dayNames=['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'];
-  const monthNames=['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'];
-  const dateLabel=dayNames[today.getDay()]+', '+today.getDate()+' '+monthNames[today.getMonth()];
-  const cardRef=React.useRef(null);
-
-  const tipEmoji2=(tip)=>({
-    kolay:'🚶',aerobik:'🏃',uzun:'🛤',tempo:'💨',tempo_sureli:'💨',esik:'🔥',esik_sureli:'🔥',
-    interval:'⚡',piramit:'🔺',kesintisiz_piramit:'🔺',
-    yokus_kisa:'⛰',yokus_uzun:'⛰',tirmanis:'📈',
-    teknik:'🎯',acici:'🚀',capraz:'➕',
-    hill_sprint:'⛰',on_off:'⚡',tempo_interval:'💨',
-    cruise:'💨',yaris_tempo:'🏁',strides:'🦿',progressive:'📈'
-  }[tip]||'🏃');
-
-  // Yarış zorluk skoru → gradyan rengi (zordan kolaya: kırmızı → turuncu → sarı → yeşil)
-  const diffToColors=(score)=>{
-    if(score>130) return{from:'#1e003a',to:'#7c3aed',text:'#c4b5fd',badge:'#8b5cf6'}; // Historic
-    if(score>80)  return{from:'#7f1d1d',to:'#dc2626',text:'#fca5a5',badge:'#ef4444'}; // Ultra Zor
-    if(score>48)  return{from:'#431407',to:'#ea580c',text:'#fdba74',badge:'#f97316'}; // Çok Zor
-    if(score>25)  return{from:'#422006',to:'#d97706',text:'#fde68a',badge:'#f59e0b'}; // Zor
-    return{from:'#052e16',to:'#16a34a',text:'#86efac',badge:'#22c55e'};               // Normal
-  };
-
-  const diffLabel=(score)=>'';
-
-  // Takım serisi
-  const seriInfo=React.useMemo(()=>{
-    let seri=0;
-    const d=new Date(today);
-    d.setDate(d.getDate()-1);
-    while(seri<365){
-      const ds=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-      if(!(workouts||[]).some(w=>w.date===ds))break;
-      seri++;d.setDate(d.getDate()-1);
-    }
-    const bas=new Date(today);bas.setDate(bas.getDate()-seri);
-    return{seri,basStr:bas.getDate()+' '+monthNames[bas.getMonth()]};
-  },[workouts,todayStr]);
-
-  // Her sporcu için bugünkü antrenman + en yakın yarış bilgisi
-  const athData=React.useMemo(()=>{
-    return athletes
-      .filter(a=>(a.kosu_gunleri||[]).length>0||(a.capraz_gunleri||[]).length>0)
-      .map(a=>{
-        try{
-          const athHistory=allHistory?.[a.id]||[];
-          const athWorkouts=(workouts||[]).filter(w=>w.athleteId===a.id);
-          const athRaceIds=(a.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
-          const athRaces=(races||[]).filter(r=>athRaceIds.includes(r.id));
-          const plan=generateTwoWeekPlan(a,athHistory,athRaces,athWorkouts,testPlanlar||[]);
-          if(!plan||!plan.weeks)return null;
-          // planSnap varsa manualOverrides uygula
-          const snap=planSnaps[a.id];
-          if(snap){
-            const manualDates=new Set(Object.keys(snap.manualOverrides||{}));
-            const cancelledDays=snap.cancelledDays||{};
-            plan.weeks.forEach(wk=>{
-              wk.days=wk.days.map(day=>{
-                // İptal edilmiş günler
-                if(cancelledDays[day.date])
-                  return{...day,tip:'dinlenme',baslik:'İptal Edildi',sure_dk:0};
-                const ov=snap.overrideMap?.[day.date];
-                // Manuel atanmış günler — tam override
-                if(manualDates.has(day.date)){
-                  if(ov) return{...day,tip:ov.tip,baslik:ov.baslik,sure_dk:ov.sure_dk,yukHedef:ov.yukHedef,yapilar:ov.yapilar||day.yapilar};
-                  const mo=snap.manualOverrides[day.date];
-                  if(mo?.tip) return{...day,tip:mo.tip,baslik:mo.baslik||day.baslik};
-                }
-                return day;
-              });
-            });
-          }
-          const allDays=plan.weeks.flatMap(w=>w.days);
-          const day=allDays.find(d=>d.date===todayStr);
-          if(!day||day.tip==='dinlenme')return null;
-          // En yakın yarış
-          const nextRace=athRaces
-            .filter(r=>new Date(r.tarih+'T12:00:00')>=today)
-            .sort((a,b)=>new Date(a.tarih)-new Date(b.tarih))[0]||null;
-          const score=nextRace?raceDiffScore(nextRace):0;
-          const daysLeft=nextRace?Math.ceil((new Date(nextRace.tarih+'T12:00:00')-today)/864e5):null;
-          return{athlete:a,day,nextRace,score,daysLeft};
-        }catch(e){return null;}
-      })
-      .filter(Boolean);
-  },[athletes,workouts,allHistory,races,testPlanlar,todayStr,planSnaps]);
-
-  // Yarışa göre grupla, yarış yoksa ayrı grup
-  const gruplar=React.useMemo(()=>{
-    const raceMap={};
-    athData.forEach(d=>{
-      const key=d.nextRace?d.nextRace.id:'_no_race';
-      if(!raceMap[key]) raceMap[key]={race:d.nextRace,score:d.score,sporcular:[]};
-      raceMap[key].sporcular.push(d);
-    });
-    // Grupları zorluk skoruna göre zordan kolaya sırala
-    return Object.values(raceMap)
-      .sort((a,b)=>b.score-a.score)
-      .map(g=>({
-        ...g,
-        // Grup içi sporcuları da zorluk skoruna göre (sporcu yarış yoksa en sona)
-        sporcular:g.sporcular.sort((a,b)=>b.score-a.score)
-      }));
-  },[athData]);
-
-  const cardRefV=React.useRef(null); // dikey (Instagram)
-  const cardRefH=React.useRef(null); // yatay (geniş)
-
-  // Ortak içerik oluşturucu
-  const renderIcerik=(mod)=>{ // mod: 'v' dikey | 'h' yatay
-    const isH=mod==='h';
-    // Tek grup render — hem yatay hem dikey kullanır
-    const renderGrup=(g,gi,isHorizMode)=>{
-      const colors=diffToColors(g.score);
-      const race=g.race;
-      const daysLeft=race?Math.ceil((new Date(race.tarih+'T12:00:00')-today)/864e5):null;
-      return React.createElement('div',{key:gi,style:{
-        display:'flex',flexDirection:'column',
-        ...(isHorizMode?{flex:'1 1 180px',minWidth:160,maxWidth:280}:{marginBottom:8})
-      }},
-        // Yarış başlığı
-        race&&React.createElement('div',{style:{
-          padding:'7px 10px',
-          borderRadius:'8px 8px 0 0',
-          background:'linear-gradient(135deg,'+colors.from+' 0%,'+colors.to+'40 100%)',
-          borderTop:'2px solid '+colors.badge,
-          borderLeft:'2px solid '+colors.badge,
-          borderRight:'2px solid '+colors.badge,
-          display:'flex',alignItems:'center',justifyContent:'space-between',gap:8
-        }},
-          React.createElement('div',{style:{display:'flex',alignItems:'center',gap:6,flex:1,minWidth:0}},
-            race.logo&&React.createElement('img',{src:race.logo,style:{
-              width:24,height:24,objectFit:'contain',borderRadius:4,
-              background:'rgba(255,255,255,.1)',padding:2,flexShrink:0
-            }}),
-            React.createElement('div',{style:{minWidth:0}},
-              React.createElement('div',{style:{color:'#fff',fontWeight:700,fontSize:11,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},race.ad),
-              React.createElement('div',{style:{color:colors.text,fontSize:9,marginTop:1}},
-                (race.mesafe?'~'+race.mesafe+' km':'')+(race.d_plus?' · D+ ~'+race.d_plus+'m':'')
-              )
-            )
-          ),
-          daysLeft!=null&&React.createElement('div',{style:{
-            background:colors.badge+'33',border:'1px solid '+colors.badge+'66',
-            borderRadius:5,padding:'2px 6px',textAlign:'center',flexShrink:0
-          }},
-            React.createElement('div',{style:{color:colors.text,fontWeight:800,fontSize:13}},daysLeft),
-            React.createElement('div',{style:{color:colors.text,fontSize:7,opacity:.7}},'GÜN')
-          )
-        ),
-        // Sporcular — her zaman dikey liste (öbek görünümü)
-        React.createElement('div',{style:{
-          display:'flex',flexDirection:'column',gap:1,
-          border:'1px solid '+colors.badge+'30',
-          borderTop:race?'none':undefined,
-          borderRadius:race?'0 0 8px 8px':'8px',
-          overflow:'hidden'
-        }},
-          g.sporcular.map(({athlete:a,day},si)=>{
-            const foto=a.foto;
-            const isim=(a.ad||'')+' '+(a.soyad||'');
-            const emoji=tipEmoji2(day.tip);
-            const antAd=day.yapi_notu?day.yapi_notu.split(' — ')[0]:day.baslik;
-            return React.createElement('div',{key:a.id,style:{
-              display:'flex',alignItems:'center',gap:8,
-              padding:'7px 10px',
-              background:si%2===0?'rgba(255,255,255,.04)':'rgba(255,255,255,.02)',
-              borderLeft:'2px solid '+colors.badge+'50'
-            }},
-              React.createElement('div',{style:{
-                width:30,height:30,borderRadius:'50%',flexShrink:0,
-                overflow:'hidden',border:'1.5px solid '+colors.badge+'70',
-                background:'rgba(255,255,255,.08)',
-                display:'flex',alignItems:'center',justifyContent:'center',fontSize:14
-              }},
-                foto?React.createElement('img',{src:foto,style:{width:'100%',height:'100%',objectFit:'cover'}}):React.createElement('span',null,emoji)
-              ),
-              React.createElement('div',{style:{flex:1,minWidth:0}},
-                React.createElement('div',{style:{color:'#f1f5f9',fontWeight:600,fontSize:11,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},isim),
-                React.createElement('div',{style:{color:colors.text,fontSize:10,marginTop:1,opacity:.8}},emoji+' '+antAd)
-              )
-            );
-          })
-        )
-      );
-    };
-
-    const grupRender=gruplar.map((g,gi)=>renderGrup(g,gi,isH));
-
-    return React.createElement('div',{style:{
-      background:'#0f2a4a',
-      borderRadius:16,overflow:'hidden',
-      display:'flex',flexDirection:'column',
-      fontFamily:'-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
-      ...(isH?{width:'100%'}:{})
-    }},
-
-      // Başlık
-      React.createElement('div',{style:{padding:isH?'12px 16px 8px':'18px 20px 10px',display:'flex',alignItems:'center',justifyContent:'space-between'}},
-        React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8}},
-          teamLogo
-            ?React.createElement('img',{src:teamLogo,style:{width:isH?28:38,height:isH?28:38,objectFit:'contain',borderRadius:6,background:'rgba(255,255,255,.08)',padding:2}})
-            :React.createElement('div',{style:{width:isH?28:38,height:isH?28:38,borderRadius:6,background:'rgba(99,102,241,.25)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:isH?14:18}},'🏃'),
-          React.createElement('div',null,
-            React.createElement('div',{style:{color:'#f1f5f9',fontWeight:800,fontSize:isH?13:15,letterSpacing:'-0.3px'}},teamName||'Koşu İzi'),
-            React.createElement('div',{style:{color:'rgba(255,255,255,.35)',fontSize:isH?9:10,letterSpacing:1,marginTop:1}},'GÜNÜN PROGRAMI')
-          )
-        ),
-        React.createElement('div',{style:{textAlign:'right'}},
-          React.createElement('div',{style:{color:'#e2e8f0',fontWeight:700,fontSize:isH?12:14}},dateLabel),
-          React.createElement('div',{style:{color:'rgba(255,255,255,.3)',fontSize:isH?9:11}},today.getFullYear())
-        )
-      ),
-      // Seri
-      seriInfo.seri>0&&React.createElement('div',{style:{padding:isH?'0 16px 10px':'0 20px 14px'}},
-        React.createElement('div',{style:{
-          padding:isH?'6px 10px':'10px 14px',borderRadius:8,
-          background:'rgba(34,197,94,.12)',border:'1px solid rgba(34,197,94,.2)',
-          display:'flex',alignItems:'center',gap:8
-        }},
-          React.createElement('span',{style:{fontSize:isH?14:20}},'🔥'),
-          React.createElement('div',null,
-            React.createElement('div',{style:{color:'#4ade80',fontWeight:700,fontSize:isH?11:13}},seriInfo.seri+' günlük takım serisi!'),
-            React.createElement('div',{style:{color:'rgba(255,255,255,.3)',fontSize:isH?9:11}},seriInfo.basStr+"'den beri aktif")
-          )
-        )
-      ),
-      // Gruplar
-      React.createElement('div',{style:{
-        padding:isH?'0 16px 12px':'0 20px 12px',
-        display:'flex',
-        flexDirection:isH?'row':'column',
-        flexWrap:isH?'wrap':'nowrap',
-        gap:isH?8:10,
-        alignItems:isH?'flex-start':'stretch'
-      }},
-        gruplar.length===0
-          ?React.createElement('div',{style:{textAlign:'center',color:'rgba(255,255,255,.25)',fontSize:13,padding:'20px 0'}},'🏖 Bugün kimsenin antrenmanı yok')
-          :grupRender
-      ),
-      // Alt imza
-      React.createElement('div',{style:{padding:isH?'8px 16px':'10px 20px',borderTop:'1px solid rgba(255,255,255,.05)',display:'flex',justifyContent:'center'}},
-        React.createElement('div',{style:{color:'rgba(255,255,255,.15)',fontSize:isH?8:9,letterSpacing:1.5}},'KOŞU İZİ · kosuizi.github.io')
-      )
-    );
-  };
-
-  return React.createElement('div',null,
-    // Başlık
-    React.createElement('div',{style:{fontWeight:700,fontSize:14,marginBottom:12,color:'var(--text-primary)'}},dateLabel+' Günün Programı'),
-
-    // Dikey versiyon (Instagram Hikayesi)
-    React.createElement('div',{style:{marginBottom:20}},
-      React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:6,display:'flex',alignItems:'center',gap:6}},
-        '📱 Instagram Hikayesi',
-        React.createElement(ShareButton,{targetRef:cardRefV,filename:'program_hikaye_'+todayStr+'.png',title:dateLabel+' Günün Programı'})
-      ),
-      React.createElement('div',{ref:cardRefV,style:{maxWidth:360,margin:'0 auto'}},
-        renderIcerik('v')
-      )
-    ),
-
-    // Yatay versiyon
-    React.createElement('div',null,
-      React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:6,display:'flex',alignItems:'center',gap:6}},
-        '🖥 Yatay Paylaşım',
-        React.createElement(ShareButton,{targetRef:cardRefH,filename:'program_yatay_'+todayStr+'.png',title:dateLabel+' Günün Programı'})
-      ),
-      React.createElement('div',{ref:cardRefH},
-        renderIcerik('h')
-      )
-    )
-  );
-}
-
 
 function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
   const [weekOffset,setWeekOffset]=useState(0);
@@ -3979,7 +3685,7 @@ function zoneStatusColor(pct, min, max, idealMin, idealMax){
   return{bg:'rgba(220,38,38,0.15)',border:'rgba(220,38,38,0.55)',text:'#7f1d1d'};
 }
 
-// Global plan snap cache — ProgramTab re-render'da kaybolmaz
+// Global plan snap cache — HaftalikPlanTab ve AntrenmanEkle için paylaşımlı
 const _planSnapsCache = {};
 
 function coachingCue(label, tip){
@@ -14238,7 +13944,6 @@ function App(){
     React.createElement('div',{className:'content'},
       tab==='dashboard'&&React.createElement(Dashboard,{workouts:athWks,athlete,history,races}),
       tab==='plan'&&React.createElement(HaftalikPlanTab,{athlete,history,races,workouts,testPlanlar,planSnapInit:planSnap,onPlanSnapChange:setPlanSnapApp,onAthletesRefresh:freshList=>setAthletes(freshList),onSaveWorkout:w=>{const ath=athletes.find(a=>a.id===w.athleteId);const m=calcMetrics(w,ath);const rec=calcRecovery(w,ath,m.yukObj);const mergedHedef=mergeRecoveryHedef(rec.hedefISO,workouts,w.athleteId);setWorkouts(p=>[...p,{...w,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:mergedHedef}]);}}),
-      tab==='program'&&React.createElement(ProgramTab,{athletes,workouts,allHistory,races,testPlanlar,teamName,teamLogo}),
       tab==='lider'&&React.createElement(LiderlikTab,{athletes,workouts,teamName,teamLogo,races}),
       tab==='bolge'&&React.createElement(BolgeTab,{athlete,workouts:athWks,onUpdateAthlete:handleUpdateAthlete}),
       tab==='test'&&React.createElement(TestTab,{athlete,history,races,workouts,onUpdateAthlete:handleUpdateAthlete,onSaveWorkout:w=>setWorkouts(p=>[...p,w]),testPlanlar,onSaveTestPlan:p=>setTestPlanlar(prev=>[...prev.filter(x=>!(x.athId===p.athId&&x.testTur===p.testTur)),p]),onDeleteTestPlan:id=>setTestPlanlar(p=>p.filter(x=>x.id!==id))}),
