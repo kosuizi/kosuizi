@@ -1,4 +1,4 @@
-<!-- Version: v2026.04.17-0920 -->
+<!-- Version: v2026.04.19-1200 -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.04.17-0920'; // (1) saveCue tek snapshot — onSaveDetay rowUpdate ile birlikte kaydediliyor (detay artık geri dönmüyor) (2) handleToggleApproved bayat override için taze öneriyle snapshot tazeler (Cuma onay→sporcu görünümü)
+const APP_VERSION='v2026.04.19-1200'; // (1) saveCue tek snapshot — onSaveDetay rowUpdate ile birlikte kaydediliyor (detay artık geri dönmüyor) (2) handleToggleApproved bayat override için taze öneriyle snapshot tazeler (Cuma onay→sporcu görünümü)
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -453,6 +453,27 @@ function calcRecovery(w, ath, yukObj){
 
   return{saatler,kategori,renk,aktivite,hedefStr,hedefISO:hedef.toISOString()};
 }
+
+// ── Kümülatif toparlanma birleştirme ─────────────────────────────────────────
+// Yeni antrenman eklenirken önceki toparlanma süresi henüz bitmemişse,
+// yeni recovery_hedef = max(yeni hedef, önceki hedef)
+// Böylece bitmemiş toparlanma üzerine yeni yük binerse toplam süre uzar.
+function mergeRecoveryHedef(newHedefISO, existingWorkouts, athleteId){
+  if(!newHedefISO) return newHedefISO;
+  const now=new Date();
+  const athWks=(existingWorkouts||[]).filter(w=>w.athleteId===athleteId&&w.recovery_hedef);
+  if(!athWks.length) return newHedefISO;
+  // En son tamamlanan antrenmanın toparlanma hedefini bul
+  const sorted=athWks.slice().sort((a,b)=>(b.savedAt||b.date||'').localeCompare(a.savedAt||a.date||''));
+  const onceki=new Date(sorted[0].recovery_hedef);
+  // Önceki hedef hâlâ gelecekteyse → ikisinden büyük olanı al
+  if(onceki>now){
+    const yeni=new Date(newHedefISO);
+    return (onceki>yeni?onceki:yeni).toISOString();
+  }
+  return newHedefISO;
+}
+
 // Referans: Banister 1991, Morton 1997
 const λ_atl=1-Math.exp(-1/7);   // τ=7 gün (akut/yorgunluk)
 const λ_ctl=1-Math.exp(-1/42);  // τ=42 gün (kronik/fitness)
@@ -5349,9 +5370,7 @@ function tplFromYapiNotu(tur, yapiNotu, band, sure_dk, zones, disiplin, phase, c
     if(isDenge) detay='2×12 tekrar · Single leg deadlift, bosu denge, propriosepsiyon · Yavaş ve kontrollü';
     if(isUst) detay='3×10 tekrar · Push-up, row, shoulder press, core · Koşu postürünü destekleyen hareketler';
     return{tip:'kuvvet',sure_dk,yapi_notu:yapiNotu,yapilar:[
-      {baslik:'Isınma',detay:'5–10 dk hafif mobilite + eklem ısınma'},
-      {baslik:'Kuvvet Çalışması',detay:`${sure_dk-15} dk — ${blok} · ${detay}`},
-      {baslik:'Soğuma',detay:'5 dk esneme + derin nefes'},
+      {baslik:'Kuvvet Çalışması',detay:`${sure_dk} dk — ${blok} · ${detay}`},
     ]};
   }
 
@@ -5476,19 +5495,18 @@ function tplFromYapiNotu(tur, yapiNotu, band, sure_dk, zones, disiplin, phase, c
     ]};
   }
 
-  // Yarış
+  // Yarış — tek aşama satırı (mesafe + efor)
   if(tur==='yaris'){
-    const isB=yapiNotu.includes('Önemli')||yapiNotu.includes('(B)');
+    const isB=yapiNotu.includes('\u00d6nemli')||yapiNotu.includes('(B)');
     const isC=yapiNotu.includes('Antrenman')||yapiNotu.includes('(C)');
     const isPace=yapiNotu.includes('Pacemaker');
-    let notlar='Hedef yarış — maksimal efor · Yarış öncesi açıcı, ardından soğuma ekle';
-    if(isB) notlar='Önemli yarış — kontrollü agresif · Hedef yarış için veri topla';
-    if(isC) notlar='Antrenman yarışı — %85–90 efor · Birinciliğin önemi yok, form ve ritim odaklı';
-    if(isPace) notlar='Pacemaker görevi — belirlenen pace sabit tut · Kendi yarışın değil, başkasını götür';
+    let eforNot='Maksimal efor';
+    if(isB) eforNot='Kontroll\u00fc agresif efor';
+    if(isC) eforNot='%85\u201390 efor';
+    if(isPace) eforNot='Pacemaker \u2014 pace sabit tut';
+    const zIdx=isC||isPace?3:4;
     return{tip:'yaris',sure_dk,yapi_notu:yapiNotu,yapilar:[
-      {baslik:'💡 Yarış Öncesi',detay:'Açıcı antrenman: 15–20dk kolay koşu + 4×80m strides (yarıştan 1 saat önce)',_rows:_R.isinma(15)},
-      {baslik:'🏁 Yarış',detay:notlar},
-      {baslik:'Soğuma',detay:'15–20 dk Z1 yürüyüş-koşu · Kas pompalamayı sürdür · Nem ve beslenmeye dikkat',_rows:_R.soguma(15)},
+      {baslik:'🏁 Yarış',detay:eforNot,_rows:[{label:'🏁 Yarış',sure_sn:sure_dk*60,zIdx,type:'single'}]},
     ]};
   }
 
@@ -14218,7 +14236,7 @@ function App(){
     ),
     React.createElement('div',{className:'content'},
       tab==='dashboard'&&React.createElement(Dashboard,{workouts:athWks,athlete,history,races}),
-      tab==='plan'&&React.createElement(HaftalikPlanTab,{athlete,history,races,workouts,testPlanlar,planSnapInit:planSnap,onPlanSnapChange:setPlanSnapApp,onAthletesRefresh:freshList=>setAthletes(freshList),onSaveWorkout:w=>{const ath=athletes.find(a=>a.id===w.athleteId);const m=calcMetrics(w,ath);const rec=calcRecovery(w,ath,m.yukObj);setWorkouts(p=>[...p,{...w,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:rec.hedefISO}]);}}),
+      tab==='plan'&&React.createElement(HaftalikPlanTab,{athlete,history,races,workouts,testPlanlar,planSnapInit:planSnap,onPlanSnapChange:setPlanSnapApp,onAthletesRefresh:freshList=>setAthletes(freshList),onSaveWorkout:w=>{const ath=athletes.find(a=>a.id===w.athleteId);const m=calcMetrics(w,ath);const rec=calcRecovery(w,ath,m.yukObj);const mergedHedef=mergeRecoveryHedef(rec.hedefISO,workouts,w.athleteId);setWorkouts(p=>[...p,{...w,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:mergedHedef}]);}}),
       tab==='program'&&React.createElement(ProgramTab,{athletes,workouts,allHistory,races,testPlanlar,teamName,teamLogo}),
       tab==='lider'&&React.createElement(LiderlikTab,{athletes,workouts,teamName,teamLogo,races}),
       tab==='bolge'&&React.createElement(BolgeTab,{athlete,workouts:athWks,onUpdateAthlete:handleUpdateAthlete}),
@@ -14229,7 +14247,8 @@ function App(){
         const ath=athletes.find(a=>a.id===w.athleteId);
         const m=calcMetrics(w,ath);
         const rec=calcRecovery(w,ath,m.yukObj);
-        const updatedWorkouts=[...workouts,{...w,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:rec.hedefISO}];
+        const mergedHedef=mergeRecoveryHedef(rec.hedefISO,workouts,w.athleteId);
+        const updatedWorkouts=[...workouts,{...w,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:mergedHedef}];
         setWorkouts(updatedWorkouts);
         // O gün otomatik iptal edildiyse cancelledDays'ten çıkar — plan kilidine dokunma
         if(planSnap?.cancelledDays?.[w.date]){
@@ -15251,6 +15270,116 @@ function SporcuPlanView(){
               whiteSpace:'nowrap',flexShrink:0
             }
           },'✏️ Anketi Güncelle')
+        );
+      })(),
+
+
+      // ── Dinlenme Uyarı Bandı ─────────────────────────────────────────────────
+      (()=>{
+        // Veri hazırlığı
+        const _lhWarn=workouts.length>0?buildHistory(workouts,athlete,races):[];
+        const _lastWarn=_lhWarn[_lhWarn.length-1]||{};
+        const _tsb=_lastWarn.tsb!=null?_lastWarn.tsb:null;
+        const _acwr=_lastWarn.acwr!=null?_lastWarn.acwr:null;
+
+        // Toparlanma süresi
+        const _sortedW=[...workouts].sort((a,b)=>new Date(b.date)-new Date(a.date));
+        const _lastWk=_sortedW[0]||null;
+        let _kalanSaat=0;
+        if(_lastWk){
+          try{
+            const _rec=calcRecovery(_lastWk,athlete,calcMetrics(_lastWk,athlete).yukObj);
+            _kalanSaat=Math.max(0,Math.round((new Date(_rec.hedefISO)-new Date())/3600000));
+          }catch(e){}
+        }
+
+        // Faz (yarış takviminden)
+        const _athRaceIdsW=(athlete.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
+        const _athRacesW=(races||[]).filter(r=>_athRaceIdsW.includes(r.id));
+        const {primary:_nextRaceW}=selectRaces(athlete,_athRacesW);
+        const _phase=calcPhase(localDateStr(new Date()),_nextRaceW?.tarih,_nextRaceW?.prep_weeks,_nextRaceW||{});
+
+        // Arka arkaya antrenman sayısı (bugün dahil geriye doğru)
+        let _consec=0;
+        for(let _ci=0;_ci<8;_ci++){
+          const _cd=new Date();_cd.setDate(_cd.getDate()-_ci);
+          if(workouts.some(w=>w.date===localDateStr(_cd))) _consec++;
+          else break;
+        }
+
+        // ── Uyarı seviyesi belirle (en yüksek seviye kazanır) ────────────────
+        let lvl=0,icon='',title='',text='',bg='',border='',titleClr='';
+
+        // SEVİYE 3 — Kritik
+        const _critCount=[_kalanSaat>36,_acwr!=null&&_acwr>1.5,_tsb!=null&&_tsb<-25].filter(Boolean).length;
+        if(_phase==='Yarış Sonrası'){
+          lvl=3;icon='🛑';title='Yarış Sonrası Toparlanma';
+          text='Yarış sonrası toparlanma dönemindesin. İlk 48–72 saat kolay hareket, sonrası tam dinlenme. Bir sonraki antrenman bloğuna acele etme.';
+          bg='var(--danger-bg)';border='var(--danger)';titleClr='var(--danger)';
+        } else if(_critCount>=2||(_critCount>=1&&_kalanSaat>36)){
+          lvl=3;icon='🛑';title='Yüksek Stres — Dinlenme Gerekli';
+          text='Vücudun yüksek stres altında. Bu aşamada ekstra antrenman yarardan çok zarar verir — bugün ya da yarın mutlaka tam dinlenme.';
+          bg='var(--danger-bg)';border='var(--danger)';titleClr='var(--danger)';
+        } else if(_kalanSaat>36){
+          lvl=3;icon='🛑';title='Ciddi Yorgunluk';
+          text='Vücudun yüksek stres altında. Bu aşamada ekstra antrenman yarardan çok zarar verir — bugün ya da yarın mutlaka tam dinlenme.';
+          bg='var(--danger-bg)';border='var(--danger)';titleClr='var(--danger)';
+        } else if(_acwr!=null&&_acwr>1.5){
+          lvl=3;icon='🛑';title='Yük Aşırı Yüksek';
+          text='Vücudun yüksek stres altında. Bu aşamada ekstra antrenman yarardan çok zarar verir — bugün ya da yarın mutlaka tam dinlenme.';
+          bg='var(--danger-bg)';border='var(--danger)';titleClr='var(--danger)';
+        } else if(_tsb!=null&&_tsb<-25){
+          lvl=3;icon='🛑';title='Aşırı Yorgunluk';
+          text='Vücudun yüksek stres altında. Bu aşamada ekstra antrenman yarardan çok zarar verir — bugün ya da yarın mutlaka tam dinlenme.';
+          bg='var(--danger-bg)';border='var(--danger)';titleClr='var(--danger)';
+        }
+
+        // SEVİYE 2 — Uyarı
+        if(lvl<2){
+          if(_kalanSaat>12&&_kalanSaat<=36){
+            lvl=2;icon='⚠️';title='Toparlanma Devam Ediyor';
+            text='Kasların yeniden yapılanma sürecinde. Sıradaki antrenman için tam dinlenmiş olmak performansını %10–15 artırır.';
+            bg='var(--warn-bg)';border='var(--warn)';titleClr='var(--warn)';
+          } else if(_acwr!=null&&_acwr>1.3){
+            lvl=2;icon='⚠️';title='Yüksek Haftalık Yük';
+            text='Bu haftaki yük son 4 haftanın ortalamasının belirgin üzerinde. Hafta içi ekstra bir dinlenme günü sakatlık riskini ciddi ölçüde düşürür.';
+            bg='var(--warn-bg)';border='var(--warn)';titleClr='var(--warn)';
+          } else if(_consec>=3){
+            lvl=2;icon='⚠️';title=_consec+' Gündür Arka Arkaya Antrenman';
+            text='Son '+_consec+' gündür arka arkaya çalıştın. Bir dinlenme veya çapraz antrenman günü kaslara yeniden yapılanma fırsatı verir.';
+            bg='var(--warn-bg)';border='var(--warn)';titleClr='var(--warn)';
+          }
+        }
+
+        // SEVİYE 1 — Bilgi
+        if(lvl<1){
+          if(_kalanSaat>0&&_kalanSaat<=12){
+            lvl=1;icon='ℹ️';title='Toparlanma Süreci';
+            text='Son antrenmandan toparlanıyorsun. Yeterli uyku ve sıvı alımı süreci hızlandırır.';
+            bg='var(--info-bg)';border='var(--info)';titleClr='var(--info)';
+          } else if(_phase==='Taper'){
+            lvl=1;icon='🎯';title='Taper — Dinlenme Formunu Açığa Çıkarıyor';
+            text='Yarış öncesi azaltma dönemindeyiz. Daha az çalışmak formunu açığa çıkarıyor — dinlenme antrenmanın bir parçası.';
+            bg='var(--info-bg)';border='var(--info)';titleClr='var(--info)';
+          }
+        }
+
+        if(lvl===0) return null;
+
+        return React.createElement('div',{style:{
+          background:bg,
+          border:'1px solid '+border,
+          borderLeft:'4px solid '+border,
+          borderRadius:'var(--radius-lg)',
+          padding:'14px 16px',
+          marginBottom:16,
+          display:'flex',alignItems:'flex-start',gap:12
+        }},
+          React.createElement('div',{style:{fontSize:22,flexShrink:0,marginTop:1}},icon),
+          React.createElement('div',null,
+            React.createElement('div',{style:{fontSize:13,fontWeight:700,color:titleClr,marginBottom:3}},title),
+            React.createElement('div',{style:{fontSize:12,color:'var(--text-primary)',lineHeight:1.6}},text)
+          )
         );
       })(),
 
