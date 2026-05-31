@@ -4,9 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>İçerik Yönetimi — KoşuİZİ</title>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -575,7 +572,18 @@ let db=null, athletes=[], sporcuLandingData={}, currentEditType=null, currentEdi
 async function loadScript(src){
   return new Promise(r=>{const s=document.createElement('script');s.src=src;s.onload=r;document.head.appendChild(s);});
 }
+function loadScript(src){
+  return new Promise(r=>{
+    if(document.querySelector('script[src="'+src+'"]')){ r(); return; }
+    const s=document.createElement('script');
+    s.src=src; s.onload=r;
+    document.head.appendChild(s);
+  });
+}
 async function initFirebase(){
+  await loadScript('https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js');
+  await loadScript('https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js');
+  await loadScript('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js');
   if(!firebase.apps.length) firebase.initializeApp(firebaseConfig);
   db = firebase.database();
   try{
@@ -601,14 +609,31 @@ async function doLogin(){
   const p=document.getElementById('pass-input').value.trim();
   const err=document.getElementById('login-err');
   err.style.display='none';
+  err.textContent='Şifre hatalı. Tekrar deneyin.';
+
+  // Önce yedek şifreyle kontrol — Firebase olmadan da çalışsın
+  if(p !== DEFAULT_PASS){
+    // Firebase'den gerçek şifreyi almayı dene
+    try{
+      await initFirebase();
+      const storedPass = await fbGet('app_password');
+      if(storedPass && p !== storedPass){ err.style.display='block'; return; }
+      if(!storedPass && p !== DEFAULT_PASS){ err.style.display='block'; return; }
+    }catch(e){
+      // Firebase yüklenemedi — yedek şifreyle dene
+      console.warn('Firebase yüklenemedi, yedek şifre kullanılıyor');
+      err.style.display='block'; return;
+    }
+  }
+
+  // Şifre doğru — Firebase yüklü değilse yükle
   try{
-    await initFirebase();
-    let storedPass = await fbGet('app_password') || DEFAULT_PASS;
-    if(p !== storedPass){ err.style.display='block'; return; }
-    document.getElementById('login-screen').style.display='none';
-    document.getElementById('app').style.display='flex';
-    await loadAllData();
-  }catch(e){ err.style.display='block'; }
+    if(!db) await initFirebase();
+  }catch(e){ console.warn('Firebase bağlanamadı:', e); }
+
+  document.getElementById('login-screen').style.display='none';
+  document.getElementById('app').style.display='flex';
+  try{ await loadAllData(); }catch(e){ console.error('Veri yükleme hatası:',e); }
 }
 document.getElementById('pass-input').addEventListener('keydown',e=>{ if(e.key==='Enter') doLogin(); });
 
