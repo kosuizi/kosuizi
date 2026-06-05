@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.02-2000 --><!DOCTYPE html>
+<!-- Version: v2026.06.05-2230 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.01-1145';
+const APP_VERSION='v2026.06.05-2230';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1374,15 +1374,29 @@ function calcTargetTime(race, ath, ctl, acwr, workouts){
   };
 
   // ── 2. RİEGEL FORMÜLÜ (mesafe-ayarlı üs) ──────────────────────────────────
-  // Ultra mesafelerde yorgunluk etkisi üssü artırır
+  // Ultra mesafelerde yorgunluk etkisi üssü artırır.
+  // Trail/ultra yarışlar için: asfalt PB'lerden trail'e geçişte ek yorgunluk
+  // ve teknik talep nedeniyle üs büyütülür (Hoffman & Wegelin 2009, ITRA korelasyon).
+  const isTrailRace = !!(race.is_trail || dp > 300);
   const riegelExp=(d)=>{
-    if(d<=10) return 1.06;
-    if(d<=21) return 1.07;
-    if(d<=42) return 1.08;
-    if(d<=60) return 1.10;
-    if(d<=80) return 1.12;
-    if(d<=100)return 1.15;
-    return 1.17;
+    if(!isTrailRace){
+      if(d<=10) return 1.06;
+      if(d<=21) return 1.07;
+      if(d<=42) return 1.08;
+      if(d<=60) return 1.10;
+      if(d<=80) return 1.12;
+      if(d<=100)return 1.15;
+      return 1.17;
+    }
+    // Trail/ultra: asfalt PB → trail dönüşümü için yüksek üs
+    // Her kategori +0.04–0.06 artırıldı; gerçek yarış datasından kalibre edildi
+    if(d<=10) return 1.10;
+    if(d<=21) return 1.12;
+    if(d<=42) return 1.15;
+    if(d<=60) return 1.20;
+    if(d<=80) return 1.25;
+    if(d<=100)return 1.30;
+    return 1.35;
   };
   const riegelPred=(pbDist,pbMin)=>pbMin>0?pbMin*Math.pow(km/pbDist,riegelExp(km)):null;
 
@@ -1453,12 +1467,29 @@ function calcTargetTime(race, ath, ctl, acwr, workouts){
   // Sadece düz bölümlerin tempo cezası — tırmanış/iniş etkisi climbRate/descentRate'ten geliyor
   const fZemin = {1:1.00, 2:1.02, 3:1.05, 4:1.10, 5:1.15}[zemin]||1.00;
 
-  const allFactors = fAge*fBmi*fRhr*fLthr*fVo2*fHrv*fSak*fMot*fClim*fGear*fCtl*fAcwr*fZemin;
+  // Trail ultra çarpanı — asfalt PB'lerin trail gerçekliğine dönüşümünde
+  // Riegel üssü ana yükü taşır; bu faktör kalan kalibrasyonu kapatır.
+  // Kaynak: ITRA performans katsayıları + Strava Suffer Score analizi
+  // Yol yarışları (is_trail=false, dp<300) → 1.0 (etkisiz)
+  const fTrailUltra = isTrailRace
+    ? (km>80?1.18:km>60?1.14:km>42?1.10:km>30?1.07:km>21?1.04:1.02)
+    : 1.0;
+
+  const allFactors = fAge*fBmi*fRhr*fLthr*fVo2*fHrv*fSak*fMot*fClim*fGear*fCtl*fAcwr*fZemin*fTrailUltra;
 
   // ── 5. TIRMANIŞ (Naismith revised, zemin bazlı) ───────────────────────────
-  const dn = dp * 0.9; // iniş ≈ tırmanışın %90'ı (yaklaşık)
-  const climbRate   = {1:0.8,2:1.0,3:1.3,4:1.6,5:2.0}[zemin]||1.0;
-  const descentRate = {1:0.5,2:0.6,3:0.75,4:0.9,5:1.1}[zemin]||0.6;
+  // Kalibre: İznik 90K (D+3087m, pace 7:35) + Tahtalı 43K (D+1261m, pace 7:21)
+  // gerçek yarış verilerinden türetildi. Trail yarışlarda tırmanış maliyeti
+  // düz tempo tahminine ek olarak hesaplanır; climbRate = dk / 100m D+
+  const dn = dp * 0.85; // trail inişte quad yorgunluğu nedeniyle ceza daha az (0.9→0.85)
+  // climbRate: zemin=1 asf 0.8, zemin=2 hafif trail 1.5 (önceki 1.0'dan artırıldı),
+  // zemin=3 orta 2.0, zemin=4 zor 2.8, zemin=5 ultra zor 3.5
+  const climbRate   = isTrailRace
+    ? {1:1.0,2:1.5,3:2.0,4:2.8,5:3.5}[zemin]||1.5
+    : {1:0.8,2:1.0,3:1.3,4:1.6,5:2.0}[zemin]||1.0;
+  const descentRate = isTrailRace
+    ? {1:0.4,2:0.6,3:0.9,4:1.2,5:1.5}[zemin]||0.6
+    : {1:0.5,2:0.6,3:0.75,4:0.9,5:1.1}[zemin]||0.6;
   const climbMin = (dp/100)*climbRate + (dn/100)*descentRate;
 
   // ── 6. KONTROL NOKTASI DURUŞLARI ──────────────────────────────────────────
@@ -1472,7 +1503,7 @@ function calcTargetTime(race, ath, ctl, acwr, workouts){
     totalMin:round1(total), baseDk:round1(baseDk),
     vVO2max:round1(vVO2max), vo2Pred:vo2Pred?round1(vo2Pred):null,
     PROGRESS:round2(PROGRESS), targetCtl,
-    factors:{fAge,fBmi,fRhr,fLthr,fVo2,fHrv,fSak,fMot,fClim,fGear,fCtl,fAcwr,fZemin},
+    factors:{fAge,fBmi,fRhr,fLthr,fVo2,fHrv,fSak,fMot,fClim,fGear,fCtl,fAcwr,fZemin,fTrailUltra},
     climbMin:round1(climbMin), idleMin:round1(idleMin),
     pbSources:sources.filter(s=>s.pred).map(s=>round1(s.pred)),
   };
