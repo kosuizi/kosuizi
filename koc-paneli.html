@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.05-2230 --><!DOCTYPE html>
+<!-- Version: v2026.06.05-2315 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.05-2230';
+const APP_VERSION='v2026.06.05-2315';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -3348,14 +3348,27 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
     // ── 1. Plan fazına göre CTL büyüme tahmini ───────────────────────────────
     // Taper haftalarında CTL azalır ama TSB artar → net etki pozitif (daha hızlı)
     const daysToRace=Math.ceil((raceDate-today)/864e5);
+    // Taper başlangıcı: yarış tarihinden geriye taperW hafta.
+    // taperStartDay negatifse taper zaten geçmişte — bugün taper içindeyiz.
     const taperStartDay=daysToRace-taperW*7;
     const projCtlTsb=(dayOffset)=>{
+      // Yarış günü geçtiyse (dayOffset >= daysToRace) → anchor ile örtüş: factor=1
+      if(daysToRace<=0) return{ctl:ctlRef,tsb:tsbRef};
       const recentH=history.slice(-28);
       const ctlGrowthPerDay=recentH.length>7?(last.ctl-(recentH[0]?.ctl||last.ctl))/recentH.length:0;
       const inTaper=dayOffset>taperStartDay;
       if(inTaper){
-        // Taper: CTL günde ~0.5% azalır, TSB günde +0.8 artar (haftalık ~5.6)
-        const taperDays=dayOffset-taperStartDay;
+        // Taper: CTL günde ~0.5% azalır, TSB günde +0.8 artar (haftalık ~5.6).
+        // Gerçek taperDays: bugünden ne kadar geride olduğu değil,
+        // dayOffset'in taperStart'ı ne kadar aştığı — negatife düşmemeli.
+        // taperStartDay negatifse (taper çoktan başladı) "geçen taper günü"
+        // gerçek veri olan last.tsb/ctl ile zaten yakalanmış olur;
+        // dayOffset=0 (bugün) noktasında factor=1 olmasını garantiliyoruz.
+        const rawTaperDays=dayOffset-taperStartDay;
+        // Kritik: taperDays, dayOffset'i (bugünden ilerisi) ve taperW*7'yi aşamaz.
+        // dayOffset limiti: taper başlangıcı geçmişte olsa bile bugünden
+        // geriye doğru gidip sahte taper günü şişirmesini önler.
+        const taperDays=Math.max(0,Math.min(rawTaperDays,taperW*7,dayOffset));
         const projCtl=Math.max(ctlRef*0.85,ctlRef-ctlRef*0.005*taperDays);
         const projTsb=Math.min(20,tsbRef+0.8*taperDays);
         return{ctl:projCtl,tsb:projTsb};
@@ -3396,9 +3409,11 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
         const{ctl,tsb}=projCtlTsb(i*7);
         projPts.push({x:fmtShort(localDateStr(d)),y:round1(anchorMin*ctlTsbFactor(ctl,tsb))});
       }
-      // Yarış günü
-      const{ctl:rCtl,tsb:rTsb}=projCtlTsb(daysToRace);
-      projPts.push({x:fmtShort(race.tarih),y:round1(anchorMin*ctlTsbFactor(rCtl,rTsb)),race:true});
+      // Yarış günü — daysToRace<=0 ise artık anchor ile tam örtüş
+      const racePt=daysToRace<=0
+        ? {x:fmtShort(race.tarih),y:round1(anchorMin),race:true}
+        : (()=>{const{ctl:rCtl,tsb:rTsb}=projCtlTsb(daysToRace);return{x:fmtShort(race.tarih),y:round1(anchorMin*ctlTsbFactor(rCtl,rTsb)),race:true};})();
+      projPts.push(racePt);
     }
 
     const allLabels=[...pts.map(p=>p.x),...projPts.slice(1).map(p=>p.x)];
