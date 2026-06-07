@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.07-race-lock-v3 --><!DOCTYPE html>
+<!-- Version: v2026.06.05-2345 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -3390,11 +3390,11 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
     for(let i=0;i<history.length;i+=7){
       const d=history[i];
       if(!d?.ctl||d.ctl<1)continue;
-      if(d.date>race.tarih)continue; // yarış sonrası → üretme
       // Profil o tarihte ne durumdaydı?
       const prof=profileAt(d.date);
       let dayAnchor=anchorMin;
       if(prof!==ath){
+        // O tarihteki profille calcTargetTime çalıştır
         try{const t=calcTargetTime(race,prof,last.ctl,last.acwr||1.0,workouts);if(t?.totalMin>0)dayAnchor=t.totalMin;}catch(e){}
       }
       // Seri 1: o günkü form
@@ -3413,12 +3413,12 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
         const fRd=ctlTsbFactor(rCtl,rTsb);
         raceDayPts.push({x:fmtShort(d.date),y:round1(dayAnchor*fRd)});
       } else {
-        // d.date === race.tarih: yarış günü noktası (form tahminiyle aynı)
+        // Yarış geçtiyse = form tahminiyle aynı
         raceDayPts.push({x:fmtShort(d.date),y:round1(dayAnchor*f)});
       }
     }
-    // Bugünün anchor noktası — yalnızca yarış henüz geçmediyse ekle
-    if(todayStr<=race.tarih&&!pts.find(p=>p.x===fmtShort(last.date)))
+    // Bugünün noktası = anchor değeri (karttaki ile eşleşir)
+    if(!pts.find(p=>p.x===fmtShort(last.date)))
       pts.push({x:fmtShort(last.date),y:round1(anchorMin)});
     if(pts.length<2)return;
 
@@ -3440,90 +3440,47 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
       projPts.push(racePt);
     }
 
-    // Gerçekleşen sonuçları allLabels'a ekle — tarih eşleşmesi için origDate tabanlı birleştirme
-    const resPts=(results||[]).map(r=>({origDate:r.date,x:fmtShort(r.date),y:round1(r.durSec/60)}));
-    // pts'den origDate'leri topla (history haftalık snapshot'larla eşleştirilir)
-    const ptsOrig=[];
-    for(let i=0;i<history.length;i+=7){
-      const d=history[i];
-      if(!d?.ctl||d.ctl<1)continue;
-      if(ptsOrig.length<pts.length)ptsOrig.push(d.date);
-    }
-    if(!ptsOrig.find(d=>d===last.date))ptsOrig.push(last.date);
-
-    // projPts origDate'leri (bugünden itibaren haftalık)
-    const projOrigDates=[];
-    if(daysToRace>0&&daysToRace<400){
-      projOrigDates.push(todayStr);
-      const steps=Math.min(Math.ceil(daysToRace/7),24);
-      for(let i=1;i<=steps;i++){const d=new Date(today);d.setDate(today.getDate()+i*7);if(d>raceDate)break;projOrigDates.push(localDateStr(d));}
-      projOrigDates.push(race.tarih);
-    }
-
-    // Tüm origDate'leri topla, benzersizleştir, sırala
-    const allOrigDates=[...new Set([...ptsOrig,...projOrigDates.slice(1),...resPts.map(p=>p.origDate)])].sort();
-    const allLabels=allOrigDates.map(d=>fmtShort(d));
-
+    const allLabels=[...pts.map(p=>p.x),...projPts.slice(1).map(p=>p.x)];
     const isDark=window.matchMedia('(prefers-color-scheme:dark)').matches;
     const gc=isDark?'rgba(255,255,255,.08)':'rgba(0,0,0,.08)';
     const tc=isDark?'#777':'#888';
     if(inst.current){try{inst.current.destroy();}catch(e){}}
 
+    const resPts=(results||[]).map(r=>({x:fmtShort(r.date),y:round1(r.durSec/60)}));
     try{
-      // origDate tabanlı veri eşleştirme — fmtShort çakışmasını önler
-      const origByLabel=(arr,origDates)=>{
-        // arr: [{origDate, y}] veya origDates[i]<->arr[i]
-        const map={};arr.forEach(p=>p.origDate&&(map[p.origDate]=p.y));
-        return allOrigDates.map(d=>map[d]!=null?map[d]:null);
-      };
-      const ptsByOrig=origByLabel(pts.map((p,i)=>({origDate:ptsOrig[i],y:p.y})));
-      const raceDayByOrig=origByLabel(raceDayPts.map((p,i)=>({origDate:ptsOrig[i],y:p.y})));
-      const projByOrig=(()=>{const map={};projPts.forEach((p,i)=>{const od=projOrigDates[i];if(od)map[od]=p;});return allOrigDates.map(d=>map[d]?.y??null);})();
-      const isRacePt=allOrigDates.map(d=>{const od=projOrigDates[projOrigDates.length-1];return d===od&&projPts.find(p=>p.race);});
-      const resByOrig=(()=>{const map={};resPts.forEach(p=>map[p.origDate]=p.y);return allOrigDates.map(d=>map[d]!=null?map[d]:null);})();
       inst.current=new Chart(ref.current,{
         type:'line',
         data:{
           labels:allLabels,
           datasets:[
             showForm&&{label:'Güncel Form Tahmini',
-              data:ptsByOrig,
+              data:allLabels.map(l=>{const p=pts.find(p=>p.x===l);return p?p.y:null;}),
               borderColor:'#7c3aed',borderWidth:2.5,
-              pointRadius:ptsByOrig.map(v=>v!=null?3:0),
+              pointRadius:allLabels.map(l=>pts.find(p=>p.x===l)?3:0),
               pointBackgroundColor:'#7c3aed',
               tension:.4,fill:false,spanGaps:false},
             showRaceDay&&{label:'Yarış Günü Tahmini',
-              data:raceDayByOrig,
+              data:allLabels.map(l=>{const p=raceDayPts.find(p=>p.x===l);return p?p.y:null;}),
               borderColor:'#f97316',borderWidth:2,borderDash:[3,3],
-              pointRadius:raceDayByOrig.map(v=>v!=null?3:0),
+              pointRadius:allLabels.map(l=>raceDayPts.find(p=>p.x===l)?3:0),
               pointBackgroundColor:'#f97316',
               tension:.4,fill:false,spanGaps:false},
             projPts.length>1&&{label:'Projeksiyon',
-              data:projByOrig,
+              data:allLabels.map(l=>{const p=projPts.find(p=>p.x===l);return p?p.y:null;}),
               borderColor:'#16a34a',borderWidth:2,borderDash:[6,4],
-              pointRadius:isRacePt.map((r,i)=>r?6:(projByOrig[i]!=null&&i>0?2:0)),
+              pointRadius:allLabels.map(l=>{const p=projPts.find(p=>p.x===l);return p?.race?6:0;}),
               pointBackgroundColor:'#f59e0b',
               tension:.4,fill:false,spanGaps:true},
             resPts.length>0&&{label:'Gerçekleşen',
-              data:resByOrig,
+              data:allLabels.map(l=>{const r=resPts.find(r=>r.x===l);return r?r.y:null;}),
               borderColor:'#f59e0b',backgroundColor:'#f59e0b',
-              pointRadius:resByOrig.map(v=>v!=null?8:0),
-              pointStyle:resByOrig.map(v=>v!=null?'star':'circle'),
-              showLine:false}
+              pointRadius:8,pointStyle:'star',showLine:false}
           ].filter(Boolean)
         },
         options:{
           responsive:true,maintainAspectRatio:false,
           plugins:{legend:{display:false},
-            tooltip:{callbacks:{
-              label:ctx=>{
-                const v=ctx.raw;
-                if(v==null||v===undefined)return null;
-                const suffix=ctx.dataset.label==='Gerçekleşen'?' ★':'';
-                return ctx.dataset.label+': '+fmtHMS(v)+suffix;
-              },
-              filter:item=>item.raw!=null&&item.raw!==undefined
-            }}},
+            tooltip:{callbacks:{label:ctx=>{const v=ctx.raw;if(v==null)return null;return ctx.dataset.label+': '+fmtHMS(v);}}}},
           scales:{
             x:{ticks:{color:tc,font:{size:10},maxTicksLimit:10},grid:{color:gc},border:{display:false}},
             y:{reverse:true,ticks:{color:tc,font:{size:10},callback:v=>fmtHMS(v)},
@@ -14900,7 +14857,7 @@ function ChartRaceResults({results,race}){
   );
 }
 
-function YarislarTab({athlete,races,history,workouts,raceResults,onAddResult,onDeleteResult,onUpdateRace}){
+function YarislarTab({athlete,races,history,workouts,raceResults,onAddResult,onDeleteResult}){
   const last=history[history.length-1];
   const athRaceIds=(athlete?.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
   const athRaces=races.filter(r=>athRaceIds.includes(r.id)).sort((a,b)=>new Date(a.tarih)-new Date(b.tarih));
@@ -14909,40 +14866,6 @@ function YarislarTab({athlete,races,history,workouts,raceResults,onAddResult,onD
   const [resultForm,setResultForm]=useState({tarih:'',sure_sa:'',sure_dk:'',sure_sn:'',ort_nabiz:'',rpe:'',notlar:''});
   const setRF=(k,v)=>setResultForm(f=>({...f,[k]:v}));
   const [showPastRaces,setShowPastRaces]=useState(false);
-
-  // ── Tahmin Kilitleme ───────────────────────────────────────────────────────
-  // Yarıştan 1 gün önce veya yarış günü: o günkü CTL ile tahmin dondurulur.
-  // Önemli: Geçmiş yarışlar ilk kez donduruluyorsa BUGÜNKÜ değil,
-  // history'den yarış tarihine en yakın geçmiş kaydın CTL'i kullanılır.
-  const frozenSavedRef=React.useRef({});
-  useEffect(()=>{
-    if(!onUpdateRace||!last||!history?.length)return;
-    athRaces.forEach(race=>{
-      if(race.target_frozen||frozenSavedRef.current[race.id])return; // zaten kilitli
-      const daysLeft=race.tarih?Math.ceil((new Date(race.tarih+'T12:00:00')-today)/864e5):null;
-      if(daysLeft===null||daysLeft>1)return; // henüz kilitleme zamanı değil
-      // Hangi CTL/ACWR referans alınacak?
-      // • Yarış henüz olmadı (daysLeft 0 veya 1) → bugünün verisi doğrudur
-      // • Yarış geçmişte (daysLeft < 0) → history'den yarış tarihine en yakın kaydı bul
-      let refCtl=last?.ctl;
-      let refAcwr=last?.acwr||1.0;
-      if(daysLeft<0&&race.tarih){
-        // Yarış tarihine eşit veya önceki en son history girdisi
-        const closestH=[...history]
-          .filter(h=>h.date&&h.date<=race.tarih&&h.ctl>0)
-          .sort((a,b)=>b.date.localeCompare(a.date))[0];
-        if(closestH){refCtl=closestH.ctl;refAcwr=closestH.acwr||1.0;}
-      }
-      try{
-        const t=calcTargetTime(race,athlete,refCtl,refAcwr,workouts);
-        if(t?.totalMin>0){
-          frozenSavedRef.current[race.id]=true;
-          onUpdateRace({...race,target_frozen:round1(t.totalMin)});
-        }
-      }catch(e){}
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[athRaces.map(r=>r.id).join(','),last?.ctl]);
 
   const saveResult=(raceId)=>{
     const durSec=toSec(resultForm.sure_sa,resultForm.sure_dk,resultForm.sure_sn);
@@ -14961,16 +14884,7 @@ function YarislarTab({athlete,races,history,workouts,raceResults,onAddResult,onD
   const renderRace=(race)=>{
       const daysLeft=race.tarih?Math.ceil((new Date(race.tarih+'T12:00:00')-today)/864e5):null;
       const readiness=raceReadinessScore(last?.ctl,last?.acwr,last?.phase,athlete.sakatlık,athlete.hrv_durum,daysLeft,race,athlete,workouts);
-      // Kilit mantığı: daysLeft<=1 (yarış gününde veya gün önce) veya geçmiş yarış → frozen değer kullan
-      const isLocked=daysLeft!==null&&daysLeft<=1;
-      let target=null;
-      if(isLocked&&race.target_frozen){
-        const frozenMin=race.target_frozen;
-        try{const live=calcTargetTime(race,athlete,last?.ctl,last?.acwr,workouts);target=live?{...live,totalMin:frozenMin}:{totalMin:frozenMin,climbMin:0,idleMin:0,factors:{}};}
-        catch(e){target={totalMin:frozenMin,climbMin:0,idleMin:0,factors:{}};}
-      }else if(!isLocked){
-        try{target=calcTargetTime(race,athlete,last?.ctl,last?.acwr,workouts);}catch(e){console.error('calcTargetTime err:',e.message);}
-      }
+      let target=null;try{target=calcTargetTime(race,athlete,last?.ctl,last?.acwr,workouts);}catch(e){console.error("calcTargetTime err:",e.message);}
       const isPast=daysLeft!==null&&daysLeft<0;
       // Bu yarışa ait sonuçlar
       const results=(raceResults||[]).filter(r=>r.raceId===race.id&&r.athleteId===athlete.id)
@@ -15072,15 +14986,9 @@ function YarislarTab({athlete,races,history,workouts,raceResults,onAddResult,onD
 
             return React.createElement('div',null,
               React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(150px,1fr))',gap:10,marginBottom:12}},
-                React.createElement('div',{className:'metric',style:isLocked?{border:'1px solid var(--warn)',background:'var(--warn-bg)'}:{}},
-                  React.createElement('div',{className:'metric-label',style:{display:'flex',alignItems:'center',gap:4}},
-                    isLocked?'🔒 ':null,
-                    isLocked?'Kilitli Tahmin':'Mevcut Tahmin'
-                  ),
-                  React.createElement('div',{style:{fontSize:20,fontWeight:600,color:isLocked?'var(--warn)':'var(--info)'}},fmtHMS(target.totalMin)),
-                  isLocked?React.createElement('div',{style:{fontSize:10,color:'var(--warn)',marginTop:2}},
-                    daysLeft===1?'Yarış 1 gün önce kilitlendi':daysLeft===0?'Yarış günü — tahmin güncellenmez':'Yarış tamamlandı — tahmin sabit'
-                  ):null
+                React.createElement('div',{className:'metric'},
+                  React.createElement('div',{className:'metric-label'},'Mevcut Tahmin'),
+                  React.createElement('div',{style:{fontSize:20,fontWeight:600,color:'var(--info)'}},fmtHMS(target.totalMin))
                 ),
                 React.createElement('div',{className:'metric',style:{border:'1px solid var(--success)',background:'var(--success-bg)'}},
                   React.createElement('div',{className:'metric-label'},'Hazırlık Sonrası Hedef'),
@@ -19195,7 +19103,7 @@ function App(){
       tab==='lider'&&React.createElement(LiderlikTab,{athletes,workouts,teamName,teamLogo,races}),
       tab==='bolge'&&React.createElement(BolgeTab,{athlete,workouts:athWks,onUpdateAthlete:handleUpdateAthlete}),
       tab==="test"&&React.createElement(TestTab,{athlete,history,races,workouts,onUpdateAthlete:handleUpdateAthlete,onSaveWorkout:w=>setWorkouts(p=>[...p,w]),onUpdateWorkout:handleUpdateWorkout,onDeleteWorkout:id=>setWorkouts(p=>p.filter(x=>x.id!==id)),testPlanlar,onSaveTestPlan:p=>setTestPlanlar(prev=>[...prev.filter(x=>!(x.athId===p.athId&&x.testTur===p.testTur)),p]),onDeleteTestPlan:id=>setTestPlanlar(p=>p.filter(x=>x.id!==id))}),
-      tab==='yarislar'&&React.createElement(ErrorBoundary,null,React.createElement(YarislarTab,{athlete,races,history,workouts:athWks,raceResults,onAddResult:r=>setRaceResults(p=>[...p,r]),onDeleteResult:id=>setRaceResults(p=>p.filter(x=>x.id!==id)),onUpdateRace:r=>setRaces(p=>p.map(x=>x.id===r.id?r:x))})),
+      tab==='yarislar'&&React.createElement(ErrorBoundary,null,React.createElement(YarislarTab,{athlete,races,history,workouts:athWks,raceResults,onAddResult:r=>setRaceResults(p=>[...p,r]),onDeleteResult:id=>setRaceResults(p=>p.filter(x=>x.id!==id))})),
       tab==='karsilastir'&&React.createElement(KarsilastirTab,{athletes,races,workouts,allHistory,raceResults}),
       tab==='ekle'&&React.createElement(AntrenmanEkle,{onSave:w=>{
         const ath=athletes.find(a=>a.id===w.athleteId);
