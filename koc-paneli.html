@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.07-race-lock --><!DOCTYPE html>
+<!-- Version: v2026.06.07-race-lock-v2 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -14911,17 +14911,30 @@ function YarislarTab({athlete,races,history,workouts,raceResults,onAddResult,onD
   const [showPastRaces,setShowPastRaces]=useState(false);
 
   // ── Tahmin Kilitleme ───────────────────────────────────────────────────────
-  // Yarıştan 1 gün önce: tahmin hesapla ve race.target_frozen'a kaydet (bir kez).
-  // Yarış geçtikten sonra: target_frozen değerini göster, güncel hesaplama kullanma.
+  // Yarıştan 1 gün önce veya yarış günü: o günkü CTL ile tahmin dondurulur.
+  // Önemli: Geçmiş yarışlar ilk kez donduruluyorsa BUGÜNKÜ değil,
+  // history'den yarış tarihine en yakın geçmiş kaydın CTL'i kullanılır.
   const frozenSavedRef=React.useRef({});
   useEffect(()=>{
-    if(!onUpdateRace||!last)return;
+    if(!onUpdateRace||!last||!history?.length)return;
     athRaces.forEach(race=>{
       if(race.target_frozen||frozenSavedRef.current[race.id])return; // zaten kilitli
       const daysLeft=race.tarih?Math.ceil((new Date(race.tarih+'T12:00:00')-today)/864e5):null;
-      if(daysLeft===null||daysLeft>1)return; // henüz erken
+      if(daysLeft===null||daysLeft>1)return; // henüz kilitleme zamanı değil
+      // Hangi CTL/ACWR referans alınacak?
+      // • Yarış henüz olmadı (daysLeft 0 veya 1) → bugünün verisi doğrudur
+      // • Yarış geçmişte (daysLeft < 0) → history'den yarış tarihine en yakın kaydı bul
+      let refCtl=last?.ctl;
+      let refAcwr=last?.acwr||1.0;
+      if(daysLeft<0&&race.tarih){
+        // Yarış tarihine eşit veya önceki en son history girdisi
+        const closestH=[...history]
+          .filter(h=>h.date&&h.date<=race.tarih&&h.ctl>0)
+          .sort((a,b)=>b.date.localeCompare(a.date))[0];
+        if(closestH){refCtl=closestH.ctl;refAcwr=closestH.acwr||1.0;}
+      }
       try{
-        const t=calcTargetTime(race,athlete,last?.ctl,last?.acwr,workouts);
+        const t=calcTargetTime(race,athlete,refCtl,refAcwr,workouts);
         if(t?.totalMin>0){
           frozenSavedRef.current[race.id]=true;
           onUpdateRace({...race,target_frozen:round1(t.totalMin)});
