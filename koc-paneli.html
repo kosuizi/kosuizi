@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.08-2151 --><!DOCTYPE html>
+<!-- Version: v2026.06.08-2200 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -12294,6 +12294,38 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       }
     });
 
+    // ── OP-5: Yürü-Koş Seviye Kademesi — Programı Güncelle ───────────────────
+    // Plan her YK gününe aynı seviyeyi atar (tamamlananYK+1).
+    // Bu post-pass, gelecekteki tüm YK günlerine art arda seviyeler uygular.
+    // Koç koruma (approved=true) olan günler değiştirilmez.
+    (()=>{
+      const _todayS=localDateStr(new Date());
+      const _ykIsOvG=(ov)=>ov&&(ov._isYuruKos||(ov.yapi_notu&&ov.yapi_notu.startsWith('Yürü-Koş · S')));
+      const _ykEntries=Object.entries(newSnap.overrideMap)
+        .filter(([ds,ov])=>ds>=_todayS&&_ykIsOvG(ov))
+        .sort(([a],[b])=>a<b?-1:1);
+      if(_ykEntries.length<2) return;
+      const _fOv=_ykEntries[0][1];
+      const _fM=_fOv.yapi_notu?.match(/·\s*S(\d+)/);
+      const _fLevel=_fM?parseInt(_fM[1]):(_fOv._yuruKosSeason||1);
+      const _gZones=calcZones(freshAthlete);
+      let _gNext=_fLevel+1;
+      for(let i=1;i<_ykEntries.length;i++){
+        if(_gNext>12) break;
+        const [ds,ov]=_ykEntries[i];
+        if(ov.approved===true) continue; // koç koruma — atla, sayaç tutma
+        const _nT=tplYuruKos(_gNext,_gZones);
+        if(!_nT) continue;
+        newSnap.overrideMap[ds]={...ov,
+          tip:_nT.tip,baslik:_nT.baslik,sure_dk:_nT.sure_dk||35,
+          yukHedef:Math.round((_nT.sure_dk||35)*0.8),
+          yapi_notu:_nT.yapi_notu,_isYuruKos:true,_yuruKosSeason:_gNext,
+          yapilar:(_nT.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||'',_caprazNot:y._caprazNot}))
+        };
+        _gNext++;
+      }
+    })();
+    // ── YK Cascade end ────────────────────────────────────────────────────────
     setPlanSnap(newSnap);
     fbSet(`plan_snapshots/${freshAthlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
     setReviewMsg('✅ Plan güncellendi');
@@ -12337,6 +12369,44 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         yapilar:(_gun2.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||''}))};
       newManualOverrides[_nextStr]={tip:_gun2.tip,baslik:_gun2Baslik,atAt:now.toISOString(),b2bAutoGun2:true};
     }
+    // ── OP-5: Yürü-Koş Seviye Kademesi — Manuel Atama ────────────────────────
+    // Atanan gün yürü-koş ise, sonraki tüm YK günlerine art arda seviyeler ata.
+    // Kaynak: overrideMap + plan.weeks. Koç koruma (approved=true) → atla.
+    const _isYkTpl=tpl._isYuruKos||(tpl.yapi_notu&&tpl.yapi_notu.startsWith('Yürü-Koş · S'));
+    if(_isYkTpl){
+      const _ykM=tpl.yapi_notu?tpl.yapi_notu.match(/·\s*S(\d+)/):null;
+      const _ykAssigned=_ykM?parseInt(_ykM[1]):(tpl._yuruKosSeason||1);
+      const _ykIsOV=(ov)=>ov&&(ov._isYuruKos||(ov.yapi_notu&&ov.yapi_notu.startsWith('Yürü-Koş · S'))||(ov.baslik&&ov.baslik.startsWith('🚶🏃 Yürü-Koş')));
+      const _ykDates=new Set();
+      Object.entries(newMap).forEach(([ds,ov])=>{if(ds>dateStr&&_ykIsOV(ov))_ykDates.add(ds);});
+      try{
+        (plan?.weeks||[]).forEach(wk=>{
+          (wk.days||[]).forEach(day=>{
+            if(day.date>dateStr&&(day._isYuruKos||(day.yapi_notu&&day.yapi_notu.startsWith('Yürü-Koş · S')))&&!newMap[day.date])
+              _ykDates.add(day.date);
+          });
+        });
+      }catch(_e){}
+      const _ykZones=calcZones(athlete);
+      let _ykNext=_ykAssigned+1;
+      [..._ykDates].sort().forEach(ds=>{
+        if(_ykNext>12) return;
+        const _ex=newMap[ds];
+        if(_ex&&_ex.approved===true) return; // koç koruma aktif — atla, sayaç tutma
+        const _nTpl=tplYuruKos(_ykNext,_ykZones);
+        if(!_nTpl) return;
+        newMap[ds]={
+          tip:_nTpl.tip,baslik:_nTpl.baslik,sure_dk:_nTpl.sure_dk||35,
+          yukHedef:Math.round((_nTpl.sure_dk||35)*0.8),
+          yapi_notu:_nTpl.yapi_notu,approved:_ex?.approved||false,
+          _isYuruKos:true,_yuruKosSeason:_ykNext,
+          yapilar:(_nTpl.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||'',_caprazNot:y._caprazNot}))
+        };
+        newManualOverrides[ds]={tip:_nTpl.tip,baslik:_nTpl.baslik,atAt:now.toISOString(),_ykCascade:true,_ykLevel:_ykNext};
+        _ykNext++;
+      });
+    }
+    // ── YK Cascade end ────────────────────────────────────────────────────────
     const newSnap={...(curSnap||{}),weekKey,athId:athlete.id,lastReviewAt:now.toISOString(),
       lastSavedAt:new Date().toISOString(),
       cancelledDays:{...(curSnap?.cancelledDays||{})},
