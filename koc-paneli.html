@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.08-2100 --><!DOCTYPE html>
+<!-- Version: v2026.06.08-2151 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -5075,12 +5075,12 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
     const base = type==='run' ? runRow : restRow;
     if(!base) return null;
     const ovr = overrides[rep]?.[type] || {};
-    return {
-      ...base,
-      ...ovr,
-      _origPaceSec: base._origPaceSec,
-      _origZIdx: base._origZIdx,
-    };
+    const merged = {...base, ...ovr, _origPaceSec:base._origPaceSec, _origZIdx:base._origZIdx};
+    // pm girilmiş ama ps girilmemişse ps=0 göster (zone default'a düşme — computeAvg ile tutarlı)
+    if(ovr.pm != null && ovr.ps == null) merged.ps = 0;
+    // ps girilmiş ama pm girilmemişse pm=0 göster
+    if(ovr.ps != null && ovr.pm == null) merged.pm = 0;
+    return merged;
   };
 
   const editableCellAralik = (rep, type, field, displayVal) => {
@@ -5444,11 +5444,17 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
     const computeAvg=(baseRow,kind)=>{
       if(!baseRow) return null;
       let totMesafe=0,totPaceSec=0,totDurSec=0,paceN=0,bpmSum=0,bpmN=0,n=0;
+      // Pace hesabı için YALNIZCA açıkça girilmiş değerler (zone fallback'i hariç tutar)
+      // Sebep: baseRow.mesafe ve h/m/s zone pace'den hesaplanır → VLT değişince değişirdi.
+      let totExpMesafe=0,totWgtPace=0;
       for(let rep=1;rep<=repCount;rep++){
         const repOv=ov[rep]?.[kind]||{};
+        // Görüntü için: mesafe/süre zone fallback'i korur (display-only)
         const m=repOv.mesafe!=null?repOv.mesafe:(baseRow.mesafe||0);
-        const pm=repOv.pm!=null?repOv.pm:(baseRow.pm||0);
-        const ps=repOv.ps!=null?repOv.ps:(baseRow.ps||0);
+        // Pace hesabı: pm girilmişse ps=0 varsay (zone ps'e düşme); hiç girilmemişse zone fallback
+        const pmExp=repOv.pm!=null;
+        const pm=pmExp?repOv.pm:(baseRow.pm||0);
+        const ps=pmExp?(repOv.ps!=null?repOv.ps:0):(repOv.ps!=null?repOv.ps:(baseRow.ps||0));
         const dh=repOv.h!=null?repOv.h:(baseRow.h||0);
         const dm=repOv.m!=null?repOv.m:(baseRow.m||0);
         const ds=repOv.s!=null?repOv.s:(baseRow.s||0);
@@ -5456,6 +5462,9 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
         totDurSec+=dh*3600+dm*60+ds;
         const pSec=pm*60+ps;
         if(pSec>0){totPaceSec+=pSec;paceN++;}
+        // Açık mesafe ile pace varsa ağırlıklı hesap için biriktir (zone fallback yok)
+        const mExp=repOv.mesafe!=null?repOv.mesafe:0;
+        if(pmExp&&mExp>0&&pSec>0){totExpMesafe+=mExp;totWgtPace+=mExp*pSec;}
         // Ortalama nabız: bpm girilmiş rep'leri topla
         if(repOv.bpm!=null){bpmSum+=repOv.bpm;bpmN++;}
         n++;
@@ -5463,10 +5472,13 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
       if(n===0) return null;
       const avgMesafe=Math.round(totMesafe/n);
       const avgDurSec=Math.round(totDurSec/n);
-      // Mesafe-agirlikli ortalama tempo: toplam sure / toplam mesafe (km)
-      // Esit olmayan mesafelerde dogru sonuc verir; mesafe yoksa aritmetik ortalamaya dusar
-      const avgPaceSec=totMesafe>0&&totDurSec>0
-        ?Math.round(totDurSec/(totMesafe/1000))
+      // Pace ortalaması — öncelik sırası:
+      // 1) Açık mesafe + açık pace girilmişse: mesafe-ağırlıklı ortalama (zone bağımsız)
+      // 2) Sadece pace girilmişse: aritmetik ortalama (zone bağımsız)
+      // 3) Hiç giriş yoksa: 0 (ana satır zone pace'ini korur)
+      // NOT: baseRow.mesafe/h/m/s zone'dan gelir → pace hesabına dahil edilmez
+      const avgPaceSec=totExpMesafe>0
+        ?Math.round(totWgtPace/totExpMesafe)
         :(paceN>0?Math.round(totPaceSec/paceN):0);
       const out={mesafe:avgMesafe,...secToHMS(avgDurSec)};
       if(avgPaceSec>0){out.pm=Math.floor(avgPaceSec/60);out.ps=avgPaceSec%60;}
@@ -5666,15 +5678,20 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
     // Ana satırı bul (runRow = headerIdx+1, restRow = headerIdx+2)
     const base = type==='run' ? rows[headerIdx+1] : rows[headerIdx+2];
     if(!base) return;
-    // Mevcut override değerleriyle birleştir
+    // Mevcut override değerleri — yalnızca açık girişler (zone fallback YOK)
+    // Sebep: base.pm/ps/mesafe zone'dan gelir → birlikte kaydedilirse pace kirlenme
     const curOv = aralikOverrides[headerIdx]?.[rep]?.[type] || {};
-    const curPm = curOv.pm != null ? curOv.pm : (base.pm || 0);
-    const curPs = curOv.ps != null ? curOv.ps : (base.ps || 0);
-    const curMesafe = curOv.mesafe != null ? curOv.mesafe : (base.mesafe || 0);
+    // Sadece override'a zaten kaydedilmiş değerleri al; yoksa 0
+    const curPmOv = curOv.pm != null ? curOv.pm : null;
+    const curPsOv = curOv.ps != null ? curOv.ps : null;
+    const curMesafe = curOv.mesafe != null ? curOv.mesafe : 0; // zone fallback YOK
 
     let upd = {};
     if(field==='mesafe'){
-      const paceSec = curPm*60 + curPs;
+      // Pace: override'da her iki bileşen de varsa kullan; yoksa base (display amaçlı)
+      const pm = curPmOv != null ? curPmOv : (base.pm||0);
+      const ps = curPsOv != null ? curPsOv : (base.ps||0);
+      const paceSec = pm*60+ps;
       if(paceSec>0 && val>0){
         const newSec = Math.round(val/1000*paceSec);
         upd = {mesafe:val, ...secToHMS(newSec)};
@@ -5682,14 +5699,18 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
         upd = {mesafe:val};
       }
     } else if(field==='pm' || field==='ps'){
-      const pm = field==='pm' ? val : curPm;
-      const ps = field==='ps' ? val : curPs;
-      const paceSec = pm*60 + ps;
-      if(paceSec>0 && curMesafe>0){
-        const newSec = Math.round(curMesafe/1000*paceSec);
-        upd = {pm, ps, ...secToHMS(newSec)};
-      } else {
-        upd = {pm, ps};
+      // Sadece değiştirilen alanı kaydet — diğer bileşeni zone'dan ALMA
+      // Böylece pm girilirken ps'e zone değeri bulaşmaz (ve vice versa)
+      upd = {[field]: val};
+      // Süre yeniden hesabı: yalnızca her iki bileşen de açık override'da mevcutsa
+      const pm = field==='pm' ? val : curPmOv;
+      const ps = field==='ps' ? val : curPsOv;
+      if(pm != null && ps != null && curMesafe > 0){
+        const paceSec = pm*60+ps;
+        if(paceSec>0){
+          const newSec = Math.round(curMesafe/1000*paceSec);
+          upd = {...upd, ...secToHMS(newSec)};
+        }
       }
     } else if(field==='bpm'){
       upd = {bpm: parseInt(rawVal)||null};
