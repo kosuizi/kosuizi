@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.05-2345 --><!DOCTYPE html>
+<!-- Version: v2026.06.08-1000 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -10153,7 +10153,7 @@ function calcPersonalYukFactor(tip, athWorkouts, ath){
 }
 
 
-function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanlar=[], optimizeMode=false, forceLastEntry=null){
+function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanlar=[], optimizeMode=false, forceLastEntry=null, weekEffOverride=null){
   const today=new Date();
   // forceLastEntry: _stableHist kırpıldığında bile fitness state (ACWR/TSB/CTL/ATL)
   // daima güncel (bu haftaki antrenmanları içeren) history'nin son girişinden alınır.
@@ -10232,7 +10232,12 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
     const sonAntrenman=athWorkouts.filter(w=>w.date).sort((a,b)=>b.date.localeCompare(a.date))[0];
     const sonRecoveryHedef=sonAntrenman?.recovery_hedef?new Date(sonAntrenman.recovery_hedef):null;
     const sonRecoverySaatler=sonAntrenman?.recovery_saatler||0;
-    let wkStats={count:0,kaliteliYok:true,uzunYapildi:false,wkLoad:0,dpHedefHafta:wt?.targetDp||0,targetKmHafta:wt?.targetKm||0,weekOff:rotIdx,isFutureWeek:weekOff>0,recentKaliteli,recentLongRuns,sonYogunGun:sonYogunGunGlobal,testPlanlar:testPlanlar||[],sonAntrenmanDate:sonAntrenman?.date||null,sonRecoveryHedef,sonRecoverySaatler,athWorkouts,buHaftaKaliteli:[],kaliteliSayisi:0,aerobikSayisi:0};
+    // weekEffOverride: handlePlanGuncelle'den gelen kilitli weekEff — isRevised=true ise
+    // calcWeeklyTargets'in targetKm/Dp'si yerine effKm/effDp kullan.
+    // Bu olmadan revize haftada km açığı hesabı yanlış referansla çalışır.
+    const _effKmOverride=weekOff===0&&weekEffOverride?.isRevised?weekEffOverride.effKm:null;
+    const _effDpOverride=weekOff===0&&weekEffOverride?.isRevised?weekEffOverride.effDp:null;
+    let wkStats={count:0,kaliteliYok:true,uzunYapildi:false,wkLoad:0,dpHedefHafta:(_effDpOverride??wt?.targetDp)??0,targetKmHafta:(_effKmOverride??wt?.targetKm)??0,weekOff:rotIdx,isFutureWeek:weekOff>0,recentKaliteli,recentLongRuns,sonYogunGun:sonYogunGunGlobal,testPlanlar:testPlanlar||[],sonAntrenmanDate:sonAntrenman?.date||null,sonRecoveryHedef,sonRecoverySaatler,athWorkouts,buHaftaKaliteli:[],kaliteliSayisi:0,aerobikSayisi:0};
 
     // ── Hafta İskeleti — Antrenman Bilimi Prensipleri ─────────────────────────
     // Temel prensipler:
@@ -10771,10 +10776,10 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
 // Firebase key: plan_snapshots/{athId}/{weekKey}
 // Snapshot: {weekKey, athId, generatedAt, lastReviewAt, overrideMap, reviewLog}
 
-function generatePlanSnapshot(athlete,history,races,workouts,testPlanlar,targetWeekKey=null){
+function generatePlanSnapshot(athlete,history,races,workouts,testPlanlar,targetWeekKey=null,weekEffOverride=null){
   const now=new Date();
   const todayStr=localDateStr(now);
-  const plan=generateTwoWeekPlan(athlete,history,races,workouts,testPlanlar||[]);
+  const plan=generateTwoWeekPlan(athlete,history,races,workouts,testPlanlar||[],false,null,weekEffOverride);
   const overrideMap={};
 
   const targetKey=targetWeekKey||getWeekKey(0);
@@ -12107,7 +12112,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       }
     }
 
-    const newSnap=generatePlanSnapshot(freshAthlete,history,races,workouts||[],testPlanlar||[]);
+    const newSnap=generatePlanSnapshot(freshAthlete,history,races,workouts||[],testPlanlar||[],null,curSnap.weekEff||null);
     newSnap.planMode=planMode;
     newSnap.selectedPrimary=selectedPrimary||null;
     newSnap.athleteProfile={kosu_gunleri:freshAthlete.kosu_gunleri,capraz_gunleri:freshAthlete.capraz_gunleri,disiplin:freshAthlete.disiplin,uzun_gun:freshAthlete.uzun_gun};
@@ -12184,6 +12189,11 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       newSnap.rowOverrides={...(newSnap.rowOverrides||{}),...filteredRow};
     }
     if(curSnap.cancelledDays) newSnap.cancelledDays=curSnap.cancelledDays;
+    // weekEff kilidinini koru — Plan Güncelle mevcut haftanın hedefini sıfırlamamalı.
+    // weekEff hafta başında bir kez yazılır ve weekKey damgasıyla dondurulur.
+    // newSnap sıfırdan üretildiğinden weekEff yoktur; curSnap'ten taşımazsak
+    // weekEff useEffect kilidi boş görür ve güncel curWeekEffective'i üzerine yazar.
+    if(curSnap.weekEff) newSnap.weekEff=curSnap.weekEff;
 
     // Koşu günleri senkronizasyonu — kaliteli antrenmanları redistribute et
     const oldProfile=curSnap.athleteProfile||{};
