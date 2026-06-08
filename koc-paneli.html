@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.08-2200 --><!DOCTYPE html>
+<!-- Version: v2026.06.08-2220 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -12295,24 +12295,50 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     });
 
     // ── OP-5: Yürü-Koş Seviye Kademesi — Programı Güncelle ───────────────────
-    // Plan her YK gününe aynı seviyeyi atar (tamamlananYK+1).
-    // Bu post-pass, gelecekteki tüm YK günlerine art arda seviyeler uygular.
+    // Plan tüm gelecek YK günlerine aynı seviyeyi atar (tamamlananYK+1).
+    // Koç daha önce bir güne manuel seviye atadıysa (ykManualAnchor), o esas alınır;
+    // aksi hâlde overrideMap'teki ilk YK seviyesi kullanılır.
     // Koç koruma (approved=true) olan günler değiştirilmez.
     (()=>{
       const _todayS=localDateStr(new Date());
-      const _ykIsOvG=(ov)=>ov&&(ov._isYuruKos||(ov.yapi_notu&&ov.yapi_notu.startsWith('Yürü-Koş · S')));
-      const _ykEntries=Object.entries(newSnap.overrideMap)
-        .filter(([ds,ov])=>ds>=_todayS&&_ykIsOvG(ov))
+      const _ykIsG=(ov)=>ov&&(ov._isYuruKos||(ov.yapi_notu&&ov.yapi_notu.startsWith('Yürü-Koş · S')));
+      // Tüm gelecek YK günleri (sıralı)
+      const _ykAll=Object.entries(newSnap.overrideMap)
+        .filter(([ds,ov])=>ds>=_todayS&&_ykIsG(ov))
         .sort(([a],[b])=>a<b?-1:1);
-      if(_ykEntries.length<2) return;
-      const _fOv=_ykEntries[0][1];
-      const _fM=_fOv.yapi_notu?.match(/·\s*S(\d+)/);
-      const _fLevel=_fM?parseInt(_fM[1]):(_fOv._yuruKosSeason||1);
+      if(_ykAll.length===0) return;
+      // Anchor: koç manuel ataması varsa ve tarihi gelecekteyse kullan
+      const _anchor=curSnap?.ykManualAnchor;
+      const _hasAnchor=_anchor&&_anchor.date>=_todayS&&_anchor.level>0;
+      let _anchorDate=null,_anchorLevel=0;
+      if(_hasAnchor){
+        _anchorDate=_anchor.date; _anchorLevel=_anchor.level;
+        // Anchor günün overrideMap'ini koç'un istediği seviyeye geri yükle
+        if(newSnap.overrideMap[_anchorDate]){
+          const _aT=tplYuruKos(_anchorLevel,calcZones(freshAthlete));
+          if(_aT) newSnap.overrideMap[_anchorDate]={...newSnap.overrideMap[_anchorDate],
+            tip:_aT.tip,baslik:_aT.baslik,sure_dk:_aT.sure_dk||35,
+            yukHedef:Math.round((_aT.sure_dk||35)*0.8),
+            yapi_notu:_aT.yapi_notu,_isYuruKos:true,_yuruKosSeason:_anchorLevel,
+            yapilar:(_aT.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||'',_caprazNot:y._caprazNot}))
+          };
+        }
+        // Anchor'ı yeni snap'te de sakla
+        newSnap.ykManualAnchor={date:_anchorDate,level:_anchorLevel};
+      } else {
+        // Manuel anchor yok — planın ilk YK seviyesini kullan
+        const _fOv=_ykAll[0][1];
+        const _fM=_fOv.yapi_notu?.match(/·\s*S(\d+)/);
+        _anchorDate=_ykAll[0][0];
+        _anchorLevel=_fM?parseInt(_fM[1]):(_fOv._yuruKosSeason||1);
+      }
+      if(_ykAll.length<2) return;
+      // Anchor'dan sonraki YK günlerine art arda seviyeler ata
       const _gZones=calcZones(freshAthlete);
-      let _gNext=_fLevel+1;
-      for(let i=1;i<_ykEntries.length;i++){
+      let _gNext=_anchorLevel+1;
+      const _afterAnchor=_ykAll.filter(([ds])=>ds>_anchorDate);
+      for(const [ds,ov] of _afterAnchor){
         if(_gNext>12) break;
-        const [ds,ov]=_ykEntries[i];
         if(ov.approved===true) continue; // koç koruma — atla, sayaç tutma
         const _nT=tplYuruKos(_gNext,_gZones);
         if(!_nT) continue;
@@ -12370,13 +12396,15 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       newManualOverrides[_nextStr]={tip:_gun2.tip,baslik:_gun2Baslik,atAt:now.toISOString(),b2bAutoGun2:true};
     }
     // ── OP-5: Yürü-Koş Seviye Kademesi — Manuel Atama ────────────────────────
-    // Atanan gün yürü-koş ise, sonraki tüm YK günlerine art arda seviyeler ata.
-    // Kaynak: overrideMap + plan.weeks. Koç koruma (approved=true) → atla.
+    // Atanan gün YK ise: (a) sonraki YK günlerine art arda seviyeler ata,
+    // (b) ykManualAnchor snap'e yaz — Programı Güncelle bu anchor'ı korur.
     const _isYkTpl=tpl._isYuruKos||(tpl.yapi_notu&&tpl.yapi_notu.startsWith('Yürü-Koş · S'));
+    let _ykAnchorLevel=0;
     if(_isYkTpl){
       const _ykM=tpl.yapi_notu?tpl.yapi_notu.match(/·\s*S(\d+)/):null;
-      const _ykAssigned=_ykM?parseInt(_ykM[1]):(tpl._yuruKosSeason||1);
+      _ykAnchorLevel=_ykM?parseInt(_ykM[1]):(tpl._yuruKosSeason||1);
       const _ykIsOV=(ov)=>ov&&(ov._isYuruKos||(ov.yapi_notu&&ov.yapi_notu.startsWith('Yürü-Koş · S'))||(ov.baslik&&ov.baslik.startsWith('🚶🏃 Yürü-Koş')));
+      // Gelecek YK tarihleri: overrideMap + plan
       const _ykDates=new Set();
       Object.entries(newMap).forEach(([ds,ov])=>{if(ds>dateStr&&_ykIsOV(ov))_ykDates.add(ds);});
       try{
@@ -12388,11 +12416,11 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         });
       }catch(_e){}
       const _ykZones=calcZones(athlete);
-      let _ykNext=_ykAssigned+1;
+      let _ykNext=_ykAnchorLevel+1;
       [..._ykDates].sort().forEach(ds=>{
         if(_ykNext>12) return;
         const _ex=newMap[ds];
-        if(_ex&&_ex.approved===true) return; // koç koruma aktif — atla, sayaç tutma
+        if(_ex&&_ex.approved===true) return; // koç koruma — atla, sayaç tutma
         const _nTpl=tplYuruKos(_ykNext,_ykZones);
         if(!_nTpl) return;
         newMap[ds]={
@@ -12413,6 +12441,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       selectedPrimary:selectedPrimary||null,
       overrideMap:newMap,
       manualOverrides:newManualOverrides,
+      // ykManualAnchor: koç'un en son manuel YK atamasını saklar — Programı Güncelle'de korunur
+      ykManualAnchor:_isYkTpl&&_ykAnchorLevel>0?{date:dateStr,level:_ykAnchorLevel}:(curSnap?.ykManualAnchor||null),
       reviewLog:[...(curSnap?.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} manuel: ${baslik}${tpl.tip==='back_to_back'?' + ertesi gün B2B Gün 2':''}`}].slice(-10)
     };
     setPlanSnap(newSnap);
