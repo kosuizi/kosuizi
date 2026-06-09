@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.09-1010 --><!DOCTYPE html>
+<!-- Version: v2026.06.09-1018 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.09-1010';
+const APP_VERSION='v2026.06.09-1018';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -10225,13 +10225,31 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
     }
 
     kosuTpl.sure_dk=Math.round((kosuTpl.sure_dk||45)*yMod);
-    // Yarışsız düşük hacim: günlük km tavanına göre süreyi kırp (direkt cap)
-    // sureMod/kmSureMod yeterli değil — 0.60 taban bypass ediliyor
-    if(_noRaceMaxGunlukKm>0&&kosuTpl){
+    // Yarışsız düşük hacim: günlük km tavanına göre şablonu YENİDEN ÜRET
+    // Sadece sure_dk'yı değiştirmek yetmez — _rows içindeki satır süreleri de
+    // büyük kalır ve estimateDayKmDp bunları okuyarak yanlış mesafe hesaplar.
+    // Çözüm: sure_dk < tavan ise tüm template (yapilar + _rows dahil) yeniden üret.
+    if(_noRaceMaxGunlukKm>0&&kosuTpl&&kosuTpl.tip!=='dinlenme'&&kosuTpl.tip!=='capraz'){
       const _maxSureDk=Math.max(15,Math.round(_noRaceMaxGunlukKm*tahminiPace));
       if(kosuTpl.sure_dk>_maxSureDk){
-        kosuTpl.sure_dk=_maxSureDk;
-        if(!kosuUyari) kosuUyari='Hacim hedefi: '+Math.round(_noRaceMaxGunlukKm*10)/10+'km/gun — sure '+_maxSureDk+'dk ile sinirlandirildi';
+        // Şablonu capped sure_dk ile yeniden üret — _rows da güncellenir
+        let _newTpl=null;
+        try{
+          if(kosuTpl.tip==='aerobik'||kosuTpl.tip==='kolay'){
+            // Kısa süreler için kolay şablonu tercih et (aerobik blok=0dk sorununu önler)
+            const _tipSec=_maxSureDk<25?'kolay':'aerobik';
+            _newTpl=_tipSec==='kolay'?tplKolay(band,_maxSureDk,zones):tplAerobik(band,_maxSureDk,zones,disiplin);
+          } else if(kosuTpl.tip==='uzun'){
+            _newTpl=tplKolay(band,_maxSureDk,zones);
+          } else {
+            // Diğer tipler (template boyutu küçültemedik) → sadece sure_dk güncelle
+            _newTpl={...kosuTpl,sure_dk:_maxSureDk};
+          }
+        }catch(e){}
+        if(_newTpl){
+          kosuTpl={..._newTpl,sure_dk:_maxSureDk};
+          if(!kosuUyari) kosuUyari='Hacim hedefi: '+Math.round(_noRaceMaxGunlukKm*10)/10+'km/gun — sure '+_maxSureDk+'dk';
+        }
       }
     }
     if(!kosuUyari&&acwr>1.3&&acwr<=1.5)
