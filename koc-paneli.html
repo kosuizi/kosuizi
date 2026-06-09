@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.09-0948 --><!DOCTYPE html>
+<!-- Version: v2026.06.09-1002 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.09-0948';
+const APP_VERSION='v2026.06.09-1002';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -8088,20 +8088,43 @@ function calcWeeklyTargetsNoRace(athlete, workouts, history=[]){
   const actualDp=Math.round(cariHafta?.dp??0);
   const kmRatio=targetKm>0?(actualKm/targetKm):null;
 
-  const {start:wkStart,end:wkEnd}=getWeekBounds(0);
-  return [{
-    weekIdx:1,weekStart:wkStart,weekEnd:wkEnd,
-    phase:'Temel',isRecovery:false,isRaceWeek:false,
-    targetKm,targetDp:0,daysToRace:null,
-    isPast:false,isCurrent:true,
-    actualKm,actualDp,kmRatio,
-    weekStatus:'normal',
-    _kmPct:artisOrani,_baseKm:avg4km,_baseDp:0,
-    _isNoRace:true,
-    _avg4km:avg4km,_lastWeekKm:lastWeekKm,_peak6km:peak6,
-    _artisOrani:artisOrani,_acwr:round2(currentAcwr),
-    telafiUygulandı:false,backoffUygulandı:false
-  }];
+  // Günlük km tavanı: son 6 haftanın zirvesinin %110'u / koşu günü sayısı
+  // Bu değer günlük antrenman sürelerini frenlemek için kullanılır
+  const kosuGunSayisiAth=Math.max(1,(athlete.kosu_gunleri||[]).length);
+  const noRaceMaxGunlukKm=peak6>0
+    ?round1((peak6*1.10)/kosuGunSayisiAth)
+    :(targetKm>0?round1(targetKm/kosuGunSayisiAth):0);
+
+  // Haftalık kaliteli gün limiti — hacme göre
+  // <15km: sadece kolay/aerobik (0 kaliteli)
+  // 15-25km: max 1 kaliteli (tempo seviyesinde)
+  // >25km: normal limit
+  const maxKaliteliNoRace=avg4km<15?0:avg4km<25?1:2;
+
+  const mkNoRaceWeek=(offset,isCurr)=>{
+    const {start:ws,end:we}=getWeekBounds(offset);
+    const wksThisWeek=athWks.filter(wk=>{const d=new Date(wk.date+'T12:00:00');return d>=ws&&d<=we;});
+    const actKm=round1(wksThisWeek.reduce((s,wk)=>s+(parseFloat(wk.mesafe)||0),0));
+    const actDp=Math.round(wksThisWeek.reduce((s,wk)=>s+(parseFloat(wk.irtifa)||0),0));
+    const kRatio=targetKm>0?(actKm/targetKm):null;
+    return{
+      weekIdx:offset+2,weekStart:ws,weekEnd:we,
+      phase:'Temel',isRecovery:false,isRaceWeek:false,
+      targetKm,targetDp:0,daysToRace:null,
+      isPast:we<today,isCurrent:isCurr,
+      actualKm:actKm,actualDp:actDp,kmRatio:kRatio,
+      weekStatus:'normal',
+      _kmPct:artisOrani,_baseKm:avg4km,_baseDp:0,
+      _isNoRace:true,
+      _avg4km:avg4km,_lastWeekKm:lastWeekKm,_peak6km:peak6,
+      _artisOrani:artisOrani,_acwr:round2(currentAcwr),
+      _noRaceMaxGunlukKm:noRaceMaxGunlukKm,
+      _maxKaliteli:maxKaliteliNoRace,
+      telafiUygulandı:false,backoffUygulandı:false
+    };
+  };
+
+  return[mkNoRaceWeek(0,true), mkNoRaceWeek(1,false)];
 }
 
 function calcWeeklyTargets(athlete, races, workouts, optimizeMode=false, history=[], frozenTargets={}){
@@ -9642,8 +9665,13 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
   //   - kolay/aerobik gün: wkStats.gunlukKolayKm (kalan ÷ kolay/aerobik gün sayısı)
   //   - kaliteli gün: 0 → kmSureMod=1.0 (şablon süresi korunur, S2: fizyolojik bütünlük)
   //   - iskelet yoksa: eski eşit bölme fallback'i
+  const _noRaceMaxGunlukKm=wkStats._noRaceMaxGunlukKm||0;
   let gunlukKmHedef=0;
-  if(haftaGunTipi==='uzun'&&(wkStats.uzunGunKm||0)>0){
+  if(_noRaceMaxGunlukKm>0){
+    // Yarışsız düşük hacim: TÜM gün tipleri (kaliteli dahil) km tavanına tabi
+    // S2 bypass kaldırıldı — bu sporcu için kaliteli gün de frenlenmelidir
+    gunlukKmHedef=_noRaceMaxGunlukKm;
+  } else if(haftaGunTipi==='uzun'&&(wkStats.uzunGunKm||0)>0){
     gunlukKmHedef=wkStats.uzunGunKm;
   } else if((haftaGunTipi==='kolay'||haftaGunTipi==='aerobik')&&(wkStats.gunlukKolayKm||0)>0){
     gunlukKmHedef=wkStats.gunlukKolayKm;
@@ -9659,7 +9687,9 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
   const tahminiPace=band<=1?7.5:band===2?7.0:band===3?6.5:band===4?6.0:5.5;
   // Hedef süre (dk) — band tabanlı varsayılandan sapma oranı
   const bandBaseSure=band<=1?45:band===2?50:band===3?55:band===4?60:65;
-  const kmSureMod=gunlukKmHedef>0?Math.min(1.4,Math.max(0.65,(gunlukKmHedef*tahminiPace)/bandBaseSure)):1.0;
+  // Yarışsız modda 0.65 tabanı kaldırılır — gerçek hacim hedefi esas alınır
+  const kmSureModFloor=_noRaceMaxGunlukKm>0?0.15:0.65;
+  const kmSureMod=gunlukKmHedef>0?Math.min(1.4,Math.max(kmSureModFloor,(gunlukKmHedef*tahminiPace)/bandBaseSure)):1.0;
 
   // ── Test günü kontrolü — test planlanmışsa test antrenmanını ver ──────────
   const testPlan=wkStats.testPlanlar&&wkStats.testPlanlar.find(p=>p.athId===athlete.id&&p.date===date);
@@ -10369,7 +10399,7 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
     // Bu olmadan revize haftada km açığı hesabı yanlış referansla çalışır.
     const _effKmOverride=weekOff===0&&weekEffOverride?.isRevised?weekEffOverride.effKm:null;
     const _effDpOverride=weekOff===0&&weekEffOverride?.isRevised?weekEffOverride.effDp:null;
-    let wkStats={count:0,kaliteliYok:true,uzunYapildi:false,wkLoad:0,dpHedefHafta:(_effDpOverride??wt?.targetDp)??0,targetKmHafta:(_effKmOverride??wt?.targetKm)??0,weekOff:rotIdx,isFutureWeek:weekOff>0,recentKaliteli,recentLongRuns,sonYogunGun:sonYogunGunGlobal,testPlanlar:testPlanlar||[],sonAntrenmanDate:sonAntrenman?.date||null,sonRecoveryHedef,sonRecoverySaatler,athWorkouts,buHaftaKaliteli:[],kaliteliSayisi:0,aerobikSayisi:0};
+    let wkStats={count:0,kaliteliYok:true,uzunYapildi:false,wkLoad:0,dpHedefHafta:(_effDpOverride??wt?.targetDp)??0,targetKmHafta:(_effKmOverride??wt?.targetKm)??0,_noRaceMaxGunlukKm:wt?._noRaceMaxGunlukKm||0,weekOff:rotIdx,isFutureWeek:weekOff>0,recentKaliteli,recentLongRuns,sonYogunGun:sonYogunGunGlobal,testPlanlar:testPlanlar||[],sonAntrenmanDate:sonAntrenman?.date||null,sonRecoveryHedef,sonRecoverySaatler,athWorkouts,buHaftaKaliteli:[],kaliteliSayisi:0,aerobikSayisi:0};
 
     // ── Hafta İskeleti — Antrenman Bilimi Prensipleri ─────────────────────────
     // Temel prensipler:
@@ -10385,9 +10415,13 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       const fazPhase=primary?calcPhase(new Date(start.getTime()+3*864e5).toISOString().split('T')[0],primary.tarih,primary.prep_weeks,primary,getAthRaceOverride(athlete,primary?.id)):'Temel';
       
       // Faza göre max kaliteli gün sayısı
-      const maxKaliteli={
+      const maxKaliteliBase={
         'Temel':1, 'Gelişme':2, 'Zirve':2, 'Taper':1, 'Yarış Sonrası':0
       }[fazPhase]||1;
+      // Yarışsız düşük hacimli sporcu: _maxKaliteli ile kap
+      const maxKaliteli=(wt?._maxKaliteli!==undefined)
+        ?Math.min(maxKaliteliBase,wt._maxKaliteli)
+        :maxKaliteliBase;
 
       // Tüm koşu günlerini topla (geçmiş+gelecek)
       const kosuGunleriHafta=[];
