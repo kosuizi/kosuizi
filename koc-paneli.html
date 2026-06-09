@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.09-1018 --><!DOCTYPE html>
+<!-- Version: v2026.06.09-1039 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.09-1018';
+const APP_VERSION='v2026.06.09-1039';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -8088,12 +8088,20 @@ function calcWeeklyTargetsNoRace(athlete, workouts, history=[]){
   const actualDp=Math.round(cariHafta?.dp??0);
   const kmRatio=targetKm>0?(actualKm/targetKm):null;
 
-  // Günlük km tavanı: haftalık hedef / koşu günü sayısı
-  // peak6 KULLANILMAZ — o değer tarihsel zirveye bakarak tavanı yanlış yükseltir
-  // (ör: 6 hafta önce 21km → 7.7km/gün tavan → antrenman uzar!)
-  // Doğru: sadece mevcut targetKm'den türet
+  // Efektif günlük km: matematiksel hedef vs minimum anlamlı koşu süresi (15dk)
+  // Problem: 3.9km / 3 gün = 1.3km/gün → 9.7dk → antrenman biliminde anlamsız kısa
+  // Çözüm: minimum anlamlı koşu = 15dk. Efektif = max(15dk/pace, matematiksel)
+  // Band 1 (CTL<25) için tahmini pace 7.5 dk/km → minimum 2km/gün
   const kosuGunSayisiAth=Math.max(1,(athlete.kosu_gunleri||[]).length);
-  const noRaceMaxGunlukKm=targetKm>0?round1(targetKm/kosuGunSayisiAth):0;
+  const tahminiPaceEst=7.5; // Band 1 (düşük CTL) için muhafazakâr tahmin
+  const minGunlukKm=round1(15/tahminiPaceEst); // ~2km — minimum anlamlı koşu
+  const rawGunlukKm=targetKm>0?round1(targetKm/kosuGunSayisiAth):0;
+  // Efektif günlük km: minimum ile matematiksel hedefin büyüğü
+  const noRaceMaxGunlukKm=Math.max(minGunlukKm,rawGunlukKm);
+  // Efektif haftalık hedefi de güncelle — "Hedef" göstergesiyle tutarlı olsun
+  const effectiveTargetKm=round1(noRaceMaxGunlukKm*kosuGunSayisiAth);
+  // targetKm'yi efektif değerle override et
+  if(effectiveTargetKm>targetKm) targetKm=effectiveTargetKm;
 
   // Haftalık kaliteli gün limiti — hacme göre
   // <15km: sadece kolay/aerobik (0 kaliteli)
@@ -9121,18 +9129,23 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
     } else {
       warnings.push({icon:'💡',text:'Hedef yarış yok — aerobik taban ve genel kondisyon odaklı plan. Sporcular sekmesinden amaç seçebilirsiniz.'});
     }
-    // ACWR tabanlı haftalık km hedefini göster
+    // ACWR tabanlı haftalık km hedefini göster + antrenman bilimi açıklaması
     if(thisWeekTarget&&thisWeekTarget._isNoRace){
       const avg4=thisWeekTarget._avg4km||0;
       const lastWk=thisWeekTarget._lastWeekKm||0;
       const artis=thisWeekTarget._artisOrani||1;
       const hedef=thisWeekTarget.targetKm||0;
-      let noRaceAciklama='Bu hafta km hedefi: '+hedef+'km (son 4 hafta ort: '+avg4+'km';
-      if(lastWk===0) noRaceAciklama+=', gecen hafta 0km — artis uygulanmadi';
+      const max4=thisWeekTarget._peak6km||0;
+      let noRaceAciklama='Haftalik hedef: '+hedef+'km (son 4 hafta ort: '+avg4+'km';
+      if(lastWk===0) noRaceAciklama+=', gecen hafta 0km - artis uygulanmadi';
       else if(artis>1.0) noRaceAciklama+=', +%'+Math.round((artis-1)*100)+' artis';
       else if(artis<1.0) noRaceAciklama+=', -%'+Math.round((1-artis)*100)+' dusus';
       noRaceAciklama+=')';
-      warnings.push({icon:'km',text:noRaceAciklama});
+      warnings.push({icon:'📏',text:noRaceAciklama});
+      // Kaliteli antrenman yok — antrenman bilimi açıklaması
+      if(thisWeekTarget._maxKaliteli===0){
+        warnings.push({icon:'🏗️',text:'Aerobik taban onceliginde — haftalik '+avg4+'km ile kaliteli antrenman erken. Hedef: once '+Math.round(avg4*3)+'km/haftaya ulas (Daniels/Pfitzinger: min 15-20km taban gerekli).'});
+      }
     }
   }
   if(inj>=5)        yMod=Math.min(yMod,0.80);
