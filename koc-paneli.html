@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.08-2240 --><!DOCTYPE html>
+<!-- Version: v2026.06.09-0948 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.05-2345';
+const APP_VERSION='v2026.06.09-0948';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -8010,10 +8010,107 @@ function applyWellnessAndCollectReasons(weeks, athlete){
   });
 }
 
+// ── Yarışsız Dönem Haftalık Hacim Hesabı (ACWR Tabanlı) ──────────────────────
+// Antrenman bilimi: Gabbett 2016 (ACWR), Hulin 2015 (10% rule)
+// Metodoloji:
+//   Baz = son 4 haftanın GERÇEK km ortalaması (sıfır haftalar dahil)
+//   Artış = amaca göre max +%10/hafta (10% rule)
+//   Emniyet kilidi 1 = son 6 haftanın en yüksek haftasının %110'u
+//   Emniyet kilidi 2 = geçen hafta 0 km → artış uygulanmaz (sıfırdan başla)
+//   ACWR > 1.3 → hacim azaltılır; CTL değil gerçek yük baz alınır
+function calcWeeklyTargetsNoRace(athlete, workouts, history=[]){
+  const athWks=(workouts||[]).filter(w=>
+    w.athleteId===athlete.id&&(w.spor==='kosu'||!w.spor)
+  );
+  const today=new Date();
+
+  // Son 6 haftanın gerçek haftalık km'leri (sıfırlar dahil)
+  const weeklyData=[];
+  for(let w=5;w>=0;w--){
+    const {start,end}=getWeekBounds(-w);
+    const isCurrent=w===0;
+    const isPast=!isCurrent;
+    const wWks=athWks.filter(wk=>{
+      const d=new Date(wk.date+'T12:00:00');
+      return d>=start&&d<=end;
+    });
+    const km=round1(wWks.reduce((s,wk)=>s+(parseFloat(wk.mesafe)||0),0));
+    const dp=Math.round(wWks.reduce((s,wk)=>s+(parseFloat(wk.irtifa)||0),0));
+    const actualKm=isCurrent?km:km; // geçmiş haftalar için gerçek
+    weeklyData.push({weekOffset:-w,start,end,km,dp,isPast,isCurrent});
+  }
+
+  // Son 4 hafta ortalaması (cari hafta hariç, hafta -1 ile -4)
+  const last4=weeklyData.slice(1,5); // -4,-3,-2,-1 offset
+  const avg4km=round1(last4.reduce((s,w)=>s+w.km,0)/4);
+  const lastWeekKm=last4[3]?.km??0; // en yakın geçmiş hafta (-1)
+  const peak6=Math.max(...weeklyData.map(w=>w.km),0);
+
+  // Amaca göre artış oranı (10% rule — Daniels/Pfitzinger)
+  const amaci=athlete.antrenman_amaci||'hacim_koru';
+  const artisMap={
+    hacim_artir:   1.10, // +%10 — maksimum güvenli artış
+    aerobik_taban: 1.05, // +%5 — kalite değil hacim odaklı
+    genel_kondisyon:1.03,
+    vo2max_artir:  1.00, // hacim sabit, yoğunluk artar
+    hiz_gelistir:  1.00,
+    kuvvet_gelistir:1.00,
+    hacim_koru:    1.00,
+    toparlanma:    0.75, // −%25 — aktif toparlanma
+  };
+  let artisOrani=artisMap[amaci]??1.00;
+
+  // Sıfır hafta cezası: geçen hafta 0 km ise artış uygulanmaz
+  if(lastWeekKm===0) artisOrani=1.00;
+
+  // ACWR güvenlik: yük yüksekse indir
+  const last=history.length>0?history[history.length-1]:null;
+  const currentAcwr=last?.acwr??1.0;
+  if(currentAcwr>1.5)      artisOrani=Math.min(artisOrani,0.75);
+  else if(currentAcwr>1.3) artisOrani=Math.min(artisOrani,0.88);
+  else if(currentAcwr>1.15)artisOrani=Math.min(artisOrani,0.95);
+
+  // Hedef km
+  let targetKm=round1(avg4km*artisOrani);
+
+  // Emniyet kilidi: son 6 haftanın zirvesinin %110'unu geçme
+  if(peak6>0){
+    const safeCap=round1(peak6*1.10);
+    if(targetKm>safeCap) targetKm=safeCap;
+  }
+
+  // Alt sınır: koşu geçmişi varsa en az 2km (sistem sıfır önermez)
+  if(peak6>0&&targetKm<2) targetKm=2;
+
+  // Cari hafta gerçekleşen
+  const cariHafta=weeklyData.find(w=>w.isCurrent);
+  const actualKm=round1(cariHafta?.km??0);
+  const actualDp=Math.round(cariHafta?.dp??0);
+  const kmRatio=targetKm>0?(actualKm/targetKm):null;
+
+  const {start:wkStart,end:wkEnd}=getWeekBounds(0);
+  return [{
+    weekIdx:1,weekStart:wkStart,weekEnd:wkEnd,
+    phase:'Temel',isRecovery:false,isRaceWeek:false,
+    targetKm,targetDp:0,daysToRace:null,
+    isPast:false,isCurrent:true,
+    actualKm,actualDp,kmRatio,
+    weekStatus:'normal',
+    _kmPct:artisOrani,_baseKm:avg4km,_baseDp:0,
+    _isNoRace:true,
+    _avg4km:avg4km,_lastWeekKm:lastWeekKm,_peak6km:peak6,
+    _artisOrani:artisOrani,_acwr:round2(currentAcwr),
+    telafiUygulandı:false,backoffUygulandı:false
+  }];
+}
+
 function calcWeeklyTargets(athlete, races, workouts, optimizeMode=false, history=[], frozenTargets={}){
   if(!athlete)return[];
   const {primary}=selectRaces(athlete,races);
-  if(!primary||!primary.prep_weeks)return[];
+  if(!primary||!primary.prep_weeks){
+    // Yarış yok veya hazırlık süresi tanımlanmamış → ACWR tabanlı hacim hedefi
+    return calcWeeklyTargetsNoRace(athlete,workouts,history);
+  }
 
   // ── Optimize mod: tüm yarışları entegre et ─────────────────────────────
   const orijinalPlan=calcWeeklyTargetsCore(athlete,races,workouts,primary,history,frozenTargets);
@@ -8983,23 +9080,36 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
 
   // ── yMod: tüm toparlanma sinyalleri birleşik ─────────────────────────────
   let yMod=hrvMod(hrv);
-  // ── Yarışsız dönem: amaca göre bilgi mesajı ───────────────────────────────
+  // ── Yarışsız dönem: amaca göre bilgi mesajı + ACWR hacim hedefi ──────────
   if(daysToRace===null){
     const amRec=ANTRENMAN_AMACLARI.find(x=>x.v===(athlete.antrenman_amaci||''));
     if(amRec){
       const amacMesajlar={
         hiz_gelistir:'Sürat geliştirme dönemi — interval ve tempo ağırlıklı plan.',
         kuvvet_gelistir:'Kuvvet geliştirme dönemi — yokuş ve direnç antrenmanı ağırlıklı.',
-        hacim_artir:'Hacim artırma dönemi — aerobik yük kademeli yükseltiliyor.',
+        hacim_artir:'Hacim artırma dönemi — aerobik yük kademeli yükseltiliyor (max +%10/hafta).',
         aerobik_taban:'Aerobik taban dönemi — Z1–Z2 odaklı, kaliteli düşük.',
         vo2max_artir:'VO₂max geliştirme dönemi — yüksek yoğunluklu interval odaklı.',
         toparlanma:'Aktif toparlanma dönemi — yük düşük, kolay koşu ağırlıklı.',
         genel_kondisyon:'Genel kondisyon dönemi — dengeli, çok yönlü antrenman.',
-        hacim_koru:'Yük koruma dönemi — mevcut CTL korunuyor, dengeli plan.',
+        hacim_koru:'Yük koruma dönemi — mevcut aerobik taban korunuyor.',
       };
       warnings.push({icon:amRec.emoji,text:amacMesajlar[amRec.v]||amRec.l});
     } else {
       warnings.push({icon:'💡',text:'Hedef yarış yok — aerobik taban ve genel kondisyon odaklı plan. Sporcular sekmesinden amaç seçebilirsiniz.'});
+    }
+    // ACWR tabanlı haftalık km hedefini göster
+    if(thisWeekTarget&&thisWeekTarget._isNoRace){
+      const avg4=thisWeekTarget._avg4km||0;
+      const lastWk=thisWeekTarget._lastWeekKm||0;
+      const artis=thisWeekTarget._artisOrani||1;
+      const hedef=thisWeekTarget.targetKm||0;
+      let noRaceAciklama='Bu hafta km hedefi: '+hedef+'km (son 4 hafta ort: '+avg4+'km';
+      if(lastWk===0) noRaceAciklama+=', gecen hafta 0km — artis uygulanmadi';
+      else if(artis>1.0) noRaceAciklama+=', +%'+Math.round((artis-1)*100)+' artis';
+      else if(artis<1.0) noRaceAciklama+=', -%'+Math.round((1-artis)*100)+' dusus';
+      noRaceAciklama+=')';
+      warnings.push({icon:'km',text:noRaceAciklama});
     }
   }
   if(inj>=5)        yMod=Math.min(yMod,0.80);
