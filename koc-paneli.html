@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.09-1052 --><!DOCTYPE html>
+<!-- Version: v2026.06.09-2221 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -1148,8 +1148,9 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         if(row.bpm!=null&&zi!=null&&zones?.hrZones?.[zi]){
           const hr=zones.hrZones[zi];
           if(hr.lo_bpm&&hr.hi_bpm){
-            if(row.bpm > hr.hi_bpm)       hrDir='high';
-            else if(row.bpm < hr.lo_bpm)  hrDir='low';
+            // ±5 bpm tolerans — fizyolojik titreşim ve günlük form farkı için tampon
+            if(row.bpm > hr.hi_bpm + 5)       hrDir='high';
+            else if(row.bpm < hr.lo_bpm - 5)  hrDir='low';
           }
         }
         if(paceDir||hrDir) signals.push({date,paceDir,hrDir});
@@ -5056,6 +5057,18 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
     const isWarmup=/[iı]sınma|isinma/i.test(rowLabel);
     if(isCooldown&&ovBpm>hi_bpm) return{label:'Soğuma Nabzı',color:'#64748b',bg:'#f1f5f9',icon:'↓'};
     if(isWarmup  &&ovBpm<lo_bpm) return{label:'Isınma Nabzı', color:'#64748b',bg:'#f1f5f9',icon:'↑'};
+    // Kısa satır (≤30 sn): cardiac lag — alt sınır kontrolü atlanır
+    const durSec=rowDurSec(rowData);
+    const isShortRow=durSec>0&&durSec<=30;
+    if(isShortRow){
+      if(ovBpm>hi_bpm){
+        const over=ovBpm-hi_bpm;
+        if(over<=BPM_TOL_WARN)   return{label:'Yüksek Nabız',    color:'#f59e0b',bg:'#fffbeb',icon:'↑'};
+        if(over<=BPM_TOL_DANGER) return{label:'Çok Yüksek Nabız',color:'#f97316',bg:'#fff7ed',icon:'↑↑'};
+        return                         {label:'Tehlikeli Nabız',  color:'#ef4444',bg:'#fef2f2',icon:'⚠'};
+      }
+      return{label:'Hedef Nabız',color:'#22c55e',bg:'#f0fdf4',icon:'♥'};
+    }
     if(ovBpm>=lo_bpm&&ovBpm<=hi_bpm) return{label:'Hedef Nabız',   color:'#22c55e',bg:'#f0fdf4',icon:'♥'};
     if(ovBpm>hi_bpm){
       const over=ovBpm-hi_bpm;
@@ -5066,7 +5079,7 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
     const under=lo_bpm-ovBpm;
     if(under<=BPM_TOL_WARN)   return{label:'Düşük Nabız',    color:'#f59e0b',bg:'#fffbeb',icon:'↓'};
     if(under<=BPM_TOL_DANGER) return{label:'Çok Düşük Nabız',color:'#f97316',bg:'#fff7ed',icon:'↓↓'};
-    return                         {label:'Tehlikeli Nabız',  color:'#ef4444',bg:'#fef2f2',icon:'⚠'};
+    return                         {label:'Yetersiz Yoğunluk',color:'#0891b2',bg:'#ecfeff',icon:'⬇'};
   };
 
   // Her tekrar için ayrı override uygula — mesafe, pm, ps ve süre (h/m/s) dahil
@@ -5141,7 +5154,17 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
               e('td',{style:{...cellSt,color:'#000'}},editableCellAralik(rep,'run','pm',runData.pm!=null?runData.pm:0)),
               e('td',{style:{...cellSt,color:'#000'}},editableCellAralik(rep,'run','ps',runData.ps!=null?String(runData.ps).padStart(2,'0'):'00')),
               e('td',{style:{...cellSt,color:overrides[rep]?.run?.bpm?'#000':'#64748b',fontStyle:overrides[rep]?.run?.bpm?'normal':'italic'}},
-                editableCellAralik(rep,'run','bpm',(()=>{const ov=overrides[rep]?.run?.bpm;if(ov!=null)return ov;return suggestedBpmForZone(runData._origZIdx)??'—';})())
+                (()=>{
+                  const ov=overrides[rep]?.run?.bpm;
+                  const val=ov!=null?ov:suggestedBpmForZone(runData._origZIdx)??'—';
+                  const durSec=rowDurSec(runData);
+                  const isShortRow=durSec>0&&durSec<=30;
+                  const bpmHint=durSec>0?(isShortRow?'tepe':'ort.'):null;
+                  return React.createElement('div',{style:{display:'flex',flexDirection:'column',alignItems:'center',gap:0}},
+                    editableCellAralik(rep,'run','bpm',val),
+                    bpmHint&&React.createElement('span',{style:{fontSize:9,fontWeight:600,color:isShortRow?'#7c3aed':'#3b82f6',lineHeight:1.3,marginTop:1}},isShortRow?'▲tepe':'~ort.')
+                  );
+                })()
               )
             ));
           }
@@ -5166,7 +5189,17 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
               e('td',{style:{...cellSt,color:'#000'}},editableCellAralik(rep,'rest','pm',restData.pm!=null?restData.pm:0)),
               e('td',{style:{...cellSt,color:'#000'}},editableCellAralik(rep,'rest','ps',restData.ps!=null?String(restData.ps).padStart(2,'0'):'00')),
               e('td',{style:{...cellSt,color:overrides[rep]?.rest?.bpm?'#000':'#64748b',fontStyle:overrides[rep]?.rest?.bpm?'normal':'italic'}},
-                editableCellAralik(rep,'rest','bpm',(()=>{const ov=overrides[rep]?.rest?.bpm;if(ov!=null)return ov;return suggestedBpmForZone(restData._origZIdx)??'—';})())
+                (()=>{
+                  const ov=overrides[rep]?.rest?.bpm;
+                  const val=ov!=null?ov:suggestedBpmForZone(restData._origZIdx)??'—';
+                  const durSec=rowDurSec(restData);
+                  const isShortRow=durSec>0&&durSec<=30;
+                  const bpmHint=durSec>0?(isShortRow?'tepe':'ort.'):null;
+                  return React.createElement('div',{style:{display:'flex',flexDirection:'column',alignItems:'center',gap:0}},
+                    editableCellAralik(rep,'rest','bpm',val),
+                    bpmHint&&React.createElement('span',{style:{fontSize:9,fontWeight:600,color:isShortRow?'#7c3aed':'#3b82f6',lineHeight:1.3,marginTop:1}},isShortRow?'▲tepe':'~ort.')
+                  );
+                })()
               )
             ));
           }
@@ -5271,6 +5304,12 @@ function injectRowsFromTpl(yapilar, tip, yapi_notu, sure_dk, zones, disiplin, ba
       _rows:y._rows||(y.baslik&&tplMap[y.baslik]?tplMap[y.baslik]:undefined)
     }));
   }catch(e){ return yapilarGap; }
+}
+
+// Satır süresini saniye cinsinden döndürür (h/m/s alanlarından)
+function rowDurSec(row){
+  if(!row) return 0;
+  return ((row.h||0)*3600)+((row.m||0)*60)+(row.s||0);
 }
 
 // ── Nabız Validasyon Toleransları — kolayca değiştirilebilir sabitler ────────
@@ -5539,13 +5578,24 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
     const {lo_bpm,hi_bpm}=hr;
     const bpm=row.bpm;
     // ── Soğuma/Isınma: beklenen fizyolojik sapma — uyarı değil, bilgi rozeti ──
-    // Soğumada nabız henüz hedef zone'a inmemişse bu normaldir → gri "Soğuma Nabzı"
-    // Isınmada nabız henüz hedef zone'a çıkmamışsa bu normaldir → gri "Isınma Nabzı"
-    // Zone'a ulaşılmışsa her ikisinde de normal yeşil "Hedef Nabız" gösterilir.
     const isCooldown=/soğuma|soguma/i.test(rowLabel);
     const isWarmup=/[iı]sınma|isinma/i.test(rowLabel);
     if(isCooldown&&bpm>hi_bpm) return{label:'Soğuma Nabzı',color:'#64748b',bg:'#f1f5f9',icon:'↓'};
     if(isWarmup  &&bpm<lo_bpm) return{label:'Isınma Nabzı', color:'#64748b',bg:'#f1f5f9',icon:'↑'};
+    // ── Kısa satır (≤30 sn): cardiac lag — nabız zone'a ulaşamayabilir ──
+    // Tepe nabzı beklenir; alt sınır kontrolü atlanır, sadece üst sınır bak.
+    const durSec=rowDurSec(row);
+    const isShortRow=durSec>0&&durSec<=30;
+    if(isShortRow){
+      if(bpm>hi_bpm){
+        const over=bpm-hi_bpm;
+        if(over<=BPM_TOL_WARN)   return{label:'Yüksek Nabız',    color:'#f59e0b',bg:'#fffbeb',icon:'↑'};
+        if(over<=BPM_TOL_DANGER) return{label:'Çok Yüksek Nabız',color:'#f97316',bg:'#fff7ed',icon:'↑↑'};
+        return                         {label:'Tehlikeli Nabız',  color:'#ef4444',bg:'#fef2f2',icon:'⚠'};
+      }
+      return{label:'Hedef Nabız',color:'#22c55e',bg:'#f0fdf4',icon:'♥'};
+    }
+    // ── Normal satır: tam zone kontrolü ──
     if(bpm>=lo_bpm&&bpm<=hi_bpm) return{label:'Hedef Nabız',   color:'#22c55e',bg:'#f0fdf4',icon:'♥'};
     if(bpm>hi_bpm){
       const over=bpm-hi_bpm;
@@ -5556,7 +5606,7 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
     const under=lo_bpm-bpm;
     if(under<=BPM_TOL_WARN)   return{label:'Düşük Nabız',    color:'#f59e0b',bg:'#fffbeb',icon:'↓'};
     if(under<=BPM_TOL_DANGER) return{label:'Çok Düşük Nabız',color:'#f97316',bg:'#fff7ed',icon:'↓↓'};
-    return                         {label:'Tehlikeli Nabız',  color:'#ef4444',bg:'#fef2f2',icon:'⚠'};
+    return                         {label:'Yetersiz Yoğunluk',color:'#0891b2',bg:'#ecfeff',icon:'⬇'};
   };
 
   // ── OP-8: Pace Validation — girilen pace ile hedef zone pace karşılaştır ──
@@ -5938,13 +5988,21 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
                 const effectiveBpm=manualBpm!=null?manualBpm:avgBpm;
                 const sugBpm=suggestedBpm(r);
                 // run/walk satırları: LTHR tanımlı olmasa da bpm girişi aktif (placeholder '—')
-                // Yürü-Koş başlangıç sporcuları LTHR girmemiş olabilir; sugBpm null gelebilir.
                 const alwaysEditable=r.type==='run'||r.type==='walk';
                 const displayVal=effectiveBpm!=null?effectiveBpm:(sugBpm!=null?sugBpm:(alwaysEditable?'—':null));
-                if(r.type==='header'||r._isSprint||(displayVal==null)) return typeof displayVal==='number'?displayVal:'—'; // sprint hariç tüm satırlar bpm girişine açık
-                // Aralık ortalaması: salt gösterim (AralikEditor'dan düzenlenir), manuel override editlenebilir
+                if(r.type==='header'||r._isSprint||(displayVal==null)) return typeof displayVal==='number'?displayVal:'—';
+                // Aralık ortalaması: salt gösterim
                 if(avgBpm!=null&&manualBpm==null) return avgBpm;
-                return editableCell(i,'bpm',displayVal);
+                // Süreye göre giriş ipucu: ≤30 sn → tepe nabzı, >30 sn → ort. nabzı
+                const durSec=rowDurSec(r);
+                const isShortRow=!r.rpe&&!r._isSprint&&durSec>0&&durSec<=30;
+                const bpmHint=(!r.rpe&&!r._isSprint&&r.type!=='header'&&durSec>0)
+                  ?(isShortRow?'tepe':'ort.')
+                  :null;
+                return React.createElement('div',{style:{display:'flex',flexDirection:'column',alignItems:'center',gap:0}},
+                  editableCell(i,'bpm',displayVal),
+                  bpmHint&&React.createElement('span',{style:{fontSize:9,fontWeight:600,color:isShortRow?'#7c3aed':'#3b82f6',lineHeight:1.3,marginTop:1}},isShortRow?'▲tepe':'~ort.')
+                );
               })()
             )
           );
