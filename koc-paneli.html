@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.09-2221 --><!DOCTYPE html>
+<!-- Version: v2026.06.09-2238 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -1160,33 +1160,31 @@ function extractFeedbackSignals(allSnapsObj, athlete){
   return signals;
 }
 
-// Sinyalleri analiz eder: 3 farklı günden aynı yönde sinyal varsa öneri üretir.
+// Sinyalleri analiz eder: %60 çoğunluk + min. 2 sinyal varsa öneri üretir.
+// 3 farklı gün şartı kaldırıldı — tek bir antrenmanın satır sinyalleri yeterli.
 function analyzeRecipeFeedbackSignals(signals){
   if(!signals||signals.length===0) return null;
+  const MIN_SIGNALS=2;       // en az bu kadar sinyal gerekli
+  const MAJORITY_PCT=0.60;   // baskın yön bu oranı aşmalı
+
   const checkConsistency=(sigs, dirKey)=>{
-    if(!sigs||sigs.length===0) return null;
-    // Güne göre grupla
-    const byDate={};
-    sigs.forEach(s=>{if(!byDate[s.date])byDate[s.date]=[];byDate[s.date].push(s[dirKey]);});
-    const uniqueDays=Object.keys(byDate);
-    if(uniqueDays.length<3) return {dayCount:uniqueDays.length,totalSignals:sigs.length,direction:null,insufficient:true};
-    // Her gün için baskın yön
-    const dayDirs=uniqueDays.map(date=>{
-      const dirs=byDate[date];
-      const counts={};
-      dirs.forEach(d=>{counts[d]=(counts[d]||0)+1;});
-      return Object.entries(counts).sort((a,b)=>b[1]-a[1])[0][0];
-    });
-    // Tüm günlerdeki yön tutarlılığı
-    const dirCounts={};
-    dayDirs.forEach(d=>{dirCounts[d]=(dirCounts[d]||0)+1;});
-    const sorted=Object.entries(dirCounts).sort((a,b)=>b[1]-a[1]);
-    const dominant=sorted[0];
-    if(dominant[1]>=3){
-      return {direction:dominant[0],dayCount:dominant[1],totalSignals:sigs.length,insufficient:false};
+    if(!sigs||sigs.length<MIN_SIGNALS) return sigs?.length>0
+      ?{totalSignals:sigs.length,direction:null,insufficient:true,tooFew:true}
+      :null;
+    // Tüm sinyallerde yön sayımı
+    const counts={};
+    sigs.forEach(s=>{const d=s[dirKey];if(d)counts[d]=(counts[d]||0)+1;});
+    const total=sigs.length;
+    const sorted=Object.entries(counts).sort((a,b)=>b[1]-a[1]);
+    if(sorted.length===0) return null;
+    const [dominantDir, dominantCount]=sorted[0];
+    const pct=dominantCount/total;
+    if(pct>=MAJORITY_PCT){
+      return{direction:dominantDir,totalSignals:total,dominantCount,pct:Math.round(pct*100),insufficient:false};
     }
-    return {dayCount:uniqueDays.length,totalSignals:sigs.length,direction:null,insufficient:true,mixedDirection:true};
+    return{totalSignals:total,direction:null,insufficient:true,mixedDirection:true,pct:Math.round(pct*100)};
   };
+
   const paceRes=checkConsistency(signals.filter(s=>s.paceDir),'paceDir');
   const hrRes=checkConsistency(signals.filter(s=>s.hrDir),'hrDir');
   const hasAction=(paceRes?.direction||hrRes?.direction);
@@ -1194,11 +1192,7 @@ function analyzeRecipeFeedbackSignals(signals){
   return {
     pace:paceRes,
     hr:hrRes,
-    // pace: fast → sporcu gelişti → vLT yukarı (bölgeler zorlaşır)
-    // pace: slow → bölgeler çok zor → vLT aşağı (bölgeler kolaylaşır)
     vltAction:paceRes?.direction?(paceRes.direction==='fast'?'up':'down'):null,
-    // hr: high → nabız bölgesi çok düşük tanımlanmış → LTHR yukarı
-    // hr: low → nabız bölgesi çok yüksek tanımlanmış → LTHR aşağı
     lthrAction:hrRes?.direction?(hrRes.direction==='high'?'up':'down'):null,
   };
 }
@@ -14694,7 +14688,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
         },fbScanLoading?'Taranıyor…':'🔍 Sinyalleri Tara')
       ),
       React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:8}},
-        '3 farklı günden tutarlı sinyal birikince öneri üretilir. ',
+        'Tamamlanan fazlardaki pace ve nabız sinyallerinin %60\'ı aynı yönü gösterirse öneri üretilir (min. 2 sinyal). ',
         'Pace sinyali vLT\'yi, nabız sinyali LTHR\'ı günceller. ',
         'Isınma, soğuma ve dinlenme fazları hariç tutulur.'
       ),
@@ -14708,8 +14702,8 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
           React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},
             fbAnalysis?.pace
               ?(fbAnalysis.pace.insufficient
-                ?(fbAnalysis.pace.mixedDirection?'Yön tutarsız':''+fbAnalysis.pace.dayCount+' gün — 3 gün gerekli')
-                :'✓ '+fbAnalysis.pace.dayCount+' gün · '+(fbAnalysis.pace.direction==='fast'?'⬆ Hızlı sinyali':'⬇ Yavaş sinyali'))
+                ?(fbAnalysis.pace.tooFew?'Yetersiz sinyal (min. 2)':fbAnalysis.pace.mixedDirection?'Yön tutarsız — ek antrenman bekleniyor':'Sinyal yetersiz')
+                :'✓ '+fbAnalysis.pace.dominantCount+'/'+fbAnalysis.pace.totalSignals+' faz · '+(fbAnalysis.pace.direction==='fast'?'⬆ Hızlı':'⬇ Yavaş')+' (%'+fbAnalysis.pace.pct+')')
               :'—'
           )
         ),
@@ -14721,8 +14715,8 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
           React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},
             fbAnalysis?.hr
               ?(fbAnalysis.hr.insufficient
-                ?(fbAnalysis.hr.mixedDirection?'Yön tutarsız':''+fbAnalysis.hr.dayCount+' gün — 3 gün gerekli')
-                :'✓ '+fbAnalysis.hr.dayCount+' gün · '+(fbAnalysis.hr.direction==='high'?'↑ Yüksek sinyali':'↓ Düşük sinyali'))
+                ?(fbAnalysis.hr.tooFew?'Yetersiz sinyal (min. 2)':fbAnalysis.hr.mixedDirection?'Yön tutarsız — ek antrenman bekleniyor':'Sinyal yetersiz')
+                :'✓ '+fbAnalysis.hr.dominantCount+'/'+fbAnalysis.hr.totalSignals+' faz · '+(fbAnalysis.hr.direction==='high'?'↑ Yüksek':'↓ Düşük')+' (%'+fbAnalysis.hr.pct+')')
               :'—'
           )
         )
