@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.09-2238 --><!DOCTYPE html>
+<!-- Version: v2026.06.10-0015 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -1160,40 +1160,66 @@ function extractFeedbackSignals(allSnapsObj, athlete){
   return signals;
 }
 
-// Sinyalleri analiz eder: %60 çoğunluk + min. 2 sinyal varsa öneri üretir.
-// 3 farklı gün şartı kaldırıldı — tek bir antrenmanın satır sinyalleri yeterli.
+// Sinyalleri çapraz doğrulamayla analiz eder.
+// Kural: hem pace hem nabız sinyali aynı anda gerekli — tekil sinyal eylem üretmez.
+// 2 farklı günde uyumlu kombine sinyal → vLT eylem önerisi.
 function analyzeRecipeFeedbackSignals(signals){
   if(!signals||signals.length===0) return null;
-  const MIN_SIGNALS=2;       // en az bu kadar sinyal gerekli
-  const MAJORITY_PCT=0.60;   // baskın yön bu oranı aşmalı
 
-  const checkConsistency=(sigs, dirKey)=>{
-    if(!sigs||sigs.length<MIN_SIGNALS) return sigs?.length>0
-      ?{totalSignals:sigs.length,direction:null,insufficient:true,tooFew:true}
-      :null;
-    // Tüm sinyallerde yön sayımı
-    const counts={};
-    sigs.forEach(s=>{const d=s[dirKey];if(d)counts[d]=(counts[d]||0)+1;});
-    const total=sigs.length;
-    const sorted=Object.entries(counts).sort((a,b)=>b[1]-a[1]);
-    if(sorted.length===0) return null;
-    const [dominantDir, dominantCount]=sorted[0];
-    const pct=dominantCount/total;
-    if(pct>=MAJORITY_PCT){
-      return{direction:dominantDir,totalSignals:total,dominantCount,pct:Math.round(pct*100),insufficient:false};
-    }
-    return{totalSignals:total,direction:null,insufficient:true,mixedDirection:true,pct:Math.round(pct*100)};
+  // Kombine yön matrisi
+  const toVltDir=(paceDir,hrDir)=>{
+    if(!paceDir||!hrDir) return null;            // tekil sinyal → yok
+    if(paceDir==='fast'&&hrDir!=='high') return 'up';   // hızlı + nabız normal/düşük → vLT ↑
+    if(paceDir==='slow'&&hrDir!=='low')  return 'down'; // yavaş + nabız normal/yüksek → vLT ↓
+    return null;                                  // çakışma (hızlı+yüksek / yavaş+düşük) → yok
   };
 
-  const paceRes=checkConsistency(signals.filter(s=>s.paceDir),'paceDir');
-  const hrRes=checkConsistency(signals.filter(s=>s.hrDir),'hrDir');
-  const hasAction=(paceRes?.direction||hrRes?.direction);
-  if(!hasAction&&!paceRes&&!hrRes) return null;
-  return {
-    pace:paceRes,
-    hr:hrRes,
-    vltAction:paceRes?.direction?(paceRes.direction==='fast'?'up':'down'):null,
-    lthrAction:hrRes?.direction?(hrRes.direction==='high'?'up':'down'):null,
+  const paceSigs=signals.filter(s=>s.paceDir).length;
+  const hrSigs  =signals.filter(s=>s.hrDir).length;
+
+  // Her satır için kombine yön
+  const combined=signals
+    .map(s=>({...s,vltDir:toVltDir(s.paceDir,s.hrDir)}))
+    .filter(s=>s.vltDir);
+
+  const conflictSigs=signals.filter(s=>
+    s.paceDir&&s.hrDir&&!toVltDir(s.paceDir,s.hrDir)
+  ).length;
+
+  if(combined.length===0) return{
+    vltAction:null,noCombined:true,
+    paceSigs,hrSigs,conflictSigs,totalCombinedSignals:0,dominantDayCount:0,totalDays:0
+  };
+
+  // Güne göre grupla → her günün baskın yönü
+  const byDate={};
+  combined.forEach(s=>{
+    if(!byDate[s.date])byDate[s.date]=[];
+    byDate[s.date].push(s.vltDir);
+  });
+  const dayDirs=Object.entries(byDate).map(([date,dirs])=>{
+    const counts={};
+    dirs.forEach(d=>counts[d]=(counts[d]||0)+1);
+    const sorted=Object.entries(counts).sort((a,b)=>b[1]-a[1]);
+    return{date,dir:sorted[0][0],rowCount:dirs.length};
+  });
+
+  // 2 gün eşiği
+  const dirCounts={};
+  dayDirs.forEach(d=>dirCounts[d.dir]=(dirCounts[d.dir]||0)+1);
+  const sorted=Object.entries(dirCounts).sort((a,b)=>b[1]-a[1]);
+  const dominant=sorted[0];
+  const hasSufficientDays=dominant&&dominant[1]>=2;
+
+  return{
+    vltAction:hasSufficientDays?(dominant[0]==='up'?'up':'down'):null,
+    lthrAction:null,   // artık LTHR ayrı güncellenmez
+    insufficient:!hasSufficientDays,
+    dominantDayCount:dominant?dominant[1]:0,
+    totalDays:dayDirs.length,
+    totalCombinedSignals:combined.length,
+    paceSigs,hrSigs,conflictSigs,
+    dayDirs,
   };
 }
 
@@ -14688,114 +14714,109 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
         },fbScanLoading?'Taranıyor…':'🔍 Sinyalleri Tara')
       ),
       React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:8}},
-        'Tamamlanan fazlardaki pace ve nabız sinyallerinin %60\'ı aynı yönü gösterirse öneri üretilir (min. 2 sinyal). ',
-        'Pace sinyali vLT\'yi, nabız sinyali LTHR\'ı günceller. ',
+        'Her iki sinyal (pace + nabız) aynı yönde olduğunda kombine sinyal üretilir. ',
+        '2 farklı günde uyumlu kombine sinyal birikince vLT eylem önerisi gelir. ',
         'Isınma, soğuma ve dinlenme fazları hariç tutulur.'
       ),
       fbError&&React.createElement('div',{className:'alert alert-warn',style:{fontSize:12}},fbError),
-      fbRawCount&&React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:10}},
+      fbRawCount&&React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:10}},
         React.createElement('div',{className:'metric',style:{padding:'8px 12px'}},
           React.createElement('div',{className:'metric-label'},'Pace Sinyali'),
-          React.createElement('div',{style:{fontSize:18,fontWeight:700,fontFamily:'monospace',
-            color:fbAnalysis?.pace?.direction?'var(--info)':fbAnalysis?.pace?.insufficient?'var(--warn)':'var(--text-secondary)'
-          }},fbRawCount.pace+' faz'),
+          React.createElement('div',{style:{fontSize:18,fontWeight:700,fontFamily:'monospace',color:'var(--text-secondary)'}},
+            fbRawCount.pace+' faz'),
           React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},
-            fbAnalysis?.pace
-              ?(fbAnalysis.pace.insufficient
-                ?(fbAnalysis.pace.tooFew?'Yetersiz sinyal (min. 2)':fbAnalysis.pace.mixedDirection?'Yön tutarsız — ek antrenman bekleniyor':'Sinyal yetersiz')
-                :'✓ '+fbAnalysis.pace.dominantCount+'/'+fbAnalysis.pace.totalSignals+' faz · '+(fbAnalysis.pace.direction==='fast'?'⬆ Hızlı':'⬇ Yavaş')+' (%'+fbAnalysis.pace.pct+')')
-              :'—'
-          )
+            fbRawCount.pace>0?'ham sinyal':'—')
         ),
         React.createElement('div',{className:'metric',style:{padding:'8px 12px'}},
           React.createElement('div',{className:'metric-label'},'Nabız Sinyali'),
-          React.createElement('div',{style:{fontSize:18,fontWeight:700,fontFamily:'monospace',
-            color:fbAnalysis?.hr?.direction?'var(--info)':fbAnalysis?.hr?.insufficient?'var(--warn)':'var(--text-secondary)'
-          }},fbRawCount.hr+' faz'),
+          React.createElement('div',{style:{fontSize:18,fontWeight:700,fontFamily:'monospace',color:'var(--text-secondary)'}},
+            fbRawCount.hr+' faz'),
           React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},
-            fbAnalysis?.hr
-              ?(fbAnalysis.hr.insufficient
-                ?(fbAnalysis.hr.tooFew?'Yetersiz sinyal (min. 2)':fbAnalysis.hr.mixedDirection?'Yön tutarsız — ek antrenman bekleniyor':'Sinyal yetersiz')
-                :'✓ '+fbAnalysis.hr.dominantCount+'/'+fbAnalysis.hr.totalSignals+' faz · '+(fbAnalysis.hr.direction==='high'?'↑ Yüksek':'↓ Düşük')+' (%'+fbAnalysis.hr.pct+')')
-              :'—'
-          )
+            fbRawCount.hr>0?'ham sinyal':'—')
+        ),
+        React.createElement('div',{className:'metric',style:{padding:'8px 12px'}},
+          React.createElement('div',{className:'metric-label'},'Kombine Sinyal'),
+          React.createElement('div',{style:{fontSize:18,fontWeight:700,fontFamily:'monospace',
+            color:fbAnalysis?.vltAction?'var(--info)':fbAnalysis?.totalCombinedSignals>0?'var(--warn)':'var(--text-secondary)'}},
+            (fbAnalysis?.totalCombinedSignals||0)+' faz'),
+          React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},
+            fbAnalysis
+              ?(fbAnalysis.noCombined
+                ?(fbAnalysis.conflictSigs>0?'Çakışma var ('+fbAnalysis.conflictSigs+')':
+                  (fbAnalysis.paceSigs===0||fbAnalysis.hrSigs===0)?'Her fazda hem pace hem nabız girin':'—')
+                :fbAnalysis.vltAction
+                  ?'✓ '+fbAnalysis.dominantDayCount+'/2 gün · '+(fbAnalysis.vltAction==='up'?'⬆ vLT ↑':'⬇ vLT ↓')
+                  :fbAnalysis.dominantDayCount+'/2 gün — 1 gün daha bekleniyor')
+              :'—')
         )
       ),
       // Öneri + uygulama butonları
-      fbAnalysis&&(fbAnalysis.vltAction||fbAnalysis.lthrAction)&&(()=>{
+      fbAnalysis&&(fbAnalysis.vltAction)&&(()=>{
         const hasVlt=!!fbAnalysis.vltAction&&!!athlete.vlt;
-        const hasLthr=!!fbAnalysis.lthrAction&&!!athlete.lthr;
         const vltGrad=hasVlt?gradualVltUpdate(
           athlete.vlt,
           fbAnalysis.vltAction==='up'?String(round2(parseSayi(athlete.vlt)*1.015)):String(round2(parseSayi(athlete.vlt)*0.985)),
           0.6
         ):null;
-        const lthrGrad=hasLthr?gradualLthrUpdate(athlete.lthr,fbAnalysis.lthrAction):null;
         return React.createElement('div',null,
           fbApplied
             ?React.createElement('div',{className:'alert alert-info',style:{fontSize:12}},
-              '✓ Kalibrasyon uygulandı ('+(fbApplied==='both'?'vLT + LTHR':fbApplied==='vlt'?'vLT':'LTHR')+').'
+              '✓ vLT kalibrasyonu uygulandı.'
             )
             :React.createElement('div',null,
-              // Öneri özeti
               React.createElement('div',{style:{
                 background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:6,padding:10,marginBottom:8,fontSize:12
               }},
                 React.createElement('div',{style:{fontWeight:600,marginBottom:6,color:'var(--info)'}},
-                  '📋 Kalibrasyon Önerisi'
+                  '📋 Kalibrasyon Önerisi — '+(fbAnalysis.vltAction==='up'?'⬆ Sporcu gelişimi':'⬇ Bölgeler zorlanıyor')
                 ),
-                hasVlt&&vltGrad&&React.createElement('div',{style:{marginBottom:4}},
+                React.createElement('div',{style:{marginBottom:4,fontSize:12,color:'var(--text-secondary)',marginBottom:6}},
+                  fbAnalysis.dominantDayCount+' farklı günde uyumlu kombine sinyal (pace + nabız) · ',
+                  fbAnalysis.totalCombinedSignals+' toplam faz'
+                ),
+                hasVlt&&vltGrad&&React.createElement('div',null,
                   React.createElement('span',{style:{color:'var(--text-secondary)'}},'vLT: '),
-                  React.createElement('span',{style:{fontFamily:'monospace'}},athlete.vlt+' → '),
+                  React.createElement('span',{style:{fontFamily:'monospace'}},athlete.vlt+' m/s → '),
                   React.createElement('strong',{style:{color:'var(--success)',fontFamily:'monospace'}},vltGrad.newVlt+' m/s'),
                   React.createElement('span',{style:{color:'var(--text-secondary)',fontSize:11}},
-                    ' ('+fmtPaceFromMS(parseSayi(athlete.vlt))+' → '+fmtPaceFromMS(vltGrad.newVlt)+') · ',
-                    fbAnalysis.vltAction==='up'?'⬆ İyileşme sinyali':'⬇ Gerileme sinyali'
+                    '  ('+fmtPaceFromMS(parseSayi(athlete.vlt))+' → '+fmtPaceFromMS(vltGrad.newVlt)+' /km)'
                   )
                 ),
-                !hasVlt&&fbAnalysis.vltAction&&React.createElement('div',{style:{color:'var(--text-tertiary)',marginBottom:4,fontSize:11}},
+                !hasVlt&&React.createElement('div',{style:{color:'var(--text-tertiary)',fontSize:11}},
                   'vLT: Sporcu profilinde vLT girilmemiş — önce manuel giriş gerekli.'
-                ),
-                hasLthr&&lthrGrad&&React.createElement('div',null,
-                  React.createElement('span',{style:{color:'var(--text-secondary)'}},'LTHR: '),
-                  React.createElement('span',{style:{fontFamily:'monospace'}},athlete.lthr+' → '),
-                  React.createElement('strong',{style:{color:'var(--success)',fontFamily:'monospace'}},lthrGrad.newLthr+' bpm'),
-                  React.createElement('span',{style:{color:'var(--text-secondary)',fontSize:11}},
-                    ' · '+(fbAnalysis.lthrAction==='up'?'↑ Nabız yüksek sinyali':'↓ Nabız düşük sinyali')
-                  )
-                ),
-                !hasLthr&&fbAnalysis.lthrAction&&React.createElement('div',{style:{color:'var(--text-tertiary)',fontSize:11}},
-                  'LTHR: Sporcu profilinde LTHR girilmemiş — nabız kalibrasyonu atlandı.'
                 )
               ),
-              // Uygulama butonları
-              React.createElement('div',{className:'flex-gap'},
-                hasVlt&&hasLthr&&React.createElement('button',{
+              hasVlt&&React.createElement('div',{className:'flex-gap'},
+                React.createElement('button',{
                   className:'btn btn-primary btn-sm',
                   style:{flex:'1 1 auto'},
-                  onClick:()=>applyFbCalib('both')
-                },'Her İkisini Uygula (vLT + LTHR)'),
-                hasVlt&&React.createElement('button',{
-                  className:'btn btn-sm',
-                  style:{flex:'1 1 auto'},
                   onClick:()=>applyFbCalib('vlt')
-                },'Yalnızca vLT → '+( vltGrad?vltGrad.newVlt+' m/s':'…')),
-                hasLthr&&React.createElement('button',{
+                },'✓ Uygula → vLT '+( vltGrad?vltGrad.newVlt+' m/s':'…')),
+                React.createElement('button',{
                   className:'btn btn-sm',
                   style:{flex:'1 1 auto'},
-                  onClick:()=>applyFbCalib('lthr')
-                },'Yalnızca LTHR → '+(lthrGrad?lthrGrad.newLthr+' bpm':'…'))
+                  onClick:()=>applyFbCalib('vlt'),
+                  title:'Hedef vLT değerini doğrudan uygula'
+                },'Tam Uygula → '+(fbAnalysis.vltAction==='up'?String(round2(parseSayi(athlete.vlt)*1.015)):String(round2(parseSayi(athlete.vlt)*0.985)))+' m/s')
               )
             )
         );
       })(),
       // Yetersiz sinyal durumu
-      fbAnalysis&&!fbAnalysis.vltAction&&!fbAnalysis.lthrAction&&React.createElement('div',{
+      fbAnalysis&&!fbAnalysis.vltAction&&React.createElement('div',{
         className:'alert alert-info',style:{fontSize:12}
-      },'Henüz yeterli sinyal birikimi yok. ',
-        (fbAnalysis.pace?.dayCount||0)<3&&React.createElement('span',null,'Pace: '+(fbAnalysis.pace?.dayCount||0)+'/3 gün. '),
-        (fbAnalysis.hr?.dayCount||0)<3&&React.createElement('span',null,'Nabız: '+(fbAnalysis.hr?.dayCount||0)+'/3 gün. '),
-        'Antrenman sonrası gerçek değerleri girmeye devam edin.'
+      },
+        fbAnalysis.noCombined
+          ?(fbAnalysis.paceSigs===0&&fbAnalysis.hrSigs===0
+            ?'Henüz sinyal yok. Antrenman sonrası pace ve nabız değerlerini girin.'
+            :fbAnalysis.paceSigs===0
+            ?'Nabız sinyali var ama pace girilmemiş — her fazda pace girişi yapın.'
+            :fbAnalysis.hrSigs===0
+            ?'Pace sinyali var ama nabız girilmemiş — her fazda nabız girişi yapın.'
+            :fbAnalysis.conflictSigs>0
+            ?'Pace ve nabız sinyalleri çakışıyor ('+fbAnalysis.conflictSigs+' faz). Tutarsız antrenman — daha fazla veri bekleniyor.'
+            :'Her fazda hem pace hem nabız girildiğinde kombine sinyal üretilebilir.')
+          :'Kombine sinyal var ('+fbAnalysis.totalCombinedSignals+' faz) — '+fbAnalysis.dominantDayCount+'/2 gün tamamlandı. 1 gün daha bekleniyor.'
       ),
       !fbRawCount&&!fbScanLoading&&React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',fontStyle:'italic'}},
         'Tarama başlatılmadı.'
