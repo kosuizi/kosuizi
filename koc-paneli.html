@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.10-0015 --><!DOCTYPE html>
+<!-- Version: v2026.06.10-0847 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -1120,15 +1120,14 @@ function extractFeedbackSignals(allSnapsObj, athlete){
     Object.entries(rowOverrides).forEach(([date,dateOv])=>{
       if(!dateOv||typeof dateOv!=='object') return;
       const {__aralik,...rowOvs}=dateOv;
-      Object.values(rowOvs).forEach(row=>{
+
+      // ── Düz satırlar ────────────────────────────────────────────────────────
+      const scanRow=(row)=>{
         if(!row||typeof row!=='object') return;
-        // Kalite filtresi: header, RPE, sprint, rest, walk hariç
         if(row.type==='header'||row.rpe||row._isSprint) return;
         if(row.type==='rest'||row.type==='walk') return;
-        // Isınma / soğuma / dinlenme label filtresi
         if(row.label&&SKIP_RE.test(row.label)) return;
         let paceDir=null, hrDir=null;
-        // ── Pace sinyali ──
         const pm=row.pm, ps=row.ps;
         if((pm>0)||(ps>0)){
           const enteredSec=(pm||0)*60+(ps||0);
@@ -1136,25 +1135,34 @@ function extractFeedbackSignals(allSnapsObj, athlete){
           if(enteredSec>0&&origPace>0){
             const diff=enteredSec-origPace;
             const tol=row._isGapRow?50:25;
-            if(diff<-tol) paceDir='fast';      // hedeften daha hızlı
-            else if(diff>tol) paceDir='slow';  // hedeften daha yavaş
+            if(diff<-tol) paceDir='fast';
+            else if(diff>tol) paceDir='slow';
           }
         }
-        // ── Nabız sinyali ──
-        // Kıyaslama: midpoint değil, lo_bpm/hi_bpm sınırları kullanılır.
-        // Zone dışına çıkan her ölçüm sinyal üretir; gürültü filtresi
-        // analyzeRecipeFeedbackSignals içinde 3 farklı gün koşuluyla sağlanır.
         const zi=row._origZIdx;
         if(row.bpm!=null&&zi!=null&&zones?.hrZones?.[zi]){
           const hr=zones.hrZones[zi];
           if(hr.lo_bpm&&hr.hi_bpm){
-            // ±5 bpm tolerans — fizyolojik titreşim ve günlük form farkı için tampon
             if(row.bpm > hr.hi_bpm + 5)       hrDir='high';
             else if(row.bpm < hr.lo_bpm - 5)  hrDir='low';
           }
         }
         if(paceDir||hrDir) signals.push({date,paceDir,hrDir});
-      });
+      };
+
+      Object.values(rowOvs).forEach(scanRow);
+
+      // ── Aralık (interval) satırları — __aralik yapısı ───────────────────────
+      if(__aralik&&typeof __aralik==='object'){
+        Object.values(__aralik).forEach(repMap=>{
+          if(!repMap||typeof repMap!=='object') return;
+          Object.values(repMap).forEach(typeMap=>{
+            if(!typeMap||typeof typeMap!=='object') return;
+            // Sadece koşu alt-satırları taranır; dinlenme arası hariç
+            if(typeMap.run) scanRow(typeMap.run);
+          });
+        });
+      }
     });
   });
   return signals;
@@ -5735,7 +5743,12 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
       // bpm: sıfır veya boş girilirse override kaldır (null → önerilen değere dön)
       upd={bpm:parseInt(rawVal)||null};
     }
-    const newOverrides={...rowOverrides,[rowIdx]:{...(rowOverrides[rowIdx]||{}), ...upd}};
+    const origFields={};
+    if(r._origPaceSec>0)    origFields._origPaceSec=r._origPaceSec;
+    if(r._origZIdx!=null)   origFields._origZIdx=r._origZIdx;
+    if(r.label)             origFields.label=r.label;
+    if(r.type)              origFields.type=r.type;
+    const newOverrides={...rowOverrides,[rowIdx]:{...(rowOverrides[rowIdx]||{}), ...origFields, ...upd}};
     setRowOverrides(newOverrides);
     setEditCell(null);
     if(onSaveOverrides){const __zd=computeZoneDistFromRows(baseRows,newOverrides,zones,aralikOverrides);onSaveOverrides({...newOverrides,__aralik:aralikOverrides,...(__zd?{__zoneDist:__zd}:{})});}
@@ -5791,7 +5804,15 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
       if(!next[headerIdx]) next[headerIdx]={};
       if(!next[headerIdx][rep]) next[headerIdx][rep]={};
       if(!next[headerIdx][rep][type]) next[headerIdx][rep][type]={};
-      next[headerIdx][rep][type]={...next[headerIdx][rep][type], ...upd};
+      next[headerIdx][rep][type]={
+        ...next[headerIdx][rep][type],
+        // Sinyal üretimi için kalıcı meta alanlar — extractFeedbackSignals okur
+        _origPaceSec:base._origPaceSec,
+        _origZIdx:base._origZIdx,
+        label:base.label,
+        type:base.type,
+        ...upd
+      };
       // Firebase'e yaz: rowOverrides + __aralik birleşimi
       if(onSaveOverrides){const __zd=computeZoneDistFromRows(baseRows,rowOverrides,zones,next);onSaveOverrides({...rowOverrides,__aralik:next,...(__zd?{__zoneDist:__zd}:{})});}
       return next;
