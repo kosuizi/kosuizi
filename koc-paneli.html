@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.11-2000 --><!DOCTYPE html>
+<!-- Version: v2026.06.11-1431 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.09-1052';
+const APP_VERSION='v2026.06.11-1431';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -15059,13 +15059,13 @@ function ChartAerEff({history}){
   useEffect(()=>{
     if(!ref.current)return;
     const data=history.filter(d=>d.aerEff!==null);
-    if(data.length<2){return;}
+    if(data.length<2){if(inst.current){inst.current.destroy();inst.current=null;}return;}
     const isDark=window.matchMedia('(prefers-color-scheme:dark)').matches;
     const gridColor=isDark?'rgba(255,255,255,.08)':'rgba(0,0,0,.08)';
     const tickColor=isDark?'#777':'#888';
 
-    // SMA hesaplama (5 periyot)
-    const SMA_PERIOD=5;
+    // SMA hesaplama — veri sayısına göre adaptif periyot (kısa pencerelerde de trend hesaplanabilsin)
+    const SMA_PERIOD=data.length>=10?5:data.length>=6?3:2;
     const rawVals=data.map(d=>d.aerEff);
     const smaVals=rawVals.map((_,i)=>{
       if(i<SMA_PERIOD-1)return null;
@@ -15097,7 +15097,7 @@ function ChartAerEff({history}){
             order:2
           },
           {
-            label:'SMA(5)',
+            label:'SMA('+SMA_PERIOD+')',
             data:smaVals,
             borderColor:smaColor,borderWidth:2.5,pointRadius:0,
             borderDash:[],tension:.4,fill:false,
@@ -15114,7 +15114,7 @@ function ChartAerEff({history}){
               color:tickColor,font:{size:10},
               boxWidth:20,padding:12,
               filter:(item)=>item.datasetIndex===1
-                ?Object.assign(item,{text:'Ort. eğilim (SMA5) '+(smaLast<smaFirst?'↑ İyileşiyor':'↓ Geriyor')})||true
+                ?Object.assign(item,{text:'Ort. eğilim (SMA'+SMA_PERIOD+') '+(smaLast<smaFirst?'↑ İyileşiyor':'↓ Geriyor')})||true
                 :true
             }
           },
@@ -15123,7 +15123,7 @@ function ChartAerEff({history}){
               const v=ctx.raw;
               if(v==null)return null;
               const m=Math.floor(v/60);const s=Math.round(v%60);
-              if(ctx.datasetIndex===1)return`SMA(5): ${m}:${String(s).padStart(2,'0')} /km`;
+              if(ctx.datasetIndex===1)return`SMA(${SMA_PERIOD}): ${m}:${String(s).padStart(2,'0')} /km`;
               return`Pace@140bpm: ${m}:${String(s).padStart(2,'0')} /km`;
             }
           }}
@@ -15141,9 +15141,86 @@ function ChartAerEff({history}){
     });
     return()=>{if(inst.current)inst.current.destroy();};
   },[history]);
-  const hasData=history.some(d=>d.aerEff!==null);
-  if(!hasData)return React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',padding:'20px 0',textAlign:'center'}},'Aerobik verimlilik için Z2 bölgesinde (HR 120–165) 15dk+ koşu verisi gerekiyor.');
+  const dataCount=history.filter(d=>d.aerEff!==null).length;
+  if(dataCount<2)return React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',padding:'20px 0',textAlign:'center'}},'Seçilen dönemde aerobik verimlilik için yeterli veri yok — Z2 bölgesinde (HR 120–165) 15dk+ en az 2 koşu gerekiyor.');
   return React.createElement('div',{style:{position:'relative',height:180}},React.createElement('canvas',{ref}));
+}
+
+// ── Aerobik Verimlilik Kartı (1H/2H/4H/8H/12H periyot seçimli) ──────────────
+// Seçilen pencereye göre grafik filtrelenir; SMA trend rengi (yeşil/kırmızı)
+// yalnızca o pencere içindeki gidişata göre dinamik hesaplanır.
+function AerobikVerimlilikKarti({history,athlete}){
+  const [period,setPeriod]=React.useState(4);
+  const cardRef=React.useRef();
+  const e=React.createElement;
+
+  // history günlük dizi olduğundan son period*7 gün = seçilen pencere
+  const histFiltered=React.useMemo(()=>history.slice(-period*7),[history,period]);
+  const histOlder=React.useMemo(()=>history.slice(-period*14,-period*7),[history,period]);
+
+  const PeriodBtn=({w,l})=>e('button',{
+    onClick:()=>setPeriod(w),
+    style:{
+      padding:'3px 8px',fontSize:11,fontWeight:600,borderRadius:4,border:'1px solid',cursor:'pointer',
+      background:period===w?'var(--info)':'transparent',
+      color:period===w?'#fff':'var(--text-secondary)',
+      borderColor:period===w?'var(--info)':'var(--border)',
+      transition:'all .15s'
+    }
+  },l);
+
+  return e('div',{ref:cardRef,className:'card'},
+    e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4,flexWrap:'wrap',gap:8}},
+      e('div',{className:'card-title',style:{margin:0}},'Aerobik Verimlilik — 140 bpm Normalize Pace'),
+      e('div',{style:{display:'flex',alignItems:'center',gap:6}},
+        e('div',{style:{display:'flex',gap:3}},
+          [{w:1,l:'1H'},{w:2,l:'2H'},{w:4,l:'4H'},{w:8,l:'8H'},{w:12,l:'12H'}].map(({w,l})=>
+            e(PeriodBtn,{key:w,w,l})
+          )
+        ),
+        e(ShareBtn,{elRef:cardRef,filename:'aerobik_verimlilik.png',title:'Aerobik Verimlilik',text:athlete?.ad+' aerobik taban gelişimi'})
+      )
+    ),
+    e('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:8}},
+      'Son '+period+' hafta · Z2 antrenmanlarındaki pace 140 bpm\'e normalize edilir. Grafik yukarı çıkıyorsa (pace değeri küçülüyor) aynı nabızda daha hızlı koşuluyor — aerobik taban güçleniyor.'
+    ),
+    e(ChartAerEff,{history:histFiltered}),
+    (()=>{
+      const recent=histFiltered.filter(d=>d.aerEff!=null).map(d=>d.aerEff);
+      const older=histOlder.filter(d=>d.aerEff!=null).map(d=>d.aerEff);
+      if(recent.length<3)return e('div',{style:{fontSize:12,color:'var(--text-tertiary)',marginTop:8}},'Yorum için seçilen dönemde en az 3 Z2 antrenmanı gerekiyor.');
+      const avgRecent=round1(recent.reduce((s,v)=>s+v,0)/recent.length);
+      const avgOlder=older.length>=3?round1(older.reduce((s,v)=>s+v,0)/older.length):null;
+      const lastVal=recent[recent.length-1];
+      const msgs=[];
+
+      // Mevcut değer yorumu (sn/km cinsinden — küçük = hızlı = iyi)
+      if(lastVal<300)      msgs.push({cls:'good', text:'🚀 Mevcut aerobik verimlilik çok iyi ('+fmtPaceStr(lastVal/60,1)+' / 140 bpm). Aynı nabızda elit düzeye yakın pace.'});
+      else if(lastVal<360) msgs.push({cls:'good', text:'✓ Aerobik taban güçlü ('+fmtPaceStr(lastVal/60,1)+' / 140 bpm).'});
+      else if(lastVal<420) msgs.push({cls:'info', text:'➡ Aerobik verimlilik orta düzey ('+fmtPaceStr(lastVal/60,1)+' / 140 bpm). Gelişme potansiyeli var.'});
+      else                 msgs.push({cls:'warn', text:'📉 Aerobik taban henüz zayıf ('+fmtPaceStr(lastVal/60,1)+' / 140 bpm). Düzenli Z2 antrenmanı ile iyileşir.'});
+
+      // Trend yorumu (seçilen pencere vs önceki eşit pencere)
+      if(avgOlder!==null){
+        const diff=round1(avgRecent-avgOlder); // negatif = iyileşme (hızlanma)
+        const pct=Math.round(Math.abs(diff)/avgOlder*100);
+        if(diff<-5)       msgs.push({cls:'good', text:'📈 Son '+period+' haftada aerobik verimlilik %'+pct+' iyileşti ('+diff+' sn/km) — aynı nabızda daha hızlı koşuyorsun. Aerobik taban güçleniyor.'});
+        else if(diff<5)   msgs.push({cls:'info', text:'➡ Son '+period+' haftada verimlilik stabil ('+(diff>=0?'+':'')+diff+' sn/km). Z2 antrenman hacmini artırarak gelişimi hızlandırabilirsin.'});
+        else               msgs.push({cls:'warn', text:'⚠ Son '+period+' haftada aerobik verimlilik %'+pct+' geriledi (+'+diff+' sn/km) — yorgunluk, hastalık veya yüksek şiddet ağırlığı olabilir.'});
+      }else{
+        msgs.push({cls:'info', text:'ℹ Trend karşılaştırması için önceki '+period+' haftalık dönemde en az 3 Z2 antrenmanı gerekiyor.'});
+      }
+
+      return e('div',{style:{marginTop:8,display:'flex',flexDirection:'column',gap:5}},
+        msgs.map((m,i)=>e('div',{key:i,style:{
+          fontSize:12,padding:'7px 11px',borderRadius:'var(--radius)',
+          background:m.cls==='danger'?'var(--danger-bg)':m.cls==='warn'?'var(--warn-bg)':m.cls==='good'?'var(--success-bg)':'var(--info-bg)',
+          color:m.cls==='danger'?'var(--danger)':m.cls==='warn'?'var(--warn)':m.cls==='good'?'var(--success)':'var(--info)',
+          borderLeft:'3px solid '+(m.cls==='danger'?'var(--danger)':m.cls==='warn'?'var(--warn)':m.cls==='good'?'var(--success)':'var(--info)')
+        }},m.text))
+      );
+    })()
+  );
 }
 
 function ReadinessBar({score,detaylar}){
@@ -16667,7 +16744,7 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
 
   // Paylaş ref'leri
   const refAtlCtl=useRef();const refAcwr=useRef();
-  const refMech=useRef();const refZone=useRef();const refAerEff=useRef();
+  const refMech=useRef();const refZone=useRef();
   const refAnaMetrik=useRef();const refHaftalik=useRef();
 
   // Son 7 gün metrikleri
@@ -17031,48 +17108,8 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
     // Antrenman Profili
     React.createElement(AntrenmanProfiliKarti,{workouts,athlete}),
 
-    // Aerobik verimlilik
-    React.createElement('div',{ref:refAerEff,className:'card'},
-      React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}},
-        React.createElement('div',{className:'card-title',style:{margin:0}},'Aerobik Verimlilik — 140 bpm Normalize Pace'),
-        React.createElement(ShareBtn,{elRef:refAerEff,filename:'aerobik_verimlilik.png',title:'Aerobik Verimlilik',text:athlete?.ad+' aerobik taban gelişimi'})
-      ),
-      React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:8}},'Z2 antrenmanlarındaki pace 140 bpm\'e normalize edilir. Grafik yukarı çıkıyorsa (pace değeri küçülüyor) aynı nabızda daha hızlı koşuluyor — aerobik taban güçleniyor.'),
-      React.createElement(ChartAerEff,{history}),
-      (()=>{
-        const recent=history.slice(-28).filter(d=>d.aerEff!=null).map(d=>d.aerEff);
-        const older=history.slice(-56,-28).filter(d=>d.aerEff!=null).map(d=>d.aerEff);
-        if(recent.length<3)return React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',marginTop:8}},'Yorum için en az 3 Z2 antrenmanı gerekiyor.');
-        const avgRecent=round1(recent.reduce((s,v)=>s+v,0)/recent.length);
-        const avgOlder=older.length>=3?round1(older.reduce((s,v)=>s+v,0)/older.length):null;
-        const lastVal=recent[recent.length-1];
-        const msgs=[];
-
-        // Mevcut değer yorumu (sn/km cinsinden — küçük = hızlı = iyi)
-        if(lastVal<300)      msgs.push({cls:'good', text:'🚀 Mevcut aerobik verimlilik çok iyi ('+fmtPaceStr(lastVal/60,1)+' / 140 bpm). Aynı nabızda elit düzeye yakın pace.'});
-        else if(lastVal<360) msgs.push({cls:'good', text:'✓ Aerobik taban güçlü ('+fmtPaceStr(lastVal/60,1)+' / 140 bpm).'});
-        else if(lastVal<420) msgs.push({cls:'info', text:'➡ Aerobik verimlilik orta düzey ('+fmtPaceStr(lastVal/60,1)+' / 140 bpm). Gelişme potansiyeli var.'});
-        else                 msgs.push({cls:'warn', text:'📉 Aerobik taban henüz zayıf ('+fmtPaceStr(lastVal/60,1)+' / 140 bpm). Düzenli Z2 antrenmanı ile iyileşir.'});
-
-        // Trend yorumu (son 4 hafta vs önceki 4 hafta)
-        if(avgOlder!==null){
-          const diff=round1(avgRecent-avgOlder); // negatif = iyileşme (hızlanma)
-          const pct=Math.round(Math.abs(diff)/avgOlder*100);
-          if(diff<-5)       msgs.push({cls:'good', text:'📈 Son 4 haftada aerobik verimlilik %'+pct+' iyileşti ('+diff+' sn/km) — aynı nabızda daha hızlı koşuyorsun. Aerobik taban güçleniyor.'});
-          else if(diff<5)   msgs.push({cls:'info', text:'➡ Son 4 haftada verimlilik stabil ('+(diff>=0?'+':'')+diff+' sn/km). Z2 antrenman hacmini artırarak gelişimi hızlandırabilirsin.'});
-          else               msgs.push({cls:'warn', text:'⚠ Son 4 haftada aerobik verimlilik %'+pct+' geriledi (+'+diff+' sn/km) — yorgunluk, hastalık veya yüksek şiddet ağırlığı olabilir.'});
-        }
-
-        return React.createElement('div',{style:{marginTop:8,display:'flex',flexDirection:'column',gap:5}},
-          msgs.map((m,i)=>React.createElement('div',{key:i,style:{
-            fontSize:12,padding:'7px 11px',borderRadius:'var(--radius)',
-            background:m.cls==='danger'?'var(--danger-bg)':m.cls==='warn'?'var(--warn-bg)':m.cls==='good'?'var(--success-bg)':'var(--info-bg)',
-            color:m.cls==='danger'?'var(--danger)':m.cls==='warn'?'var(--warn)':m.cls==='good'?'var(--success)':'var(--info)',
-            borderLeft:'3px solid '+(m.cls==='danger'?'var(--danger)':m.cls==='warn'?'var(--warn)':m.cls==='good'?'var(--success)':'var(--info)')
-          }},m.text))
-        );
-      })()
-    ),
+    // Aerobik verimlilik (1H/2H/4H/8H/12H periyot seçimli)
+    React.createElement(AerobikVerimlilikKarti,{history,athlete}),
     // ── Son 24 Hafta Özeti (mesafe/süre/tempo sadece koşu, yük tüm sporlar) ──
     React.createElement(Hafta24Karti,{workouts,athlete}),
 
