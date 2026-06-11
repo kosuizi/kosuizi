@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.11-1745 --><!DOCTYPE html>
+<!-- Version: v2026.06.11-2240 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -13557,9 +13557,47 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               // - Mevcut hafta: curWeekEffective useMemo (yoğunluk düzeltmeli, cappedEffKm/Dp)
               // - Geçmiş haftalar: pastWeekEffs[weekKey] (Firebase'de weekEff olarak kayıtlı)
               // Her ikisi de yoksa orijinal hedefe fallback yapılır.
+
+              // ── "Herşey Yolunda Giderse" Projeksiyonu ─────────────────────────
+              // Mevcut hafta revize edilmişse (effKm < targetKm), gelecek haftaların
+              // GERÇEKÇİ hedeflerini simüle eder. Kural: %10/hafta fizyolojik artış
+              // sınırı — eğer bir haftada orijinal hedefe güvenle ulaşılabiliyorsa
+              // (prevKm×1.10 ≥ targetKm) o hafta "izine döner", aksi hâlde %10 tavanı.
+              // Recovery/taper haftaları (targetKm < prevKm) sınırsız düşüş = izine döner.
+              const _curWtForProj=weekTargets.find(w=>w.isCurrent);
+              const _projActive=_curWtForProj&&displayCurWeekEff?.isRevised&&displayCurWeekEff.effKm<_curWtForProj.targetKm*0.98;
+              const futureProj={};
+              let _projCatchUpIdx=null;
+              if(_projActive){
+                let _pKm=displayCurWeekEff.effKm;
+                let _pDp=displayCurWeekEff.effDp||_curWtForProj.targetDp||0;
+                let _foundOnTrack=false;
+                for(const _fw of weekTargets.filter(w=>!w.isPast&&!w.isCurrent)){
+                  const _fwk=localDateStr(_fw.weekStart);
+                  const _maxKm=round1(_pKm*1.10);
+                  const _dpRatio=_fw.targetKm>0&&_fw.targetDp>0?_fw.targetDp/_fw.targetKm:0;
+                  const _goingUp=_fw.targetKm>_pKm;
+                  const _onTrack=!_goingUp||_maxKm>=_fw.targetKm;
+                  if(_onTrack){
+                    futureProj[_fwk]={projKm:_fw.targetKm,projDp:_fw.targetDp,onTrack:true};
+                    _pKm=_fw.targetKm;_pDp=_fw.targetDp;
+                    if(!_foundOnTrack){_projCatchUpIdx=_fw.weekIdx;_foundOnTrack=true;}
+                  } else {
+                    const _pkm=_maxKm;
+                    const _pdp=_dpRatio>0?Math.round(_pkm*_dpRatio):0;
+                    futureProj[_fwk]={projKm:_pkm,projDp:_pdp,onTrack:false};
+                    _pKm=_pkm;_pDp=_pdp;
+                  }
+                }
+              }
+
               return weekTargets.map((wt,i)=>{
               const act=weekActuals[i]||{km:0,dp:0};
               const wtWeekKey=localDateStr(wt.weekStart);
+              // Gelecek hafta projeksiyonu
+              const _isFuture=!wt.isPast&&!wt.isCurrent;
+              const _futPrj=_isFuture?futureProj[wtWeekKey]:null;
+              const _showFutProj=!!_futPrj&&!_futPrj.onTrack;
               // Mevcut hafta: curWeekEffective (yoğunluk düzeltmeli versiyonu — ayrı hesap gereksiz)
               const isCurEff=wt.isCurrent&&displayCurWeekEff;
               // Geçmiş hafta: Firebase'de kayıtlı weekEff (o hafta mevcut haftayken yazıldı)
@@ -13715,6 +13753,11 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                         React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',fontWeight:400,marginRight:4}},wt.targetKm),
                         React.createElement('span',{style:{color:'var(--warn)'}},cascadeKm)
                       )
+                    :_showFutProj
+                      ?React.createElement('span',{title:'Projeksiyon: %10/hafta artis -> '+_futPrj.projKm+' km (orijinal: '+wt.targetKm+' km)'},
+                        React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',fontWeight:400,marginRight:4}},wt.targetKm),
+                        React.createElement('span',{style:{color:'var(--info)',fontWeight:700}},_futPrj.projKm)
+                      )
                     :wt.targetKm
                 ),
                 React.createElement('td',{style:{padding:'6px 8px',fontFamily:'monospace',textAlign:'center',color:act.km>0?'var(--success)':'var(--text-tertiary)'}},act.km||'—'),
@@ -13731,6 +13774,11 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                       ?React.createElement('span',null,
                         React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',fontWeight:400,marginRight:4}},wt.targetDp),
                         React.createElement('span',{style:{color:'var(--warn)'}},cascadeDp)
+                      )
+                    :_showFutProj&&wt.targetDp>0&&_futPrj.projDp>0
+                      ?React.createElement('span',{title:'Projeksiyon D+: '+_futPrj.projDp+'m (orijinal: '+wt.targetDp+'m)'},
+                        React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',fontWeight:400,marginRight:4}},wt.targetDp),
+                        React.createElement('span',{style:{color:'var(--info)',fontWeight:700}},_futPrj.projDp)
                       )
                     :(wt.targetDp>0?wt.targetDp:'—')
                 ),
@@ -13760,7 +13808,49 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
             })()
           )
         )
-      )
+      ),
+      // ── Projeksiyon özeti ────────────────────────────────────────────────────
+      (()=>{
+        // Özet kutu — kendi scope'unda yeniden hesaplar (tbody IIFE'inden bağımsız)
+        const _sCurWt=weekTargets.find(w=>w.isCurrent);
+        if(!_sCurWt||!displayCurWeekEff?.isRevised||displayCurWeekEff.effKm>=_sCurWt.targetKm*0.98)return null;
+        let _sCatchUpIdx=null;
+        let _spKm=displayCurWeekEff.effKm;
+        for(const _sfw of weekTargets.filter(w=>!w.isPast&&!w.isCurrent)){
+          const _smaxKm=round1(_spKm*1.10);
+          const _sonTrack=_sfw.targetKm<=_spKm||_smaxKm>=_sfw.targetKm;
+          if(_sonTrack){_sCatchUpIdx=_sfw.weekIdx;break;}
+          _spKm=_smaxKm;
+        }
+        return React.createElement('div',{style:{
+          marginTop:10,padding:'10px 14px',borderRadius:'var(--radius)',
+          background:'var(--info-bg)',borderLeft:'3px solid var(--info)',fontSize:12,lineHeight:1.6
+        }},
+          React.createElement('div',{style:{fontWeight:700,color:'var(--info)',marginBottom:4}},
+            '🔵 "Herşey Yolunda Giderse" Projeksiyonu'
+          ),
+          React.createElement('div',{style:{color:'var(--text-primary)',marginBottom:4}},
+            'Mevcut hafta revize hedefi (',
+            React.createElement('strong',null,displayCurWeekEff.effKm+' km'),
+            ') %100 tutturulursa ve sonraki haftalarda %10/hafta fizyolojik artış uygulanırsa:'
+          ),
+          _sCatchUpIdx!=null
+            ?React.createElement('div',{style:{color:'var(--success)',fontWeight:600}},
+              '\u2713 H'+_sCatchUpIdx+' haftasinda orijinal plana geri donulur ',
+              React.createElement('span',{style:{fontWeight:400,color:'var(--text-secondary)'}},
+                '('+((_sCatchUpIdx-(_sCurWt.weekIdx||0))+' hafta sonra \u00b7 '+
+                (weekTargets.find(w=>w.weekIdx===_sCatchUpIdx)?.weekStart.toLocaleDateString('tr-TR',{day:'2-digit',month:'short'})||'')+
+                ')')
+              )
+            )
+            :React.createElement('div',{style:{color:'var(--warn)',fontWeight:600}},
+              '\u26a0 Plan suresi icinde orijinal haftalik hedeflere tam kavusulamiyor.'
+            ),
+          React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:4}},
+            '\ud83d\udd35 Mavi = projeksiyon (gelecek hafta) \u00b7 \ud83d\udfe0 Turuncu = revize (mevcut hafta)'
+          )
+        );
+      })()
     ),
 
     // ── Gelecek hafta planı — "son antrenman yapıldı" kapısı ────────────────
