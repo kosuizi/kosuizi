@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.11-2240 --><!DOCTYPE html>
+<!-- Version: v2026.06.12-0020 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -12169,6 +12169,9 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
   // Sporcu bazlı taper/zirve override — yerel draft; kaydedilince athlete.yarıslar güncellenir
   const [taperEdit,setTaperEdit]=useState('');
   const [peakEdit,setPeakEdit]=useState('');
+  // Projeksiyon rampa ayarları — Yükleme Planı tablosu
+  const [rampModeOn,setRampModeOn]=useState(false); // false=sabit %10, true=dinamik
+  const [rampRatePct,setRampRatePct]=useState(15);  // %10-%20 arası, sadece rampModeOn=true'da etkin
 
   // ── Plan Snapshot ─────────────────────────────────────────────────────────
   const [planSnap,setPlanSnapLocal]=useState(planSnapInit||null);
@@ -13446,7 +13449,49 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
           },'Tüm yarışlar entegre')
         )
       ),
-      // ── Sporcu Özel Taper/Zirve Ayarları ────────────────────────────────
+      // ── Rampa Projeksiyon Kontrolü ────────────────────────────────────────
+      React.createElement('div',{style:{
+        display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',
+        padding:'7px 12px',marginBottom:10,
+        background:rampModeOn?'var(--success-bg)':'var(--bg-secondary)',
+        borderRadius:'var(--radius)',
+        border:rampModeOn?'1px solid var(--success)':'1px solid var(--border)',
+        transition:'all .2s'
+      }},
+        React.createElement('span',{style:{fontSize:11,fontWeight:600,color:'var(--text-secondary)',whiteSpace:'nowrap'}},'Projeksiyon:'),
+        React.createElement('button',{
+          className:'btn btn-sm',
+          style:{
+            background:rampModeOn?'var(--success)':'var(--bg-primary)',
+            color:rampModeOn?'#fff':'var(--text-secondary)',
+            border:'none',fontWeight:600,fontSize:11
+          },
+          title:rampModeOn
+            ?'Dinamik rampa aktif — tıklayarak kapat (sabit %10\'a dön)'
+            :'Sabit %10 aktif — tıklayarak dinamik rampayı aç',
+          onClick:()=>setRampModeOn(v=>!v)
+        },rampModeOn?'📈 Rampa Açık':'📈 Rampa'),
+        rampModeOn&&React.createElement(React.Fragment,null,
+          React.createElement('span',{style:{fontSize:11,color:'var(--text-secondary)',whiteSpace:'nowrap'}},'Oran:'),
+          React.createElement('input',{
+            type:'range',min:10,max:20,step:1,
+            value:rampRatePct,
+            onChange:e=>setRampRatePct(parseInt(e.target.value)),
+            style:{width:90,accentColor:'var(--success)',cursor:'pointer'}
+          }),
+          React.createElement('span',{style:{
+            fontSize:12,fontWeight:700,
+            color:rampRatePct<=12?'var(--success)':rampRatePct<=16?'var(--warn)':'var(--danger)',
+            minWidth:32
+          }},'%'+rampRatePct),
+          React.createElement('span',{style:{fontSize:10,color:'var(--text-tertiary)'}},
+            rampRatePct<=10?'Muhafazakâr':rampRatePct<=12?'Güvenli':rampRatePct<=15?'Standart':rampRatePct<=18?'Agresif':'Maksimum'
+          )
+        ),
+        !rampModeOn&&React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)'}},
+          'Sabit %10/hafta · Büyük açıklar için Rampa\'yı açın'
+        )
+      ),
       plan.primary&&(()=>{
         const pRace=plan.primary;
         const km=parseFloat(pRace.mesafe)||0;
@@ -13559,22 +13604,37 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               // Her ikisi de yoksa orijinal hedefe fallback yapılır.
 
               // ── "Herşey Yolunda Giderse" Projeksiyonu ─────────────────────────
-              // Mevcut hafta revize edilmişse (effKm < targetKm), gelecek haftaların
-              // GERÇEKÇİ hedeflerini simüle eder. Kural: %10/hafta fizyolojik artış
-              // sınırı — eğer bir haftada orijinal hedefe güvenle ulaşılabiliyorsa
-              // (prevKm×1.10 ≥ targetKm) o hafta "izine döner", aksi hâlde %10 tavanı.
-              // Recovery/taper haftaları (targetKm < prevKm) sınırsız düşüş = izine döner.
+              // Rampa modu kapalıysa sabit %10, açıksa kullanıcının seçtiği oran veya
+              // dinamik hedef-yakınsayan oran (hangisi küçükse: seçili oran kulanılır).
               const _curWtForProj=weekTargets.find(w=>w.isCurrent);
               const _projActive=_curWtForProj&&displayCurWeekEff?.isRevised&&displayCurWeekEff.effKm<_curWtForProj.targetKm*0.98;
               const futureProj={};
               let _projCatchUpIdx=null;
+              let _appliedCatchupRate=0.10;
               if(_projActive){
+                // Catch-up oranı belirle
+                let _catchupRate;
+                if(!rampModeOn){
+                  _catchupRate=1.10; // sabit %10 (varsayılan, en sağlıklı)
+                } else {
+                  // Dinamik: kullanıcının seçtiği oran VEYA zirveye yakınsayan oran — ikisi arasında büyük olan
+                  const _futBuild=weekTargets.filter(w=>!w.isPast&&!w.isCurrent&&w.phase!=='Taper'&&!w.isRaceWeek);
+                  const _peakFw=_futBuild.length?_futBuild.reduce((mx,w)=>w.targetKm>mx.targetKm?w:mx):null;
+                  const _weeksToP=_peakFw?Math.max(1,_peakFw.weekIdx-(_curWtForProj.weekIdx||0)):1;
+                  const _neededRate=_peakFw&&displayCurWeekEff.effKm>0
+                    ?Math.pow(_peakFw.targetKm/displayCurWeekEff.effKm,1/_weeksToP):1.10;
+                  const _userRate=1+(rampRatePct/100);
+                  // Kullanıcı oranını uygula — dinamik hesap bilgi amaçlı özet kutusunda gösterilir
+                  _catchupRate=_userRate;
+                }
+                _appliedCatchupRate=_catchupRate-1;
+
                 let _pKm=displayCurWeekEff.effKm;
                 let _pDp=displayCurWeekEff.effDp||_curWtForProj.targetDp||0;
                 let _foundOnTrack=false;
                 for(const _fw of weekTargets.filter(w=>!w.isPast&&!w.isCurrent)){
                   const _fwk=localDateStr(_fw.weekStart);
-                  const _maxKm=round1(_pKm*1.10);
+                  const _maxKm=round1(_pKm*_catchupRate);
                   const _dpRatio=_fw.targetKm>0&&_fw.targetDp>0?_fw.targetDp/_fw.targetKm:0;
                   const _goingUp=_fw.targetKm>_pKm;
                   const _onTrack=!_goingUp||_maxKm>=_fw.targetKm;
@@ -13814,10 +13874,24 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         // Özet kutu — kendi scope'unda yeniden hesaplar (tbody IIFE'inden bağımsız)
         const _sCurWt=weekTargets.find(w=>w.isCurrent);
         if(!_sCurWt||!displayCurWeekEff?.isRevised||displayCurWeekEff.effKm>=_sCurWt.targetKm*0.98)return null;
+        // Catch-up rate (tbody ile aynı mantık)
+        let _sCatchupRate=1.10;
+        let _sNeededRate=1.10;
+        let _sIsCapped=false;
+        if(rampModeOn){
+          const _sFutBuild=weekTargets.filter(w=>!w.isPast&&!w.isCurrent&&w.phase!=='Taper'&&!w.isRaceWeek);
+          const _sPeakFw=_sFutBuild.length?_sFutBuild.reduce((mx,w)=>w.targetKm>mx.targetKm?w:mx):null;
+          const _sWeeksToP=_sPeakFw?Math.max(1,_sPeakFw.weekIdx-(_sCurWt.weekIdx||0)):1;
+          _sNeededRate=_sPeakFw&&displayCurWeekEff.effKm>0
+            ?Math.pow(_sPeakFw.targetKm/displayCurWeekEff.effKm,1/_sWeeksToP):1.10;
+          _sCatchupRate=1+(rampRatePct/100);
+          _sIsCapped=_sNeededRate>_sCatchupRate;
+        }
+        const _sRatePct=Math.round((_sCatchupRate-1)*100);
         let _sCatchUpIdx=null;
         let _spKm=displayCurWeekEff.effKm;
         for(const _sfw of weekTargets.filter(w=>!w.isPast&&!w.isCurrent)){
-          const _smaxKm=round1(_spKm*1.10);
+          const _smaxKm=round1(_spKm*_sCatchupRate);
           const _sonTrack=_sfw.targetKm<=_spKm||_smaxKm>=_sfw.targetKm;
           if(_sonTrack){_sCatchUpIdx=_sfw.weekIdx;break;}
           _spKm=_smaxKm;
@@ -13827,12 +13901,27 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
           background:'var(--info-bg)',borderLeft:'3px solid var(--info)',fontSize:12,lineHeight:1.6
         }},
           React.createElement('div',{style:{fontWeight:700,color:'var(--info)',marginBottom:4}},
-            '🔵 "Herşey Yolunda Giderse" Projeksiyonu'
+            '\ud83d\udd35 "Her\u015fey Yolunda Giderse" Projeksiyonu'
           ),
           React.createElement('div',{style:{color:'var(--text-primary)',marginBottom:4}},
-            'Mevcut hafta revize hedefi (',
-            React.createElement('strong',null,displayCurWeekEff.effKm+' km'),
-            ') %100 tutturulursa ve sonraki haftalarda %10/hafta fizyolojik artış uygulanırsa:'
+            'Revize hedef (',React.createElement('strong',null,displayCurWeekEff.effKm+' km'),
+            ') \u2192 ',
+            rampModeOn
+              ?React.createElement('span',null,
+                'Rampa oran\u0131: ',
+                React.createElement('strong',{style:{color:_sIsCapped?'var(--warn)':'var(--success)'}},
+                  '%'+_sRatePct+'/hafta'
+                ),
+                _sIsCapped&&React.createElement('span',{style:{color:'var(--warn)',fontSize:11}},
+                  ' (zirve i\u00e7in %'+Math.round((_sNeededRate-1)*100)+' gerekli \u2014 oran\u0131 art\u0131r\u0131n)'
+                )
+              )
+              :React.createElement('span',null,
+                React.createElement('strong',null,'%10/hafta'),
+                React.createElement('span',{style:{color:'var(--text-tertiary)',fontSize:11}},
+                  ' · H\u0131zland\u0131rmak i\u00e7in Rampa\'y\u0131 a\u00e7\u0131n'
+                )
+              )
           ),
           _sCatchUpIdx!=null
             ?React.createElement('div',{style:{color:'var(--success)',fontWeight:600}},
