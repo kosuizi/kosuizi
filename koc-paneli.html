@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.11-1942 --><!DOCTYPE html>
+<!-- Version: v2026.06.10-1148 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -1144,8 +1144,9 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         if(row.bpm!=null&&zi!=null&&zones?.hrZones?.[zi]){
           const hr=zones.hrZones[zi];
           if(hr.lo_bpm&&hr.hi_bpm){
-            if(row.bpm > hr.hi_bpm + 5)       hrDir='high';
-            else if(row.bpm < hr.lo_bpm - 5)  hrDir='low';
+            // Badge eşiğiyle tutarlı: 0 tolerans — cross-validation + 2 gün zaten kalite filtresi
+            if(row.bpm > hr.hi_bpm)       hrDir='high';
+            else if(row.bpm < hr.lo_bpm)  hrDir='low';
           }
         }
         if(paceDir||hrDir||paceOk) signals.push({date,paceDir,hrDir,paceOk});
@@ -5355,7 +5356,7 @@ function rowDurSec(row){
 const BPM_TOL_WARN   = 5;   // ±5 bpm  — sarı eşiği
 const BPM_TOL_DANGER = 10;  // ±10 bpm — turuncu/kırmızı sınırı
 
-function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOverrides, onSaveDetay, readOnly, originalCueOnly, savedCuePatches, actualOrtNabiz, showPaceRange, paceRangeTol}){
+function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOverrides, onSaveDetay, readOnly, originalCueOnly, savedCuePatches, actualOrtNabiz}){
   const [customCues, setCustomCues] = useState(_cueCache.data||{});
   const [editingLabel, setEditingLabel] = useState(null);
   const [editText, setEditText] = useState('');
@@ -5992,15 +5993,6 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
                     style:{fontSize:9,padding:'0 4px',background:'transparent',border:'none',cursor:'pointer',color:'var(--text-tertiary)',opacity:0.7,flexShrink:0,lineHeight:1}
                   },'✏️')
                 );
-              })(),
-              (()=>{
-                if(!showPaceRange||r.type==='header'||!(r._origPaceSec>0)) return null;
-                const tol=paceRangeTol>0?paceRangeTol:20;
-                const orig=r._origPaceSec;
-                const lo=Math.max(1,orig-tol);
-                const hi=orig+tol;
-                const fmtPs=(sec)=>{const m=Math.floor(sec/60);const s=Math.round(sec%60);return m+':'+String(s).padStart(2,'0');};
-                return React.createElement('div',{'data-no-export':true,style:{marginTop:3,fontSize:9,color:'#7c3aed',fontWeight:700,fontFamily:'monospace',letterSpacing:.2,opacity:.9}},'📏 '+fmtPs(lo)+' – '+fmtPs(hi)+' /km');
               })()
             ),
             // HEDEF — Pace ve Nabız validation badge'ları — sadece sporcu giriş yapmışsa göster
@@ -8484,10 +8476,10 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary, history=[], fr
       targetDp=Math.round(dp+acikDp);
     }
 
-    // ── Tamamlanmış veya cari hafta hedefleri: frozen kalmalı (önceki snapshot'tan) ────
-    // Hafta bittiğinde (isPast) veya bu haftaysa (isCurrent), frozen target varsa kullan.
+    // ── Tamamlanmış hafta hedefleri: frozen kalmalı (önceki snapshot'tan) ────
+    // Hafta bittiğinde (isPast), hedefler değişmemeli. Frozen targets varsa kullan.
     const weekKeyStr=localDateStr(weekStart);
-    if((isPast||isCurrent)&&frozenTargets[weekKeyStr]){
+    if(isPast&&frozenTargets[weekKeyStr]){
       targetKm=frozenTargets[weekKeyStr].targetKm;
       targetDp=frozenTargets[weekKeyStr].targetDp;
     }
@@ -8685,16 +8677,12 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary, history=[], fr
 //   - Zirve: Bu haftanın hedefine uygunluk
 //   - Zirve öncesi (Temel/Gelişme): Projeksiyon ile ulaşılabilirlik
 // Döner: { status, message, currentWeek, actionItems[], peak*, projected*, gap* }
-function evaluatePeakReachability(weeks, primary, athlete, curWeekEff){
+function evaluatePeakReachability(weeks, primary, athlete){
   if(!weeks||!weeks.length||!primary)return null;
 
   // Bulunduğu hafta — tüm analizin merkezi
   const currentWeek=weeks.find(w=>w.isCurrent);
   if(!currentWeek)return null;
-
-  // Revize hedef varsa (effKm) targetKm'yi override et
-  const effTargetKm=(curWeekEff?.isRevised&&curWeekEff.effKm>0)?curWeekEff.effKm:currentWeek.targetKm;
-  const effTargetDp=(curWeekEff?.isRevised&&curWeekEff.effDp>0)?curWeekEff.effDp:currentWeek.targetDp;
 
   const peakWeeks=weeks.filter(w=>w.phase==='Zirve'&&!w._isRecovery);
   const peakKm=peakWeeks.length?Math.max(...peakWeeks.map(w=>w.targetKm)):0;
@@ -8769,20 +8757,10 @@ function evaluatePeakReachability(weeks, primary, athlete, curWeekEff){
       status='peak_recovery';
       title='⛰️ Zirve Fazı — Dinlenme Haftası';
       message=`Dinlenme haftasındasın — hacim %${Math.round(currentWeek._kmPct*100)} indirildi. Süper kompanzasyon için toparlanmayı önceliklendir.`;
-      const _zirveCurIdx=weeks.findIndex(w=>w.isCurrent);
-      const _zirveNextW=_zirveCurIdx>=0&&_zirveCurIdx<weeks.length-1?weeks[_zirveCurIdx+1]:null;
-      const _zirveNextKm=_zirveNextW?_zirveNextW.targetKm:null;
-      const _zirveBase=currentWeek.targetKm||0;
-      const _zirveJump=_zirveNextKm&&_zirveBase>0?_zirveNextKm/_zirveBase:null;
-      const _zirveNextMsg=_zirveNextKm
-        ?(_zirveJump>1.4
-          ?`⚠️ Bir sonraki hafta hedefi ${_zirveNextKm}km — bu haftanın ${_zirveBase}km hedefinden %${Math.round((_zirveJump-1)*100)} artış, revizyon değerlendirin`
-          :`🔄 Bir sonraki hafta hedefi: ${_zirveNextKm}km — tam yüke dönüş`)
-        :'🔄 Bir sonraki hafta tam yüke döneceksin';
       actionItems=[
         `📊 Bu hafta hedefi: ${kmTarget}km / D+ ${dpTarget}m (hafif)`,
         '💆 Kolay Z1-Z2 koşular, yoga/pilates, esneme',
-        _zirveNextMsg
+        '🔄 Bir sonraki hafta tam yüke döneceksin'
       ];
     } else if(kmPct>=85&&dpPct>=85){
       status='peak_ok';
@@ -8849,19 +8827,10 @@ function evaluatePeakReachability(weeks, primary, athlete, curWeekEff){
     status='recovery';
     title=`${phaseLabel} — Dinlenme Haftası`;
     message=`Dinlenme haftasındasın — hacim ${Math.round(currentWeek._kmPct*100)}%'e indirildi. Toparlanma için ideal.`;
-    const _gelNextW=currentIdx>=0&&currentIdx<weeks.length-1?weeks[currentIdx+1]:null;
-    const _gelNextKm=_gelNextW?_gelNextW.targetKm:null;
-    const _gelBase=effTargetKm||0;
-    const _gelJump=_gelNextKm&&_gelBase>0?_gelNextKm/_gelBase:null;
-    const _gelNextMsg=_gelNextKm
-      ?(_gelJump>1.4
-        ?`⚠️ Bir sonraki hafta hedefi ${_gelNextKm}km — bu haftanın ${_gelBase}km hedefinden %${Math.round((_gelJump-1)*100)} artış, revizyon değerlendirin`
-        :`🔄 Bir sonraki hafta hedefi: ${_gelNextKm}km — tam yüke dönüş`)
-      :'🔄 Bir sonraki hafta tam yüke döneceksin';
     actionItems=[
-      `📊 Bu hafta hedefi: ${effTargetKm}km / D+ ${effTargetDp}m`,
+      `📊 Bu hafta hedefi: ${currentWeek.targetKm}km / D+ ${currentWeek.targetDp}m`,
       '💆 Kolay koşular + çapraz antrenman',
-      _gelNextMsg
+      '🔄 Bir sonraki hafta tam yüke döneceksin'
     ];
   } else if(worstGap<=0.05){
     status='ideal';
@@ -11998,7 +11967,6 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
   const [selectedPrimary,setSelectedPrimary]=useState(null);
   const [planMode,setPlanModeLocal]=useState('optimize');
   const [expandDay,setExpandDay]=useState(null);
-  const [toleransMap,setToleransMap]=useState({}); // {date: sn} — expandDay pace toleransı
   const [manuelAtaGun,setManuelAtaGun]=useState(null);
   const [showNextWeek,setShowNextWeek]=useState(false);
   const [swapSource,setSwapSource]=useState(null); // {date, tip, baslik, sure_dk, yukHedef, yapilar, isKosuCapraz}
@@ -12052,7 +12020,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     (async()=>{
       const frozen={};
       const effMap={};
-      for(let w=-10;w<=0;w++){
+      for(let w=-10;w<0;w++){
         const wk=getWeekKey(w);
         try{
           const snap=await fbGet(`plan_snapshots/${athlete.id}/${wk}`);
@@ -13351,7 +13319,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       })(),
       // Bağlam-Duyarlı Zirve Hafta Ulaşılabilirlik Uyarısı
       (()=>{
-        const evalRes=evaluatePeakReachability(weekTargets,plan.primary,athlete,displayCurWeekEff);
+        const evalRes=evaluatePeakReachability(weekTargets,plan.primary,athlete);
         if(!evalRes)return null;
         // Status → renk eşleştirmesi
         const colorMap={
@@ -14006,8 +13974,6 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     savedOverrides:(planSnap?.rowOverrides||{})[day.date],
                     savedCuePatches:(planSnap?.overrideMap?.[day.date]?._cuePatch)||{},
                     actualOrtNabiz:split.kosuActuals.find(w=>parseFloat(w.ort_nabiz)>0)?.ort_nabiz||null,
-                    showPaceRange:true,
-                    paceRangeTol:toleransMap[day.date]||20,
                     onSaveOverrides:(overrides)=>{
                       const {__zoneDist:_zd,...cleanOverrides}=overrides;
                       const curSnap=planSnapRef.current||{};
@@ -14359,21 +14325,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
           };
           return React.createElement('div',{key:day.date,className:'card',style:{borderLeft:'4px solid '+tipColor(day.tip)}},
             React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}},
-              React.createElement('div',{style:{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',flex:1,minWidth:0}},
-                React.createElement('div',{style:{fontWeight:700,fontSize:14}},dayEmoji(day)+' '+(TIP_NAMES[day.tip]||workoutLabel(day))+(planYapiNotu(day)?' · '+planYapiNotu(day):'')+' — '+day.dayTR+(day.sure_dk>0?' · '+day.sure_dk+' dk':'')),
-                React.createElement('div',{'data-no-export':true,style:{display:'flex',alignItems:'center',gap:5,background:'#ede9fe',borderRadius:6,padding:'3px 8px',border:'1px solid #c4b5fd',flexShrink:0}},
-                  React.createElement('span',{style:{fontSize:11,fontWeight:600,color:'#7c3aed'}},'📏 Tolerans'),
-                  React.createElement('button',{
-                    onClick:()=>setToleransMap(prev=>({...prev,[day.date]:Math.max(5,(prev[day.date]||20)-5)})),
-                    style:{width:22,height:22,fontSize:14,fontWeight:700,lineHeight:1,border:'1px solid #c4b5fd',borderRadius:4,background:'#fff',color:'#7c3aed',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',padding:0,flexShrink:0}
-                  },'−'),
-                  React.createElement('span',{style:{minWidth:34,textAlign:'center',fontSize:12,fontWeight:700,fontFamily:'monospace',color:'#7c3aed'}},(toleransMap[day.date]||20)+' sn'),
-                  React.createElement('button',{
-                    onClick:()=>setToleransMap(prev=>({...prev,[day.date]:Math.min(120,(prev[day.date]||20)+5)})),
-                    style:{width:22,height:22,fontSize:14,fontWeight:700,lineHeight:1,border:'1px solid #c4b5fd',borderRadius:4,background:'#fff',color:'#7c3aed',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',padding:0,flexShrink:0}
-                  },'+')
-                )
-              ),
+              React.createElement('div',{style:{fontWeight:700,fontSize:14}},dayEmoji(day)+' '+(TIP_NAMES[day.tip]||workoutLabel(day))+(planYapiNotu(day)?' · '+planYapiNotu(day):'')+' — '+day.dayTR+(day.sure_dk>0?' · '+day.sure_dk+' dk':'')),
               React.createElement('div',{className:'flex-gap'},
                 React.createElement('button',{className:'btn btn-sm',
                   style:{background:'var(--info)',color:'#fff',border:'none'},
@@ -14420,8 +14372,6 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   savedOverrides:(planSnap?.rowOverrides||{})[day.date],
                   savedCuePatches:(planSnap?.overrideMap?.[day.date]?._cuePatch)||{},
                   actualOrtNabiz:day.actual?.find(w=>(w.spor||'kosu')==='kosu'&&parseFloat(w.ort_nabiz)>0)?.ort_nabiz||null,
-                  showPaceRange:true,
-                  paceRangeTol:toleransMap[day.date]||20,
                   onSaveOverrides:(overrides)=>{
                     const {__zoneDist:_zd,...cleanOverrides}=overrides;
                     const curSnap=planSnapRef.current||{};
@@ -14554,7 +14504,8 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       const sigs=extractFeedbackSignals(allSnaps,athlete);
       setFbRawCount({
         pace:sigs.filter(s=>s.paceDir).length,
-        hr:sigs.filter(s=>s.hrDir).length
+        hr:sigs.filter(s=>s.hrDir).length,
+        paceOk:sigs.filter(s=>s.paceOk).length,
       });
       const analysis=analyzeRecipeFeedbackSignals(sigs);
       setFbAnalysis(analysis);
@@ -14802,8 +14753,10 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
         // Ham sinyaller
         React.createElement('div',{className:'metric',style:{padding:'8px 12px'}},
           React.createElement('div',{className:'metric-label'},'Pace Sinyali'),
-          React.createElement('div',{style:{fontSize:18,fontWeight:700,fontFamily:'monospace',color:'var(--text-secondary)'}},fbRawCount.pace+' faz'),
-          React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},fbRawCount.pace>0?'ham sinyal':'—')
+          React.createElement('div',{style:{fontSize:18,fontWeight:700,fontFamily:'monospace',color:'var(--text-secondary)'}},
+            fbRawCount.pace+' faz'),
+          React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},
+            fbRawCount.pace>0?'zone dışı':(fbRawCount.paceOk>0?fbRawCount.paceOk+' faz hedefte':'—'))
         ),
         React.createElement('div',{className:'metric',style:{padding:'8px 12px'}},
           React.createElement('div',{className:'metric-label'},'Nabız Sinyali'),
