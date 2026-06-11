@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.12-0020 --><!DOCTYPE html>
+<!-- Version: v2026.06.12-0130 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -10724,8 +10724,17 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
     // weekEffOverride: handlePlanGuncelle'den gelen kilitli weekEff — isRevised=true ise
     // calcWeeklyTargets'in targetKm/Dp'si yerine effKm/effDp kullan.
     // Bu olmadan revize haftada km açığı hesabı yanlış referansla çalışır.
-    const _effKmOverride=weekOff===0&&weekEffOverride?.isRevised?weekEffOverride.effKm:null;
-    const _effDpOverride=weekOff===0&&weekEffOverride?.isRevised?weekEffOverride.effDp:null;
+    // week1Proj: ramp modu aktifken gelecek hafta için projeksiyon hedefi
+    const _effKmOverride=weekOff===0&&weekEffOverride?.isRevised
+      ?weekEffOverride.effKm
+      :weekOff===1&&weekEffOverride?.week1Proj?.isRevised
+        ?weekEffOverride.week1Proj.effKm
+        :null;
+    const _effDpOverride=weekOff===0&&weekEffOverride?.isRevised
+      ?weekEffOverride.effDp
+      :weekOff===1&&weekEffOverride?.week1Proj?.isRevised&&(weekEffOverride.week1Proj.effDp||0)>0
+        ?weekEffOverride.week1Proj.effDp
+        :null;
     let wkStats={count:0,kaliteliYok:true,uzunYapildi:false,wkLoad:0,dpHedefHafta:(_effDpOverride??wt?.targetDp)??0,targetKmHafta:(_effKmOverride??wt?.targetKm)??0,_noRaceMaxGunlukKm:wt?._noRaceMaxGunlukKm||0,weekOff:rotIdx,isFutureWeek:weekOff>0,recentKaliteli,recentLongRuns,sonYogunGun:sonYogunGunGlobal,testPlanlar:testPlanlar||[],sonAntrenmanDate:sonAntrenman?.date||null,sonRecoveryHedef,sonRecoverySaatler,athWorkouts,buHaftaKaliteli:[],kaliteliSayisi:0,aerobikSayisi:0};
 
     // ── Hafta İskeleti — Antrenman Bilimi Prensipleri ─────────────────────────
@@ -12204,6 +12213,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         setPlanSnap(snap);
         if(snap.selectedPrimary!==undefined) setSelectedPrimary(snap.selectedPrimary||null);
         if(snap.planMode) setPlanModeLocal(snap.planMode);
+        if(snap.rampModeOn!==undefined) setRampModeOn(!!snap.rampModeOn);
+        if(snap.rampRatePct!==undefined) setRampRatePct(Math.min(20,Math.max(10,parseInt(snap.rampRatePct)||15)));
       }
       setSnapReady(true);
     }).catch(()=>{
@@ -12278,7 +12289,17 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       // history'yi önceki hafta sonuna kırp → week.wt.targetKm hafta içi sabit kalır
       const _prevEndStr=localDateStr(getWeekBounds(-1).end);
       const _stableHist=(history||[]).filter(h=>h.date<=_prevEndStr);
-      const generated=generateTwoWeekPlan(athlete,_stableHist,racesOverride,workouts,testPlanlar||[],planMode==='optimize',history[history.length-1]);
+      const generated=generateTwoWeekPlan(athlete,_stableHist,racesOverride,workouts,testPlanlar||[],planMode==='optimize',history[history.length-1],(()=>{
+        // weekEffOverride: mevcut hafta weekEff + ramp modu açıksa week1Proj
+        const _we=planSnap?.weekEff||null;
+        if(!rampModeOn||!_we?.isRevised||!_we.effKm) return _we;
+        const _catchRate=1+(rampRatePct/100);
+        const _p1Km=round1(_we.effKm*_catchRate);
+        // week1 original target — weekTargets henüz hazır değil, plan içinden çek
+        const _w1tgt=null; // generateTwoWeekPlan içi wt.targetKm ile kıyaslanır
+        const _week1Proj={effKm:_p1Km,effDp:0,isRevised:true};
+        return{..._we,week1Proj:_week1Proj};
+      })());
       const todayStr=localDateStr(new Date());
       const manualOvMap=planSnap.manualOverrides||{};
       const manualDates=new Set(Object.keys(manualOvMap));
@@ -12385,9 +12406,14 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     const racesOverride=selectedPrimary?races.map(r=>({...r,__force:r.id===selectedPrimary})):races;
     const _prevEndStr2=localDateStr(getWeekBounds(-1).end);
     const _stableHist2=(history||[]).filter(h=>h.date<=_prevEndStr2);
-    return generateTwoWeekPlan(athlete,_stableHist2,racesOverride,workouts,testPlanlar||[],planMode==='optimize',history[history.length-1]);
+    return generateTwoWeekPlan(athlete,_stableHist2,racesOverride,workouts,testPlanlar||[],planMode==='optimize',history[history.length-1],(()=>{
+      const _we=planSnap?.weekEff||null;
+      if(!rampModeOn||!_we?.isRevised||!_we.effKm) return _we;
+      const _p1Km=round1(_we.effKm*(1+(rampRatePct/100)));
+      return{..._we,week1Proj:{effKm:_p1Km,effDp:0,isRevised:true}};
+    })());
     }catch(e){console.error('plan useMemo error:',e);return{_error:e.message};}
-  },[athlete,history,races,workouts,selectedPrimary,planSnap]);
+  },[athlete,history,races,workouts,selectedPrimary,planSnap,rampModeOn,rampRatePct]);
 
   const weekTargets=React.useMemo(()=>{
     if(!athlete)return[];
@@ -13469,7 +13495,16 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
           title:rampModeOn
             ?'Dinamik rampa aktif — tıklayarak kapat (sabit %10\'a dön)'
             :'Sabit %10 aktif — tıklayarak dinamik rampayı aç',
-          onClick:()=>setRampModeOn(v=>!v)
+          onClick:()=>{
+            const newVal=!rampModeOn;
+            setRampModeOn(newVal);
+            const s=planSnapRef.current;
+            if(s&&(db||initFirebase())){
+              const u={...s,rampModeOn:newVal,lastSavedAt:new Date().toISOString()};
+              setPlanSnap(u);
+              db.ref(`plan_snapshots/${athlete.id}/${weekKey}`).set(stripUndefined(u)).catch(()=>{});
+            }
+          }
         },rampModeOn?'📈 Rampa Açık':'📈 Rampa'),
         rampModeOn&&React.createElement(React.Fragment,null,
           React.createElement('span',{style:{fontSize:11,color:'var(--text-secondary)',whiteSpace:'nowrap'}},'Oran:'),
@@ -13477,6 +13512,24 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
             type:'range',min:10,max:20,step:1,
             value:rampRatePct,
             onChange:e=>setRampRatePct(parseInt(e.target.value)),
+            onMouseUp:e=>{
+              const v=parseInt(e.target.value);
+              const s=planSnapRef.current;
+              if(s&&(db||initFirebase())){
+                const u={...s,rampRatePct:v,lastSavedAt:new Date().toISOString()};
+                setPlanSnap(u);
+                db.ref(`plan_snapshots/${athlete.id}/${weekKey}`).set(stripUndefined(u)).catch(()=>{});
+              }
+            },
+            onTouchEnd:e=>{
+              const v=parseInt(e.target.value);
+              const s=planSnapRef.current;
+              if(s&&(db||initFirebase())){
+                const u={...s,rampRatePct:v,lastSavedAt:new Date().toISOString()};
+                setPlanSnap(u);
+                db.ref(`plan_snapshots/${athlete.id}/${weekKey}`).set(stripUndefined(u)).catch(()=>{});
+              }
+            },
             style:{width:90,accentColor:'var(--success)',cursor:'pointer'}
           }),
           React.createElement('span',{style:{
@@ -14120,7 +14173,14 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
           week.weekOff===0?'Bu Hafta':'Gelecek Hafta',
           React.createElement('span',{style:{fontWeight:400,fontSize:12,marginLeft:8}},
             week.start.toLocaleDateString('tr-TR',{day:'2-digit',month:'long'})
-          )
+          ),
+          // Gelecek hafta + ramp aktifse projeksiyon rozeti
+          week.weekOff===1&&rampModeOn&&displayCurWeekEff?.isRevised&&React.createElement('span',{
+            style:{
+              marginLeft:6,fontSize:10,fontWeight:700,padding:'1px 6px',
+              borderRadius:99,background:'var(--success-bg)',color:'var(--success)'
+            }
+          },'📈 %'+rampRatePct+' Rampa')
         ),
         React.createElement('div',{className:'flex-gap',style:{alignItems:'center'}},
           week.wt&&React.createElement('div',{className:'flex-gap',style:{fontSize:12,flexWrap:'wrap'}},
@@ -14130,7 +14190,18 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                 React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',fontWeight:400,marginRight:4}},week.wt.targetKm+' km'),
                 React.createElement('span',{style:{fontWeight:700,color:'var(--warn)'}},weekEffKm+' km')
               )
-              :React.createElement('span',{style:{fontWeight:600}},week.wt.targetKm+' km'),
+              // Gelecek hafta + ramp aktifse projeksiyon hedefini göster
+              :(week.weekOff===1&&rampModeOn&&displayCurWeekEff?.isRevised&&(()=>{
+                  const _p1=round1((displayCurWeekEff.effKm||0)*(1+rampRatePct/100));
+                  const _showP1=_p1>0&&_p1<week.wt.targetKm*0.99;
+                  return _showP1
+                    ?React.createElement('span',null,
+                      React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',fontWeight:400,marginRight:4}},week.wt.targetKm+' km'),
+                      React.createElement('span',{style:{fontWeight:700,color:'var(--success)'}},_p1+' km')
+                    )
+                    :React.createElement('span',{style:{fontWeight:600}},week.wt.targetKm+' km');
+                })())
+              ||React.createElement('span',{style:{fontWeight:600}},week.wt.targetKm+' km'),
             week.wt.targetDp>0&&(weekShowRevised
               ?React.createElement('span',null,
                 React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',fontWeight:400,marginRight:4}},'D+ '+week.wt.targetDp+'m'),
