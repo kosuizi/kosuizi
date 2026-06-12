@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.12-2204 --><!DOCTYPE html>
+<!-- Version: v2026.06.12-2213 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.12-2204';
+const APP_VERSION='v2026.06.12-2213';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -12674,13 +12674,23 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       const freshList=await fbGet('ath2');
       if(Array.isArray(freshList)){
         const found=freshList.find(a=>a.id===athlete.id);
-        // Birleştirme: Firebase verisi anket alanları için tazeyken (kosu_gunleri vb.),
-        // yarıslar için LOCAL state her zaman en güncel.
-        // Sebep: handleSaveAthRaceOverride → setAthletes (async prop update zinciri).
-        // Planı Güncelle hızlı basılırsa hem athlete prop hem Firebase bayat olabilir.
-        if(found) freshAthlete={...found, yarıslar:athlete.yarıslar};
-        // freshList'i de patchle — onAthletesRefresh eski yarıslar'la state'i geri döndürmesin
-        const patchedList=freshList.map(a=>a.id===athlete.id?{...a,yarıslar:athlete.yarıslar}:a);
+        // Birleştirme — HANGİSİ TAZE?
+        // Eski varsayım "Firebase anket alanları için her zaman tazedir" YANLIŞTI:
+        // Koç kartı düzenlediğinde fbSet useEffect üzerinden ASENKRON gider; Planı
+        // Güncelle hemen basılırsa fbGet bayat listeyi döndürür ve koçun değişikliği
+        // (örn. koşu gününü kaldırma) hem plana yansımaz hem de onAthletesRefresh
+        // ile lokal state'te GERİ ALINIRDI. Çözüm: _updatedAt damgası büyük olan kazanır.
+        // Damga yoksa (eski kayıt) Firebase tercih edilir — anket akışı korunur.
+        // Yarıslar için LOCAL state her zaman en güncel (handleSaveAthRaceOverride zinciri).
+        if(found){
+          const _localTs=athlete._updatedAt||0;
+          const _remoteTs=found._updatedAt||0;
+          const _base=_localTs>_remoteTs?athlete:found;
+          freshAthlete={..._base, yarıslar:athlete.yarıslar};
+        }
+        // freshList'i kazanan kayıtla patchle — onAthletesRefresh bayat profil veya
+        // eski yarıslar'la state'i geri döndürmesin
+        const patchedList=freshList.map(a=>a.id===athlete.id?{...freshAthlete}:a);
         if(onAthletesRefresh) onAthletesRefresh(patchedList);
       }
     }catch(e){console.warn('handlePlanGuncelle: taze veri alınamadı, mevcut state kullanılıyor',e);}
@@ -19661,6 +19671,9 @@ function App(){
         newA={...newA,profileHistory:[...((newA.profileHistory||[]).filter(s=>s.date!==snap.date)),snap].slice(-50)};
       }
     }
+    // Yarış durumu (race condition) damgası: handlePlanGuncelle bu damgayı
+    // Firebase'deki kayıtla kıyaslayıp hangisinin taze olduğuna karar verir.
+    newA={...newA,_updatedAt:Date.now()};
     setAthletes(p=>p.map(x=>x.id===newA.id?newA:x));
   };
 
@@ -20395,7 +20408,7 @@ function SporcuAnketi(){
         ].slice(-50)
       }):form;
       // Fresh data üzerine sadece anket alanlarını yaz (diğer coach alanlarını koru)
-      const updated=freshAll.map(function(a){return a.id===selId?Object.assign({},a,formWithSnap,{anket_guncelleme:new Date().toISOString()}):a;});
+      const updated=freshAll.map(function(a){return a.id===selId?Object.assign({},a,formWithSnap,{anket_guncelleme:new Date().toISOString(),_updatedAt:Date.now()}):a;});
       await fbSet('ath2',updated);
 
       setAthletes(updated);
