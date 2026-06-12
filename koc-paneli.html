@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.12-1548 --><!DOCTYPE html>
+<!-- Version: v2026.06.12-0930 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.12-1548';
+const APP_VERSION='v2026.06.11-1745';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -3124,7 +3124,6 @@ function BugunTab({athletes,workouts,onSelChange,onTabChange}){
   const [refreshKey,setRefreshKey]=useState(0);
 
   const todayStr=localDateStr(new Date());
-  const tomorrowStr=localDateStr(new Date(Date.now()+864e5));
   const weekKey=getWeekKey(0);
   const today=new Date();
   const DAY_NAMES=['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'];
@@ -3150,18 +3149,7 @@ function BugunTab({athletes,workouts,onSelChange,onTabChange}){
     const snap=snaps[ath.id];
     const dayPlan=snap?.overrideMap?.[todayStr]||null;
     const todayActual=todayActualAll.filter(w=>w.athleteId===ath.id);
-    const todayOv=snap?.overrideMap?.[todayStr];
-    const tomorrowOv=snap?.overrideMap?.[tomorrowStr];
-    const todayApproved=todayOv?.approved===true;
-    const tomorrowApproved=tomorrowOv?.approved===true;
-    const hasAnyOv=!!(todayOv||tomorrowOv);
-    const iletimBadge=hasAnyOv?(()=>{
-      if(todayApproved&&tomorrowApproved)return{label:'Bugün ve yarın iletildi',icon:'✓',bg:'var(--success-bg)',color:'var(--success)',border:'var(--success)'};
-      if(todayApproved)return{label:'Bugün iletildi',icon:'✓',bg:'var(--warn-bg)',color:'var(--warn)',border:'var(--warn)'};
-      if(tomorrowApproved)return{label:'Yarın iletildi',icon:'✓',bg:'var(--warn-bg)',color:'var(--warn)',border:'var(--warn)'};
-      return{label:'Bugün ve yarın iletilmedi',icon:'✗',bg:'var(--danger-bg)',color:'var(--danger)',border:'var(--danger)'};
-    })():null;
-    return{ath,dayPlan,todayActual,hasActual:todayActual.length>0,iletimBadge};
+    return{ath,dayPlan,todayActual,hasActual:todayActual.length>0};
   });
 
   const withTraining=athData.filter(d=>d.dayPlan&&d.dayPlan.tip!=='dinlenme');
@@ -3176,7 +3164,7 @@ function BugunTab({athletes,workouts,onSelChange,onTabChange}){
     return h>0?`${h}sa ${m>0?m+'dk':''}`:`${m}dk`;
   };
 
-  const renderCard=({ath,dayPlan,todayActual,hasActual,iletimBadge})=>{
+  const renderCard=({ath,dayPlan,todayActual,hasActual})=>{
     const tip=dayPlan?.tip||'dinlenme';
     const isDinlenme=!dayPlan||tip==='dinlenme';
     const clr=getBugunRenk(tip);
@@ -3224,13 +3212,6 @@ function BugunTab({athletes,workouts,onSelChange,onTabChange}){
             '↑ '+dayPlan.dpHedef+'m D+'),
           dayPlan.yukHedef>0&&React.createElement('span',{style:{fontSize:12,color:'var(--text-secondary)'}},
             '📊 '+(Math.round(dayPlan.yukHedef))+' TSS'),
-        ),
-        // İletim durumu badge
-        iletimBadge&&React.createElement('div',{style:{marginTop:4}},
-          React.createElement('span',{style:{
-            display:'inline-block',padding:'2px 8px',borderRadius:99,fontSize:11,fontWeight:600,
-            background:iletimBadge.bg,color:iletimBadge.color,border:'1px solid '+iletimBadge.border
-          }},iletimBadge.icon+' '+iletimBadge.label)
         ),
         // Gerçekleşen antrenman
         hasActual&&todayActual.map((w,i)=>React.createElement('div',{key:i,
@@ -13517,12 +13498,10 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
           onClick:()=>{
             const newVal=!rampModeOn;
             setRampModeOn(newVal);
-            const s=planSnapRef.current;
-            if(s&&(db||initFirebase())){
-              const u={...s,rampModeOn:newVal,lastSavedAt:new Date().toISOString()};
-              setPlanSnap(u);
-              db.ref(`plan_snapshots/${athlete.id}/${weekKey}`).set(stripUndefined(u)).catch(()=>{});
-            }
+            const s=planSnapRef.current||{};
+            const u={...s,rampModeOn:newVal,rampRatePct,lastSavedAt:new Date().toISOString()};
+            setPlanSnap(u);
+            fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,u).catch(()=>{});
           }
         },rampModeOn?'📈 Rampa Açık':'📈 Rampa'),
         rampModeOn&&React.createElement(React.Fragment,null,
@@ -13533,21 +13512,15 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
             onChange:e=>setRampRatePct(parseInt(e.target.value)),
             onMouseUp:e=>{
               const v=parseInt(e.target.value);
-              const s=planSnapRef.current;
-              if(s&&(db||initFirebase())){
-                const u={...s,rampRatePct:v,lastSavedAt:new Date().toISOString()};
-                setPlanSnap(u);
-                db.ref(`plan_snapshots/${athlete.id}/${weekKey}`).set(stripUndefined(u)).catch(()=>{});
-              }
+              const u={...(planSnapRef.current||{}),rampModeOn,rampRatePct:v,lastSavedAt:new Date().toISOString()};
+              setPlanSnap(u);
+              fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,u).catch(()=>{});
             },
             onTouchEnd:e=>{
               const v=parseInt(e.target.value);
-              const s=planSnapRef.current;
-              if(s&&(db||initFirebase())){
-                const u={...s,rampRatePct:v,lastSavedAt:new Date().toISOString()};
-                setPlanSnap(u);
-                db.ref(`plan_snapshots/${athlete.id}/${weekKey}`).set(stripUndefined(u)).catch(()=>{});
-              }
+              const u={...(planSnapRef.current||{}),rampModeOn,rampRatePct:v,lastSavedAt:new Date().toISOString()};
+              setPlanSnap(u);
+              fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,u).catch(()=>{});
             },
             style:{width:90,accentColor:'var(--success)',cursor:'pointer'}
           }),
