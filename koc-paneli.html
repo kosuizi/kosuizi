@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.12-1348 --><!DOCTYPE html>
+<!-- Version: v2026.06.12-1851 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -3124,7 +3124,9 @@ function BugunTab({athletes,workouts,onSelChange,onTabChange}){
   const [refreshKey,setRefreshKey]=useState(0);
 
   const todayStr=localDateStr(new Date());
+  const tomorrowStr=localDateStr(new Date(Date.now()+864e5));
   const weekKey=getWeekKey(0);
+  const tomorrowWeekKey=getWeekKey(new Date(Date.now()+864e5));
   const today=new Date();
   const DAY_NAMES=['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'];
   const dayName=DAY_NAMES[today.getDay()];
@@ -3137,6 +3139,11 @@ function BugunTab({athletes,workouts,onSelChange,onTabChange}){
       const result={};
       await Promise.all(athletes.map(async ath=>{
         try{const snap=await fbGet(`plan_snapshots/${ath.id}/${weekKey}`);if(snap)result[ath.id]=snap;}catch(e){}
+        // Yarın farklı bir haftadaysa ek snap al
+        if(tomorrowWeekKey!==weekKey){
+          try{const snap2=await fbGet(`plan_snapshots/${ath.id}/${tomorrowWeekKey}`);
+            if(snap2){result[ath.id+'_tomorrow']=snap2;}}catch(e){}
+        }
       }));
       setSnaps(result);setLoading(false);
     };
@@ -3147,9 +3154,13 @@ function BugunTab({athletes,workouts,onSelChange,onTabChange}){
 
   const athData=athletes.map(ath=>{
     const snap=snaps[ath.id];
+    const snapTmr=tomorrowWeekKey!==weekKey?(snaps[ath.id+'_tomorrow']||snap):snap;
     const dayPlan=snap?.overrideMap?.[todayStr]||null;
+    const tomorrowPlan=snapTmr?.overrideMap?.[tomorrowStr]||null;
     const todayActual=todayActualAll.filter(w=>w.athleteId===ath.id);
-    return{ath,dayPlan,todayActual,hasActual:todayActual.length>0};
+    const todayApproved=dayPlan?.approved===true;
+    const tomorrowApproved=tomorrowPlan?.approved===true;
+    return{ath,dayPlan,todayActual,hasActual:todayActual.length>0,todayApproved,tomorrowApproved};
   });
 
   const withTraining=athData.filter(d=>d.dayPlan&&d.dayPlan.tip!=='dinlenme');
@@ -3164,7 +3175,7 @@ function BugunTab({athletes,workouts,onSelChange,onTabChange}){
     return h>0?`${h}sa ${m>0?m+'dk':''}`:`${m}dk`;
   };
 
-  const renderCard=({ath,dayPlan,todayActual,hasActual})=>{
+  const renderCard=({ath,dayPlan,todayActual,hasActual,todayApproved,tomorrowApproved})=>{
     const tip=dayPlan?.tip||'dinlenme';
     const isDinlenme=!dayPlan||tip==='dinlenme';
     const clr=getBugunRenk(tip);
@@ -3173,6 +3184,14 @@ function BugunTab({athletes,workouts,onSelChange,onTabChange}){
     // dark modda sabit arka plan renkleri çalışmaz — var() değişkenlerine fallback
     const cardBg=hasActual?'var(--success-bg)':isDinlenme?'var(--bg-primary)':darkMode?'var(--bg-secondary)':clr.bg;
     const cardBorder=hasActual?'var(--success)':isDinlenme?'var(--border)':darkMode?'var(--border-hover)':clr.border;
+
+    // İletim badge — sadece plan varsa göster (dinlenme gününde gizle)
+    const iletimBadge=!isDinlenme?(()=>{
+      if(todayApproved&&tomorrowApproved)return{label:'Bugün ve yarın iletildi',cls:'badge-good'};
+      if(todayApproved)return{label:'Bugün iletildi',cls:'badge-warn'};
+      if(tomorrowApproved)return{label:'Yarın iletildi',cls:'badge-warn'};
+      return{label:'İletilmedi',cls:'badge-danger'};
+    })():null;
 
     return React.createElement('div',{
       key:ath.id,
@@ -3199,6 +3218,7 @@ function BugunTab({athletes,workouts,onSelChange,onTabChange}){
           hasActual&&React.createElement('span',{className:'badge badge-good'},'✓ Tamamlandı'),
           !hasActual&&!isDinlenme&&React.createElement('span',{className:'badge badge-gray'},'Bekliyor'),
           isDinlenme&&React.createElement('span',{className:'badge badge-gray'},'😴 Dinlenme'),
+          iletimBadge&&React.createElement('span',{className:'badge '+iletimBadge.cls},iletimBadge.label),
         ),
         // Plan başlık
         !isDinlenme&&dayPlan&&React.createElement('div',{style:{fontSize:13,fontWeight:500,color:'var(--text-primary)',marginBottom:4,lineHeight:1.35}},
