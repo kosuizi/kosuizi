@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.14-0100 --><!DOCTYPE html>
+<!-- Version: v2026.06.13-1626 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -9169,7 +9169,7 @@ function evaluatePeakReachability(weeks, primary, athlete){
 // ═══════════════════════════════════════════════════════════════════════════════
 function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload,
   powerOverload,wkSessions,mechKardioDanger,zoneDist4w,kaliteliYapildi,
-  planWeek,prevWeek}){
+  planWeek,prevWeek,aerEffDecline=false}){
 
   const z=zoneDist4w||{};
   const anaPct=z.anaPct??null;
@@ -9297,6 +9297,23 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
     }
   }
 
+  // ── Öncelik 4.5: aerEffDecline — aerobik verimlilik düşüşü ────────────────
+  // Aynı nabızda tempo giderek yavaşlıyorsa kümülatif yorgunluk işareti.
+  // Yük baskısı (ACWR>1.1 veya TSB<-5) eşliğindeyse forceLow; tek başınaysa preferLow.
+  if(!forceEasy&&aerEffDecline){
+    if(acwr>1.1||tsb<-5){
+      if(!forceLow){
+        forceLow=true;
+        zoneReasons.push('Aerobik verimlilik düşüşü + yük baskısı (ACWR '+acwr.toFixed(2)+', TSB '+tsb.toFixed(1)+') — tempo/eşik antrenman ertelendi, aerobik öncelikli.');
+      }
+    } else {
+      if(!forceLow&&!preferLow){
+        preferLow=true;
+        zoneReasons.push('Aerobik verimlilik son 4 haftada kötüleşiyor (aynı nabızda daha yavaş) — yüksek yoğunluklu antrenman ertelendi.');
+      }
+    }
+  }
+
   // ── Öncelik 5: Plan sinyallerini fitness sinyalleriyle birleştir ─────────────
   // Plan bazlı kısıtlar fitness sinyallerinin üzerine katmanlanır.
   // Daha kısıtlayıcı olan kazanır; plan sinyali fitness sinyalini yumuşatamaz.
@@ -9386,7 +9403,7 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   // ── IF trendi ─────────────────────────────────────────────────────────────
   const wkIFs=wkMetrics.map(({m})=>m.IF).filter(v=>v>0);
   const meanIF=wkIFs.length?round2(wkIFs.reduce((s,v)=>s+v,0)/wkIFs.length):null;
-  const ifOverloaded=meanIF!=null&&meanIF>0.90;
+  const ifOverloaded=meanIF!=null&&meanIF>0.90&&wkSessions>=2; // ≥2 seans şartı: tek seansla yanlış tetiklemeyi önler
 
   // ── Güç yükü analizi ─────────────────────────────────────────────────────
   const wkHasPower=wkMetrics.some(({w})=>parseFloat(w.ort_guc)>0);
@@ -9550,7 +9567,8 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
     acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload,powerOverload,wkSessions,
     mechKardioDanger,zoneDist4w,kaliteliYapildi,
     planWeek:thisWeekTarget||null,
-    prevWeek:prevWeekTarget||null
+    prevWeek:prevWeekTarget||null,
+    aerEffDecline  // aerobik verimlilik düşüşü — evaluateSignals'ta preferLow/forceLow'a katkı eder
   });
   const forceEasy=sigs.forceEasy;
   const forceLow=sigs.forceLow;
