@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.13-2300 --><!DOCTYPE html>
+<!-- Version: v2026.06.14-0100 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -4263,37 +4263,63 @@ function computeZoneDistFromRows(baseRows,rowOverrides,zones,aralikOv){
   };
 }
 
-// Tek antrenman için bölge dağılımı — dakika cinsinden
+// Tek antrenman için bölge dağılımı — tamamen nabız bazlı
+// TUR_ZONE_DIST artık kullanılmıyor; tür etiketi değil fizyolojik veri esas.
+// Öncelik: _rowZoneDist (aşama bazlı bpm) → ort_nabiz+maks_nabiz → hariç tut
 function calcWorkoutZoneDist(w,athlete){
-  // Aşama verisinden hesaplanmış kesin dağılım varsa direkt kullan
+  // 1. Aşama bazlı kesin dağılım (reçete tablosundan — en hassas)
   if(w._rowZoneDist) return w._rowZoneDist;
+
   const durMin=(()=>{
     const s=parseInt(w.sure_sa||0)*3600+parseInt(w.sure_dk||0)*60+parseInt(w.sure_sn||0);
     return s/60;
   })();
-  if(durMin<5)return null;
+  if(durMin<5) return null;
   const spor=w.spor||'kosu';
-  if(spor!=='kosu'&&spor!=='yuruyus')return null;
+  if(spor!=='kosu'&&spor!=='yuruyus') return null;
 
-  const tur=w.tur||'';
   const avgHR=parseFloat(w.ort_nabiz)||0;
-  // profileHistory'den o tarihe ait metrikleri al — bölge değişimlerinden bağımsız tarihsel doğruluk
+  const maxHR=parseFloat(w.maks_nabiz)||0;
+
+  // Ort. nabız yoksa dağılıma dahil etme — tahmin yerine gerçek veri zorunlu
+  if(avgHR<=0) return null;
+
+  // profileHistory'den o tarihe ait metrikleri al — tarihsel doğruluk
   const athSnap=athleteAtDate(athlete,w.date||'');
   const lthr=parseSayi(athSnap?.lthr)||0;
-  const mhr=parseSayi(athSnap?.mhr)||0;
+  const mhr_ath=parseSayi(athSnap?.mhr)||0;
   const rhr=parseSayi(athSnap?.rhr)||0;
 
-  // Kaynak seçimi: tür > nabız > varsayılan
-  let dist=TUR_ZONE_DIST[tur]||null;
-  if(!dist&&avgHR>0&&lthr>0) dist=hrBasedZoneDist(avgHR,lthr,mhr,rhr);
-  if(!dist) dist={low:80,high:18,ana:2}; // varsayılan
+  // LTHR olmadan nabzı bölgeye yerleştiremeyiz
+  if(lthr<=0) return null;
+
+  // 2. Ort. nabız bazlı dağılım (ana kaynak)
+  const distAvg=hrBasedZoneDist(avgHR,lthr,mhr_ath,rhr);
+  if(!distAvg) return null;
+
+  // 3. Maks nabız blend — zirvedeki yüksek yoğunluk momentlerini yansıtmak için
+  // Ort. nabız %80 ağırlık (antrenmanın büyük çoğunluğu), maks nabız %20 (zirve anlar)
+  let dist=distAvg;
+  if(maxHR>0&&maxHR>avgHR){
+    const distMax=hrBasedZoneDist(maxHR,lthr,mhr_ath,rhr);
+    if(distMax){
+      let low =Math.round(distAvg.low *0.80+distMax.low *0.20);
+      let high=Math.round(distAvg.high*0.80+distMax.high*0.20);
+      let ana =Math.round(distAvg.ana *0.80+distMax.ana *0.20);
+      // Yuvarlama hatası düzeltmesi — toplam 100 olmalı
+      const diff=100-(low+high+ana);
+      low+=diff; // farkı low'a ekle (en büyük dilim)
+      dist={low,high,ana};
+    }
+  }
 
   return{
-    lowMin: round1(durMin*dist.low/100),
+    lowMin: round1(durMin*dist.low /100),
     highMin:round1(durMin*dist.high/100),
-    anaMin: round1(durMin*dist.ana/100),
+    anaMin: round1(durMin*dist.ana /100),
     totalMin:round1(durMin),
     lowPct:dist.low, highPct:dist.high, anaPct:dist.ana,
+    _hrBased:true,
   };
 }
 
