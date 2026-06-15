@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.15-0206 --><!DOCTYPE html>
+<!-- Version: v2026.06.15-0742 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -1800,7 +1800,7 @@ function compressImage(file,{maxW=800,maxH=800,quality=0.75,onDone,onError}){
   reader.readAsDataURL(file);
 }
 
-const TABS=[{id:'dashboard',label:'🏠 Pano'},{id:'bugun',label:'🗓️ Bugün'},{id:'plan',label:'📅 Plan'},{id:'lider',label:'🏆 Lider'},{id:'bolge',label:'❤️ Bölgeler'},{id:'test',label:'🧪 Testler'},{id:'yarislar',label:'🏁 Yarışlar'},{id:'karsilastir',label:'⚖️ Karşılaştır'},{id:'ekle',label:'➕ Ekle'},{id:'antrenmanlar',label:'📚 Antrenman'},{id:'gecmis',label:'🕐 Geçmiş'},{id:'analiz',label:'📊 Analiz'},{id:'yukle',label:'⬆️ Yükle'},{id:'sporcular',label:'👥 Sporcular & Yarışlar'}];
+const TABS=[{id:'dashboard',label:'🏠 Pano'},{id:'motivasyon',label:'✨ Motivasyon'},{id:'bugun',label:'🗓️ Bugün'},{id:'plan',label:'📅 Plan'},{id:'lider',label:'🏆 Lider'},{id:'bolge',label:'❤️ Bölgeler'},{id:'test',label:'🧪 Testler'},{id:'yarislar',label:'🏁 Yarışlar'},{id:'karsilastir',label:'⚖️ Karşılaştır'},{id:'ekle',label:'➕ Ekle'},{id:'antrenmanlar',label:'📚 Antrenman'},{id:'gecmis',label:'🕐 Geçmiş'},{id:'analiz',label:'📊 Analiz'},{id:'yukle',label:'⬆️ Yükle'},{id:'sporcular',label:'👥 Sporcular & Yarışlar'}];
 
 const SPOR_TURLERI=[
   {v:'kosu',     l:'Koşu',       k:1.00, emoji:'🏃'},
@@ -17336,6 +17336,241 @@ function AntrenmanProfiliKarti({workouts,athlete}){
   );
 }
 
+// ── Motivasyon Sayfası Yardımcıları ──────────────────────────────────────────
+// Sporcuya özel: gelişim trendleri + süreklilik/hacim sinyalleri.
+// Ek Firebase okuması gerekmez — mevcut workouts/history/profileHistory kullanılır.
+
+// Profil anketi metrik trendi — profileHistory dizisinde ilk vs son kayıt
+function calcProfilTrend(profHist,field){
+  const series=(profHist||[]).filter(s=>s[field]!=null&&s[field]!=='')
+    .slice().sort((a,b)=>new Date(a.date)-new Date(b.date));
+  if(series.length<2)return null;
+  const first=series[0],last=series[series.length-1];
+  const fv=parseFloat(first[field]),lv=parseFloat(last[field]);
+  if(isNaN(fv)||isNaN(lv))return null;
+  return{first:round1(fv),last:round1(lv),diff:round1(lv-fv),firstDate:first.date,lastDate:last.date,count:series.length};
+}
+
+// Trend metriği gösterim/yorum kuralları — generateMessages ile aynı eşikler
+const TREND_META={
+  vo2max:{label:'VO₂max',unit:'ml/kg/dk',icon:'🫁',
+    tone:t=>t.diff>0?'good':t.diff<-2?'warn':'info',
+    msg:t=>t.diff>0?'Aerobik taban gelişiyor.':t.diff<-2?'Toparlanma ve antrenman kalitesi gözden geçirilmeli.':'Stabil seyrediyor.'},
+  rhr:{label:'Dinlenme Nabzı (RHR)',unit:'bpm',icon:'❤️',
+    tone:t=>t.diff<0?'good':t.diff>3?'warn':'info',
+    msg:t=>t.diff<0?'Kalp daha az çalışarak aynı işi yapıyor — toparlanma iyileşiyor.':t.diff>3?'Yorgunluk, hastalık veya uyku eksikliği işareti olabilir.':'Stabil seyrediyor.'},
+  lthr:{label:'Laktat Eşiği (LTHR)',unit:'bpm',icon:'🔥',
+    tone:t=>t.diff>0?'good':t.diff<-3?'warn':'info',
+    msg:t=>t.diff>0?'Eşik gücü artıyor — tempo/eşik antrenmanları meyvesini veriyor.':t.diff<-3?'Test koşullarını kontrol et; yorgunluk olabilir.':'Stabil seyrediyor.'},
+  kilo:{label:'Kilo',unit:'kg',icon:'⚖️',
+    tone:t=>{const p=t.first?Math.abs(t.diff/t.first*100):0;return t.diff<0?(p>1?'warn':'good'):t.diff>0?'info':'info';},
+    msg:t=>{const p=t.first?Math.abs(t.diff/t.first*100):0;
+      return t.diff<0?(p>1?'Hızlı kayıp — beslenmeyi gözden geçir.':'Güç/ağırlık oranı iyileşiyor.')
+        :t.diff>0?'Antrenman yüküyle orantılı mı kontrol et.':'Stabil seyrediyor.';}},
+  hrv_7gun:{label:'HRV (7g Ort.)',unit:'ms',icon:'🧬',
+    tone:t=>t.diff>3?'good':t.diff<-3?'warn':'info',
+    msg:t=>t.diff>3?'Sinir sistemi dinleniyor — yük artışı için uygun pencere.':t.diff<-3?'Toparlanma baskı altında — yoğunluğu düşür.':'Stabil seyrediyor.'},
+};
+
+// CTL trendi — son değer vs ~N hafta önceki değer (history yetersizse en erken noktaya düşer)
+function calcCtlTrend(history,weeks=8){
+  if(!history||history.length<2)return null;
+  const last=history[history.length-1];
+  const idx=Math.max(0,history.length-1-weeks*7);
+  const prev=history[idx];
+  if(last?.ctl==null||prev?.ctl==null)return null;
+  return{last:round1(last.ctl),prev:round1(prev.ctl),diff:round1(last.ctl-prev.ctl),days:history.length-1-idx};
+}
+
+// Aerobik verimlilik trendi — AerobikVerimlilikKarti ile aynı 4H pencere mantığı
+function calcAerEffTrend(history,period=4){
+  const recent=(history||[]).slice(-period*7).filter(d=>d.aerEff!=null).map(d=>d.aerEff);
+  const older=(history||[]).slice(-period*14,-period*7).filter(d=>d.aerEff!=null).map(d=>d.aerEff);
+  if(recent.length<3)return null;
+  const avgRecent=round1(recent.reduce((a,b)=>a+b,0)/recent.length);
+  if(older.length<3)return{avgRecent,avgOlder:null,diff:null};
+  const avgOlder=round1(older.reduce((a,b)=>a+b,0)/older.length);
+  return{avgRecent,avgOlder,diff:round1(avgRecent-avgOlder)};
+}
+
+// Geçtikçe hedef serisi — her tamamlanmış hafta için "hedef" = o haftadan önceki
+// 4 haftanın koşu km ortalaması, "gerçek" = o haftanın km'si. Yarış planından
+// bağımsız — sporcunun kendi son dönem ortalamasına göre tutarlılık ölçer.
+function calcGectikceHedefler(workouts,athleteId,weeks=8){
+  const athWks=(workouts||[]).filter(w=>w.athleteId===athleteId&&(w.spor==='kosu'||!w.spor));
+  const kmMap={};
+  for(let o=-1;o>=-(weeks+4);o--){
+    const{start,end}=getWeekBounds(o);
+    const wks=athWks.filter(w=>{const d=new Date(w.date+'T12:00:00');return d>=start&&d<=end;});
+    kmMap[o]=round1(wks.reduce((s,w)=>s+(parseFloat(w.mesafe)||0),0));
+  }
+  const out=[];
+  for(let w=weeks;w>=1;w--){
+    const base=[1,2,3,4].reduce((s,k)=>s+kmMap[-(w+k)],0);
+    const target=round1(base/4);
+    const actual=kmMap[-w];
+    out.push({weekOffset:-w,target,actual,ratio:target>0?Math.min(1.1,round2(actual/target)):null});
+  }
+  return out;
+}
+
+// Haftalık antrenman serisi — bu hafta (varsa) dahil, art arda en az 1 antrenman
+// yapılan hafta sayısı. Hafta henüz bitmediyse ve bu hafta kayıt yoksa seri
+// "bozulmuş" gösterilmez — bir önceki haftadan itibaren sayılır.
+function calcHaftalikSeri(workouts,athleteId){
+  const athWks=(workouts||[]).filter(w=>w.athleteId===athleteId);
+  const hasWk=(offset)=>{
+    const{start,end}=getWeekBounds(offset);
+    return athWks.some(w=>{const d=new Date(w.date+'T12:00:00');return d>=start&&d<=end;});
+  };
+  let streak=0,offset=hasWk(0)?0:-1;
+  while(hasWk(offset)){streak++;offset--;}
+  return streak;
+}
+
+// Son 24 hafta özeti — Hafta24Karti'ndeki toplam/en yoğun hafta hesabının
+// motivasyon kartı için sadeleştirilmiş, bağımsız versiyonu.
+function calc24HaftaOzet(workouts,athlete){
+  const KOSU_SPORLAR=['kosu','trail','yol','ultra'];
+  const AY=['Oca','Şub','Mar','Nis','May','Haz','Tem','Ağu','Eyl','Eki','Kas','Ara'];
+  let totalKm=0,totalDp=0,totalYuk=0,totalSessions=0,best=null;
+  for(let i=0;i<24;i++){
+    const{start,end}=getWeekBounds(-i);
+    const inWeek=(workouts||[]).filter(w=>{const d=new Date(w.date+'T12:00:00');return d>=start&&d<=end;});
+    const kosular=inWeek.filter(w=>KOSU_SPORLAR.includes(w.spor||'kosu'));
+    const km=round1(kosular.reduce((s,w)=>s+(parseFloat(w.mesafe)||0),0));
+    const dp=Math.round(kosular.reduce((s,w)=>s+(parseFloat(w.irtifa)||0),0));
+    let yuk=0;inWeek.forEach(w=>{yuk+=(calcMetrics(w,athlete).yukObj||0);});
+    totalKm+=km;totalDp+=dp;totalYuk+=yuk;totalSessions+=inWeek.length;
+    if(km>0&&(!best||km>best.km))best={km,label:`${start.getDate()} ${AY[start.getMonth()]} - ${end.getDate()} ${AY[end.getMonth()]}`};
+  }
+  return{totalKm:round1(totalKm),totalDp,totalYuk:round1(totalYuk),totalSessions,best};
+}
+
+// ── Sinyal Satırı (Motivasyon kartlarında ortak görünüm) ─────────────────────
+function SinyalSatiri({icon,label,value,tone,desc}){
+  const cMap={good:'var(--success)',warn:'var(--warn)',danger:'var(--danger)',info:'var(--info)'};
+  const bgMap={good:'var(--success-bg)',warn:'var(--warn-bg)',danger:'var(--danger-bg)',info:'var(--info-bg)'};
+  return React.createElement('div',{style:{
+    display:'flex',alignItems:'flex-start',gap:10,padding:'10px 12px',
+    borderRadius:'var(--radius)',background:bgMap[tone]||'var(--bg-secondary)',marginBottom:8
+  }},
+    React.createElement('div',{style:{fontSize:17,lineHeight:'20px'}},icon),
+    React.createElement('div',{style:{flex:1,minWidth:0}},
+      React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:8,flexWrap:'wrap'}},
+        React.createElement('span',{style:{fontSize:12,fontWeight:600,color:'var(--text-primary)'}},label),
+        React.createElement('span',{style:{fontSize:13,fontWeight:700,color:cMap[tone]||'var(--text-primary)',fontFamily:'monospace',whiteSpace:'nowrap'}},value)
+      ),
+      desc&&React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',marginTop:2}},desc)
+    )
+  );
+}
+function SinyalBosSatiri({icon,label,desc}){
+  return React.createElement('div',{style:{
+    display:'flex',alignItems:'flex-start',gap:10,padding:'10px 12px',
+    borderRadius:'var(--radius)',background:'var(--bg-secondary)',marginBottom:8,opacity:0.65
+  }},
+    React.createElement('div',{style:{fontSize:17,lineHeight:'20px'}},icon),
+    React.createElement('div',{style:{flex:1}},
+      React.createElement('div',{style:{fontSize:12,fontWeight:600,color:'var(--text-secondary)'}},label),
+      React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:2}},desc)
+    )
+  );
+}
+
+// ── Motivasyon Sekmesi ────────────────────────────────────────────────────────
+function MotivasyonTab({athlete,workouts,history}){
+  if(!athlete)return React.createElement('div',{className:'empty'},'Sporcu seçilmedi.');
+  const profHist=athlete.profileHistory||[];
+
+  const trendRow=(field)=>{
+    const meta=TREND_META[field];
+    const t=calcProfilTrend(profHist,field);
+    if(!t)return React.createElement(SinyalBosSatiri,{key:field,icon:meta.icon,label:meta.label,
+      desc:'En az 2 anket güncellemesi birikince burada görünecek.'});
+    const ok=t.diff>0?'+':'';
+    return React.createElement(SinyalSatiri,{key:field,icon:meta.icon,label:meta.label,
+      value:`${t.first} → ${t.last} ${meta.unit} (${ok}${t.diff})`,
+      tone:meta.tone(t),desc:meta.msg(t)});
+  };
+
+  const ctlT=calcCtlTrend(history,8);
+  const aerT=calcAerEffTrend(history,4);
+  const gectikceler=calcGectikceHedefler(workouts,athlete.id,8);
+  const validRatios=gectikceler.filter(g=>g.ratio!=null);
+  const planAvg=validRatios.length?validRatios.reduce((s,g)=>s+g.ratio,0)/validRatios.length:null;
+  let hedefSerisi=0;
+  for(let i=gectikceler.length-1;i>=0;i--){
+    if(gectikceler[i].ratio!=null&&gectikceler[i].ratio>=0.85)hedefSerisi++;else break;
+  }
+  const haftalikSeri=calcHaftalikSeri(workouts,athlete.id);
+  const ozet24=calc24HaftaOzet(workouts,athlete);
+  const profil4=calcAntrenmanProfili(workouts,athlete,4);
+
+  return React.createElement('div',null,
+
+    // ── Bölüm A: Gelişim Trendleri ──────────────────────────────────────────
+    React.createElement('div',{className:'card',style:{marginBottom:12}},
+      React.createElement('div',{className:'card-title'},'📈 Gelişim Trendleri'),
+      React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:10}},
+        'Anket güncellemeleri ve antrenman verisinden hesaplanan uzun vadeli yön.'),
+      trendRow('vo2max'),trendRow('rhr'),trendRow('lthr'),trendRow('kilo'),trendRow('hrv_7gun'),
+      ctlT
+        ?React.createElement(SinyalSatiri,{icon:'📈',label:'CTL (Fitness)',
+            value:`${ctlT.prev} → ${ctlT.last} (${ctlT.diff>0?'+':''}${ctlT.diff})`,
+            tone:ctlT.diff>3?'good':ctlT.diff<-3?'warn':'info',
+            desc:ctlT.diff>3?`Son ${ctlT.days} günde kondisyon istikrarlı büyüyor.`:ctlT.diff<-3?`Son ${ctlT.days} günde kondisyon kaybı var.`:`Son ${ctlT.days} günde kondisyon korunuyor.`})
+        :React.createElement(SinyalBosSatiri,{icon:'📈',label:'CTL (Fitness)',desc:'Antrenman geçmişi birikince burada görünecek.'}),
+      aerT
+        ?(aerT.avgOlder!=null
+          ?React.createElement(SinyalSatiri,{icon:'🚀',label:'Aerobik Verimlilik (140bpm)',
+              value:`${secToPace(aerT.avgOlder)} → ${secToPace(aerT.avgRecent)} /km`,
+              tone:aerT.diff<-5?'good':aerT.diff>5?'warn':'info',
+              desc:aerT.diff<-5?'Aynı nabızda daha hızlı koşuyorsun — aerobik taban güçleniyor.':aerT.diff>5?'Aynı nabızda yavaşlama var, takip et.':'Son 4 haftada stabil.'})
+          :React.createElement(SinyalSatiri,{icon:'🚀',label:'Aerobik Verimlilik (140bpm)',
+              value:`${secToPace(aerT.avgRecent)} /km`,tone:'info',
+              desc:'Trend için önceki 4 haftada da en az 3 Z2 koşu gerekiyor.'}))
+        :React.createElement(SinyalBosSatiri,{icon:'🚀',label:'Aerobik Verimlilik (140bpm)',desc:'Son 4 haftada en az 3 düz Z2 koşu birikince burada görünecek.'})
+    ),
+
+    // ── Bölüm B: Süreklilik & Hacim ──────────────────────────────────────────
+    React.createElement('div',{className:'card'},
+      React.createElement('div',{className:'card-title'},'🔥 Süreklilik & Hacim'),
+      React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:10}},
+        'Antrenman düzeninin ve hacminin zaman içindeki tutarlılığı.'),
+      planAvg!=null
+        ?(()=>{
+            const pct=Math.round(planAvg*100);
+            const tone=planAvg>=0.75?'good':planAvg>=0.40?'info':'warn';
+            const aciklama=planAvg>=0.90?'Mükemmel disiplin ✓':planAvg>=0.75?'İyi tutarlılık':planAvg>=0.60?'Orta düzey':planAvg>=0.40?'Tutarsız':'Hacim dalgalı';
+            return React.createElement(SinyalSatiri,{icon:'📊',label:'Plan Tutarlılığı (8 hafta)',value:'%'+pct,tone,
+              desc:aciklama+' — kendi son dönem ortalamana göre.'});
+          })()
+        :React.createElement(SinyalBosSatiri,{icon:'📊',label:'Plan Tutarlılığı',desc:'En az 5 haftalık antrenman geçmişi birikince burada görünecek.'}),
+      hedefSerisi>0
+        ?React.createElement(SinyalSatiri,{icon:'🎯',label:'Hedef Tutturma Serisi',value:hedefSerisi+' hafta',tone:'good',
+            desc:'Üst üste '+hedefSerisi+' hafta kendi ortalamanın en az %85\'i tutturuldu.'})
+        :React.createElement(SinyalSatiri,{icon:'🎯',label:'Hedef Tutturma Serisi',value:'—',tone:'info',
+            desc:'Henüz aktif bir seri yok — bu hafta başlayabilir.'}),
+      React.createElement(SinyalSatiri,{icon:'✅',label:'Haftalık Antrenman Serisi',value:haftalikSeri+' hafta',
+        tone:haftalikSeri>=4?'good':'info',
+        desc:haftalikSeri>0?'Üst üste '+haftalikSeri+' haftadır en az 1 antrenman yapıldı.':'Bu hafta ilk antrenmanla seri başlasın.'}),
+      ozet24.totalSessions>0
+        ?React.createElement(SinyalSatiri,{icon:'📅',label:'Son 24 Hafta',value:ozet24.totalKm+' km',tone:'info',
+            desc:'D+ '+ozet24.totalDp+'m · '+ozet24.totalSessions+' antrenman'+(ozet24.best?' · En yoğun hafta: '+ozet24.best.label+' ('+ozet24.best.km+' km)':'')})
+        :React.createElement(SinyalBosSatiri,{icon:'📅',label:'Son 24 Hafta',desc:'Antrenman kaydı birikince burada görünecek.'}),
+      profil4
+        ?(()=>{
+            const order=['aerobik','esik','vo2max','anaerobik','teknik','diger'];
+            const top=order.filter(k=>profil4.enerji[k]?.dk>0).sort((a,b)=>profil4.enerji[b].pct-profil4.enerji[a].pct).slice(0,3);
+            return React.createElement(SinyalSatiri,{icon:'🧩',label:'Antrenman Profili (4 hafta)',value:profil4.wkCount+' antrenman',tone:'info',
+              desc:top.map(k=>'%'+profil4.enerji[k].pct+' '+ENERJI_META[k].label).join(' · ')});
+          })()
+        :React.createElement(SinyalBosSatiri,{icon:'🧩',label:'Antrenman Profili',desc:'Bu dönem için yeterli kayıt yok.'})
+    )
+  );
+}
+
 function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
   if(!athlete)return React.createElement('div',{className:'empty'},'Sporcu seçilmedi.');
   const last=history[history.length-1];
@@ -20176,6 +20411,7 @@ function App(){
     React.createElement('div',{className:'content'},
       tab==='bugun'&&React.createElement(BugunTab,{athletes,workouts,onSelChange:setSelId,onTabChange:setTab}),
       tab==='dashboard'&&React.createElement(Dashboard,{workouts:athWks,athlete,history,races,teamLogo,teamName,planSnap}),
+      tab==='motivasyon'&&React.createElement(ErrorBoundary,null,React.createElement(MotivasyonTab,{athlete,workouts:athWks,history})),
       tab==='plan'&&React.createElement(HaftalikPlanTab,{athlete,history,races,workouts,testPlanlar,planSnapInit:planSnap,onPlanSnapChange:setPlanSnapApp,onAthletesRefresh:freshList=>setAthletes(freshList),onUpdateAthlete:handleUpdateAthlete,onUpdateWorkout:handleUpdateWorkout,onSaveWorkout:w=>{const ath=athletes.find(a=>a.id===w.athleteId);const m=calcMetrics(w,ath);const rec=calcRecovery(w,ath,m.yukObj);const mergedHedef=mergeRecoveryHedef(rec.hedefISO,rec.saatler,workouts,w.athleteId);setWorkouts(p=>[...p,{...w,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:mergedHedef}]);}}),
       tab==='lider'&&React.createElement(LiderlikTab,{athletes,workouts,teamName,teamLogo,races}),
       tab==='bolge'&&React.createElement(BolgeTab,{athlete,workouts:athWks,onUpdateAthlete:handleUpdateAthlete}),
