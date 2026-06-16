@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.17-0021 --><!DOCTYPE html>
+<!-- Version: v2026.06.17-0039 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.17-0021';
+const APP_VERSION='v2026.06.17-0039';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -12420,6 +12420,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
 
 
   // 1. Snapshot yükle — sporcu değişince önce sıfırla
+  const prevRampAthleteIdRef=useRef(athlete?.id);
   useEffect(()=>{
     if(!athlete){setSnapReady(true);return;}
     setPlanSnap(null);
@@ -12427,8 +12428,16 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     setFrozenTargets({});
     setSnapReady(false);
     snapFetchOkRef.current=false;
-    setRampModeOn(false);
-    setRampRatePct(15);
+    // DÜZELTME: Rampa ayarları (rampModeOn/rampRatePct) sadece SPORCU değiştiğinde
+    // varsayılana sıfırlanmalı. Bu effect weekKey değişiminde de (yeni hafta başlangıcı)
+    // tetiklendiği için eskiden her hafta başında rampa ayarı kayboluyordu — yeni
+    // haftanın snapshot'ı bu alanları içermediğinden aşağıdaki koşullu restore hiç
+    // devreye girmiyordu. Artık aynı sporcu için hafta değişiminde mevcut değer korunur.
+    if(prevRampAthleteIdRef.current!==athlete.id){
+      setRampModeOn(false);
+      setRampRatePct(15);
+      prevRampAthleteIdRef.current=athlete.id;
+    }
     fbGet(`plan_snapshots/${athlete.id}/${weekKey}`).then(stored=>{
       const snap=stored||null;
       snapFetchOkRef.current=true;
@@ -14365,6 +14374,11 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
             if(!nextWeekSnap?.frozenTargets){
               const updated={
                 ...(nextWeekSnap||{}),
+                // Rampa ayarlarını da gelecek haftanın snapshot'ına yaz — aksi halde
+                // hafta döndüğünde (özellikle sayfa yeniden yüklenirse) bu alanlar
+                // boş geldiğinden rampa oranı varsayılana (%15/kapalı) düşüyordu.
+                rampModeOn,
+                rampRatePct,
                 frozenTargets:{
                   targetKm:nextWeek.targetKm,
                   targetDp:nextWeek.targetDp
