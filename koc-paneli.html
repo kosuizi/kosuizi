@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.15-2318 --><!DOCTYPE html>
+<!-- Version: v2026.06.16-1244 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.15-2318';
+const APP_VERSION='v2026.06.16-1244';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1121,6 +1121,15 @@ function gradualLthrUpdate(currentLthr, direction){
   };
 }
 
+// ── Kalibrasyon Sinyal Ağırlıkları — rozet kademesiyle BİREBİR aynı sınıflandırma ──
+// Tolerans payı içindeki sapmalar (Hedef Nabız) sinyal üretmez — 0 puan.
+// Biraz Yüksek/Düşük=1 · Çok Yüksek/Düşük=2 · Tehlikeli/Yetersiz Yoğunluk=4
+// Günlük baskın yön bu puanlarla belirlenir (satır SAYISI değil, toplam AĞIRLIK); günler arası toplanır.
+// Eylem önerisi: ≥2 farklı gün VE toplam puan ≥ BPM_SIGNAL_SCORE_THRESHOLD — ikisi birden gerekli.
+// Böylece 1 "Tehlikeli" + 1 "Çok Yüksek" gün (4+2=6) hızlı tetikler; 2 "Biraz Yüksek" gün (1+1=2) tetiklemez.
+const BPM_SIGNAL_WEIGHT={warn:1,danger:2,critical:4};
+const BPM_SIGNAL_SCORE_THRESHOLD=4;
+
 // Tüm plan_snapshots verisinden reçete geribildirim sinyalleri çıkarır.
 // Yalnızca kalite fazları (ısınma/soğuma/dinlenme dışı) kullanılır.
 // athlete parametresi: hrZones recompute için kullanılır (_origZIdx → zone center)
@@ -1156,15 +1165,29 @@ function extractFeedbackSignals(allSnapsObj, athlete){
           }
         }
         const zi=row._origZIdx;
+        let hrWeight=0;
         if(row.bpm!=null&&zi!=null&&zones?.hrZones?.[zi]){
           const hr=zones.hrZones[zi];
           if(hr.lo_bpm&&hr.hi_bpm){
-            // Badge eşiğiyle tutarlı: 0 tolerans — cross-validation + 2 gün zaten kalite filtresi
-            if(row.bpm > hr.hi_bpm)       hrDir='high';
-            else if(row.bpm < hr.lo_bpm)  hrDir='low';
+            // Rozet sistemiyle (bpmValidation/bpmValidationAralik) BİREBİR aynı kademe:
+            // tolerans payı (target) içindeki sapmalar sinyal üretmez — gürültü filtrelenir.
+            const {target,warn,danger}=getBpmTol(hr);
+            if(row.bpm > hr.hi_bpm){
+              const over=row.bpm-hr.hi_bpm;
+              if(over>target){
+                hrDir='high';
+                hrWeight=over<=warn?BPM_SIGNAL_WEIGHT.warn:over<=danger?BPM_SIGNAL_WEIGHT.danger:BPM_SIGNAL_WEIGHT.critical;
+              }
+            } else if(row.bpm < hr.lo_bpm){
+              const under=hr.lo_bpm-row.bpm;
+              if(under>target){
+                hrDir='low';
+                hrWeight=under<=warn?BPM_SIGNAL_WEIGHT.warn:under<=danger?BPM_SIGNAL_WEIGHT.danger:BPM_SIGNAL_WEIGHT.critical;
+              }
+            }
           }
         }
-        if(paceDir||hrDir||paceOk) signals.push({date,paceDir,hrDir,paceOk});
+        if(paceDir||hrDir||paceOk) signals.push({date,paceDir,hrDir,paceOk,hrWeight});
       };
 
       Object.values(rowOvs).forEach(scanRow);
@@ -1187,7 +1210,7 @@ function extractFeedbackSignals(allSnapsObj, athlete){
 
 // Sinyalleri çapraz doğrulamayla analiz eder.
 // vLT: pace + nabız ikisi birden gerekli. LTHR: pace hedefte + nabız sapıyor.
-// Her iki kanal için 2 farklı günde uyumlu sinyal → eylem önerisi.
+// Eylem önerisi: ≥2 farklı günde uyumlu yön VE toplam ağırlıklı puan ≥ BPM_SIGNAL_SCORE_THRESHOLD.
 function analyzeRecipeFeedbackSignals(signals){
   if(!signals||signals.length===0) return null;
 
@@ -1207,27 +1230,33 @@ function analyzeRecipeFeedbackSignals(signals){
     return null;
   };
 
-  // Gün bazlı birikim analizi — 2 gün eşiği
+  // Gün bazlı AĞIRLIKLI puan birikimi — ≥2 gün VE ≥BPM_SIGNAL_SCORE_THRESHOLD puan ikisi birden gerekli
   const analyzeByDay=(combined)=>{
-    if(combined.length===0) return{action:null,dominantDayCount:0,totalDays:0,totalSignals:0,noCombined:true};
+    if(combined.length===0) return{action:null,dominantDayCount:0,totalDays:0,totalSignals:0,totalScore:0,noCombined:true};
     const byDate={};
     combined.forEach(s=>{
       if(!byDate[s.date])byDate[s.date]=[];
-      byDate[s.date].push(s.dir);
+      byDate[s.date].push({dir:s.dir,weight:s.hrWeight||1});
     });
-    const dayDirs=Object.entries(byDate).map(([date,dirs])=>{
-      const counts={};
-      dirs.forEach(d=>counts[d]=(counts[d]||0)+1);
-      const sorted=Object.entries(counts).sort((a,b)=>b[1]-a[1]);
-      return{date,dir:sorted[0][0],rowCount:dirs.length};
+    const dayDirs=Object.entries(byDate).map(([date,items])=>{
+      const sums={};
+      items.forEach(it=>{sums[it.dir]=(sums[it.dir]||0)+it.weight;});
+      const sorted=Object.entries(sums).sort((a,b)=>b[1]-a[1]);
+      return{date,dir:sorted[0][0],dayScore:sorted[0][1],rowCount:items.length};
     });
-    const dirCounts={};
-    dayDirs.forEach(d=>dirCounts[d.dir]=(dirCounts[d.dir]||0)+1);
-    const sorted=Object.entries(dirCounts).sort((a,b)=>b[1]-a[1]);
-    const dominant=sorted[0];
+    const dirScores={};
+    dayDirs.forEach(d=>{dirScores[d.dir]=(dirScores[d.dir]||0)+d.dayScore;});
+    const dirDayCounts={};
+    dayDirs.forEach(d=>{dirDayCounts[d.dir]=(dirDayCounts[d.dir]||0)+1;});
+    const sortedScores=Object.entries(dirScores).sort((a,b)=>b[1]-a[1]);
+    const dominant=sortedScores[0];
+    const dominantDir=dominant?dominant[0]:null;
+    const dominantScore=dominant?dominant[1]:0;
+    const dominantDayCount=dominantDir?(dirDayCounts[dominantDir]||0):0;
     return{
-      action:dominant&&dominant[1]>=2?dominant[0]:null,
-      dominantDayCount:dominant?dominant[1]:0,
+      action:(dominantDir&&dominantDayCount>=2&&dominantScore>=BPM_SIGNAL_SCORE_THRESHOLD)?dominantDir:null,
+      dominantDayCount,
+      totalScore:dominantScore,
       totalDays:dayDirs.length,
       totalSignals:combined.length,
       noCombined:false,
@@ -5371,12 +5400,12 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
     const hr=zones?.hrZones?.[zIdx];
     if(!hr?.lo_bpm||!hr?.hi_bpm) return null;
     const {lo_bpm,hi_bpm}=hr;
-    const {warn:BPM_TOL_WARN,danger:BPM_TOL_DANGER}=getBpmTol(hr);
-    // Soğuma/ısınma: beklenen sapma → tarafsız gri rozet
+    const {target,warn,danger}=getBpmTol(hr);
+    // Soğuma: her iki yönde de beklenen sapma → tarafsız gri rozet. Isınma: sadece alt sınır.
     const rowLabel=rowData.label||'';
     const isCooldown=/soğuma|soguma/i.test(rowLabel);
     const isWarmup=/[iı]sınma|isinma/i.test(rowLabel);
-    if(isCooldown&&ovBpm>hi_bpm) return{label:'Soğuma Nabzı',color:'#64748b',bg:'#f1f5f9',icon:'↓'};
+    if(isCooldown&&(ovBpm>hi_bpm||ovBpm<lo_bpm)) return{label:'Soğuma Nabzı',color:'#64748b',bg:'#f1f5f9',icon:'↓'};
     if(isWarmup  &&ovBpm<lo_bpm) return{label:'Isınma Nabzı', color:'#64748b',bg:'#f1f5f9',icon:'↑'};
     // Kısa satır (≤30 sn): cardiac lag — alt sınır kontrolü atlanır
     const durSec=rowDurSec(rowData);
@@ -5384,23 +5413,26 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
     if(isShortRow){
       if(ovBpm>hi_bpm){
         const over=ovBpm-hi_bpm;
-        if(over<=BPM_TOL_WARN)   return{label:'Yüksek Nabız',    color:'#f59e0b',bg:'#fffbeb',icon:'↑'};
-        if(over<=BPM_TOL_DANGER) return{label:'Çok Yüksek Nabız',color:'#f97316',bg:'#fff7ed',icon:'↑↑'};
-        return                         {label:'Tehlikeli Nabız',  color:'#ef4444',bg:'#fef2f2',icon:'⚠'};
+        if(over<=target)  return{label:'Hedef Nabız',color:'#22c55e',bg:'#f0fdf4',icon:'♥'};
+        if(over<=warn)    return{label:'Biraz Yüksek Nabız',color:'#f59e0b',bg:'#fffbeb',icon:'↑'};
+        if(over<=danger)  return{label:'Çok Yüksek Nabız',  color:'#f97316',bg:'#fff7ed',icon:'↑↑'};
+        return                   {label:'Tehlikeli Nabız',  color:'#ef4444',bg:'#fef2f2',icon:'⚠'};
       }
       return{label:'Hedef Nabız',color:'#22c55e',bg:'#f0fdf4',icon:'♥'};
     }
     if(ovBpm>=lo_bpm&&ovBpm<=hi_bpm) return{label:'Hedef Nabız',   color:'#22c55e',bg:'#f0fdf4',icon:'♥'};
     if(ovBpm>hi_bpm){
       const over=ovBpm-hi_bpm;
-      if(over<=BPM_TOL_WARN)   return{label:'Yüksek Nabız',    color:'#f59e0b',bg:'#fffbeb',icon:'↑'};
-      if(over<=BPM_TOL_DANGER) return{label:'Çok Yüksek Nabız',color:'#f97316',bg:'#fff7ed',icon:'↑↑'};
-      return                         {label:'Tehlikeli Nabız',  color:'#ef4444',bg:'#fef2f2',icon:'⚠'};
+      if(over<=target)  return{label:'Hedef Nabız',color:'#22c55e',bg:'#f0fdf4',icon:'♥'};
+      if(over<=warn)    return{label:'Biraz Yüksek Nabız',color:'#f59e0b',bg:'#fffbeb',icon:'↑'};
+      if(over<=danger)  return{label:'Çok Yüksek Nabız',  color:'#f97316',bg:'#fff7ed',icon:'↑↑'};
+      return                   {label:'Tehlikeli Nabız',  color:'#ef4444',bg:'#fef2f2',icon:'⚠'};
     }
     const under=lo_bpm-ovBpm;
-    if(under<=BPM_TOL_WARN)   return{label:'Düşük Nabız',    color:'#f59e0b',bg:'#fffbeb',icon:'↓'};
-    if(under<=BPM_TOL_DANGER) return{label:'Çok Düşük Nabız',color:'#f97316',bg:'#fff7ed',icon:'↓↓'};
-    return                         {label:'Yetersiz Yoğunluk',color:'#0891b2',bg:'#ecfeff',icon:'⬇'};
+    if(under<=target)  return{label:'Hedef Nabız',     color:'#22c55e',bg:'#f0fdf4',icon:'♥'};
+    if(under<=warn)    return{label:'Biraz Düşük Nabız',color:'#f59e0b',bg:'#fffbeb',icon:'↓'};
+    if(under<=danger)  return{label:'Çok Düşük Nabız',  color:'#f97316',bg:'#fff7ed',icon:'↓↓'};
+    return                    {label:'Yetersiz Yoğunluk',color:'#0891b2',bg:'#ecfeff',icon:'⬇'};
   };
 
   // Her tekrar için ayrı override uygula — mesafe, pm, ps ve süre (h/m/s) dahil
@@ -5633,22 +5665,25 @@ function rowDurSec(row){
   return ((row.h||0)*3600)+((row.m||0)*60)+(row.s||0);
 }
 
-// ── Nabız Validasyon Toleransları — zone genişliğine ORANLI ──────────────────
+// ── Nabız Validasyon Toleransları — zone genişliğine ORANLI, 3 katmanlı ──────
 // Sabit bpm değil: her zone'un kendi genişliğine (hi_bpm−lo_bpm) göre ölçeklenir.
 // Dar/yoğun zone'larda (Z5a/Z5b ≈ %5 LTHR) küçük bpm sapmaları daha "ağır",
 // geniş zone'larda (Z3/Z4/Z5c ≈ %10 LTHR) aynı bpm sapması daha "hafif" sayılır.
-//   WARN   = zone genişliğinin %50'si → sarı   "Yüksek/Düşük Nabız"
+//   TARGET = zone genişliğinin %25'i → hâlâ yeşil  "Hedef Nabız" (aralık dışına taşan tolerans payı)
+//   WARN   = zone genişliğinin %50'si → sarı   "Biraz Yüksek/Düşük Nabız"
 //   DANGER = zone genişliğinin %100'ü → turuncu "Çok Yüksek/Düşük Nabız"
 //   DANGER üstü                       → kırmızı "Tehlikeli Nabız"
-// Örn. Z5c (179–194, genişlik 15): WARN=8, DANGER=15 → 193 zone içi "Hedef Nabız".
+// Örn. Z4 (162–172, genişlik 10): TARGET=3,WARN=5,DANGER=10 → 173-175 hâlâ "Hedef Nabız".
 // Min. 2 bpm taban — çok dar zone'larda (yuvarlama vb.) bandın tamamen kaybolmasını önler.
+const BPM_TOL_TARGET_RATIO = 0.25;
 const BPM_TOL_WARN_RATIO   = 0.5;
 const BPM_TOL_DANGER_RATIO = 1.0;
 function getBpmTol(hr){
-  const zoneW = (hr?.hi_bpm||0) - (hr?.lo_bpm||0);
-  const warn   = Math.max(2, Math.round(zoneW * BPM_TOL_WARN_RATIO));
+  const zoneW  = (hr?.hi_bpm||0) - (hr?.lo_bpm||0);
+  const target = Math.max(2, Math.round(zoneW * BPM_TOL_TARGET_RATIO));
+  const warn   = Math.max(target+1, Math.round(zoneW * BPM_TOL_WARN_RATIO));
   const danger = Math.max(warn+1, Math.round(zoneW * BPM_TOL_DANGER_RATIO));
-  return {warn, danger};
+  return {target, warn, danger};
 }
 
 function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOverrides, onSaveDetay, readOnly, originalCueOnly, savedCuePatches, actualOrtNabiz}){
@@ -5892,11 +5927,11 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
   // Nabız validasyonu — sadece manuel bpm girildiğinde aktif
   // row.bpm: rowOverrides merge edilmiş değer (undefined=girişsiz, null=temizlenmiş, number=girilmiş)
   // Kıyaslama: lo_bpm/hi_bpm sınırlarına göre yapılır.
-  // Zone içindeyse → yeşil "Hedef Nabız"
-  // Tolerans (WARN/DANGER) getBpmTol() ile zone genişliğine ORANLI hesaplanır.
-  // 1–WARN bpm dışarıda → sarı    "Yüksek/Düşük Nabız"
-  // WARN+1–DANGER bpm   → turuncu "Çok Yüksek/Düşük Nabız"
-  // DANGER üstü bpm     → kırmızı "Tehlikeli Nabız"
+  // Zone içi + TARGET tolerans payı → yeşil "Hedef Nabız"
+  // Tolerans (TARGET/WARN/DANGER) getBpmTol() ile zone genişliğine ORANLI hesaplanır.
+  // TARGET+1–WARN bpm dışarıda → sarı    "Biraz Yüksek/Düşük Nabız"
+  // WARN+1–DANGER bpm          → turuncu "Çok Yüksek/Düşük Nabız"
+  // DANGER üstü bpm            → kırmızı "Tehlikeli Nabız"
   // Soğuma/ısınma: zone sapması beklenen fizyolojik durum → tarafsız gri rozet
   const bpmValidation=(row)=>{
     if(!row||row.type==='header'||row._isSprint) return null; // sprint hariç tüm satırlar bpm validasyonuna açık
@@ -5910,12 +5945,12 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
     const hr=zones?.hrZones?.[zi];
     if(!hr?.lo_bpm||!hr?.hi_bpm) return null;
     const {lo_bpm,hi_bpm}=hr;
-    const {warn:BPM_TOL_WARN,danger:BPM_TOL_DANGER}=getBpmTol(hr);
+    const {target,warn,danger}=getBpmTol(hr);
     const bpm=row.bpm;
-    // ── Soğuma/Isınma: beklenen fizyolojik sapma — uyarı değil, bilgi rozeti ──
+    // ── Soğuma: her iki yönde de beklenen sapma — uyarı değil, bilgi rozeti. Isınma: sadece alt sınır ──
     const isCooldown=/soğuma|soguma/i.test(rowLabel);
     const isWarmup=/[iı]sınma|isinma/i.test(rowLabel);
-    if(isCooldown&&bpm>hi_bpm) return{label:'Soğuma Nabzı',color:'#64748b',bg:'#f1f5f9',icon:'↓'};
+    if(isCooldown&&(bpm>hi_bpm||bpm<lo_bpm)) return{label:'Soğuma Nabzı',color:'#64748b',bg:'#f1f5f9',icon:'↓'};
     if(isWarmup  &&bpm<lo_bpm) return{label:'Isınma Nabzı', color:'#64748b',bg:'#f1f5f9',icon:'↑'};
     // ── Kısa satır (≤30 sn): cardiac lag — nabız zone'a ulaşamayabilir ──
     // Tepe nabzı beklenir; alt sınır kontrolü atlanır, sadece üst sınır bak.
@@ -5924,9 +5959,10 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
     if(isShortRow){
       if(bpm>hi_bpm){
         const over=bpm-hi_bpm;
-        if(over<=BPM_TOL_WARN)   return{label:'Yüksek Nabız',    color:'#f59e0b',bg:'#fffbeb',icon:'↑'};
-        if(over<=BPM_TOL_DANGER) return{label:'Çok Yüksek Nabız',color:'#f97316',bg:'#fff7ed',icon:'↑↑'};
-        return                         {label:'Tehlikeli Nabız',  color:'#ef4444',bg:'#fef2f2',icon:'⚠'};
+        if(over<=target)  return{label:'Hedef Nabız',color:'#22c55e',bg:'#f0fdf4',icon:'♥'};
+        if(over<=warn)    return{label:'Biraz Yüksek Nabız',color:'#f59e0b',bg:'#fffbeb',icon:'↑'};
+        if(over<=danger)  return{label:'Çok Yüksek Nabız',  color:'#f97316',bg:'#fff7ed',icon:'↑↑'};
+        return                   {label:'Tehlikeli Nabız',  color:'#ef4444',bg:'#fef2f2',icon:'⚠'};
       }
       return{label:'Hedef Nabız',color:'#22c55e',bg:'#f0fdf4',icon:'♥'};
     }
@@ -5934,14 +5970,16 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
     if(bpm>=lo_bpm&&bpm<=hi_bpm) return{label:'Hedef Nabız',   color:'#22c55e',bg:'#f0fdf4',icon:'♥'};
     if(bpm>hi_bpm){
       const over=bpm-hi_bpm;
-      if(over<=BPM_TOL_WARN)   return{label:'Yüksek Nabız',    color:'#f59e0b',bg:'#fffbeb',icon:'↑'};
-      if(over<=BPM_TOL_DANGER) return{label:'Çok Yüksek Nabız',color:'#f97316',bg:'#fff7ed',icon:'↑↑'};
-      return                         {label:'Tehlikeli Nabız',  color:'#ef4444',bg:'#fef2f2',icon:'⚠'};
+      if(over<=target)  return{label:'Hedef Nabız',color:'#22c55e',bg:'#f0fdf4',icon:'♥'};
+      if(over<=warn)    return{label:'Biraz Yüksek Nabız',color:'#f59e0b',bg:'#fffbeb',icon:'↑'};
+      if(over<=danger)  return{label:'Çok Yüksek Nabız',  color:'#f97316',bg:'#fff7ed',icon:'↑↑'};
+      return                   {label:'Tehlikeli Nabız',  color:'#ef4444',bg:'#fef2f2',icon:'⚠'};
     }
     const under=lo_bpm-bpm;
-    if(under<=BPM_TOL_WARN)   return{label:'Düşük Nabız',    color:'#f59e0b',bg:'#fffbeb',icon:'↓'};
-    if(under<=BPM_TOL_DANGER) return{label:'Çok Düşük Nabız',color:'#f97316',bg:'#fff7ed',icon:'↓↓'};
-    return                         {label:'Yetersiz Yoğunluk',color:'#0891b2',bg:'#ecfeff',icon:'⬇'};
+    if(under<=target)  return{label:'Hedef Nabız',     color:'#22c55e',bg:'#f0fdf4',icon:'♥'};
+    if(under<=warn)    return{label:'Biraz Düşük Nabız',color:'#f59e0b',bg:'#fffbeb',icon:'↓'};
+    if(under<=danger)  return{label:'Çok Düşük Nabız',  color:'#f97316',bg:'#fff7ed',icon:'↓↓'};
+    return                    {label:'Yetersiz Yoğunluk',color:'#0891b2',bg:'#ecfeff',icon:'⬇'};
   };
 
   // ── OP-8: Pace Validation — girilen pace ile hedef zone pace karşılaştır ──
@@ -15389,7 +15427,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       ),
       React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:8}},
         'vLT: pace + nabız ikisi birden gerekli. LTHR: pace hedefte + nabız sapıyor. ',
-        '2 farklı günde uyumlu sinyal → eylem önerisi. Isınma, soğuma, dinlenme hariç.'
+        '≥2 farklı günde uyumlu yön + yeterli puan → eylem önerisi. Isınma, soğuma, dinlenme hariç.'
       ),
       fbError&&React.createElement('div',{className:'alert alert-warn',style:{fontSize:12}},fbError),
       fbRawCount&&React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:10}},
