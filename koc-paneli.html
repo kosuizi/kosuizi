@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.15-0742 --><!DOCTYPE html>
+<!-- Version: v2026.06.15-2318 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.15-0206';
+const APP_VERSION='v2026.06.15-2318';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -5371,6 +5371,7 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
     const hr=zones?.hrZones?.[zIdx];
     if(!hr?.lo_bpm||!hr?.hi_bpm) return null;
     const {lo_bpm,hi_bpm}=hr;
+    const {warn:BPM_TOL_WARN,danger:BPM_TOL_DANGER}=getBpmTol(hr);
     // Soğuma/ısınma: beklenen sapma → tarafsız gri rozet
     const rowLabel=rowData.label||'';
     const isCooldown=/soğuma|soguma/i.test(rowLabel);
@@ -5632,12 +5633,23 @@ function rowDurSec(row){
   return ((row.h||0)*3600)+((row.m||0)*60)+(row.s||0);
 }
 
-// ── Nabız Validasyon Toleransları — kolayca değiştirilebilir sabitler ────────
-// BPM_TOL_WARN   : zone sınırını bu kadar aşarsa → sarı  "Yüksek/Düşük Nabız"     (1–5 bpm)
-// BPM_TOL_DANGER : bu eşiğe kadar              → turuncu "Çok Yüksek/Düşük Nabız" (6–10 bpm)
-//                  bu eşiği aşarsa              → kırmızı "Tehlikeli Nabız"         (11+ bpm)
-const BPM_TOL_WARN   = 5;   // ±5 bpm  — sarı eşiği
-const BPM_TOL_DANGER = 10;  // ±10 bpm — turuncu/kırmızı sınırı
+// ── Nabız Validasyon Toleransları — zone genişliğine ORANLI ──────────────────
+// Sabit bpm değil: her zone'un kendi genişliğine (hi_bpm−lo_bpm) göre ölçeklenir.
+// Dar/yoğun zone'larda (Z5a/Z5b ≈ %5 LTHR) küçük bpm sapmaları daha "ağır",
+// geniş zone'larda (Z3/Z4/Z5c ≈ %10 LTHR) aynı bpm sapması daha "hafif" sayılır.
+//   WARN   = zone genişliğinin %50'si → sarı   "Yüksek/Düşük Nabız"
+//   DANGER = zone genişliğinin %100'ü → turuncu "Çok Yüksek/Düşük Nabız"
+//   DANGER üstü                       → kırmızı "Tehlikeli Nabız"
+// Örn. Z5c (179–194, genişlik 15): WARN=8, DANGER=15 → 193 zone içi "Hedef Nabız".
+// Min. 2 bpm taban — çok dar zone'larda (yuvarlama vb.) bandın tamamen kaybolmasını önler.
+const BPM_TOL_WARN_RATIO   = 0.5;
+const BPM_TOL_DANGER_RATIO = 1.0;
+function getBpmTol(hr){
+  const zoneW = (hr?.hi_bpm||0) - (hr?.lo_bpm||0);
+  const warn   = Math.max(2, Math.round(zoneW * BPM_TOL_WARN_RATIO));
+  const danger = Math.max(warn+1, Math.round(zoneW * BPM_TOL_DANGER_RATIO));
+  return {warn, danger};
+}
 
 function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOverrides, onSaveDetay, readOnly, originalCueOnly, savedCuePatches, actualOrtNabiz}){
   const [customCues, setCustomCues] = useState(_cueCache.data||{});
@@ -5880,10 +5892,11 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
   // Nabız validasyonu — sadece manuel bpm girildiğinde aktif
   // row.bpm: rowOverrides merge edilmiş değer (undefined=girişsiz, null=temizlenmiş, number=girilmiş)
   // Kıyaslama: lo_bpm/hi_bpm sınırlarına göre yapılır.
-  // Zone içindeyse → yeşil
-  // 1–BPM_TOL_WARN (1–5) bpm dışarıda   → sarı    "Yüksek/Düşük Nabız"
-  // BPM_TOL_WARN+1–BPM_TOL_DANGER (6–10) → turuncu "Çok Yüksek/Düşük Nabız"
-  // BPM_TOL_DANGER+ (11+)                → kırmızı "Tehlikeli Nabız"
+  // Zone içindeyse → yeşil "Hedef Nabız"
+  // Tolerans (WARN/DANGER) getBpmTol() ile zone genişliğine ORANLI hesaplanır.
+  // 1–WARN bpm dışarıda → sarı    "Yüksek/Düşük Nabız"
+  // WARN+1–DANGER bpm   → turuncu "Çok Yüksek/Düşük Nabız"
+  // DANGER üstü bpm     → kırmızı "Tehlikeli Nabız"
   // Soğuma/ısınma: zone sapması beklenen fizyolojik durum → tarafsız gri rozet
   const bpmValidation=(row)=>{
     if(!row||row.type==='header'||row._isSprint) return null; // sprint hariç tüm satırlar bpm validasyonuna açık
@@ -5897,6 +5910,7 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
     const hr=zones?.hrZones?.[zi];
     if(!hr?.lo_bpm||!hr?.hi_bpm) return null;
     const {lo_bpm,hi_bpm}=hr;
+    const {warn:BPM_TOL_WARN,danger:BPM_TOL_DANGER}=getBpmTol(hr);
     const bpm=row.bpm;
     // ── Soğuma/Isınma: beklenen fizyolojik sapma — uyarı değil, bilgi rozeti ──
     const isCooldown=/soğuma|soguma/i.test(rowLabel);
