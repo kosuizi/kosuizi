@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.17-0039 --><!DOCTYPE html>
+<!-- Version: v2026.06.17-1944 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.17-0039';
+const APP_VERSION='v2026.06.17-1944';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -3914,6 +3914,15 @@ function calcWeeklyStats(workouts,athletes,weekOffset=0){
     const irtifa=Math.round(wks.reduce((s,w)=>s+(parseFloat(w.irtifa)||0),0));
     const sureSn=wks.reduce((s,w)=>s+toSec(w.sure_sa,w.sure_dk,w.sure_sn),0);
     const count=wks.length;
+    // Spor türüne göre mesafe kırılımı — farklı sporların mesafeleri birbirine
+    // karıştırılmadan ayrı ayrı tutulur (örn. koşu km'si ile yüzme km'si toplanmaz)
+    const mesafeBySpor={};
+    wks.forEach(w=>{
+      const m=parseFloat(w.mesafe)||0;
+      if(m<=0)return;
+      const s=w.spor||'kosu';
+      mesafeBySpor[s]=round1((mesafeBySpor[s]||0)+m);
+    });
     // Skor = Σ (yukObj × spor_katsayisi)
     // yukObj = hrTSS veya TRIMP (süre+nabız bazlı gerçek antrenman yükü)
     // Spor katsayısı ile düzeltilerek farklı sporlar adil karşılaştırılır
@@ -3930,7 +3939,7 @@ function calcWeeklyStats(workouts,athletes,weekOffset=0){
       const s=w.spor||'kosu';
       sporDagilim[s]=(sporDagilim[s]||0)+1;
     });
-    return{ath:a,mesafe,irtifa,sureSn,count,sporSkoru,sporDagilim,wks};
+    return{ath:a,mesafe,mesafeBySpor,irtifa,sureSn,count,sporSkoru,sporDagilim,wks};
   }).sort((a,b)=>b.sporSkoru-a.sporSkoru);
 }
 
@@ -3947,10 +3956,24 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
   const prevRankMap=React.useMemo(()=>{
     const m={};prevStats.forEach((r,i)=>{m[r.ath.id]=i+1;});return m;
   },[prevStats]);
-  const totalKm=round1(stats.reduce((s,r)=>s+r.mesafe,0));
   const totalDp=Math.round(stats.reduce((s,r)=>s+r.irtifa,0));
   const totalSessions=stats.reduce((s,r)=>s+r.count,0);
   const activeCount=stats.filter(r=>r.count>0).length;
+  // Takım toplam mesafesi spor türüne göre ayrıştırılır (koşu km'si ile yüzme km'si karışmaz)
+  const teamMesafeBySpor=React.useMemo(()=>{
+    const out={};
+    stats.forEach(r=>{
+      Object.entries(r.mesafeBySpor||{}).forEach(([k,v])=>{
+        out[k]=round1((out[k]||0)+v);
+      });
+    });
+    return out;
+  },[stats]);
+  const distanceTiles=Object.entries(teamMesafeBySpor)
+    .filter(([,v])=>v>0)
+    .sort((a,b)=>b[1]-a[1])
+    .map(([k,v])=>({l:SPOR_MAP[k]?.l||k,v:v+' km',icon:SPOR_MAP[k]?.emoji||'📍'}));
+  if(distanceTiles.length===0)distanceTiles.push({l:'Toplam km',v:'0 km',icon:'📍'});
 
   const medalColors=['#FFD700','#C0C0C0','#CD7F32'];
   const medals=['🥇','🥈','🥉'];
@@ -4020,7 +4043,7 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
       if(navigator.share&&navigator.canShare&&navigator.canShare({files:[file]})){
         await navigator.share({
           title:`${row.ath.ad} ${row.ath.soyad||''} — ${weekLabel(weekOffset)}`,
-          text:`${rank+1}. sıra · ${row.mesafe}km${row.irtifa>0?' · D+'+row.irtifa+'m':''} · Skor: ${row.sporSkoru}`,
+          text:`${rank+1}. sıra · ${Object.entries(row.mesafeBySpor||{}).map(([sk,sv])=>(SPOR_MAP[sk]?.emoji||'')+sv+'km').join(' ')||'0km'}${row.irtifa>0?' · D+'+row.irtifa+'m':''} · Skor: ${row.sporSkoru}`,
           files:[file]
         });
       } else {
@@ -4096,7 +4119,7 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
 
       // Takım toplamları
       React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10,marginBottom:20}},
-        [{l:'Toplam km',v:totalKm+' km',icon:'📍'},
+        [...distanceTiles,
          {l:'Toplam D+',v:totalDp+' m',icon:'⛰'},
          {l:'Antrenman',v:totalSessions,icon:'🏃'},
          {l:'Aktif Sporcu',v:activeCount+'/'+athletes.length,icon:'👥'},
@@ -4172,9 +4195,11 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
             // Metrikler
             React.createElement('div',{style:{textAlign:'right',flexShrink:0}},
               React.createElement('div',{style:{display:'flex',gap:12,alignItems:'center'}},
-                row.mesafe>0&&React.createElement('div',{style:{textAlign:'center'}},
-                  React.createElement('div',{style:{fontWeight:700,fontSize:15,color:'#38bdf8'}},row.mesafe+' km'),
-                  React.createElement('div',{style:{fontSize:10,color:'#475569'}},'mesafe')
+                Object.entries(row.mesafeBySpor||{}).sort((a,b)=>b[1]-a[1]).map(([sk,sv])=>
+                  React.createElement('div',{key:sk,style:{textAlign:'center'}},
+                    React.createElement('div',{style:{fontWeight:700,fontSize:15,color:'#38bdf8'}},sv+' km'),
+                    React.createElement('div',{style:{fontSize:10,color:'#475569'}},(SPOR_MAP[sk]?.emoji||'')+' '+(SPOR_MAP[sk]?.l||sk))
+                  )
                 ),
                 row.irtifa>0&&React.createElement('div',{style:{textAlign:'center'}},
                   React.createElement('div',{style:{fontWeight:700,fontSize:15,color:'#34d399'}},row.irtifa+' m'),
