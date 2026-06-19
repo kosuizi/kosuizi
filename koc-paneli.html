@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.20-0031 --><!DOCTYPE html>
+<!-- Version: v2026.06.20-0115 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.20-0031';
+const APP_VERSION='v2026.06.20-0115';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1284,24 +1284,63 @@ function analyzeRecipeFeedbackSignals(signals){
   };
 }
 
-  // Öncelik: manuel giriş → PB zinciri
-function calcVlt(ath){
-  if(ath.vlt && parseSayi(ath.vlt) > 0) return parseSayi(ath.vlt);
-  // PB'den türet — en isabetli mesafe önce
-  const pbs = [
-    {dist:42.195, pb:ath.pb_m},
-    {dist:21.0975, pb:ath.pb_hm},
-    {dist:10, pb:ath.pb_10k},
-    {dist:5, pb:ath.pb_5k},
-  ];
-  for(const {dist,pb} of pbs){
-    const v = pbToVlt(pb, dist);
-    if(v && v > 1 && v < 8) return v;
+  // Öncelik: manuel giriş → PB zinciri (doğruluk + güncellik birlikte değerlendirilir)
+// vLT için PB kaynakları — doğruluk sırasına göre (en isabetliden en az isabetliye):
+//   Yarı Maraton: eşik eforuna en yakın mesafe, düzeltme gerektirmiyor → en güvenilir
+//   10K:          eşik üstü ama ölçülebilir/tutarlı bir sapma
+//   Maraton:      benzer büyüklükte düzeltme ama yakıt/pacing/hava gibi fizyolojik
+//                 olmayan gürültüye açık → 10K'dan sonra
+//   5K:           VO2max ağırlıklı efor, en büyük düzeltme → en az güvenilir
+const PB_SOURCES=[
+  {key:'pb_hm', dateKey:'pb_hm_tarih', dist:21.0975, label:'Yarı Maraton'},
+  {key:'pb_10k',dateKey:'pb_10k_tarih',dist:10,       label:'10K'},
+  {key:'pb_m',  dateKey:'pb_m_tarih',  dist:42.195,   label:'Maraton'},
+  {key:'pb_5k', dateKey:'pb_5k_tarih', dist:5,        label:'5K'},
+];
+const PB_BAYAT_AY=24; // bu süreden eski PB "bayat" sayılır — taze alternatif varsa öne alınmaz
+
+// PB'lerden vLT tahmini — tüm karar mantığı + kaynak bilgisi burada üretilir.
+// Tarih girilmemiş PB'ler her zaman geçerli/taze kabul edilir (geriye dönük uyumluluk —
+// mevcut sporcu verisinde tarih yok diye mekanizma asla durmaz). Sadece tarihi GİRİLMİŞ
+// ve eski (>PB_BAYAT_AY ay) kayıtlar, daha taze bir alternatif varsa geride bırakılır.
+function calcVltDetail(ath){
+  if(ath.vlt && parseSayi(ath.vlt) > 0){
+    return {vlt:parseSayi(ath.vlt), kaynak:'manuel', label:'Manuel'};
+  }
+  const adaylar=[];
+  PB_SOURCES.forEach((src,rank)=>{
+    const v=pbToVlt(ath[src.key], src.dist);
+    if(!v||v<=1||v>=8) return;
+    const tarihStr=ath[src.dateKey];
+    let ayFark=null, taze=true; // tarih yoksa taze varsayılır
+    if(tarihStr){
+      const d=new Date(tarihStr+'T12:00:00');
+      if(!isNaN(d.getTime())){
+        ayFark=Math.round((Date.now()-d.getTime())/(1000*3600*24*30.44));
+        taze=ayFark<=PB_BAYAT_AY;
+      }
+    }
+    adaylar.push({...src,rank,vlt:v,ayFark,taze});
+  });
+  if(adaylar.length){
+    const tazeler=adaylar.filter(a=>a.taze);
+    const havuz=tazeler.length?tazeler:adaylar; // hiçbiri taze değilse hepsi havuzda kalır
+    havuz.sort((a,b)=>a.rank-b.rank); // doğruluk sırasına göre — en isabetli mesafe önce
+    const sec=havuz[0];
+    const bayatNot=(!tazeler.length&&sec.ayFark!=null&&sec.ayFark>PB_BAYAT_AY)?' — bayat, taze alternatif yok':'';
+    const tarihNot=sec.ayFark!=null?(sec.ayFark+' ay önce'+bayatNot):'tarih girilmedi';
+    return {vlt:sec.vlt, kaynak:'pb', label:sec.label+' ('+tarihNot+')', detay:sec};
   }
   // Yoksa VO2max tabanlı tahmini
-  const vo2 = parseSayi(ath.vo2max) || 0;
-  if(vo2 > 0) return round2(vo2 * 0.01408); // Daniels sabiti
-  return null;
+  const vo2=parseSayi(ath.vo2max)||0;
+  if(vo2>0){
+    return {vlt:round2(vo2*0.01408), kaynak:'vo2max', label:'VO₂max tahmini (Daniels sabiti)'}; // Daniels sabiti
+  }
+  return {vlt:null, kaynak:null, label:'—'};
+}
+
+function calcVlt(ath){
+  return calcVltDetail(ath).vlt;
 }
 
 // Friel nabız bölgeleri — %LTHR bazlı (birincil), %HRR bazlı (yedek)
@@ -1858,7 +1897,7 @@ function katsayiToSpor(k){
   });
   return best;
 }
-const EMPTY_A={ad:'',soyad:'',foto:'',strava:'',cinsiyet:'Erkek',dogum:'',kilo:'',boy:'',rhr:'',mhr:'',lthr:'',ftp:'',vo2max:'',vlt:'',disiplin:'karma',uzun_gun:[],kosu_gunleri:[],capraz_gunleri:[],hrv_durum:'',hrv_7gun:'',sakatlık:'1',motivasyon:'3',dinlenme_siklik:'3x1',pb_5k:'',pb_10k:'',pb_hm:'',pb_m:'',yarıslar:[],anket_pin:'',kuvvet_link:'',kuvvet_link2:'',kuvvet_link3:'',kuvvet_aciklama:'',seviye:'baslangic',antrenman_amaci:'',pasif:false};
+const EMPTY_A={ad:'',soyad:'',foto:'',strava:'',cinsiyet:'Erkek',dogum:'',kilo:'',boy:'',rhr:'',mhr:'',lthr:'',ftp:'',vo2max:'',vlt:'',disiplin:'karma',uzun_gun:[],kosu_gunleri:[],capraz_gunleri:[],hrv_durum:'',hrv_7gun:'',sakatlık:'1',motivasyon:'3',dinlenme_siklik:'3x1',pb_5k:'',pb_10k:'',pb_hm:'',pb_m:'',pb_5k_tarih:'',pb_10k_tarih:'',pb_hm_tarih:'',pb_m_tarih:'',yarıslar:[],anket_pin:'',kuvvet_link:'',kuvvet_link2:'',kuvvet_link3:'',kuvvet_aciklama:'',seviye:'baslangic',antrenman_amaci:'',pasif:false};
 // Yarışsız dönem antrenman amaçları
 const ANTRENMAN_AMACLARI=[
   {v:'hacim_koru',     l:'Hacim Koru',       emoji:'🔄', renk:'#3b82f6', bg:'#eff6ff', desc:'Mevcut antrenman yükünü ve aerobik tabanı korumak'},
@@ -3065,10 +3104,15 @@ function SporcuModal({onClose,onSave,initial,races}){
       React.createElement('div',{className:'card-title'},'Kişisel Rekorlar'),
       React.createElement('div',{className:'form-grid'},
         fg('En iyi 5K',f.pb_5k,v=>set('pb_5k',v),'text',{ph:'00:19:56'}),
+        fg('5K Tarihi',f.pb_5k_tarih,v=>set('pb_5k_tarih',v),'date'),
         fg('En iyi 10K',f.pb_10k,v=>set('pb_10k',v),'text',{ph:'00:40:36'}),
+        fg('10K Tarihi',f.pb_10k_tarih,v=>set('pb_10k_tarih',v),'date'),
         fg('En iyi Yarı Maraton',f.pb_hm,v=>set('pb_hm',v),'text',{ph:'01:30:34'}),
-        fg('En iyi Maraton',f.pb_m,v=>set('pb_m',v),'text',{ph:'03:25:41'})
+        fg('Yarı Maraton Tarihi',f.pb_hm_tarih,v=>set('pb_hm_tarih',v),'date'),
+        fg('En iyi Maraton',f.pb_m,v=>set('pb_m',v),'text',{ph:'03:25:41'}),
+        fg('Maraton Tarihi',f.pb_m_tarih,v=>set('pb_m_tarih',v),'date')
       ),
+      React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',marginTop:-4,marginBottom:8}},'Tarih girilmezse PB güncel kabul edilir ve vLT hesaplamasında kullanılmaya devam eder.'),
       races.length>0&&React.createElement('div',null,
         React.createElement('div',{className:'divider'}),
         React.createElement('div',{className:'card-title'},'Hedef Yarışlar'),
@@ -4313,24 +4357,46 @@ function athleteAtDate(ath,dateStr){
   return {...ath,...snap};
 }
 
-// Nabız bazlı tahmin (tür yoksa)
+// Nabız bazlı tahmin (tür yoksa) — ortalama nabzın resmi bölge sınırlarına göre
+// normal dağılım varsayımıyla low/high/ana süre yüzdesi tahmini.
+// Bant geçiş noktaları artık HR_ZONES_LTHR'dan türetiliyor (senkron):
+//   low/high sınırı = Z2 üst sınırı, high/ana sınırı = Z4 üst sınırı (zIdxToBand ile uyumlu)
+// sigma: antrenman içi tipik nabız dalgalanması varsayımı (LTHR'ın %'si) — tek ayarlanabilir parametre
+// Not: Tek-tepeli (unimodal) dağılım varsayar; ısınma+ana set+toparlanma gibi yapısal/
+// iki-tepeli antrenmanlarda (özellikle interval, çok yüksek ort. nabızlarda) gerçek
+// dağılımdan sapabilir — test sonrası gerekirse alt taban (floor) eklenebilir.
+const ZONE_DIST_LOW_HIGH_PCT = HR_ZONES_LTHR[1].hi; // Z2 üst sınırı
+const ZONE_DIST_HIGH_ANA_PCT = HR_ZONES_LTHR[3].hi; // Z4 üst sınırı
+const ZONE_DIST_SIGMA_PCT = 0.06;
+
+// Standart normal kümülatif dağılım — Abramowitz-Stegun yaklaşımı
+function normCDF(z){
+  const t = 1/(1+0.2316419*Math.abs(z));
+  const d = 0.3989423*Math.exp(-z*z/2);
+  const p = d*t*(0.3193815+t*(-0.3565638+t*(1.781478+t*(-1.821256+t*1.330274))));
+  return z>0 ? 1-p : p;
+}
+
 function hrBasedZoneDist(avgHR,lthr,mhr,rhr){
   if(!avgHR||!lthr)return null;
-  // %LTHR
-  const pct=avgHR/lthr;
-  if(pct<0.78)       return{low:95,high:5, ana:0};
-  if(pct<0.87)       return{low:80,high:18,ana:2};
-  if(pct<0.95)       return{low:35,high:55,ana:10};
-  if(pct<1.00)       return{low:12,high:62,ana:26};
-  if(pct<1.05)       return{low:10,high:30,ana:60};
-  return              {low:8, high:22,ana:70};
+  const lowHighBpm=lthr*ZONE_DIST_LOW_HIGH_PCT;
+  const highAnaBpm=lthr*ZONE_DIST_HIGH_ANA_PCT;
+  const sigma=lthr*ZONE_DIST_SIGMA_PCT;
+  const pLow=normCDF((lowHighBpm-avgHR)/sigma);
+  const pCumHigh=normCDF((highAnaBpm-avgHR)/sigma);
+  let low=Math.round(pLow*100);
+  let high=Math.round((pCumHigh-pLow)*100);
+  if(high<0) high=0;
+  if(low+high>100) high=100-low;
+  const ana=100-low-high;
+  return{low,high,ana};
 }
 
 // bpm → zone index (hrZones dizisinde en yüksek eşiği aşan zone)
 function bpmToZoneIdx(bpm,hrZones){
   if(!bpm||!hrZones) return null;
   let zIdx=0;
-  hrZones.forEach((hz,i)=>{if(hz.lo_bpm&&bpm>=hz.lo_bpm)zIdx=i;});
+  hrZones.forEach((hz,i)=>{if(hz.lo_bpm!=null&&bpm>=hz.lo_bpm)zIdx=i;});
   return zIdx;
 }
 // zIdx (0–6) → üç banttan biri: low / high / ana
@@ -15353,7 +15419,8 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
   if(!athlete)return React.createElement('div',{className:'empty'},'Sporcu seçilmedi.');
   const zones=calcZones(athlete);
   const vlt=zones.vlt;
-  const vltSource=athlete.vlt?'Manuel':'PB tahmini (Riegel/Daniels)';
+  const vltDetail=calcVltDetail(athlete);
+  const vltSource=vltDetail.label;
   const hasHR=zones.hrZones!=null;
   const hasPace=zones.paceZones!=null;
 
