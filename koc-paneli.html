@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.20-1044 --><!DOCTYPE html>
+<!-- Version: v2026.06.20-1108 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.20-1044';
+const APP_VERSION='v2026.06.20-1108';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1137,14 +1137,7 @@ function extractFeedbackSignals(allSnapsObj, athlete){
   const SKIP_RE=/[iı]sınma|isinma|soğuma|soguma|dinlenme|toparlanma|blok\s*arası|strides\s*arası/i;
   const zones=calcZones(athlete);
   const signals=[];
-  // Tanı sayaçları — "X hedefte" neden 0 çıkıyor sorusunu görünür kılmak için
-  const debug={scanned:0,bpmEntered:0,noZi:0,noZoneMatch:0,noZoneBounds:0,classified:0,
-    noZiDateMin:null,noZiDateMax:null,classifiedDateMin:null,classifiedDateMax:null};
-  const trackDate=(field,d)=>{
-    if(!debug[field+'Min']||d<debug[field+'Min']) debug[field+'Min']=d;
-    if(!debug[field+'Max']||d>debug[field+'Max']) debug[field+'Max']=d;
-  };
-  if(!allSnapsObj||typeof allSnapsObj!=='object'){ signals.debug=debug; return signals; }
+  if(!allSnapsObj||typeof allSnapsObj!=='object') return signals;
   // allSnapsObj: { weekKey: { rowOverrides: { date: { rowIdx: rowData } } } }
   Object.values(allSnapsObj).forEach(snap=>{
     const rowOverrides=snap?.rowOverrides||{};
@@ -1158,7 +1151,6 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         if(row.type==='header'||row.rpe||row._isSprint) return;
         if(row.type==='rest'||row.type==='walk') return;
         if(row.label&&SKIP_RE.test(row.label)) return;
-        debug.scanned++;
         let paceDir=null, hrDir=null, paceOk=false, hrOk=false;
         const pm=row.pm, ps=row.ps;
         if((pm>0)||(ps>0)){
@@ -1174,15 +1166,9 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         }
         const zi=row._origZIdx;
         let hrWeight=0;
-        if(row.bpm!=null){
-          debug.bpmEntered++;
-          if(zi==null){ debug.noZi++; trackDate('noZiDate',date); }
-          else if(!zones?.hrZones?.[zi]) debug.noZoneMatch++;
-        }
         if(row.bpm!=null&&zi!=null&&zones?.hrZones?.[zi]){
           const hr=zones.hrZones[zi];
           if(hr.lo_bpm&&hr.hi_bpm){
-            debug.classified++; trackDate('classifiedDate',date);
             // Rozet sistemiyle (bpmValidation/bpmValidationAralik) BİREBİR aynı kademe:
             // tolerans payı (target) içindeki sapmalar sinyal üretmez — gürültü filtrelenir.
             // Üst/alt yön ayrı eşiklere sahip (asimetrik) — bkz. getBpmTol() yorumu.
@@ -1200,7 +1186,7 @@ function extractFeedbackSignals(allSnapsObj, athlete){
                 hrWeight=under<=warnDown?BPM_SIGNAL_WEIGHT.warn:under<=dangerDown?BPM_SIGNAL_WEIGHT.danger:BPM_SIGNAL_WEIGHT.critical;
               } else hrOk=true;
             } else hrOk=true; // zone içinde
-          } else if(row.bpm!=null) debug.noZoneBounds++;
+          }
         }
         if(paceDir||hrDir||paceOk||hrOk) signals.push({date,paceDir,hrDir,paceOk,hrOk,hrWeight});
       };
@@ -1220,7 +1206,6 @@ function extractFeedbackSignals(allSnapsObj, athlete){
       }
     });
   });
-  signals.debug=debug;
   return signals;
 }
 
@@ -15410,7 +15395,6 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
   const [fbRawCount,setFbRawCount]=useState(null); // {pace, hr}
   const [fbApplied,setFbApplied]=useState(null);   // 'vlt' (LTHR bu mekanizmadan kaldırıldı)
   const [fbError,setFbError]=useState(null);
-  const [fbDebug,setFbDebug]=useState(null); // Tanı: scanned→bpmEntered→classified hunisi
 
   const FB_SCAN_WINDOW_DAYS=21; // Son 21 gün (≈1 mezosiklus) — eski form verisi karışmasın
   const FB_SCAN_WEEKS_FETCH=5;  // 21 günü her takvim hizalamasında garanti kapsayan cömert üst sınır
@@ -15426,7 +15410,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
 
   const runFbScan=async()=>{
     if(!athlete?.id) return;
-    setFbScanLoading(true);setFbAnalysis(null);setFbRawCount(null);setFbApplied(null);setFbError(null);setFbDebug(null);
+    setFbScanLoading(true);setFbAnalysis(null);setFbRawCount(null);setFbApplied(null);setFbError(null);
     try{
       // Tüm geçmiş yerine sadece son birkaç haftayı çek — weekKey'ler Pazartesi tarihiyle anahtarlı
       const weekKeys=Array.from({length:FB_SCAN_WEEKS_FETCH},(_,i)=>getWeekKey(-i));
@@ -15438,7 +15422,6 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       const sigsAll=extractFeedbackSignals(allSnaps,athlete);
       const sigs=sigsAll.filter(s=>s.date>=cutoffStr); // tam 21 günlük pencereye kırp
 
-      setFbDebug(sigsAll.debug||null);
       setFbRawCount({
         pace:sigs.filter(s=>s.paceDir).length,
         hr:sigs.filter(s=>s.hrDir).length,
@@ -15713,20 +15696,6 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
                   ?'✓ '+fbAnalysis.vlt.dominantDayCount+'/2 gün · '+(fbAnalysis.vltAction==='up'?'⬆ vLT ↑':'⬇ vLT ↓')
                   :fbAnalysis.vlt.dominantDayCount+'/2 gün — 1 gün daha bekleniyor')
               :'—')
-        )
-      ),
-      fbDebug&&React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',marginBottom:10,padding:'6px 8px',background:'var(--bg-secondary)',borderRadius:4}},
-        '🔬 Tanı (son 5 hafta, tarih kırpılmadan): ',
-        fbDebug.scanned+' satır tarandı → ',
-        fbDebug.bpmEntered+' nabız girilmiş',
-        fbDebug.noZi>0?' ('+fbDebug.noZi+' satırda _origZIdx yok!)':'',
-        fbDebug.noZoneMatch>0?' ('+fbDebug.noZoneMatch+' satırda zone eşleşmedi!)':'',
-        fbDebug.noZoneBounds>0?' ('+fbDebug.noZoneBounds+' satırda lo/hi_bpm yok!)':'',
-        ' → '+fbDebug.classified+' sınıflandırıldı (tarih filtresinden önce)',
-        (fbDebug.noZiDateMin||fbDebug.classifiedDateMin)&&React.createElement('div',{style:{marginTop:4}},
-          fbDebug.noZiDateMin&&('_origZIdx eksik tarih aralığı: '+fbDebug.noZiDateMin+' → '+fbDebug.noZiDateMax),
-          fbDebug.noZiDateMin&&fbDebug.classifiedDateMin&&React.createElement('br'),
-          fbDebug.classifiedDateMin&&('Sınıflandırılan tarih aralığı: '+fbDebug.classifiedDateMin+' → '+fbDebug.classifiedDateMax)
         )
       ),
       // Öneri + uygulama butonu — Mekanizma 2 artık yalnızca vLT üretir, LTHR bu akıştan kaldırıldı
