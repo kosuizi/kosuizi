@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.20-1108 --><!DOCTYPE html>
+<!-- Version: v2026.06.20-1315 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.20-1108';
+const APP_VERSION='v2026.06.20-1315';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -5580,6 +5580,17 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
     const isWarmup=/[iı]sınma|isinma/i.test(rowLabel);
     if(isCooldown&&(ovBpm>hi_bpm||ovBpm<lo_bpm)) return{label:'Soğuma Nabzı',color:'#64748b',bg:'#f1f5f9',icon:'↓'};
     if(isWarmup  &&ovBpm<lo_bpm) return{label:'Isınma Nabzı', color:'#64748b',bg:'#f1f5f9',icon:'↑'};
+    // Toparlanma amaçlı satır (tekrar arası dinlenme): ORTALAMA değil EN DÜŞÜK nabız girilir.
+    // Amaç bir sonraki tekrara hazır olacak kadar toparlanmak — tek yönlü kontrol, eşik = satırın
+    // kendi atanmış bölgesinin üst sınırı. Aktif eforla aynı üst-yön toleransı yeniden kullanılır.
+    if(type==='rest'){
+      if(ovBpm<=hi_bpm) return{label:'Toparlanma Sağlandı',color:'#22c55e',bg:'#f0fdf4',icon:'✓'};
+      const over=ovBpm-hi_bpm;
+      if(over<=targetUp)  return{label:'Toparlanma Sağlandı', color:'#22c55e',bg:'#f0fdf4',icon:'✓'};
+      if(over<=warnUp)    return{label:'Toparlanma Yavaş',    color:'#f59e0b',bg:'#fffbeb',icon:'~'};
+      if(over<=dangerUp)  return{label:'Toparlanma Yetersiz', color:'#f97316',bg:'#fff7ed',icon:'!'};
+      return                     {label:'Toparlanma Sağlanamadı',color:'#ef4444',bg:'#fef2f2',icon:'⚠'};
+    }
     // Kısa satır (≤30 sn): cardiac lag — alt sınır kontrolü atlanır
     const durSec=rowDurSec(rowData);
     const isShortRow=durSec>0&&durSec<=30;
@@ -5718,12 +5729,10 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
                 (()=>{
                   const ov=overrides[rep]?.rest?.bpm;
                   const val=ov!=null?ov:suggestedBpmForZone(restData._origZIdx)??'—';
-                  const durSec=rowDurSec(restData);
-                  const isShortRow=durSec>0&&durSec<=30;
-                  const bpmHint=durSec>0?(isShortRow?'tepe':'ort.'):null;
+                  const bpmHint='min';
                   return React.createElement('div',{style:{display:'flex',flexDirection:'column',alignItems:'center',gap:0}},
                     editableCellAralik(rep,'rest','bpm',val),
-                    bpmHint&&React.createElement('span',{style:{fontSize:9,fontWeight:600,color:isShortRow?'#7c3aed':'#3b82f6',lineHeight:1.3,marginTop:1}},isShortRow?'▲tepe':'~ort.')
+                    bpmHint&&React.createElement('span',{style:{fontSize:9,fontWeight:600,color:'#10b981',lineHeight:1.3,marginTop:1}},'▼min')
                   );
                 })()
               )
@@ -6155,6 +6164,19 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
     const isWarmup=/[iı]sınma|isinma/i.test(rowLabel);
     if(isCooldown&&(bpm>hi_bpm||bpm<lo_bpm)) return{label:'Soğuma Nabzı',color:'#64748b',bg:'#f1f5f9',icon:'↓'};
     if(isWarmup  &&bpm<lo_bpm) return{label:'Isınma Nabzı', color:'#64748b',bg:'#f1f5f9',icon:'↑'};
+    // ── Toparlanma amaçlı satırlar (dinlenme/yürüyüş): ORTALAMA değil EN DÜŞÜK nabız girilir.
+    // Amaç bir sonraki tekrara/bölüme hazır olacak kadar toparlanmak — bu yüzden tek yönlü kontrol:
+    // sadece "yeterince düşmedi mi" sorusu var, "çok düşük" diye bir sorun yok. Eşik = satırın
+    // kendi atanmış bölgesinin üst sınırı (genelde Z1, ama coach farklı atadıysa ona saygı duyar).
+    // Tolerans, aktif eforla aynı üst-yön kademesini (targetUp/warnUp/dangerUp) yeniden kullanır.
+    if(row.type==='rest'||row.type==='walk'){
+      if(bpm<=hi_bpm) return{label:'Toparlanma Sağlandı',color:'#22c55e',bg:'#f0fdf4',icon:'✓'};
+      const over=bpm-hi_bpm;
+      if(over<=targetUp)  return{label:'Toparlanma Sağlandı', color:'#22c55e',bg:'#f0fdf4',icon:'✓'};
+      if(over<=warnUp)    return{label:'Toparlanma Yavaş',    color:'#f59e0b',bg:'#fffbeb',icon:'~'};
+      if(over<=dangerUp)  return{label:'Toparlanma Yetersiz', color:'#f97316',bg:'#fff7ed',icon:'!'};
+      return                     {label:'Toparlanma Sağlanamadı',color:'#ef4444',bg:'#fef2f2',icon:'⚠'};
+    }
     // ── Kısa satır (≤30 sn): cardiac lag — nabız zone'a ulaşamayabilir ──
     // Tepe nabzı beklenir; alt sınır kontrolü atlanır, sadece üst sınır bak.
     const durSec=rowDurSec(row);
@@ -6599,14 +6621,16 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
                 // Aralık ortalaması: salt gösterim
                 if(avgBpm!=null&&manualBpm==null) return avgBpm;
                 // Süreye göre giriş ipucu: ≤30 sn → tepe nabzı, >30 sn → ort. nabzı
+                // Toparlanma amaçlı satırlar (dinlenme/yürüyüş): en düşük nabız girilir
+                const isRecoveryRow=r.type==='rest'||r.type==='walk';
                 const durSec=rowDurSec(r);
                 const isShortRow=!r.rpe&&!r._isSprint&&durSec>0&&durSec<=30;
-                const bpmHint=(!r.rpe&&!r._isSprint&&r.type!=='header'&&durSec>0)
+                const bpmHint=isRecoveryRow?'min':(!r.rpe&&!r._isSprint&&r.type!=='header'&&durSec>0)
                   ?(isShortRow?'tepe':'ort.')
                   :null;
                 return React.createElement('div',{style:{display:'flex',flexDirection:'column',alignItems:'center',gap:0}},
                   editableCell(i,'bpm',displayVal),
-                  bpmHint&&React.createElement('span',{style:{fontSize:9,fontWeight:600,color:isShortRow?'#7c3aed':'#3b82f6',lineHeight:1.3,marginTop:1}},isShortRow?'▲tepe':'~ort.')
+                  bpmHint&&React.createElement('span',{style:{fontSize:9,fontWeight:600,color:isRecoveryRow?'#10b981':isShortRow?'#7c3aed':'#3b82f6',lineHeight:1.3,marginTop:1}},isRecoveryRow?'▼min':isShortRow?'▲tepe':'~ort.')
                 );
               })()
             )
