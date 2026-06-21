@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.21-2222 --><!DOCTYPE html>
+<!-- Version: v2026.06.21-2234 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.21-2222';
+const APP_VERSION='v2026.06.21-2234';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1166,8 +1166,13 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         }
         const zi=row._origZIdx;
         let hrWeight=0;
-        if(row.bpm!=null&&zi!=null&&zones?.hrZones?.[zi]){
-          const hr=zones.hrZones[zi];
+        // Donmuş sınırlar varsa (satır daha önce düzenlenmiş) onları kullan — LTHR sonradan
+        // değişse bile geçmiş satırın nabız değerlendirmesi kaymasın. Yoksa (hiç düzenlenmemiş/
+        // eski veri) güncel LTHR'a göre canlı hesapla.
+        const hr=(row._origLoBpm&&row._origHiBpm)
+          ? {id:zones?.hrZones?.[zi]?.id, lo_bpm:row._origLoBpm, hi_bpm:row._origHiBpm}
+          : zones?.hrZones?.[zi];
+        if(row.bpm!=null&&zi!=null&&hr){
           if(hr.lo_bpm&&hr.hi_bpm){
             // Rozet sistemiyle (bpmValidation/bpmValidationAralik) BİREBİR aynı kademe:
             // tolerans payı (target) içindeki sapmalar sinyal üretmez — gürültü filtrelenir.
@@ -5578,7 +5583,10 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
     if(ovBpm==null) return null;
     const zIdx=rowData._origZIdx;
     if(zIdx==null) return null;
-    const hr=zones?.hrZones?.[zIdx];
+    // Donmuş sınırlar varsa (rowData daha önce düzenlenmiş) onları kullan — bkz. updateAralikCell
+    const hr=(rowData._origLoBpm&&rowData._origHiBpm)
+      ? {id:zones?.hrZones?.[zIdx]?.id, lo_bpm:rowData._origLoBpm, hi_bpm:rowData._origHiBpm}
+      : zones?.hrZones?.[zIdx];
     if(!hr?.lo_bpm||!hr?.hi_bpm) return null;
     const {lo_bpm,hi_bpm}=hr;
     const {targetUp,warnUp,dangerUp,targetDown,warnDown,dangerDown}=getBpmTol(hr);
@@ -6167,7 +6175,10 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
     if(row.bpm==null) return null;
     const zi=row._origZIdx;
     if(zi==null) return null;
-    const hr=zones?.hrZones?.[zi];
+    // Donmuş sınırlar varsa (satır daha önce düzenlenmiş) onları kullan — bkz. updateCell
+    const hr=(row._origLoBpm&&row._origHiBpm)
+      ? {id:zones?.hrZones?.[zi]?.id, lo_bpm:row._origLoBpm, hi_bpm:row._origHiBpm}
+      : zones?.hrZones?.[zi];
     if(!hr?.lo_bpm||!hr?.hi_bpm) return null;
     const {lo_bpm,hi_bpm}=hr;
     const {targetUp,warnUp,dangerUp,targetDown,warnDown,dangerDown}=getBpmTol(hr);
@@ -6336,6 +6347,12 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
     if(r._origZIdx!=null)   origFields._origZIdx=r._origZIdx;
     if(r.label)             origFields.label=r.label;
     if(r.type)              origFields.type=r.type;
+    // Nabız bölge SINIRLARI da donsun — sadece hangi bölge (_origZIdx) değil, o anki LTHR'a göre
+    // hesaplanmış bpm aralığı da kaydedilir. Yoksa LTHR sonradan değişirse "aynı bölge" farklı
+    // bpm sınırlarına denk gelir ve geçmiş satırın nabız değerlendirmesi yine kayar.
+    const ohr=r._origZIdx!=null?zones?.hrZones?.[r._origZIdx]:null;
+    if(ohr?.lo_bpm) origFields._origLoBpm=ohr.lo_bpm;
+    if(ohr?.hi_bpm) origFields._origHiBpm=ohr.hi_bpm;
     const newOverrides={...rowOverrides,[rowIdx]:{...(rowOverrides[rowIdx]||{}), ...origFields, ...upd}};
     setRowOverrides(newOverrides);
     setEditCell(null);
@@ -6392,11 +6409,15 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
       if(!next[headerIdx]) next[headerIdx]={};
       if(!next[headerIdx][rep]) next[headerIdx][rep]={};
       if(!next[headerIdx][rep][type]) next[headerIdx][rep][type]={};
+      // Nabız bölge sınırları da donsun — bkz. updateCell'deki aynı mantık
+      const ohr=base._origZIdx!=null?zones?.hrZones?.[base._origZIdx]:null;
       next[headerIdx][rep][type]={
         ...next[headerIdx][rep][type],
         // Sinyal üretimi için kalıcı meta alanlar — extractFeedbackSignals okur
         _origPaceSec:base._origPaceSec,
         _origZIdx:base._origZIdx,
+        ...(ohr?.lo_bpm?{_origLoBpm:ohr.lo_bpm}:{}),
+        ...(ohr?.hi_bpm?{_origHiBpm:ohr.hi_bpm}:{}),
         label:base.label,
         type:base.type,
         ...upd
