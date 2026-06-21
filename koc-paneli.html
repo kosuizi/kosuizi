@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.22-0219 --><!DOCTYPE html>
+<!-- Version: v2026.06.22-0232 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.22-0219';
+const APP_VERSION='v2026.06.22-0232';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -9350,7 +9350,7 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary, history=[], fr
 //   - Zirve: Bu haftanın hedefine uygunluk
 //   - Zirve öncesi (Temel/Gelişme): Projeksiyon ile ulaşılabilirlik
 // Döner: { status, message, currentWeek, actionItems[], peak*, projected*, gap* }
-function evaluatePeakReachability(weeks, primary, athlete){
+function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, rampRatePct=10, curEffKm=null, curEffDp=null){
   if(!weeks||!weeks.length||!primary)return null;
 
   // Bulunduğu hafta — tüm analizin merkezi
@@ -9462,21 +9462,35 @@ function evaluatePeakReachability(weeks, primary, athlete){
 
   // ── GELİŞME / TEMEL FAZI (Zirve öncesi) ──
   // Bu aşamada geleceğe yönelik projeksiyon mantıklı
+  // DÜZELTME (çelişen durum değerlendirmeleri): Bu fonksiyon eskiden büyüme
+  // oranını HER ZAMAN sabit %10 kabul ediyordu — koçun Rampa ayarıyla (örn.
+  // %17) seçtiği daha agresif oranı tamamen yok sayıyordu. Sonuç: Rampa açık
+  // ve yeterliyken bile bu kutu "ulaşılması zor, plan revizesi öner" diyebiliyor,
+  // aynı ekrandaki "Herşey Yolunda Giderse" kutusu ise AYNI veriyle (ama Rampa
+  // oranını kullanarak) "zirveye yetişilecek" diyebiliyordu — iki kutu
+  // birbiriyle çelişiyordu. Artık ikisi de AYNI başlangıç noktasını (aktif bir
+  // revize/efektif hedef varsa o, yoksa son gerçekleşen hafta) ve AYNI büyüme
+  // oranını (Rampa açıksa seçili oran, kapalıysa %10) kullanıyor.
+  const weeklyGrowthRate=rampModeOn?1+(rampRatePct/100):1.10;
+
   const pastWeeks=weeks.filter(w=>w.isPast&&w.targetKm>0);
   const recent=pastWeeks.slice(-4);
   const recentKmRatio=recent.length?recent.reduce((s,w)=>s+(w.kmRatio||0),0)/recent.length:1;
   const recentDpRatio=recent.length?recent.reduce((s,w)=>s+(w.targetDp>0?w.actualDp/w.targetDp:1),0)/recent.length:1;
 
-  const lastDoneKm=recent.length?recent[recent.length-1].actualKm:currentWeek.targetKm*0.5;
-  const lastDoneDp=recent.length?recent[recent.length-1].actualDp:currentWeek.targetDp*0.5;
+  // Başlangıç noktası: aktif bir efektif (revize) hedef varsa o kullanılır —
+  // "Herşey Yolunda Giderse" projeksiyonuyla aynı kaynak — yoksa son gerçekleşen hafta.
+  const curEffActive=curEffKm!=null&&curEffKm>0&&curEffKm<currentWeek.targetKm*0.98;
+  const lastDoneKm=curEffActive?curEffKm:(recent.length?recent[recent.length-1].actualKm:currentWeek.targetKm*0.5);
+  const lastDoneDp=curEffActive&&curEffDp!=null?curEffDp:(recent.length?recent[recent.length-1].actualDp:currentWeek.targetDp*0.5);
 
   const currentIdx=weeks.findIndex(w=>w.isCurrent);
   const firstPeakIdx=weeks.findIndex(w=>w.phase==='Zirve');
   const weeksToFirstPeak=firstPeakIdx>=0&&currentIdx>=0?Math.max(0,firstPeakIdx-currentIdx):0;
 
-  // 10% rule
-  const maxReachableKm=weeksToFirstPeak>0?round1(lastDoneKm*Math.pow(1.10,weeksToFirstPeak)):lastDoneKm;
-  const maxReachableDp=weeksToFirstPeak>0?Math.round(lastDoneDp*Math.pow(1.10,weeksToFirstPeak)):lastDoneDp;
+  // Rampa oranıyla büyüme (Rampa kapalıysa sabit %10 — 10% rule)
+  const maxReachableKm=weeksToFirstPeak>0?round1(lastDoneKm*Math.pow(weeklyGrowthRate,weeksToFirstPeak)):lastDoneKm;
+  const maxReachableDp=weeksToFirstPeak>0?Math.round(lastDoneDp*Math.pow(weeklyGrowthRate,weeksToFirstPeak)):lastDoneDp;
 
   const projectedPeakKm=round1(Math.min(peakKm,maxReachableKm)*Math.min(1,recentKmRatio+0.1));
   const projectedPeakDp=Math.round(Math.min(peakDp,maxReachableDp)*Math.min(1,recentDpRatio+0.1));
@@ -9486,6 +9500,26 @@ function evaluatePeakReachability(weeks, primary, athlete){
   const kmGapPct=peakKm>0?gapKm/peakKm:0;
   const dpGapPct=peakDp>0?gapDp/peakDp:0;
   const worstGap=Math.max(kmGapPct,dpGapPct);
+
+  // ── Haftalık yakınsama simülasyonu — eskiden ayrı "Herşey Yolunda Giderse"
+  // kutusunda yapılan hesap: her gelecek haftanın KENDİ hedefine karşı, seçili
+  // oranla katlanarak büyüyüp ilk yakaladığı haftayı bulur. Artık tek kutuya
+  // dahil ediliyor (aşağıda actionItems içinde kullanılır).
+  let catchUpWeekIdx=null,catchUpWeekDate=null;
+  if(curEffActive){
+    let pKm=curEffKm;
+    for(const fw of weeks.filter(w=>!w.isPast&&!w.isCurrent)){
+      const maxKm=round1(pKm*weeklyGrowthRate);
+      const onTrack=fw.targetKm<=pKm||maxKm>=fw.targetKm;
+      if(onTrack){catchUpWeekIdx=fw.weekIdx;catchUpWeekDate=fw.weekStart;break;}
+      pKm=maxKm;
+    }
+  }
+  const catchUpInfo=curEffActive?{
+    effKm:curEffKm,ratePct:Math.round((weeklyGrowthRate-1)*100),
+    catchUpWeekIdx,catchUpWeekDate,
+    weeksUntilCatchUp:catchUpWeekIdx!=null?catchUpWeekIdx-(currentWeek.weekIdx||0):null
+  }:null;
 
   // Bu haftanın ideal hedefi
   const currentKmPct=currentWeek.targetKm>0?Math.round(currentWeek.actualKm/currentWeek.targetKm*100):0;
@@ -9512,8 +9546,11 @@ function evaluatePeakReachability(weeks, primary, athlete){
     actionItems=[
       `📊 Bu hafta: ${currentWeek.actualKm}/${currentWeek.targetKm}km (%${currentKmPct}) · D+ ${currentWeek.actualDp}/${currentWeek.targetDp}m (%${currentDpPct})`,
       `⏳ Zirveye ${weeksToFirstPeak} hafta`,
+      catchUpInfo?(catchUpInfo.catchUpWeekIdx!=null
+        ?`🔵 Revize hedef ${catchUpInfo.effKm}km · Rampa %${catchUpInfo.ratePct}/hafta ile H${catchUpInfo.catchUpWeekIdx} haftasında orijinal plana dönülür (${catchUpInfo.weeksUntilCatchUp} hafta sonra)`
+        :`⚠ Revize hedef ${catchUpInfo.effKm}km · %${catchUpInfo.ratePct}/hafta ile bile plan süresi içinde orijinal hedeflere tam kavuşulamıyor`):null,
       '🎯 Tutarlılığı koru — değişiklik gerekmez'
-    ];
+    ].filter(Boolean);
   } else if(worstGap<=0.20){
     status='risk';
     title=phaseLabel+' — Dikkat';
@@ -9523,7 +9560,10 @@ function evaluatePeakReachability(weeks, primary, athlete){
       `📉 Projeksiyon zirve: ${projectedPeakKm}km (hedef ${peakKm}km)`,
       gapKm>0?`🎯 Haftalık ortalama +${round1(gapKm/Math.max(1,weeksToFirstPeak))}km artış gerekli`:null,
       gapDp>0?`⛰️ D+ için haftada +${Math.round(gapDp/Math.max(1,weeksToFirstPeak))}m ekle`:null,
-      '✓ 10% rule içinde kalarak sürdürülebilir artış'
+      catchUpInfo?(catchUpInfo.catchUpWeekIdx!=null
+        ?`🔵 Revize hedef ${catchUpInfo.effKm}km · Rampa %${catchUpInfo.ratePct}/hafta ile H${catchUpInfo.catchUpWeekIdx} haftasında orijinal plana dönülür (${catchUpInfo.weeksUntilCatchUp} hafta sonra)`
+        :`⚠ Revize hedef ${catchUpInfo.effKm}km · %${catchUpInfo.ratePct}/hafta ile bile plan süresi içinde orijinal hedeflere tam kavuşulamıyor`):null,
+      `✓ %${Math.round((weeklyGrowthRate-1)*100)} kuralı içinde kalarak sürdürülebilir artış`
     ].filter(Boolean);
   } else {
     status='unlikely';
@@ -9532,10 +9572,14 @@ function evaluatePeakReachability(weeks, primary, athlete){
     actionItems=[
       `📊 Bu hafta: ${currentWeek.actualKm}/${currentWeek.targetKm}km (%${currentKmPct}) · D+ ${currentWeek.actualDp}/${currentWeek.targetDp}m (%${currentDpPct})`,
       `📉 Projeksiyon: ${projectedPeakKm}km vs hedef ${peakKm}km (açık %${Math.round(kmGapPct*100)})`,
-      `⏳ Zirveye ${weeksToFirstPeak} hafta — mevcut trend yeterli değil`,
+      `⏳ Zirveye ${weeksToFirstPeak} hafta — %${Math.round((weeklyGrowthRate-1)*100)}/hafta oranı yeterli değil`,
+      catchUpInfo?(catchUpInfo.catchUpWeekIdx!=null
+        ?`🔵 Revize hedef ${catchUpInfo.effKm}km · Rampa %${catchUpInfo.ratePct}/hafta ile H${catchUpInfo.catchUpWeekIdx} haftasında orijinal plana dönülür (${catchUpInfo.weeksUntilCatchUp} hafta sonra)`
+        :`⚠ Revize hedef ${catchUpInfo.effKm}km · %${catchUpInfo.ratePct}/hafta ile bile plan süresi içinde orijinal hedeflere tam kavuşulamıyor`):null,
       '💡 Öneri 1: Hazırlık süresini uzat (yarış tarihini erteleme mümkünse)',
       '💡 Öneri 2: Yarış hedefini daha kısa mesafeye revize et',
       '💡 Öneri 3: Antrenman sıklığını artır (haftada +1 gün)',
+      !rampModeOn?'💡 Öneri 4: Rampa\'yı açıp oranı artırarak yetişme ihtimalini test edin':null,
       gapDp>peakDp*0.3?'⛰️ Tırmanışlı antrenmanları öncelikli ekle':null
     ].filter(Boolean);
   }
@@ -9544,6 +9588,7 @@ function evaluatePeakReachability(weeks, primary, athlete){
     ...baseResult,
     status,title,message,actionItems,
     projectedPeakKm,projectedPeakDp,
+    catchUpInfo,
     gapKm,gapDp,
     recentKmRatio:round1(recentKmRatio),
     weeksToFirstPeak
@@ -14181,7 +14226,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       })(),
       // Bağlam-Duyarlı Zirve Hafta Ulaşılabilirlik Uyarısı
       (()=>{
-        const evalRes=evaluatePeakReachability(weekTargets,plan.primary,athlete);
+        const evalRes=evaluatePeakReachability(weekTargets,plan.primary,athlete,rampModeOn,rampRatePct,displayCurWeekEff?.isRevised?displayCurWeekEff.effKm:null,displayCurWeekEff?.isRevised?displayCurWeekEff.effDp:null);
         if(!evalRes)return null;
         // Status → renk eşleştirmesi
         const colorMap={
@@ -14490,77 +14535,6 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
           )
         )
       ),
-      // ── Projeksiyon özeti ────────────────────────────────────────────────────
-      (()=>{
-        // Özet kutu — kendi scope'unda yeniden hesaplar (tbody IIFE'inden bağımsız)
-        const _sCurWt=weekTargets.find(w=>w.isCurrent);
-        if(!_sCurWt||!displayCurWeekEff?.isRevised||displayCurWeekEff.effKm>=_sCurWt.targetKm*0.98)return null;
-        // Catch-up rate (tbody ile aynı mantık)
-        let _sCatchupRate=1.10;
-        let _sNeededRate=1.10;
-        let _sIsCapped=false;
-        if(rampModeOn){
-          const _sFutBuild=weekTargets.filter(w=>!w.isPast&&!w.isCurrent&&w.phase!=='Taper'&&!w.isRaceWeek);
-          const _sPeakFw=_sFutBuild.length?_sFutBuild.reduce((mx,w)=>w.targetKm>mx.targetKm?w:mx):null;
-          const _sWeeksToP=_sPeakFw?Math.max(1,_sPeakFw.weekIdx-(_sCurWt.weekIdx||0)):1;
-          _sNeededRate=_sPeakFw&&displayCurWeekEff.effKm>0
-            ?Math.pow(_sPeakFw.targetKm/displayCurWeekEff.effKm,1/_sWeeksToP):1.10;
-          _sCatchupRate=1+(rampRatePct/100);
-          _sIsCapped=_sNeededRate>_sCatchupRate;
-        }
-        const _sRatePct=Math.round((_sCatchupRate-1)*100);
-        let _sCatchUpIdx=null;
-        let _spKm=displayCurWeekEff.effKm;
-        for(const _sfw of weekTargets.filter(w=>!w.isPast&&!w.isCurrent)){
-          const _smaxKm=round1(_spKm*_sCatchupRate);
-          const _sonTrack=_sfw.targetKm<=_spKm||_smaxKm>=_sfw.targetKm;
-          if(_sonTrack){_sCatchUpIdx=_sfw.weekIdx;break;}
-          _spKm=_smaxKm;
-        }
-        return React.createElement('div',{style:{
-          marginTop:10,padding:'10px 14px',borderRadius:'var(--radius)',
-          background:'var(--info-bg)',borderLeft:'3px solid var(--info)',fontSize:12,lineHeight:1.6
-        }},
-          React.createElement('div',{style:{fontWeight:700,color:'var(--info)',marginBottom:4}},
-            '\ud83d\udd35 "Her\u015fey Yolunda Giderse" Projeksiyonu'
-          ),
-          React.createElement('div',{style:{color:'var(--text-primary)',marginBottom:4}},
-            'Revize hedef (',React.createElement('strong',null,displayCurWeekEff.effKm+' km'),
-            ') \u2192 ',
-            rampModeOn
-              ?React.createElement('span',null,
-                'Rampa oran\u0131: ',
-                React.createElement('strong',{style:{color:_sIsCapped?'var(--warn)':'var(--success)'}},
-                  '%'+_sRatePct+'/hafta'
-                ),
-                _sIsCapped&&React.createElement('span',{style:{color:'var(--warn)',fontSize:11}},
-                  ' (zirve i\u00e7in %'+Math.round((_sNeededRate-1)*100)+' gerekli \u2014 oran\u0131 art\u0131r\u0131n)'
-                )
-              )
-              :React.createElement('span',null,
-                React.createElement('strong',null,'%10/hafta'),
-                React.createElement('span',{style:{color:'var(--text-tertiary)',fontSize:11}},
-                  ' · H\u0131zland\u0131rmak i\u00e7in Rampa\'y\u0131 a\u00e7\u0131n'
-                )
-              )
-          ),
-          _sCatchUpIdx!=null
-            ?React.createElement('div',{style:{color:'var(--success)',fontWeight:600}},
-              '\u2713 H'+_sCatchUpIdx+' haftasinda orijinal plana geri donulur ',
-              React.createElement('span',{style:{fontWeight:400,color:'var(--text-secondary)'}},
-                '('+((_sCatchUpIdx-(_sCurWt.weekIdx||0))+' hafta sonra \u00b7 '+
-                (weekTargets.find(w=>w.weekIdx===_sCatchUpIdx)?.weekStart.toLocaleDateString('tr-TR',{day:'2-digit',month:'short'})||'')+
-                ')')
-              )
-            )
-            :React.createElement('div',{style:{color:'var(--warn)',fontWeight:600}},
-              '\u26a0 Plan suresi icinde orijinal haftalik hedeflere tam kavusulamiyor.'
-            ),
-          React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:4}},
-            '\ud83d\udd35 Mavi = projeksiyon (gelecek hafta) \u00b7 \ud83d\udfe0 Turuncu = revize (mevcut hafta)'
-          )
-        );
-      })()
     ),
 
     // ── Gelecek hafta planı — "son antrenman yapıldı" kapısı ────────────────
