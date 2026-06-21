@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.22-0213 --><!DOCTYPE html>
+<!-- Version: v2026.06.22-0219 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.22-0213';
+const APP_VERSION='v2026.06.22-0219';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -9233,7 +9233,17 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary, history=[], fr
   const _acwrSnap=(history&&history.length>0)?[...history].reverse().find(h=>h.date<=_prevWeekEndStr):null;
   const currentAcwr=_acwrSnap?.acwr??last?.acwr??1.0;
 
-  // Geçmiş "missed" hafta sayısı — fitness kaybı sinyali
+  // Geçmiş "missed" hafta sayısı — fitness kaybı sinyali.
+  // DÜZELTME (re-base kaskat hatası — "Geri çekme" ile aynı aile): missedCount
+  // eskiden TÜM geçmiş boyunca kalıcı olarak birikiyordu ve hiç sıfırlanmıyordu.
+  // Bu yüzden bir planın geçmişinde herhangi bir noktada 2+ "başarısız" hafta
+  // oluştuğunda (sıkça olur), missedCount>=2 koşulu BİR DAHA ASLA false olmuyor
+  // ve re-base (-%10) sporcu güncel olarak iyi gitse bile sonsuza dek uygulanmaya
+  // devam ediyordu. Düzeltme: sadece SON birkaç (MISSED_WINDOW) geçmiş haftaya
+  // bakan kayan bir pencere kullanılır — re-base artık sporcunun GÜNCEL gidişatını
+  // yansıtır, aylar önceki kötü haftalar yüzünden kalıcı asılı kalmaz.
+  const MISSED_WINDOW=6;
+  let recentPastStatuses=[];
   let missedCount=0;
 
   const weeks=baseWeeks.map((wk,i)=>{
@@ -9249,11 +9259,12 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary, history=[], fr
     overshootBackoff=0;
 
     if(wk.isPast){
-      // Geçmiş hafta bitti — telafi/backoff birikimini güncelle
-      if(wk.weekStatus==='missed'){
-        // Başarısız hafta — telafi yapılmaz, fitness kaybı sayacı
-        missedCount++;
-      } else if(wk.weekStatus==='deficit'){
+      // Geçmiş hafta bitti — telafi/backoff/missed birikimini güncelle
+      // missedCount: son MISSED_WINDOW geçmiş haftaya bakan kayan pencere
+      recentPastStatuses.push(wk.weekStatus);
+      if(recentPastStatuses.length>MISSED_WINDOW) recentPastStatuses.shift();
+      missedCount=recentPastStatuses.filter(s=>s==='missed').length;
+      if(wk.weekStatus==='deficit'){
         // Eksik hafta — kayıp yükün %50'si telafi havuzuna
         const eksikKm=Math.max(0,wk.targetKm-wk.actualKm);
         const eksikDp=Math.max(0,wk.targetDp-wk.actualDp);
