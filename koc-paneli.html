@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.22-0138 --><!DOCTYPE html>
+<!-- Version: v2026.06.22-0213 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.22-0138';
+const APP_VERSION='v2026.06.22-0213';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -9237,6 +9237,17 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary, history=[], fr
   let missedCount=0;
 
   const weeks=baseWeeks.map((wk,i)=>{
+    // DÜZELTME (kaskat geri çekme hatası — kök neden): overshootBackoff eskiden
+    // Math.max ile biriktirilip yalnızca "ilk geçmiş-olmayan hafta"da tüketiliyordu.
+    // Geçmiş haftalar için early-return bu bayrağı HİÇ sıfırlamıyordu — yani aşırı
+    // yük 1 hafta önce de olsa 20 hafta önce de olsa, sonunda mutlaka BUGÜNKÜ
+    // güncel haftaya düşüyordu ("↓ Geri çekme -%8" haftadan haftaya sürekli
+    // ilerliyordu). Düzeltme: backoff artık SADECE bir sonraki tek haftaya
+    // taşınır — o hafta da zaten geçmişse (fırsat kaçmışsa) sessizce düşer,
+    // daha sonraki bambaşka bir "güncel hafta"ya asla sıçramaz.
+    const myBackoff=overshootBackoff;
+    overshootBackoff=0;
+
     if(wk.isPast){
       // Geçmiş hafta bitti — telafi/backoff birikimini güncelle
       if(wk.weekStatus==='missed'){
@@ -9249,8 +9260,10 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary, history=[], fr
         telafiKm+=eksikKm*0.50;
         telafiDp+=eksikDp*0.50;
       } else if(wk.weekStatus==='overshoot'){
-        // Aşırı hafta — bir sonraki Temel/Gelişme haftasında %8 geri çekme
-        overshootBackoff=Math.max(overshootBackoff,0.08);
+        // Aşırı hafta — SADECE bir sonraki haftada (Temel/Gelişme) %8 geri çekme.
+        // Bu haftanın kendisi zaten geçmiş, bu yüzden myBackoff burada uygulanmaz —
+        // sadece overshootBackoff bir sonraki iterasyona (bir sonraki hafta) taşınır.
+        overshootBackoff=0.08;
       }
       return{...wk,telafiUygulandı:false,backoffUygulandı:false};
     }
@@ -9260,24 +9273,22 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary, history=[], fr
     // Kısıtlı tutulur (%5 maks) — agresif taper indirimi istemiyoruz, sadece Zirve
     // aşımının nöromüsküler yorgunluğunu hafifçe yansıtmak yeterli.
     if(wk.phase==='Taper'||wk.phase==='Zirve'){
-      if(wk.phase==='Taper'&&overshootBackoff>0){
-        const backoffPct=Math.min(overshootBackoff,0.05);
+      if(wk.phase==='Taper'&&myBackoff>0){
+        const backoffPct=Math.min(myBackoff,0.05);
         const azaltKm=round1(wk.targetKm*backoffPct);
         const azaltDp=Math.round(wk.targetDp*backoffPct);
-        overshootBackoff=0;
         return{...wk,targetKm:round1(wk.targetKm-azaltKm),targetDp:Math.round(wk.targetDp-azaltDp),
           backoffUygulandı:true,backoffPct:Math.round(backoffPct*100),telafiUygulandı:false};
       }
       return{...wk,telafiUygulandı:false,backoffUygulandı:false};
     }
 
-    // 1. Aşırı yük backoff'u (öncelik)
-    if(overshootBackoff>0){
-      const azaltKm=wk.targetKm*overshootBackoff;
-      const azaltDp=wk.targetDp*overshootBackoff;
+    // 1. Aşırı yük backoff'u (öncelik) — sadece bu haftaya taşınmışsa (myBackoff)
+    if(myBackoff>0){
+      const azaltKm=wk.targetKm*myBackoff;
+      const azaltDp=wk.targetDp*myBackoff;
       const yeniKm=round1(wk.targetKm-azaltKm);
       const yeniDp=Math.round(wk.targetDp-azaltDp);
-      overshootBackoff=0; // Tek seferlik
       return{...wk,targetKm:yeniKm,targetDp:yeniDp,backoffUygulandı:true,backoffPct:8,telafiUygulandı:false};
     }
 
