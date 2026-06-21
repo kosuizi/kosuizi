@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.21-2234 --><!DOCTYPE html>
+<!-- Version: v2026.06.22-0138 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.21-2234';
+const APP_VERSION='v2026.06.22-0138';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -9120,6 +9120,15 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary, history=[], fr
     // ── Tamamlanmış hafta hedefleri: frozen kalmalı (önceki snapshot'tan) ────
     // Hafta bittiğinde (isPast), hedefler değişmemeli. Frozen targets varsa kullan.
     const weekKeyStr=localDateStr(weekStart);
+    // DÜZELTME (kaskat geri çekme hatası): kmRatio/weekStatus, frozen (backoff/
+    // telafi uygulanmış) hedef YERİNE periyodizasyonun HAM hedefine (fairTargetKm)
+    // göre hesaplanmalı. Eskiden frozen (küçültülmüş) hedef kullanılıyordu — bir
+    // hafta overshoot nedeniyle %8 geri çekilip donduğunda, sporcu aynı hacmi
+    // korusa bile artık küçülmüş hedefe göre o hafta da "overshoot" görünüyor ve
+    // geri çekme bir sonraki haftaya tekrar tetikleniyordu — "↓ Geri çekme -%8"
+    // etiketi haftadan haftaya sonsuza dek ilerliyordu. Fair hedef, backoff/telafi
+    // döngüsünden tamamen bağımsız olduğu için bu geri besleme kırılır.
+    const fairTargetKm=targetKm;
     if(isPast&&frozenTargets[weekKeyStr]){
       targetKm=frozenTargets[weekKeyStr].targetKm;
       targetDp=frozenTargets[weekKeyStr].targetDp;
@@ -9134,7 +9143,8 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary, history=[], fr
     }
 
     // Gerçekleşme durumu — antrenman bilimi: %85+ ideal, %70-85 hafif eksik, %40-70 eksik, <%40 başarısız, >%120 aşırı
-    const kmRatio=targetKm>0?(actualKm/targetKm):null;
+    // NOT: fairTargetKm kullanılır (bkz. yukarıdaki düzeltme notu) — frozen hedef değil.
+    const kmRatio=fairTargetKm>0?(actualKm/fairTargetKm):null;
     let weekStatus='normal'; // normal | missed | deficit | ok | overshoot
     if(isPast&&kmRatio!==null){
       if(kmRatio<0.40)weekStatus='missed';
@@ -12682,25 +12692,32 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       setRampRatePct(15);
       prevRampAthleteIdRef.current=athlete.id;
     }
-    fbGet(`plan_snapshots/${athlete.id}/${weekKey}`).then(stored=>{
-      const snap=stored||null;
-      snapFetchOkRef.current=true;
-      if(snap){
-        setPlanSnap(snap);
-        if(snap.selectedPrimary!==undefined) setSelectedPrimary(snap.selectedPrimary||null);
-        if(snap.planMode) setPlanModeLocal(snap.planMode);
-        if(snap.rampModeOn!==undefined) setRampModeOn(!!snap.rampModeOn);
-        if(snap.rampRatePct!==undefined) setRampRatePct(Math.min(20,Math.max(10,parseInt(snap.rampRatePct)||15)));
-      }
-      setSnapReady(true);
-    }).catch(()=>{
-      snapFetchOkRef.current=false;
-      setSnapReady(true);
-    });
-    // Önceki hafta snapshot'ı — revize edilmiş hafta notu için (tek ek Firebase okuma)
     fbGet(`plan_snapshots/${athlete.id}/${prevWeekKey}`).then(prev=>{
       if(prev?.weekEff?.isRevised) setPrevWeekSnap(prev);
-    }).catch(()=>{});
+      return prev;
+    }).catch(()=>null).then(prev=>{
+      fbGet(`plan_snapshots/${athlete.id}/${weekKey}`).then(stored=>{
+        const snap=stored||null;
+        snapFetchOkRef.current=true;
+        if(snap){
+          setPlanSnap(snap);
+          if(snap.selectedPrimary!==undefined) setSelectedPrimary(snap.selectedPrimary||null);
+          if(snap.planMode) setPlanModeLocal(snap.planMode);
+        }
+        // DÜZELTME: Rampa ayarı (rampModeOn/rampRatePct) bu haftanın snapshot'ında
+        // henüz yoksa (yeni hafta, koç henüz dokunmadı) varsayılana (kapalı/%15)
+        // DÜŞMEMELİ — önceki haftanın ayarı miras alınmalı. Aksi halde koç her hafta
+        // başında rampayı yeniden açıp oranı tekrar girmek zorunda kalıyordu.
+        if(snap?.rampModeOn!==undefined) setRampModeOn(!!snap.rampModeOn);
+        else if(prev?.rampModeOn!==undefined) setRampModeOn(!!prev.rampModeOn);
+        if(snap?.rampRatePct!==undefined) setRampRatePct(Math.min(20,Math.max(10,parseInt(snap.rampRatePct)||15)));
+        else if(prev?.rampRatePct!==undefined) setRampRatePct(Math.min(20,Math.max(10,parseInt(prev.rampRatePct)||15)));
+        setSnapReady(true);
+      }).catch(()=>{
+        snapFetchOkRef.current=false;
+        setSnapReady(true);
+      });
+    });
     
     // Geçmiş 10 hafta frozen targets + weekEff (revize hedefler) yükle
     (async()=>{
