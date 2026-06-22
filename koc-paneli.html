@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.22-1020 --><!DOCTYPE html>
+<!-- Version: v2026.06.22-1035 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.22-1020';
+const APP_VERSION='v2026.06.22-1035';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -11381,9 +11381,10 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
     const athHash = (athlete.id||'').split('').reduce((h,c)=>((h<<5)-h+c.charCodeAt(0))|0, 0);
     // rotIdx: sporcu hash'i (sabit, farklı sporcular farklı başlangıç) +
     // takvim haftası (her hafta +1 ilerler, history.length değişmese bile) +
-    // history derinliği (uzun geçmişte ekstra çeşitlilik) + weekOff
+    // history derinliği (uzun geçmişte ekstra çeşitlilik) +
+    // _planRotOffset (her "Planı Güncelle" basışında +1, anlık çeşitlilik) + weekOff
     const _calWeek=Math.floor(Date.now()/(7*24*3600*1000));
-    const rotIdx = Math.abs(athHash % 97) + _calWeek + Math.floor((history.length||0)/7) + weekOff;
+    const rotIdx = Math.abs(athHash % 97) + _calWeek + Math.floor((history.length||0)/7) + (athlete._planRotOffset||0) + weekOff;
     
     // Son 4 haftada yapılan kaliteli antrenman tiplerini bul (tekrar önleme)
     // weekOff=1 ise önceki haftanın PLANLANAN kaliteli tiplerini de dahil et
@@ -13019,7 +13020,9 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       // history'yi önceki hafta sonuna kırp → week.wt.targetKm hafta içi sabit kalır
       const _prevEndStr=localDateStr(getWeekBounds(-1).end);
       const _stableHist=(history||[]).filter(h=>h.date<=_prevEndStr);
-      const generated=generateTwoWeekPlan(athlete,_stableHist,racesOverride,workouts,testPlanlar||[],planMode==='optimize',history[history.length-1],(()=>{
+      // rotOffset: snapshot'tan alınan sayaç — her "Planı Güncelle"de +1, pickSeq çeşitliliği için
+      const _athWithRot=planSnap.rotOffset!=null?{...athlete,_planRotOffset:planSnap.rotOffset}:athlete;
+      const generated=generateTwoWeekPlan(_athWithRot,_stableHist,racesOverride,workouts,testPlanlar||[],planMode==='optimize',history[history.length-1],(()=>{
         // weekEffOverride: mevcut hafta weekEff + ramp modu açıksa week1Proj
         const _we=planSnap?.weekEff||null;
         if(!rampModeOn||!_we?.isRevised||!_we.effKm) return _we;
@@ -13415,7 +13418,12 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       }
     }
 
+    // rotOffset: her "Planı Güncelle" basışında +1 — pickSeq'e farklı startIdx verir
+    const newRotOffset=((curSnap.rotOffset||0)+1)%97;
+    freshAthlete={...freshAthlete,_planRotOffset:newRotOffset};
+
     const newSnap=generatePlanSnapshot(freshAthlete,history,races,workouts||[],testPlanlar||[],null,curSnap.weekEff||null);
+    newSnap.rotOffset=newRotOffset;
     newSnap.planMode=planMode;
     newSnap.selectedPrimary=selectedPrimary||null;
     newSnap.athleteProfile={kosu_gunleri:freshAthlete.kosu_gunleri,capraz_gunleri:freshAthlete.capraz_gunleri,disiplin:freshAthlete.disiplin,uzun_gun:freshAthlete.uzun_gun};
