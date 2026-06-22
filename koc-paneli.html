@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.22-0945 --><!DOCTYPE html>
+<!-- Version: v2026.06.22-1430 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.22-0945';
+const APP_VERSION='v2026.06.22-1430';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -9889,6 +9889,33 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
   return{level,forceEasy,forceLow,preferLow,forceQuality,planForceEasy,planPreferLow,yModZone,zoneReasons};
 }
 
+// ── Tür son kullanım & frekans yardımcıları (global) ─────────────────────────
+// Her antrenman türünün "kaç gün önce yapıldı" haritası (tüm tipler, tarih bazlı en son)
+function calcTurSonKullanim(wks, todayStr){
+  const today=new Date(todayStr+'T12:00:00');
+  const result={};
+  const sorted=[...wks].filter(w=>w.date&&w.tur&&w.tur!=='dinlenme').sort((a,b)=>b.date.localeCompare(a.date));
+  for(const w of sorted){
+    if(result[w.tur]!==undefined) continue;
+    const d=new Date(w.date+'T12:00:00');
+    const diff=Math.floor((today-d)/(1000*60*60*24));
+    if(diff>=0) result[w.tur]=diff;
+  }
+  return result;
+}
+// Son nGun içinde her antrenman türünün tekrar sayısı (frekans)
+function calcTurFrekans(wks, todayStr, nGun){
+  nGun=nGun||42;
+  const today=new Date(todayStr+'T12:00:00');
+  const result={};
+  for(const w of wks){
+    if(!w.date||!w.tur||w.tur==='dinlenme') continue;
+    const diff=(today-new Date(w.date+'T12:00:00'))/(1000*60*60*24);
+    if(diff>=0&&diff<=nGun) result[w.tur]=(result[w.tur]||0)+1;
+  }
+  return result;
+}
+
 // ── Günün Antrenmanı Motoru (yeniden yazıldı) ─────────────────────────────────
 
 function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts, planMode='optimize', planTodayDay=null){
@@ -11005,12 +11032,18 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
       const pickSeq=(seq)=>{
         const startIdx=(wk+haftaIciSira)%seq.length;
         const yasak=[...recent.slice(0,2),...buHaftaKaliteli];
+        const turFreq=wkStats.turFrekans||{};
+        const turSon=wkStats.turSonKullanim||{};
+        // İzin verilen tüm adayları topla
+        const adaylar=[];
         for(let i=0;i<seq.length;i++){
           const tpl=seq[(startIdx+i)%seq.length]();
-          if(!yasak.includes(tpl.tip)) return tpl;
+          if(!yasak.includes(tpl.tip)) adaylar.push({tpl,freq:turFreq[tpl.tip]||0,gun:turSon[tpl.tip]??999});
         }
-        // Tümü yasaksa en az kullanılanı ver
-        return seq[startIdx]();
+        if(!adaylar.length) return seq[startIdx%seq.length]();
+        // Az kullanılan önce (frekans↑); eşitlikte en uzun süre önce kullanılan önce (gun↓)
+        adaylar.sort((a,b)=>a.freq!==b.freq?a.freq-b.freq:b.gun-a.gun);
+        return adaylar[0].tpl;
       };
       if(daysToRace!==null&&daysToRace<=14){
         // Yarışa 8-14 gün (phase henüz Taper değil ama yakın): kaliteli sırasına göre farklılaştır
@@ -11080,11 +11113,16 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
       const fallbackPick=(seq)=>{
         const startIdx=wk%seq.length;
         const yasak=[...(wkStats.recentKaliteli||[]).slice(0,2),...(wkStats.buHaftaKaliteli||[])];
+        const turFreq=wkStats.turFrekans||{};
+        const turSon=wkStats.turSonKullanim||{};
+        const adaylar=[];
         for(let i=0;i<seq.length;i++){
           const tpl=seq[(startIdx+i)%seq.length]();
-          if(!yasak.includes(tpl.tip)) return tpl;
+          if(!yasak.includes(tpl.tip)) adaylar.push({tpl,freq:turFreq[tpl.tip]||0,gun:turSon[tpl.tip]??999});
         }
-        return seq[startIdx]();
+        if(!adaylar.length) return seq[startIdx%seq.length]();
+        adaylar.sort((a,b)=>a.freq!==b.freq?a.freq-b.freq:b.gun-a.gun);
+        return adaylar[0].tpl;
       };
       if(daysToRace!==null&&daysToRace<=14&&haftaGunTipi==='kaliteli'){
         // Yarışa yakın taper: 1. kaliteli gün=tempo, 2. kaliteli gün=strides/açıcı
@@ -11399,7 +11437,11 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       :weekOff===1&&weekEffOverride?.week1Proj?.isRevised&&(weekEffOverride.week1Proj.effDp||0)>0
         ?weekEffOverride.week1Proj.effDp
         :null;
-    let wkStats={count:0,kaliteliYok:true,uzunYapildi:false,wkLoad:0,dpHedefHafta:(_effDpOverride??wt?.targetDp)??0,targetKmHafta:(_effKmOverride??wt?.targetKm)??0,_noRaceMaxGunlukKm:wt?._noRaceMaxGunlukKm||0,weekOff:rotIdx,isFutureWeek:weekOff>0,recentKaliteli,recentLongRuns,sonYogunGun:sonYogunGunGlobal,testPlanlar:testPlanlar||[],sonAntrenmanDate:sonAntrenman?.date||null,sonRecoveryHedef,sonRecoverySaatler,athWorkouts,buHaftaKaliteli:[],kaliteliSayisi:0,aerobikSayisi:0};
+    // Tür son kullanım & frekans — pickSeq'de çeşitlilik için
+    const _planTodayStr=localDateStr(today);
+    const turSonKullanim=calcTurSonKullanim(athWorkouts,_planTodayStr);
+    const turFrekans=calcTurFrekans(athWorkouts,_planTodayStr,42);
+    let wkStats={count:0,kaliteliYok:true,uzunYapildi:false,wkLoad:0,dpHedefHafta:(_effDpOverride??wt?.targetDp)??0,targetKmHafta:(_effKmOverride??wt?.targetKm)??0,_noRaceMaxGunlukKm:wt?._noRaceMaxGunlukKm||0,weekOff:rotIdx,isFutureWeek:weekOff>0,recentKaliteli,recentLongRuns,sonYogunGun:sonYogunGunGlobal,testPlanlar:testPlanlar||[],sonAntrenmanDate:sonAntrenman?.date||null,sonRecoveryHedef,sonRecoverySaatler,athWorkouts,buHaftaKaliteli:[],kaliteliSayisi:0,aerobikSayisi:0,turSonKullanim,turFrekans};
 
     // ── Hafta İskeleti — Antrenman Bilimi Prensipleri ─────────────────────────
     // Temel prensipler:
@@ -13117,6 +13159,11 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
 
   // Gerçekleşen haftalık km+D+ hesapla
   const athWks=(workouts||[]).filter(w=>w.athleteId===athlete?.id);
+  // Tür son kullanım — kompakt grid badge için (her antrenman türü kaç gün önce yapıldı)
+  const athWksSon=React.useMemo(()=>
+    calcTurSonKullanim((workouts||[]).filter(w=>w.athleteId===athlete?.id&&w.date&&w.tur&&w.tur!=='dinlenme'),localDateStr(new Date())),
+    [workouts,athlete?.id]
+  );
   const weekActuals=React.useMemo(()=>{
     return weekTargets.map(wt=>{
       const ws=wt.weekStart;const we=wt.weekEnd;
@@ -15403,6 +15450,10 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                           '✕ ',React.createElement('s',null,workoutLabel(day)))
                       : React.createElement('div',null,
                           React.createElement('div',{style:{fontSize:10,fontWeight:600,textAlign:'center',color:tipColor(day.tip),marginTop:2}},workoutLabel(day)),
+                          !day.isPast&&athWksSon[day.tip]!=null&&React.createElement('div',{
+                            style:{fontSize:8,textAlign:'center',color:athWksSon[day.tip]>14?'var(--warn)':'var(--text-tertiary)',marginTop:1},
+                            title:(TIP_NAMES[day.tip]||day.tip)+' son '+athWksSon[day.tip]+' gün önce yapıldı'
+                          },'🕐 '+athWksSon[day.tip]+'g'),
                           day.isKosuCapraz&&React.createElement('div',{style:{fontSize:9,fontWeight:600,textAlign:'center',color:'var(--success)',marginTop:1}},'➕ Çapraz')
                         ),
                   day.sure_dk>0&&React.createElement('div',{style:{fontSize:9,color:'var(--text-tertiary)',textAlign:'center'}},day.sure_dk+' dk'),
@@ -15573,9 +15624,10 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   React.createElement('div',null,
                     React.createElement('div',{style:{fontWeight:700,fontSize:15}},TIP_NAMES[day.tip]||workoutLabel(day)),
                     planYapiNotu(day)&&React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',marginTop:1}},planYapiNotu(day)),
-                    React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)'}},
-                      day.dayTR
-                    )
+                    React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)'}},day.dayTR),
+                    !day.isPast&&athWksSon[day.tip]!=null&&React.createElement('div',{
+                      style:{fontSize:11,color:athWksSon[day.tip]>14?'var(--warn)':'var(--text-tertiary)',marginTop:2}
+                    },'🕐 Bu tür son '+athWksSon[day.tip]+' gün önce yapıldı')
                   )
                 ),
                 day.aciklama&&React.createElement('div',{style:{
