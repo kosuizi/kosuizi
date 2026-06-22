@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.22-0232 --><!DOCTYPE html>
+<!-- Version: v2026.06.22-0253 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.22-0232';
+const APP_VERSION='v2026.06.22-0253';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -9479,10 +9479,15 @@ function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, ram
   const recentDpRatio=recent.length?recent.reduce((s,w)=>s+(w.targetDp>0?w.actualDp/w.targetDp:1),0)/recent.length:1;
 
   // Başlangıç noktası: aktif bir efektif (revize) hedef varsa o kullanılır —
-  // "Herşey Yolunda Giderse" projeksiyonuyla aynı kaynak — yoksa son gerçekleşen hafta.
+  // "Herşey Yolunda Giderse" projeksiyonuyla aynı kaynak — yoksa son birkaç
+  // haftanın ORTALAMASI (tek bir haftanın gürültüsüne karşı km ile tutarlı
+  // şekilde — recentKmRatio/recentDpRatio de zaten ortalama kullanıyordu,
+  // ama başlangıç noktası tek haftaya bakıyordu, bu tutarsızlık D+ tarafında
+  // özellikle belirgindi: tek bir "o hafta tırmanış yapılmadı" haftası, gerçek
+  // kümülatif eğilim ne olursa olsun projeksiyonu sıfırlayabiliyordu).
   const curEffActive=curEffKm!=null&&curEffKm>0&&curEffKm<currentWeek.targetKm*0.98;
-  const lastDoneKm=curEffActive?curEffKm:(recent.length?recent[recent.length-1].actualKm:currentWeek.targetKm*0.5);
-  const lastDoneDp=curEffActive&&curEffDp!=null?curEffDp:(recent.length?recent[recent.length-1].actualDp:currentWeek.targetDp*0.5);
+  const lastDoneKm=curEffActive?curEffKm:(recent.length?round1(recent.reduce((s,w)=>s+(w.actualKm||0),0)/recent.length):currentWeek.targetKm*0.5);
+  const lastDoneDp=curEffActive&&curEffDp!=null?curEffDp:(recent.length?Math.round(recent.reduce((s,w)=>s+(w.actualDp||0),0)/recent.length):currentWeek.targetDp*0.5);
 
   const currentIdx=weeks.findIndex(w=>w.isCurrent);
   const firstPeakIdx=weeks.findIndex(w=>w.phase==='Zirve');
@@ -9498,8 +9503,18 @@ function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, ram
   const gapKm=round1(peakKm-projectedPeakKm);
   const gapDp=Math.round(peakDp-projectedPeakDp);
   const kmGapPct=peakKm>0?gapKm/peakKm:0;
-  const dpGapPct=peakDp>0?gapDp/peakDp:0;
+  // DÜZELTME: D+ hedefi ihmal edilebilir düzeydeyse (örn. düz parkurlu yarış —
+  // "Tuz Gölü" gibi irtifa kazanımı olmayan bir yarış), yüzdesel D+ açığı
+  // anlamsız büyüyebilir (peakDp=5m iken 1m fark bile %20 "açık" gösterir) ve
+  // hem genel durumu (worstGap) hem de "tırmanışlı antrenman ekle" önerisini
+  // gerçek dışı şekilde tetikleyebiliyordu. Mutlak bir eşik altında D+ gap'i
+  // değerlendirmeye hiç katılmaz.
+  const DP_MEANINGFUL_THRESHOLD=100; // metre — bu altındaki zirve D+ hedefi "düz parkur" sayılır
+  const dpMeaningful=peakDp>=DP_MEANINGFUL_THRESHOLD;
+  const dpGapPct=dpMeaningful?gapDp/peakDp:0;
   const worstGap=Math.max(kmGapPct,dpGapPct);
+
+
 
   // ── Haftalık yakınsama simülasyonu — eskiden ayrı "Herşey Yolunda Giderse"
   // kutusunda yapılan hesap: her gelecek haftanın KENDİ hedefine karşı, seçili
@@ -9580,7 +9595,7 @@ function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, ram
       '💡 Öneri 2: Yarış hedefini daha kısa mesafeye revize et',
       '💡 Öneri 3: Antrenman sıklığını artır (haftada +1 gün)',
       !rampModeOn?'💡 Öneri 4: Rampa\'yı açıp oranı artırarak yetişme ihtimalini test edin':null,
-      gapDp>peakDp*0.3?'⛰️ Tırmanışlı antrenmanları öncelikli ekle':null
+      gapDp>peakDp*0.3&&dpMeaningful?'⛰️ Tırmanışlı antrenmanları öncelikli ekle':null
     ].filter(Boolean);
   }
 
