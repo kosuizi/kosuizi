@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.22-0253 --><!DOCTYPE html>
+<!-- Version: v2026.06.22-0332 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.22-0253';
+const APP_VERSION='v2026.06.22-0332';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -8989,6 +8989,82 @@ function effectiveDisiplin(athlete, primaryRace){
   return base;
 }
 
+// ── Haftanın Uzun Koşusu — Hedef Pay Oranı ────────────────────────────────
+// Yükleme planındaki haftalık km hedefinin ne kadarının "haftanın uzunu"
+// olarak planlanacağını belirler. Faza göre değişir: Zirve haftalarda uzun
+// koşunun payı artar (örn. maraton zirve haftasında ~80km/hafta için %32
+// ≈ 25-26km uzun koşu — koçun saha tecrübesiyle uyumlu); Taper'da güvenlik
+// için pay düşürülür. Patika/ultra disiplinlerde uzun koşu/arazi kültürü
+// (back-to-back günler dahil) nedeniyle pay biraz daha yüksek tutulur.
+// Mevcut/gelecek hafta gün üretimindeki sabit %28 kuralının yerini alır —
+// tek kaynak burası, hem tablo gösterimi hem gerçek üretim aynı oranı kullanır.
+function uzunKosuPayOrani(phase, disiplin){
+  const tablo={'Temel':0.25,'Gelişme':0.28,'Zirve':0.32,'Taper':0.22,'Yarış Sonrası':0};
+  let pay=tablo[phase];
+  if(pay===undefined) pay=0.28;
+  if(disiplin==='ultra') pay+=0.04;
+  else if(disiplin==='patika'||disiplin==='karma') pay+=0.02;
+  return pay;
+}
+
+// ── Haftanın Uzunu — Hafta Hedefinden Kaba Band Tahmini ───────────────────
+// Mevcut/gelecek hafta gün üretiminde band, CTL simülasyonundan (simCtl) gelir.
+// Yükleme planı tablosu uzak gelecek haftaları için CTL simülasyonu yapmaz —
+// bu yüzden o haftanın KENDİ haftalık km hedefinden kaba bir band tahmini
+// türetilir. Yalnızca mutlak tavan hesaplamak için kullanılır, başka hiçbir
+// yerde band yerine geçmez.
+function proxyBandFromWeeklyKm(km){
+  if(km<25)return 1;
+  if(km<40)return 2;
+  if(km<60)return 3;
+  if(km<85)return 4;
+  return 5;
+}
+
+// ── Haftanın Uzunu — Band Bazlı Mutlak Tavan (km) ─────────────────────────
+// tplUzun, gerçek üretimde uzun koşu süresini CTL bandına göre mutlak bir
+// dakika tavanıyla (bandMax) sınırlar — uzunKosuPayOrani'nin ürettiği yüzde
+// bu tavanı bilmez, dolayısıyla çok yüksek hacimli haftalarda (örn. ultra
+// hazırlığı) tek başına gerçekçi olmayan bir mesafe önerebilir. Bu fonksiyon
+// aynı dakika tablosunu sporcunun gerçek Z2 pace'iyle (zones üzerinden) km'ye
+// çevirip aynı tavanı tabloya da uygular.
+// NOT: tplUzun ayrıca önceki uzun koşulara göre haftadan haftaya ilerleme
+// sınırı da uygular (±%10 artış / 3 ardışık artıştan sonra %72 geri çekme).
+// Bu, yalnızca GERÇEKLEŞMİŞ geçmiş uzun koşulara bağlı olduğundan uzak
+// gelecek haftalar için önceden simüle edilemez — bu fonksiyon yalnızca
+// mutlak (band) tavanı uygular, ilerleme tavanını değil.
+function uzunKosuBandMaxKm(band, disiplin, zones){
+  const isUltra=disiplin==='ultra';
+  const bandMaxDk=isUltra
+    ?(band<=1?80:band===2?100:band===3?130:band===4?160:200)
+    :(band<=1?60:band===2?75:band===3?90:band===4?110:130);
+  const paceSec=(zones&&typeof getPaceSec==='function')?(getPaceSec(zones,1)||360):360;
+  return round1(bandMaxDk/(paceSec/60));
+}
+
+// ── Haftanın Uzunu — Mesafe ve D+ Hedefi Tahmini ──────────────────────────
+// Yükleme planı tablosunda her hafta için "haftanın uzunu" olarak koşulması
+// önerilen mesafe ve D+'ı gösterir.
+// Mesafe: uzunKosuPayOrani ile haftalık km hedefinden pay alır, ardından
+// uzunKosuBandMaxKm ile gerçek üretimle aynı mutlak tavana sınırlanır
+// (zones verilmişse sporcunun gerçek Z2 pace'i, band verilmezse o haftanın
+// kendi km hedefinden proxyBandFromWeeklyKm ile kaba tahmin kullanılır).
+// D+: yol disiplininde uzun koşular düz parkurda yapılır (tplUzun ile
+// tutarlı — D+ hedefi 0); trail/ultra/karma disiplinde gün-bazlı üretim
+// mantığıyla tutarlı olacak şekilde haftalık D+ hedefinin tamamı tek uzun
+// güne atfedilir (back-to-back günlerinde gerçek dağılım Gün1/Gün2 arasında
+// bölünür — bu yalnızca ileriye dönük bir planlama tahminidir).
+function estimateUzunKosuHedefi(targetKm, targetDp, phase, disiplin, zones, band){
+  const pay=uzunKosuPayOrani(phase, disiplin);
+  let km=round1((targetKm||0)*pay);
+  const effBand=band||proxyBandFromWeeklyKm(targetKm||0);
+  const bandCapKm=uzunKosuBandMaxKm(effBand, disiplin, zones);
+  let capped=false;
+  if(bandCapKm>0&&km>bandCapKm){ km=bandCapKm; capped=true; }
+  const dp=disiplin!=='yol'?Math.round(targetDp||0):0;
+  return {km, dp, pay, capped, bandCapKm};
+}
+
 function calcWeeklyTargetsCore(athlete, races, workouts, primary, history=[], frozenTargets={}){
   if(!athlete||!primary)return[];
   const today=new Date();
@@ -10809,6 +10885,34 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
       kosuTpl=isTrail&&dpGun>200
         ?tplTirmanisAcik(band,Math.round(70*uzunYMod),zones,dpGun)
         :tplUzun(band,simState.ctl||0,zones,disiplin,dpGun,wkStats.recentLongRuns);
+      // ── Haftalık uzun koşu hedefini ÜSTTEN sınırla (alt sınır değil) ─────
+      // Progresyon tarihçesi haftalık hedefin üzerinde bir uzun koşu önerirse
+      // (özellikle taper/zirve haftalarında gereksiz yük) hedefle kısıtla.
+      // Alt sınır uygulanmaz — progresyon güvenlik kuralı korunur (sporcu
+      // hedefin altındaysa zorla artırma, kademeli ilerle).
+      // Trail kolu (tplTirmanisAcik) kendi hedefini zaten dpGun üzerinden alır.
+      if(!isTrail&&wkStats.uzunGunKm>0&&kosuTpl.sure_dk>0){
+        const _z2Sec=getPaceSec(zones,1)||360;
+        const _hedefDk=Math.round(wkStats.uzunGunKm*_z2Sec/60);
+        if(_hedefDk>10&&kosuTpl.sure_dk>_hedefDk){
+          const _eskiDk=kosuTpl.sure_dk;
+          const _mainDk=Math.max(10,_hedefDk-20); // 15dk ısınma + 5dk soğuma rezerve
+          kosuTpl={...kosuTpl,
+            sure_dk:_hedefDk,
+            _revised:true,
+            _revizeNeden:`Haftalık hedef üst sınırı: ~${wkStats.uzunGunKm}km (~${_hedefDk}dk), progresyon ${_eskiDk}dk öneriyordu`,
+            yapilar:(kosuTpl.yapilar||[]).map(y=>{
+              if((y.baslik||'').includes('Z2 Uzun')){
+                return{...y,
+                  detay:y.detay.replace(/\d+(?= dk)/,String(_mainDk)),
+                  _rows:[{label:'Z2 Uzun Koşu',sure_sn:_mainDk*60,zIdx:1}]
+                };
+              }
+              return y;
+            })
+          };
+        }
+      }
       if(cokYorgun)kosuUyari='TSB '+tsb.toFixed(1)+' — çok yorgun, uzun koşu süresi %35 kısaltıldı';
       else if(yorgun)kosuUyari='TSB '+tsb.toFixed(1)+' — yorgun, uzun koşu süresi %20 kısaltıldı';
       }
@@ -11456,8 +11560,9 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       // Kaliteli seans başına tahmini km (band'a göre) — bütçe rezervasyonu için
       const kaliteliSessionKm=band<=1?5:band===2?6:band===3?7:band===4?8:9;
       const tahminiKaliteliKm=kaliteliKalanSayi*kaliteliSessionKm;
-      // Uzun koşu payı: kalan hedefin %28'i
-      const uzunGunKm=uzunKalanSayi>0?kalanTargetKm*0.28:0;
+      // Uzun koşu payı: faz ve disipline göre değişir (bkz. uzunKosuPayOrani) —
+      // yükleme planı tablosundaki "Uzun" tahminiyle aynı kaynağı kullanır.
+      const uzunGunKm=uzunKalanSayi>0?round1(kalanTargetKm*uzunKosuPayOrani(fazPhase,effectiveDisiplin(athlete,primary))):0;
       // Kolay/aerobik günlere kalan km'yi eşit dağıt
       const kolayKalanToplam=Math.max(0,kalanTargetKm-uzunGunKm-tahminiKaliteliKm);
       const gunlukKolayKm=kolayAerobikKalanSayi>0?kolayKalanToplam/kolayAerobikKalanSayi:0;
@@ -14284,6 +14389,13 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               // - Geçmiş haftalar: pastWeekEffs[weekKey] (Firebase'de weekEff olarak kayıtlı)
               // Her ikisi de yoksa orijinal hedefe fallback yapılır.
 
+              // Haftanın uzunu tahmini için disiplin/zones/band (bkz. estimateUzunKosuHedefi)
+              const _uzunDisiplin=effectiveDisiplin(athlete,plan.primary);
+              const _uzunZones=calcZones(athlete);
+              // Mevcut hafta için gerçek CTL bandı (gün üretimiyle aynı kaynak) —
+              // diğer haftalar için proxyBandFromWeeklyKm kullanılır (CTL simülasyonu yok).
+              const _uzunRealBand=ctlBand((history&&history[history.length-1]?.ctl)||0);
+
               // ── "Herşey Yolunda Giderse" Projeksiyonu ─────────────────────────
               // Rampa modu kapalıysa sabit %10, açıksa kullanıcının seçtiği oran veya
               // dinamik hedef-yakınsayan oran (hangisi küçükse: seçili oran kulanılır).
@@ -14405,6 +14517,22 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                 ?Math.round(wt.targetDp*(cascadeKm/wt.targetKm))
                 :wt.targetDp;
 
+              // Haftanın uzunu — tabloda GÖRÜNEN hedeften (revize/cascade/projeksiyon dahil)
+              // pay alır, ham orijinal hedeften değil. Böylece hafta revize edildiğinde
+              // (örn. HRV/sakatlık nedeniyle hedef düşürüldüğünde ya da taper cascade
+              // devreye girdiğinde) uzun koşu önerisi de aynı revizyonu yansıtır.
+              const _dispKmForUzun=showRevised?effKm:(showCascade?cascadeKm:(_showFutProj?_futPrj.projKm:wt.targetKm));
+              const _dispDpForUzun=(showRevised&&wt.targetDp>0)?effDp:((showCascade&&wt.targetDp>0)?cascadeDp:(((_showFutProj&&wt.targetDp>0&&_futPrj.projDp>0))?_futPrj.projDp:wt.targetDp));
+              const _uzunHedef=wt.isRecovery||wt.isRaceWeek||wt.phase==='Yarış Sonrası'
+                ?null
+                :estimateUzunKosuHedefi(_dispKmForUzun,_dispDpForUzun,wt.phase,_uzunDisiplin,_uzunZones,wt.isCurrent?_uzunRealBand:null);
+              // Orijinal (revize mekanizmalarından bağımsız) uzun koşu hedefi —
+              // tablo haftalık km için "üstü çizili orijinal → revize" gösterdiği gibi
+              // uzun koşu için de farkı göstermek için kullanılır.
+              const _uzunHedefOrijinal=wt.isRecovery||wt.isRaceWeek||wt.phase==='Yarış Sonrası'
+                ?null
+                :estimateUzunKosuHedefi(wt.targetKm,wt.targetDp,wt.phase,_uzunDisiplin,_uzunZones,null);
+
               const diffKm=round1(act.km-wt.targetKm);
               const diffDp=Math.round(act.dp-wt.targetDp);
               const kmPct=wt.targetKm>0?Math.round(act.km/wt.targetKm*100):null;
@@ -14499,7 +14627,25 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                         React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',fontWeight:400,marginRight:4}},wt.targetKm),
                         React.createElement('span',{style:{color:'var(--info)',fontWeight:700}},_futPrj.projKm)
                       )
-                    :wt.targetKm
+                    :wt.targetKm,
+                  _uzunHedef&&_uzunHedef.km>0&&React.createElement('div',{
+                    style:{fontSize:9,fontWeight:400,marginTop:1,whiteSpace:'nowrap'},
+                    title:_uzunHedef.capped
+                      ?'Band tavanına sınırlandı (~'+_uzunHedef.bandCapKm+'km) — haftalık km hedefinin %'+Math.round(_uzunHedef.pay*100)+" payı bu sınırı aşıyordu"
+                      :(_uzunHedefOrijinal&&_uzunHedefOrijinal.km!==_uzunHedef.km
+                        ?'Orijinal hedef: ~'+_uzunHedefOrijinal.km+'km — revizyon/cascade sonrası: ~'+_uzunHedef.km+'km'
+                        :'Haftanın uzunu hedefi — haftalık km hedefinin %'+Math.round(_uzunHedef.pay*100)+"'i ("+wt.phase+")")
+                  },
+                    '🏃 ',
+                    _uzunHedefOrijinal&&_uzunHedefOrijinal.km!==_uzunHedef.km&&React.createElement('span',{
+                      style:{textDecoration:'line-through',color:'var(--text-tertiary)',marginRight:3}
+                    },'~'+_uzunHedefOrijinal.km+'km'),
+                    React.createElement('span',{
+                      style:{color:_uzunHedef.capped
+                        ?'var(--warn)'
+                        :(_uzunHedefOrijinal&&_uzunHedefOrijinal.km!==_uzunHedef.km?'var(--warn)':'var(--text-tertiary)')}
+                    },'~'+_uzunHedef.km+'km'+(_uzunHedef.capped?' ⚡':''))
+                  )
                 ),
                 React.createElement('td',{style:{padding:'6px 8px',fontFamily:'monospace',textAlign:'center',color:act.km>0?'var(--success)':'var(--text-tertiary)'}},act.km||'—'),
                 React.createElement('td',{style:{padding:'6px 8px',fontFamily:'monospace',textAlign:'center',color:diffKm>=0?'var(--success)':'var(--danger)'}},
@@ -14521,7 +14667,21 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                         React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',fontWeight:400,marginRight:4}},wt.targetDp),
                         React.createElement('span',{style:{color:'var(--info)',fontWeight:700}},_futPrj.projDp)
                       )
-                    :(wt.targetDp>0?wt.targetDp:'—')
+                    :(wt.targetDp>0?wt.targetDp:'—'),
+                  _uzunHedef&&_uzunHedef.dp>0&&React.createElement('div',{
+                    style:{fontSize:9,fontWeight:400,marginTop:1,whiteSpace:'nowrap'},
+                    title:_uzunHedefOrijinal&&_uzunHedefOrijinal.dp>0&&_uzunHedefOrijinal.dp!==_uzunHedef.dp
+                      ?'Orijinal D+ hedefi: ~'+_uzunHedefOrijinal.dp+'m — revizyon/cascade sonrası: ~'+_uzunHedef.dp+'m'
+                      :'Haftanın uzunu D+ hedefi — ağırlıklı olarak tek uzun güne atfedilir'
+                  },
+                    '🏃 ',
+                    _uzunHedefOrijinal&&_uzunHedefOrijinal.dp>0&&_uzunHedefOrijinal.dp!==_uzunHedef.dp&&React.createElement('span',{
+                      style:{textDecoration:'line-through',color:'var(--text-tertiary)',marginRight:3}
+                    },'~'+_uzunHedefOrijinal.dp+'m'),
+                    React.createElement('span',{
+                      style:{color:_uzunHedefOrijinal&&_uzunHedefOrijinal.dp>0&&_uzunHedefOrijinal.dp!==_uzunHedef.dp?'var(--warn)':'var(--text-tertiary)'}
+                    },'~'+_uzunHedef.dp+'m')
+                  )
                 ),
                 React.createElement('td',{style:{padding:'6px 8px',fontFamily:'monospace',textAlign:'center',color:act.dp>0?'var(--success)':'var(--text-tertiary)'}},act.dp||'—'),
                 React.createElement('td',{style:{padding:'6px 8px',fontFamily:'monospace',textAlign:'center',color:diffDp>=0?'var(--success)':'var(--danger)'}},
@@ -14712,6 +14872,11 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     plan.weeks.filter(week=>week.weekOff===0||(week.weekOff===1&&showNextWeek)).map(week=>{
       const haftalikReceteRef=React.createRef();
       const antrenmanGunleri=week.days.filter(d=>d.tip!=='dinlenme'&&d.yapilar?.length>0);
+      // Haftanın uzunu için band/zones — gerçek gün üretimiyle aynı kaynak
+      // (ctlBand(history sonu), weekOff 0/1 ayrımı yapmadan aynı band kullanılır;
+      // gün üretiminde de band tek seferde, hafta dışında hesaplanır).
+      const _uzunBandHafta=ctlBand((history&&history[history.length-1]?.ctl)||0);
+      const _uzunZonesHafta=calcZones(athlete);
       // Mevcut hafta revize hedef: curWeekEffective (yoğunluk düzeltmeli) — tekrar hesap gereksiz
       // curWeekEffective yoksa (plan yok / gelecek hafta) null döner
       const weekEffKm=week.weekOff===0&&displayCurWeekEff?displayCurWeekEff.effKm:0;
@@ -14770,6 +14935,41 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                 React.createElement('span',{style:{fontWeight:700,color:'var(--warn)'}},'D+ '+weekEffDp+'m')
               )
               :React.createElement('span',{style:{fontWeight:600}},'D+ '+week.wt.targetDp+'m')),
+            (()=>{
+              // Haftanın uzunu — bu kartta GÖRÜNEN hedeften (revize/rampa projeksiyonu
+              // dahil) pay alır, ham orijinal hedeften değil — yukarıdaki "Hedef:" rozeti
+              // ile aynı mantık. Orijinal farklıysa üstü çizili gösterilir.
+              let _dKm=week.wt.targetKm, _dDp=week.wt.targetDp;
+              if(weekShowRevised){
+                _dKm=weekEffKm;
+                if(week.wt.targetDp>0)_dDp=weekEffDp;
+              } else if(week.weekOff===1&&rampModeOn&&displayCurWeekEff?.isRevised){
+                const _p1=round1((displayCurWeekEff.effKm||0)*(1+rampRatePct/100));
+                if(_p1>0&&_p1<week.wt.targetKm*0.99)_dKm=_p1;
+              }
+              const _uzunHedefHafta=estimateUzunKosuHedefi(_dKm,_dDp,week.wt.phase,effectiveDisiplin(athlete,plan.primary),_uzunZonesHafta,_uzunBandHafta);
+              const _uzunHedefHaftaOrijinal=estimateUzunKosuHedefi(week.wt.targetKm,week.wt.targetDp,week.wt.phase,effectiveDisiplin(athlete,plan.primary),_uzunZonesHafta,null);
+              const _haftalikDegisti=_uzunHedefHaftaOrijinal.km!==_uzunHedefHafta.km;
+              const _haftalikDpDegisti=_uzunHedefHaftaOrijinal.dp>0&&_uzunHedefHaftaOrijinal.dp!==_uzunHedefHafta.dp;
+              return _uzunHedefHafta.km>0&&React.createElement('span',{
+                style:{color:_uzunHedefHafta.capped||_haftalikDegisti?'var(--warn)':'var(--text-secondary)'},
+                title:_uzunHedefHafta.capped
+                  ?'Band tavanına sınırlandı (~'+_uzunHedefHafta.bandCapKm+'km) — gün üretimi de aynı tavanı uygular'
+                  :(_haftalikDegisti?'Orijinal hedef: ~'+_uzunHedefHaftaOrijinal.km+'km — revizyon sonrası: ~'+_uzunHedefHafta.km+'km':'Haftanın uzunu hedefi — günlük antrenman önerisi bu hedefe göre ölçeklenir')
+              },
+                '🏃 Uzun: ',
+                _haftalikDegisti&&React.createElement('span',{style:{textDecoration:'line-through',opacity:0.6,marginRight:3}},_uzunHedefHaftaOrijinal.km+'km'),
+                _uzunHedefHafta.km+'km',
+                _haftalikDpDegisti
+                  ?React.createElement('span',null,
+                    ' / ',
+                    React.createElement('span',{style:{textDecoration:'line-through',opacity:0.6,marginRight:3}},'D+'+_uzunHedefHaftaOrijinal.dp+'m'),
+                    'D+'+_uzunHedefHafta.dp+'m'
+                  )
+                  :(_uzunHedefHafta.dp>0?' / D+'+_uzunHedefHafta.dp+'m':''),
+                _uzunHedefHafta.capped?' ⚡':''
+              );
+            })(),
             week.wkActualKm>0&&React.createElement('span',{style:{color:'var(--success)'}},'Gerçek: '+week.wkActualKm+' km'+(week.wkActualDp>0?' / D+'+week.wkActualDp+'m':''))
           ),
           antrenmanGunleri.length>0&&React.createElement('button',{
