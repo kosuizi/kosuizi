@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.23-0932 --><!DOCTYPE html>
+<!-- Version: v2026.06.23-1530 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.23-0932';
+const APP_VERSION='v2026.06.23-1530';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1193,7 +1193,7 @@ function extractFeedbackSignals(allSnapsObj, athlete){
             } else hrOk=true; // zone içinde
           }
         }
-        if(paceDir||hrDir||paceOk||hrOk) signals.push({date,paceDir,hrDir,paceOk,hrOk,hrWeight});
+        if(paceDir||hrDir||paceOk||hrOk) signals.push({date,paceDir,hrDir,paceOk,hrOk,hrWeight,zi:zi??0});
       };
 
       Object.values(rowOvs).forEach(scanRow);
@@ -1226,15 +1226,18 @@ function extractFeedbackSignals(allSnapsObj, athlete){
 function analyzeRecipeFeedbackSignals(signals){
   if(!signals||signals.length===0) return null;
 
-  const toVltDir=(paceDir,hrDir,paceOk)=>{
-    // A) Çapraz doğrulama — iki bağımsız kanıt
+  const toVltDir=(paceDir,hrDir,paceOk,zi=0)=>{
+    // A) Çapraz doğrulama — iki bağımsız kanıt (tüm zonlar geçerli)
     if(paceDir&&hrDir){
       if(paceDir==='fast'&&hrDir!=='high') return 'up';
       if(paceDir==='slow'&&hrDir!=='low')  return 'down';
       return null; // çakışma — pace ve nabız birbirini doğrulamıyor
     }
-    // B) Pace hedefte, nabız sapıyor — eşik kalibrasyonu şüpheli
-    if(paceOk&&hrDir&&!paceDir){
+    // B) Pace hedefte, nabız sapıyor — YALNIZCA Z3+ (zi≥2)
+    // Z1–Z2 kolay koşu nabzı vLT için güvenilmez: aerobik taban ≠ eşik kapasitesi.
+    // Aerobik bazı iyi ama eşiği zayıf sporcu Z2'yi düşük nabızla rahat koşabilir
+    // → yanlış 'up' sinyali üretir. Z3 (Tempo) ve üstü zone'lar bu kanalı besleyebilir.
+    if(zi>=2&&paceOk&&hrDir&&!paceDir){
       if(hrDir==='high') return 'down'; // doğru pace'e gereğinden fazla efor → eşik sanılandan yavaş
       if(hrDir==='low')  return 'up';   // doğru pace'i kolayca sürdürüyor → eşik sanılandan hızlı
     }
@@ -1281,9 +1284,9 @@ function analyzeRecipeFeedbackSignals(signals){
 
   const paceSigs=signals.filter(s=>s.paceDir).length;
   const hrSigs  =signals.filter(s=>s.hrDir).length;
-  const conflictSigs=signals.filter(s=>s.paceDir&&s.hrDir&&!toVltDir(s.paceDir,s.hrDir,false)).length;
+  const conflictSigs=signals.filter(s=>s.paceDir&&s.hrDir&&!toVltDir(s.paceDir,s.hrDir,false,s.zi??0)).length;
 
-  const vltResult =analyzeByDay(signals.map(s=>({...s,dir:toVltDir(s.paceDir,s.hrDir,s.paceOk)})).filter(s=>s.dir));
+  const vltResult =analyzeByDay(signals.map(s=>({...s,dir:toVltDir(s.paceDir,s.hrDir,s.paceOk,s.zi??0)})).filter(s=>s.dir));
 
   return{
     vltAction :vltResult.action  ==='up'?'up' :vltResult.action  ==='down'?'down':null,
