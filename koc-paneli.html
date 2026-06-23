@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.22-1955 --><!DOCTYPE html>
+<!-- Version: v2026.06.23-0932 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.22-1955';
+const APP_VERSION='v2026.06.23-0932';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -10170,15 +10170,36 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
       .slice(0,6);
   })();
 
+  // ── Çeşitlilik verisi — planDay'in pickSeq/fallbackPick rotasyonu için ────
+  // Bu yol yalnızca generateTwoWeekPlan ilgili günü üretemediğinde devreye girer.
+  // Eskiden bu alanlar (turFrekans/turSonKullanim/recentKaliteli/weekOff) eksikti →
+  // o yola düşülünce çeşitlilik tamamen kapanıyordu. Artık tam aktarılıyor.
+  const _recTodayStr=`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+  const _athWksRec=(allWorkouts||[]).filter(w=>w.athleteId===athlete.id);
+  const _turSonKullanimRec=calcTurSonKullanim(_athWksRec,_recTodayStr);
+  const _turFrekansRec=calcTurFrekans(_athWksRec,_recTodayStr,42);
+  const _recentKaliteliRec=_athWksRec
+    .filter(w=>['interval','esik','esik_sureli','tempo','tempo_sureli','piramit','kesintisiz_piramit','on_off','tempo_interval','cruise','yaris_tempo','hill_sprint','yokus_kisa','yokus_uzun'].includes(w.tur))
+    .sort((a,b)=>new Date(b.date)-new Date(a.date))
+    .slice(0,4).map(w=>w.tur);
+  // rotIdx — generateTwoWeekPlan ile aynı formül (history/7 terimi yok, temiz +1/hafta)
+  const _athHashRec=(athlete.id||'').split('').reduce((h,c)=>((h<<5)-h+c.charCodeAt(0))|0,0);
+  const _rotIdxRec=Math.abs(_athHashRec%97)+Math.floor(Date.now()/(7*24*3600*1000))+(athlete._planRotOffset||0);
+
   const wkStatsForPlan={
     count:wkSessions,
     kaliteliYok:!kaliteliYapildi,
     uzunYapildi,
     wkLoad,
     dpHedefHafta:thisWeekTarget?.targetDp||0,
-    weekOff: Math.floor((history.length||0)/7),
+    weekOff: _rotIdxRec,
     isFutureWeek: false,
     recentLongRuns: recentLongRunsForPlan,
+    recentKaliteli: _recentKaliteliRec,
+    buHaftaKaliteli: [],
+    kaliteliSayisi: 0,
+    turSonKullanim: _turSonKullanimRec,
+    turFrekans: _turFrekansRec,
   };
   const todayStr=`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
   const simStateToday={
@@ -11071,7 +11092,9 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
           ()=>tplPiramit(band,zones,phase),
           ()=>tplKesintisizPiramit(band,zones,phase),
           ()=>tplCruise(band,Math.round(55*yMod),zones,phase),
-          ()=>isTrail?tplHillSprint(band,zones,phase):tplOnOff(band,zones,phase),
+          ()=>tplTempoInterval(band,Math.round(52*yMod),zones,phase),
+          ()=>(isTrail||race?.is_trail||(parseFloat(race?.mesafe)||0)>42.195)?tplHillSprint(band,zones,phase):tplYarisTempo(band,Math.round(50*yMod),zones,phase,race,_ytPaceSec),
+          ()=>isTrail?tplYokusKisa(band,zones,phase):tplOnOff(band,zones,phase),
         ];
         kosuTpl=pickSeq(zirveSeq);
       } else if(phase==='Gelişme'){
@@ -11081,6 +11104,8 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
           ()=>tplPiramit(band,zones,phase),
           ()=>tplKesintisizPiramit(band,zones,phase),
           ()=>tplCruise(band,Math.round(50*yMod),zones,phase),
+          ()=>tplEsik(band,Math.round(50*yMod),zones,phase),
+          ()=>tplTempo(band,Math.round(48*yMod),zones,phase),
           ()=>tplOnOff(band,zones,phase),
           ()=>(isTrail||race?.is_trail||(parseFloat(race?.mesafe)||0)>42.195)?tplHillSprint(band,zones,phase):tplYarisTempo(band,Math.round(48*yMod),zones,phase,race,_ytPaceSec),
         ];
@@ -11089,10 +11114,12 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
         const temelSeq=amacKaliteliSeq||[
           ()=>tplProgressive(band,Math.round(50*yMod),zones,phase),
           ()=>tplTempo(band,Math.round(45*yMod),zones,phase),
-          ()=>tplStrides(band,Math.round(50*yMod),zones,phase),
+          ()=>tplEsik(band,Math.round(45*yMod),zones,phase),
           ()=>tplCruise(band,Math.round(45*yMod),zones,phase),
-          ()=>isTrail&&band>=2?tplYokusKisa(band,zones,phase):tplEsik(band,Math.round(45*yMod),zones,phase),
-          ()=>tplInterval(band,phase,zones),
+          ()=>tplStrides(band,Math.round(50*yMod),zones,phase),
+          ()=>tplYokusKisa(band,zones,phase),
+          ()=>tplHillSprint(band,zones,phase),
+          ()=>isTrail&&band>=2?tplYokusUzun(band,zones,phase):tplInterval(band,phase,zones),
         ];
         kosuTpl=pickSeq(temelSeq);
       }
@@ -11100,8 +11127,8 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
       // Temel fazda aerobik günlere zaman zaman strides ekle — amaca göre yönlendir
       const wk=wkStats.weekOff||0;
       if(amacKaliteliSeq){
-        // Amaç seçilmişse amacın ilk şablonunu kullan
-        kosuTpl=amacKaliteliSeq[0]();
+        // Amaç seçilmişse amacın şablonları arasında rotasyonla dön (sabit ilk eleman değil)
+        kosuTpl=amacKaliteliSeq[wk%amacKaliteliSeq.length]();
       } else {
         kosuTpl=wk%3===0
           ?tplStrides(band,Math.round(50*yMod),zones,phase)
@@ -11139,9 +11166,11 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
           const zirveSeq=[
             ()=>isTrail&&band>=3?tplYokusUzun(band,zones,phase):tplInterval(band,phase,zones),
             ()=>tplPiramit(band,zones,phase),
-          ()=>tplKesintisizPiramit(band,zones,phase),
+            ()=>tplKesintisizPiramit(band,zones,phase),
             ()=>tplCruise(band,Math.round(55*yMod),zones,phase),
-            ()=>isTrail?tplHillSprint(band,zones,phase):tplOnOff(band,zones,phase),
+            ()=>tplTempoInterval(band,Math.round(52*yMod),zones,phase),
+            ()=>(isTrail||race?.is_trail||(parseFloat(race?.mesafe)||0)>42.195)?tplHillSprint(band,zones,phase):tplYarisTempo(band,Math.round(50*yMod),zones,phase,race,_ytPaceSec),
+            ()=>isTrail?tplYokusKisa(band,zones,phase):tplOnOff(band,zones,phase),
           ];
           kosuTpl=fallbackPick(zirveSeq);
         } else if(!wkStats.uzunYapildi&&(!uzunGunTanimli||isUzunGun)){
@@ -11155,8 +11184,10 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
             ()=>isTrail&&band>=3?tplYokusKisa(band,zones,phase):tplInterval(band,phase,zones),
             ()=>tplTempoInterval(band,Math.round(50*yMod),zones,phase),
             ()=>tplPiramit(band,zones,phase),
-          ()=>tplKesintisizPiramit(band,zones,phase),
+            ()=>tplKesintisizPiramit(band,zones,phase),
             ()=>tplCruise(band,Math.round(50*yMod),zones,phase),
+            ()=>tplEsik(band,Math.round(50*yMod),zones,phase),
+            ()=>tplTempo(band,Math.round(48*yMod),zones,phase),
             ()=>tplOnOff(band,zones,phase),
             ()=>(isTrail||race?.is_trail||(parseFloat(race?.mesafe)||0)>42.195)?tplHillSprint(band,zones,phase):tplYarisTempo(band,Math.round(48*yMod),zones,phase,race,_ytPaceSec),
           ];
@@ -11172,10 +11203,12 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
           const temelSeq=amacKaliteliSeq||[
             ()=>tplProgressive(band,Math.round(50*yMod),zones,phase),
             ()=>tplTempo(band,Math.round(45*yMod),zones,phase),
-            ()=>tplStrides(band,Math.round(50*yMod),zones,phase),
+            ()=>tplEsik(band,Math.round(45*yMod),zones,phase),
             ()=>tplCruise(band,Math.round(45*yMod),zones,phase),
-            ()=>isTrail&&band>=2?tplYokusKisa(band,zones,phase):tplEsik(band,Math.round(45*yMod),zones,phase),
-            ()=>tplInterval(band,phase,zones),
+            ()=>tplStrides(band,Math.round(50*yMod),zones,phase),
+            ()=>tplYokusKisa(band,zones,phase),
+            ()=>tplHillSprint(band,zones,phase),
+            ()=>isTrail&&band>=2?tplYokusUzun(band,zones,phase):tplInterval(band,phase,zones),
           ];
           kosuTpl=fallbackPick(temelSeq);
         } else if(antrenmanAmaci==='toparlanma'){
@@ -11377,11 +11410,13 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
     // → her sporcu farklı sekans noktasından başlar, benzer history'ye rağmen farklı antrenman alır
     const athHash = (athlete.id||'').split('').reduce((h,c)=>((h<<5)-h+c.charCodeAt(0))|0, 0);
     // rotIdx: sporcu hash'i (sabit, farklı sporcular farklı başlangıç) +
-    // takvim haftası (her hafta +1 ilerler, history.length değişmese bile) +
-    // history derinliği (uzun geçmişte ekstra çeşitlilik) +
+    // takvim haftası (her hafta TAM +1 ilerler) +
     // _planRotOffset (her "Planı Güncelle" basışında +1, anlık çeşitlilik) + weekOff
+    // NOT: Önceki history.length/7 terimi kaldırıldı — haftalık adımı +2 yapıp
+    // çift-uzunluklu sekanslarda yarım kütüphaneyi atlıyordu (3-haftalık katı döngü).
+    // Temiz +1 adım, her sekans uzunluğunda tam kapsama sağlar.
     const _calWeek=Math.floor(Date.now()/(7*24*3600*1000));
-    const rotIdx = Math.abs(athHash % 97) + _calWeek + Math.floor((history.length||0)/7) + (athlete._planRotOffset||0) + weekOff;
+    const rotIdx = Math.abs(athHash % 97) + _calWeek + (athlete._planRotOffset||0) + weekOff;
     
     // Son 4 haftada yapılan kaliteli antrenman tiplerini bul (tekrar önleme)
     // weekOff=1 ise önceki haftanın PLANLANAN kaliteli tiplerini de dahil et
