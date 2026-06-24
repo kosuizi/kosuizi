@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.23-1640 --><!DOCTYPE html>
+<!-- Version: v2026.06.24-1535 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.23-1640';
+const APP_VERSION='v2026.06.24-1535';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -7525,6 +7525,125 @@ function tplKolay(band, sure_dk, zones){
   };
 }
 
+// ── S-Seviye Progresyon Yardımcısı ──────────────────────────────────────────
+// baseIdx: faz×band başlangıç indeksi (0-indexed)
+// phaseStep: mesosikl adımı (0/1/2); 4 haftalık döngü: 0→1→2→0(toparlanma)
+// phaseMaxIdx: fazın izin verdiği en yüksek S-indeksi
+function calcProgressionSIdx(baseIdx, phaseStep, phaseMaxIdx){
+  return Math.min(baseIdx+(phaseStep||0), phaseMaxIdx);
+}
+
+// ── Progresyon İçerik Dizileri (0-indexed; sIdx+1 = S-seviyesi) ─────────────
+// Her giriş YAPI_NOTLARI'ndaki S-sıralamasıyla birebir eşleşir.
+const TEMPO_PROG=[
+  {sets:'2×6 dk',  din:'3 dk',   extra:'Rahat nefes'},
+  {sets:'2×8 dk',  din:'3 dk',   extra:'Rahat nefes'},
+  {sets:'3×8 dk',  din:'2.5 dk', extra:'Rahat nefes'},
+  {sets:'2×12 dk', din:'2.5 dk', extra:'Ritim sabit, son blokta hız artışı yok'},
+  {sets:'3×10 dk', din:'2 dk',   extra:'Ritim sabit, son blokta hız artışı yok'},
+  {sets:'3×12 dk', din:'2 dk',   extra:'Ritim sabit, son blokta hız artışı yok'},
+  {sets:'2×15 dk', din:'2 dk',   extra:'Son blok: sürdürülebilir maksimal tempo'},
+  {sets:'3×15 dk', din:'2 dk',   extra:'Son blok: sürdürülebilir maksimal tempo'},
+];
+const ESIK_PROG=[
+  {sets:'2×8 dk',  din:'2.5 dk', extra:'Hız değil ritim — nefes hafif zorlanıyor'},
+  {sets:'2×10 dk', din:'2.5 dk', extra:'Hız değil ritim — nefes hafif zorlanıyor'},
+  {sets:'3×8 dk',  din:'2.5 dk', extra:'Hız değil ritim — nefes hafif zorlanıyor'},
+  {sets:'2×10 dk', din:'2 dk',   extra:'Son 2 dk her blokta biraz daha sıkıştır'},
+  {sets:'3×10 dk', din:'2 dk',   extra:'Son 2 dk her blokta biraz daha sıkıştır'},
+  {sets:'3×12 dk', din:'2 dk',   extra:'Son 2 dk her blokta biraz daha sıkıştır'},
+  {sets:'3×10 dk', din:'90 sn',  extra:'Kümülatif yorgunluk hedef — son blok en zor'},
+  {sets:'4×10 dk', din:'90 sn',  extra:'Kümülatif yorgunluk hedef — son blok en zor'},
+  {sets:'3×15 dk', din:'90 sn',  extra:'Kümülatif yorgunluk hedef — son blok en zor'},
+];
+// interval: t=tekrar, s=süre(sn), d=dinlenme(sn); t2/s2 = ikinci blok (Zirve fazı)
+const INTERVAL_PROG=[
+  {t:4,s:120,d:180},
+  {t:4,s:180,d:180},
+  {t:5,s:180,d:150},
+  {t:5,s:240,d:180},
+  {t:6,s:180,d:120},
+  {t:6,s:240,d:150},
+  {t:5,s:240,d:120,t2:5,s2:180},
+  {t:6,s:240,d:120,t2:6,s2:120},
+  {t:6,s:240,d:120,t2:6,s2:120}, // S9 (distance-based fallback)
+];
+// yokus_kisa: t=tekrar, s=sprint_sn, din=dinlenme_str
+const YOKUS_KISA_PROG=[
+  {t:5,  s:20, din:'2 dk yürüyüş'},
+  {t:6,  s:20, din:'2 dk yürüyüş'},
+  {t:6,  s:30, din:'2 dk yürüyüş'},
+  {t:6,  s:30, din:'tam yürüyüş inişi'},
+  {t:8,  s:30, din:'tam yürüyüş inişi'},
+  {t:8,  s:45, din:'tam yürüyüş inişi'},
+  {t:10, s:30, din:'yürüyüş inişi'},
+  {t:10, s:45, din:'yürüyüş inişi'},
+];
+const YOKUS_KISA_SURE=[35,37,40,42,45,48,50,55];
+// yokus_uzun: t=tekrar, s=süre_str, din=dinlenme_str
+const YOKUS_UZUN_PROG=[
+  {t:3,s:'2 dk',din:'yürüyüş inişi'},
+  {t:3,s:'3 dk',din:'yürüyüş inişi'},
+  {t:4,s:'3 dk',din:'yürüyüş inişi'},
+  {t:3,s:'4 dk',din:'yürüyüş inişi'},
+  {t:4,s:'4 dk',din:'yürüyüş inişi'},
+  {t:4,s:'5 dk',din:'yürüyüş inişi'},
+  {t:5,s:'4 dk',din:'kısa yürüyüş'},
+  {t:5,s:'5 dk',din:'kısa yürüyüş'},
+];
+const YOKUS_UZUN_SURE=[40,42,45,48,52,57,58,65];
+// cruise: t=tekrar, s=sure_dk, d=dinlenme_sn
+const CRUISE_PROG=[
+  {t:3,s:6, d:90},
+  {t:3,s:8, d:90},
+  {t:4,s:6, d:90},
+  {t:4,s:8, d:90},
+  {t:5,s:8, d:90},
+  {t:4,s:8, d:60},
+  {t:5,s:8, d:60},
+  {t:4,s:10,d:60},
+];
+// on_off: set=tekrar, on/off=sn, tur=tur sayısı
+const ON_OFF_PROG=[
+  {set:6, on:30,off:45,tur:2},
+  {set:8, on:30,off:45,tur:2},
+  {set:8, on:30,off:30,tur:3},
+  {set:10,on:30,off:30,tur:3},
+  {set:12,on:30,off:30,tur:3},
+  {set:10,on:40,off:20,tur:3},
+  {set:12,on:40,off:20,tur:3},
+  {set:15,on:40,off:20,tur:3},
+];
+// tempo_interval: t=tekrar, s=sure_dk, din=dinlenme_str
+const TEMPO_INT_PROG=[
+  {t:2,s:10,din:'3 dk'},
+  {t:2,s:12,din:'3 dk'},
+  {t:3,s:10,din:'3 dk'},
+  {t:2,s:15,din:'3 dk'},
+  {t:3,s:12,din:'3 dk'},
+  {t:3,s:15,din:'2.5 dk'},
+  {t:2,s:20,din:'2.5 dk'},
+];
+// yaris_tempo: t=tekrar, s=sure_dk, din=dinlenme_str
+const YARIS_TEMPO_PROG=[
+  {t:3,s:6, din:'2 dk'},
+  {t:3,s:8, din:'2 dk'},
+  {t:4,s:8, din:'2 dk'},
+  {t:3,s:10,din:'2 dk'},
+  {t:4,s:8, din:'90 sn'},
+  {t:4,s:10,din:'90 sn'},
+  {t:5,s:8, din:'90 sn'},
+];
+// hill_sprint: t=tekrar, s=sprint_sn, din=dinlenme_str, sure=toplam_dk
+const HILL_SPRINT_PROG=[
+  {t:5, s:8, din:'2dk yürüyüş', sure:25},
+  {t:6, s:8, din:'2dk yürüyüş', sure:28},
+  {t:6, s:10,din:'2dk yürüyüş', sure:30},
+  {t:8, s:10,din:'2dk yürüyüş', sure:33},
+  {t:8, s:10,din:'90sn yürüyüş',sure:33},
+  {t:10,s:10,din:'90sn yürüyüş',sure:35},
+];
+
 function tplAerobik(band, sure_dk, zones, disiplin){
   const isPatika=disiplin==='patika'||disiplin==='ultra'||disiplin==='karma';
   return{
@@ -7689,43 +7808,37 @@ function tplPowerHiking(band, zones, dpHedef){
   };
 }
 
-function tplTempo(band, sure_dk, zones, phase='Gelişme'){
-  // Temel: kısa bloklar, uzun dinlenme → Zirve: uzun bloklar, kısa dinlenme
-  // cfg.sets ve dinlenme YAPI_NOTLARI.tempo ile birebir eşleşir (S1–S8)
-  const cfg={
-    'Temel':   {sets:band<=2?'2×6 dk':band===3?'2×8 dk':'3×8 dk', dinlenme:band<=2?'3 dk':band===3?'3 dk':'2.5 dk', extra:'Rahat nefes'},
-    'Gelişme': {sets:band<=2?'2×12 dk':band===3?'3×10 dk':'3×12 dk', dinlenme:band<=2?'2.5 dk':'2 dk', extra:'Ritim sabit, son blokta hız artışı yok'},
-    'Zirve':   {sets:band<=2?'2×15 dk':'3×15 dk', dinlenme:'2 dk', extra:'Son blok: sürdürülebilir maksimal tempo'},
-    'Taper':   {sets:band<=2?'2×6 dk':band===3?'2×8 dk':'3×8 dk', dinlenme:band<=2?'3 dk':band===3?'3 dk':'2.5 dk', extra:'Taper — hafif tempo, yorgunluk yok'},
-  }[phase]||{sets:'2×6 dk',dinlenme:'3 dk',extra:''};
-  // Açık phase_band → S-seviye haritası (indexOf'tan bağımsız, YAPI_NOTLARI ile tutarlı)
-  const tempoLevel={'Temel_12':'S1','Temel_3':'S2','Temel_45':'S3','Gelişme_12':'S4','Gelişme_3':'S5','Gelişme_45':'S6','Zirve_12':'S7','Zirve_3':'S8','Zirve_45':'S8','Taper_12':'S1','Taper_3':'S2','Taper_45':'S3'};
-  const bandKeyT=band<=2?'12':band===3?'3':'45';
-  const seviye=tempoLevel[`${phase}_${bandKeyT}`]||'';
-  const yapiNotu=`Tempo · ${seviye} — ${cfg.sets} / ${cfg.dinlenme} dinlenme`;
+function tplTempo(band, sure_dk, zones, phase='Gelişme', phaseStep=0){
+  // Progresyon: TEMPO_PROG[sIdx] — phaseBase+bandOffset+phaseStep → sIdx
+  const phaseBase={Temel:0,Gelişme:3,Zirve:6,Taper:0}[phase]||0;
+  const bandOff=band<=2?0:band===3?1:2;
+  const phaseMax={Temel:2,Gelişme:5,Zirve:7,Taper:2}[phase]??7;
+  const sIdx=calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax);
+  const cfg=TEMPO_PROG[sIdx];
+  const seviye='S'+(sIdx+1);
+  const extraFinal=phase==='Taper'?'Taper — hafif tempo, yorgunluk yok':cfg.extra;
+  const yapiNotu=`Tempo · ${seviye} — ${cfg.sets} / ${cfg.din} dinlenme`;
   const z3t=zoneInfo(zones,2)||'Z3 tempo';
   return{
     tip:'tempo', sure_dk,
     yapi_notu:yapiNotu,
     yapilar:[
       {baslik:'Isınma',detay:`15 dk kolay koşu Z1 + dinamik ısınma`,_rows:_R.isinma(15)},
-      {baslik:'Z3 Tempo Blokları',detay:`${cfg.sets} Z3 tempo · ${cfg.dinlenme} dinlenme arası · ${cfg.extra}`,_rows:_R.blok('Z3 Tempo',cfg.sets,2,cfg.dinlenme, `${cfg.sets} — ${z3t} · ${cfg.extra}`, `${cfg.dinlenme} dinlenme arası`)},
+      {baslik:'Z3 Tempo Blokları',detay:`${cfg.sets} Z3 tempo · ${cfg.din} dinlenme arası · ${extraFinal}`,_rows:_R.blok('Z3 Tempo',cfg.sets,2,cfg.din, `${cfg.sets} — ${z3t} · ${extraFinal}`, `${cfg.din} dinlenme arası`)},
       {baslik:'Soğuma',detay:`10 dk Z1 kolay koşu`,_rows:_R.soguma(10)},
     ]
   };
 }
 
-function tplEsik(band, sure_dk, zones, phase='Gelişme'){
-  const cfg={
-    'Temel':   {sets:band<=2?'2×8 dk':band===3?'2×10 dk':'3×8 dk',   din:'2.5 dk', extra:'Hız değil ritim — nefes hafif zorlanıyor'},
-    'Gelişme': {sets:band<=2?'2×10 dk':band===3?'3×10 dk':'3×12 dk', din:'2 dk',   extra:'Son 2 dk her blokta biraz daha sıkıştır'},
-    'Zirve':   {sets:band<=2?'3×10 dk':band===3?'4×10 dk':'3×15 dk', din:'90 sn',  extra:'Kümülatif yorgunluk hedef — son blok en zor'},
-  }[phase]||{sets:'2×10 dk',din:'2 dk',extra:''};
-  // Açık phase_band → S-seviye haritası (indexOf bug'u giderildi, YAPI_NOTLARI ile tutarlı)
-  const esikLevel={'Temel_12':'S1','Temel_3':'S2','Temel_45':'S3','Gelişme_12':'S4','Gelişme_3':'S5','Gelişme_45':'S6','Zirve_12':'S7','Zirve_3':'S8','Zirve_45':'S9'};
-  const bandKeyE=band<=2?'12':band===3?'3':'45';
-  const seviyeE=esikLevel[`${phase}_${bandKeyE}`]||'';
-  const yapiNotuE=`Eşik · ${seviyeE} — ${cfg.sets} / ${cfg.din} ara`;
+function tplEsik(band, sure_dk, zones, phase='Gelişme', phaseStep=0){
+  // Progresyon: ESIK_PROG[sIdx]
+  const phaseBase={Temel:0,Gelişme:3,Zirve:6}[phase]||0;
+  const bandOff=band<=2?0:band===3?1:2;
+  const phaseMax={Temel:2,Gelişme:5,Zirve:8}[phase]??8;
+  const sIdx=calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax);
+  const cfg=ESIK_PROG[sIdx];
+  const seviye='S'+(sIdx+1);
+  const yapiNotuE=`Eşik · ${seviye} — ${cfg.sets} / ${cfg.din} ara`;
   return{
     tip:'esik', sure_dk,
     yapi_notu:yapiNotuE,
@@ -7738,44 +7851,35 @@ function tplEsik(band, sure_dk, zones, phase='Gelişme'){
   };
 }
 
-function tplInterval(band, phase, zones){
+function tplInterval(band, phase, zones, phaseStep=0){
   const sure_dk=band<=2?45:band===3?50:band===4?55:60;
   const z5a=zoneInfo(zones,4)||'Z5a VO₂max';
   const z5b=zoneInfo(zones,5)||'Z5b';
-  // Faz + band kombinasyonuyla ilerleyen yapı — YAPI_NOTLARI.interval ile tutarlı
-  const cfg={
-    'Temel':   {b12:`4×2 dk — ${z5a} · 3 dk dinlenme`,   b3:`4×3 dk — ${z5a} · 3 dk`,       b45:`5×3 dk — ${z5a} · 2.5 dk`},
-    'Gelişme': {b12:`5×4 dk — ${z5a} · 3 dk dinlenme`,   b3:`6×3 dk — ${z5a} · 2 dk`,       b45:`6×4 dk — ${z5a} · 2.5 dk`},
-    'Zirve':   {b12:`5×4 dk + 5×3 dk — ${z5a}/${z5b} · 2 dk`, b3:`6×4 dk + 6×2 dk — ${z5a}/${z5b} · 2 dk`, b45:`6×4 dk + 6×2 dk — ${z5a}/${z5b} · 2 dk`},
-  }[phase]||{b12:`4×2 dk — ${z5a} · 3 dk`,b3:`4×3 dk — ${z5a}`,b45:`5×3 dk — ${z5a}`};
-  const blok=band<=2?cfg.b12:band===3?cfg.b3:cfg.b45;
+  // Progresyon: INTERVAL_PROG[sIdx]
+  const phaseBase={Temel:0,Gelişme:3,Zirve:6}[phase]||0;
+  const bandOff=band<=2?0:band===3?1:2;
+  const phaseMax={Temel:2,Gelişme:5,Zirve:8}[phase]??8;
+  const sIdx=calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax);
+  const ic=INTERVAL_PROG[sIdx];
+  const seviye='S'+(sIdx+1);
+  // blok açıklama satırı
+  const dinSn_str=ic.d>=60?Math.round(ic.d/60)+' dk':(ic.d+'sn');
+  const blok=ic.t2
+    ?`${ic.t}×${Math.round(ic.s/60)} dk + ${ic.t2}×${Math.round(ic.s2/60)} dk — ${z5a}/${z5b} · ${dinSn_str} dinlenme`
+    :`${ic.t}×${Math.round(ic.s/60)} dk — ${z5a} · ${dinSn_str} dinlenme`;
   const strides=band<=2?'4×80m':band===3?'4×100m':'6×100m';
   const strideCount=band<=2?4:band===3?4:6;
-  // Yapısal set bilgisi — YAPI_NOTLARI.interval (S1–S8) ile birebir eşleşir
-  const intSetsCfg={
-    'Temel':   {b12:{t:4,s:120,d:180},b3:{t:4,s:180,d:180},b45:{t:5,s:180,d:150}},
-    'Gelişme': {b12:{t:5,s:240,d:180},b3:{t:6,s:180,d:120},b45:{t:6,s:240,d:150}},
-    'Zirve':   {b12:{t:5,s:240,d:120,t2:5,s2:180},b3:{t:6,s:240,d:120,t2:6,s2:120},b45:{t:6,s:240,d:120,t2:6,s2:120}},
-  }[phase]||{b12:{t:4,s:120,d:180},b3:{t:4,s:180,d:180},b45:{t:5,s:180,d:150}};
-  const ic=band<=2?intSetsCfg.b12:band===3?intSetsCfg.b3:intSetsCfg.b45;
-  // _rows: ana blok + opsiyonel ikinci blok
-  const blokParts=blok.split(' · ');
-  const intDinCue=blokParts.length>1?blokParts[blokParts.length-1]:null;
-  const intRunCue=blokParts.length>1?blokParts.slice(0,-1).join(' · '):blok;
-  const intRows=[{label:'Z5a İnterval',sure_sn:ic.s,zIdx:4,tekrar:ic.t,din_sn:ic.d,_cue:intRunCue,_dinCue:intDinCue}];
-  if(ic.t2) intRows.push({label:'Z5b İnterval',sure_sn:ic.s2,zIdx:5,tekrar:ic.t2,din_sn:ic.d,_cue:intRunCue,_dinCue:intDinCue});
-  // İnterval seviyesi: faz + band kombinasyonuna göre
-  const intervalSeviye={
-    'Temel_12':'S1','Temel_3':'S2','Temel_45':'S3',
-    'Gelişme_12':'S4','Gelişme_3':'S5','Gelişme_45':'S6',
-    'Zirve_12':'S7','Zirve_3':'S8','Zirve_45':'S9',
-    'Zirve_1000m':'S9','Zirve_1200m':'S10','Zirve_1600m':'S11',
+  const intRows=[{label:'Z5a İnterval',sure_sn:ic.s,zIdx:4,tekrar:ic.t,din_sn:ic.d,_cue:blok,_dinCue:dinSn_str+' dinlenme'}];
+  if(ic.t2) intRows.push({label:'Z5b İnterval',sure_sn:ic.s2,zIdx:5,tekrar:ic.t2,din_sn:ic.d,_cue:blok,_dinCue:dinSn_str+' dinlenme'});
+  // yapi_notu — YAPI_NOTLARI.interval ile birebir eşleşir
+  const intervalYN={
+    'S1':'Interval · S1 — 4×2 dk / 3dk dinlenme','S2':'Interval · S2 — 4×3 dk / 3dk dinlenme',
+    'S3':'Interval · S3 — 5×3 dk / 2.5dk dinlenme','S4':'Interval · S4 — 5×4 dk / 3dk dinlenme',
+    'S5':'Interval · S5 — 6×3 dk / 2dk dinlenme','S6':'Interval · S6 — 6×4 dk / 2.5dk dinlenme',
+    'S7':'Interval · S7 — 5×4 dk + 5×3 dk / 2dk','S8':'Interval · S8 — 6×4 dk + 6×2 dk / 2dk',
+    'S9':'Interval · S9 — 6×4 dk + 6×2 dk / 2dk',
   };
-  const bandKey=band<=2?'12':band===3?'3':'45';
-  const seviyeI=intervalSeviye[`${phase}_${bandKey}`]||'';
-  // yapi_notu YAPI_NOTLARI.interval ile birebir eşleşir → dropdown uyumu + tplFromYapiNotu parse uyumu
-  const intervalYN={'S1':'Interval · S1 — 4×2 dk / 3dk dinlenme','S2':'Interval · S2 — 4×3 dk / 3dk dinlenme','S3':'Interval · S3 — 5×3 dk / 2.5dk dinlenme','S4':'Interval · S4 — 5×4 dk / 3dk dinlenme','S5':'Interval · S5 — 6×3 dk / 2dk dinlenme','S6':'Interval · S6 — 6×4 dk / 2.5dk dinlenme','S7':'Interval · S7 — 5×4 dk + 5×3 dk / 2dk','S8':'Interval · S8 — 6×4 dk + 6×2 dk / 2dk'};
-  const yapiNotuI=intervalYN[seviyeI]||`VO₂max İnterval · ${seviyeI}`;
+  const yapiNotuI=intervalYN[seviye]||`VO₂max İnterval · ${seviye}`;
   return{
     tip:'interval', sure_dk,
     yapi_notu:yapiNotuI,
@@ -7788,48 +7892,44 @@ function tplInterval(band, phase, zones){
   };
 }
 
-function tplYokusKisa(band, zones, phase='Gelişme'){
-  const cfg={
-    'Temel':   {sets:band<=2?'5×20sn':band===3?'6×20sn':'6×30sn', din:'2 dk yürüyüş', extra:''},
-    'Gelişme': {sets:band<=2?'6×30sn':band===3?'8×30sn':'8×45sn', din:'tam yürüyüş inişi', extra:''},
-    'Zirve':   {sets:band<=2?'10×30sn':band===3?'10×45sn':'10×45sn',din:'yürüyüş inişi', extra:''},
-  }[phase]||{sets:'6×30sn',din:'yürüyüş inişi',extra:''};
-  const sure_dk=phase==='Temel'?(band<=2?35:40):phase==='Zirve'?(band<=2?45:55):(band<=2?40:45);
-  // Açık phase_band → S-seviye haritası (indexOf bug'u giderildi, YAPI_NOTLARI ile tutarlı)
-  const ykLevel={'Temel_12':'S1','Temel_3':'S2','Temel_45':'S3','Gelişme_12':'S4','Gelişme_3':'S5','Gelişme_45':'S6','Zirve_12':'S7','Zirve_3':'S8','Zirve_45':'S8'};
-  const bandKeyYK=band<=2?'12':band===3?'3':'45';
-  const seviyeYK=ykLevel[`${phase}_${bandKeyYK}`]||'';
-  const yapiNotuYK=`Kısa Yokuş · ${seviyeYK} — ${cfg.sets} / ${cfg.din}`;
+function tplYokusKisa(band, zones, phase='Gelişme', phaseStep=0){
+  // Progresyon: YOKUS_KISA_PROG[sIdx]
+  const phaseBase={Temel:0,Gelişme:3,Zirve:6}[phase]||0;
+  const bandOff=band<=2?0:band===3?1:2;
+  const phaseMax={Temel:2,Gelişme:5,Zirve:7}[phase]??7;
+  const sIdx=calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax);
+  const cfg=YOKUS_KISA_PROG[sIdx];
+  const sure_dk=YOKUS_KISA_SURE[sIdx]||40;
+  const seviye='S'+(sIdx+1);
+  const yapiNotuYK=`Kısa Yokuş · ${seviye} — ${cfg.t}×${cfg.s}sn / ${cfg.din}`;
   return{
     tip:'yokus_kisa', sure_dk,
     yapi_notu:yapiNotuYK,
     yapilar:[
       {baslik:'Isınma',detay:`15 dk — ${zoneInfo(zones,1)||'Z1–Z2'}`,_rows:_R.isinma(15)},
-      {baslik:'Maks. Yokuş Çıkışları',detay:`${cfg.sets} maksimal çıkış (eğim %8–12) · RPE 9–10 · ${cfg.din}${cfg.extra?' · '+cfg.extra:''}`,_rows:(()=>{const p=parseSetsStr(cfg.sets);return p?[{label:'Yokuş Sprint',sure_sn:p.sure_sn,zIdx:5,tekrar:p.tekrar,din_sn:120,isSprint:true,rpe:'9–10'}]:[];})()},
+      {baslik:'Maks. Yokuş Çıkışları',detay:`${cfg.t}×${cfg.s}sn maksimal çıkış (eğim %8–12) · RPE 9–10 · ${cfg.din}`,_rows:[{label:'Yokuş Sprint',sure_sn:cfg.s,zIdx:5,tekrar:cfg.t,din_sn:parseDinStr(cfg.din),isSprint:true,rpe:'9–10'}]},
       {baslik:'Soğuma',detay:`10 dk Z1 kolay koşu`,_rows:_R.soguma(10)},
     ]
   };
 }
 
-function tplYokusUzun(band, zones, phase='Gelişme'){
-  const cfg={
-    'Temel':   {sets:band<=2?'3×2 dk':band===3?'3×3 dk':'4×3 dk', din:'yürüyüş inişi', extra:'Z3–Z4'},
-    'Gelişme': {sets:band<=2?'3×4 dk':band===3?'4×4 dk':'4×5 dk', din:'yürüyüş inişi', extra:''},
-    'Zirve':   {sets:band<=2?'5×4 dk':band===3?'5×5 dk':'5×5 dk', din:'kısa yürüyüş',  extra:''},
-  }[phase]||{sets:'3×4 dk',din:'yürüyüş inişi',extra:''};
-  const sure_dk=phase==='Temel'?(band<=2?40:45):phase==='Zirve'?(band<=2?55:65):(band<=2?45:55);
+function tplYokusUzun(band, zones, phase='Gelişme', phaseStep=0){
+  // Progresyon: YOKUS_UZUN_PROG[sIdx]
+  const phaseBase={Temel:0,Gelişme:3,Zirve:6}[phase]||0;
+  const bandOff=band<=2?0:band===3?1:2;
+  const phaseMax={Temel:2,Gelişme:5,Zirve:7}[phase]??7;
+  const sIdx=calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax);
+  const cfg=YOKUS_UZUN_PROG[sIdx];
+  const sure_dk=YOKUS_UZUN_SURE[sIdx]||45;
   const z4=zoneInfo(zones,3)||'Z4';
-  // Açık phase_band → S-seviye haritası (indexOf bug'u giderildi, YAPI_NOTLARI ile tutarlı)
-  const yuLevel={'Temel_12':'S1','Temel_3':'S2','Temel_45':'S3','Gelişme_12':'S4','Gelişme_3':'S5','Gelişme_45':'S6','Zirve_12':'S7','Zirve_3':'S8','Zirve_45':'S8'};
-  const bandKeyYU=band<=2?'12':band===3?'3':'45';
-  const seviyeYU=yuLevel[`${phase}_${bandKeyYU}`]||'';
-  const yapiNotuYU=`Uzun Yokuş · ${seviyeYU} — ${cfg.sets} / ${cfg.din}`;
+  const seviye='S'+(sIdx+1);
+  const yapiNotuYU=`Uzun Yokuş · ${seviye} — ${cfg.t}×${cfg.s} / ${cfg.din}`;
   return{
     tip:'yokus_uzun', sure_dk,
     yapi_notu:yapiNotuYU,
     yapilar:[
       {baslik:'Isınma',detay:`15 dk — ${zoneInfo(zones,1)||'Z1–Z2'}`,_rows:_R.isinma(15)},
-      {baslik:'Z4 Yokuş Çıkışları',detay:`${cfg.sets} çıkış (eğim %6–10) — ${z4} · ${cfg.din}${cfg.extra?' · '+cfg.extra:''}`,_rows:(()=>{const p=parseSetsStr(cfg.sets);return p?[{label:'Z4 Yokuş',sure_sn:p.sure_sn,zIdx:3,tekrar:p.tekrar,din_sn:parseDinStr(cfg.din),rpe:'7–8'}]:[];})()},
+      {baslik:'Z4 Yokuş Çıkışları',detay:`${cfg.t}×${cfg.s} çıkış (eğim %6–10) — ${z4} · ${cfg.din}`,_rows:(()=>{const p=parseSetsStr(`${cfg.t}×${cfg.s}`);return p?[{label:'Z4 Yokuş',sure_sn:p.sure_sn,zIdx:3,tekrar:p.tekrar,din_sn:parseDinStr(cfg.din),rpe:'7–8'}]:[];})()},
       {baslik:'Soğuma',detay:`10 dk Z1 kolay koşu`,_rows:_R.soguma(10)},
     ]
   };
@@ -7934,30 +8034,27 @@ function tplKesintisizPiramit(band, zones, phase='Gelişme'){
 }
 
 // ── Cruise Intervals ─────────────────────────────────────────────────────────
-function tplCruise(band, sure_dk, zones, phase='Gelişme'){
+function tplCruise(band, sure_dk, zones, phase='Gelişme', phaseStep=0){
   const z4=zoneInfo(zones,3)||'Z4 Eşik';
-  const cfg={
-    'Temel':   {sets:band<=2?'3×6 dk':band===3?'3×8 dk':'4×6 dk',   din:'90 sn', dinTur:'hafif koşu (Z1)', extra:''},
-    'Gelişme': {sets:band<=2?'4×8 dk':band===3?'5×8 dk':'4×8 dk',   din:band<=2?'90 sn':band===3?'90 sn':'60 sn', dinTur:'hafif koşu (Z1)', extra:''},
-    'Zirve':   {sets:band<=2?'5×8 dk':band===3?'4×10 dk':'5×8 dk',  din:'60 sn', dinTur:'hafif koşu (Z1)', extra:''},
-  }[phase]||{sets:'3×6 dk',din:'90 sn',dinTur:'hafif koşu',extra:''};
-  // Açık phase_band → S-seviye haritası (indexOf bug'u giderildi, YAPI_NOTLARI ile tutarlı)
-  const cruiseLevel={'Temel_12':'S1','Temel_3':'S2','Temel_45':'S3','Gelişme_12':'S4','Gelişme_3':'S5','Gelişme_45':'S6','Zirve_12':'S7','Zirve_3':'S8','Zirve_45':'S8'};
-  const bandKeyC=band<=2?'12':band===3?'3':'45';
-  const seviyeC=cruiseLevel[`${phase}_${bandKeyC}`]||'';
-  const yapiNotuC=`Cruise · ${seviyeC} — ${cfg.sets} / ${cfg.din} ara`;
+  // Progresyon: CRUISE_PROG[sIdx]
+  const phaseBase={Temel:0,Gelişme:3,Zirve:6}[phase]||0;
+  const bandOff=band<=2?0:band===3?1:2;
+  const phaseMax={Temel:2,Gelişme:5,Zirve:7}[phase]??7;
+  const sIdx=calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax);
+  const cp=CRUISE_PROG[sIdx];
+  const seviye='S'+(sIdx+1);
+  const dinStr=cp.d+'sn';
+  const setsStr=`${cp.t}×${cp.s} dk`;
+  const yapiNotuC=`Cruise · ${seviye} — ${setsStr} / ${dinStr} ara`;
+  const dinTur='hafif koşu (Z1)';
   return{
     tip:'esik', sure_dk,
     yapi_notu:yapiNotuC,
     yapilar:[
       {baslik:'Isınma',detay:`15 dk Z1 kolay koşu`,_rows:_R.isinma(15)},
-      {baslik:'Z4 Cruise Blokları',detay:`${cfg.sets} — ${z4}${cfg.extra?' · '+cfg.extra:''}`,_rows:(()=>{
-        const _cr=_R.blok('Z4 Cruise',cfg.sets,3,cfg.din);
-        const _extraIsDin=cfg.extra.startsWith(cfg.din);
-        if(_cr[0]){
-          _cr[0]._cue=_extraIsDin?`${cfg.sets} — ${z4}`:`${cfg.sets} — ${z4} · ${cfg.extra}`;
-          _cr[0]._dinCue=_extraIsDin?cfg.extra:`${cfg.din} ${cfg.dinTur}`;
-        }
+      {baslik:'Z4 Cruise Blokları',detay:`${setsStr} — ${z4}`,_rows:(()=>{
+        const _cr=_R.blok('Z4 Cruise',setsStr,3,dinStr);
+        if(_cr[0]){_cr[0]._cue=`${setsStr} — ${z4}`;_cr[0]._dinCue=`${dinStr} ${dinTur}`;}
         return _cr;
       })()},
       {baslik:'Soğuma',detay:`10 dk Z1 hafif koşu + esneme`,_rows:_R.soguma(10)},
@@ -8001,35 +8098,32 @@ function tplProgressive(band, sure_dk, zones, phase='Gelişme'){
 }
 
 // ── On-Off (Fartlek) ─────────────────────────────────────────────────────────
-function tplOnOff(band, zones, phase='Gelişme'){
+function tplOnOff(band, zones, phase='Gelişme', phaseStep=0){
   const z5a=zoneInfo(zones,4)||'Z5a'; const z1=zoneInfo(zones,0)||'Z1';
-  const cfg={
-    'Temel':   {sets:band<=2?'6 set':band===3?'8 set':'8 set', acik:'30sn', kapali:band<=2?'45sn':band===3?'45sn':'30sn', tur:band<=2?2:band===3?2:3, sure:band<=2?32:band===3?38:38},
-    'Gelişme': {sets:band<=2?'10 set':band===3?'12 set':'10 set', acik:band<=2?'30sn':band===3?'30sn':'40sn', kapali:band<=2?'30sn':band===3?'30sn':'20sn', tur:3, sure:band<=2?38:band===3?44:44},
-    'Zirve':   {sets:band<=2?'12 set':band===3?'15 set':'15 set', acik:'40sn', kapali:'20sn', tur:3, sure:band<=2?44:band===3?50:50},
-  }[phase]||{sets:'6 set',acik:'30sn',kapali:'45sn',tur:2,sure:32};
-  const onoffLevel={'Temel_12':'S1','Temel_3':'S2','Temel_45':'S3','Gelişme_12':'S4','Gelişme_3':'S5','Gelişme_45':'S6','Zirve_12':'S7','Zirve_3':'S8','Zirve_45':'S9'};
-  const onoffKey=`${phase}_${band<=2?'12':band===3?'3':'45'}`;
-  const seviyeOO=onoffLevel[onoffKey]||'';
-  const yapiNotuOO=`On-Off · ${seviyeOO} — ${cfg.sets}: ${cfg.acik}/${cfg.kapali} × ${cfg.tur} tur`;
-  const ooTekrar=parseInt(cfg.sets)||8;
-  const ooAcikSn=parseDinStr(cfg.acik);
-  const ooKapaliSn=parseDinStr(cfg.kapali);
+  // Progresyon: ON_OFF_PROG[sIdx]
+  const phaseBase={Temel:0,Gelişme:3,Zirve:6}[phase]||0;
+  const bandOff=band<=2?0:band===3?1:2;
+  const phaseMax={Temel:2,Gelişme:5,Zirve:7}[phase]??7;
+  const sIdx=calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax);
+  const oo=ON_OFF_PROG[sIdx];
+  const seviye='S'+(sIdx+1);
+  const sure_dk=Math.round((oo.set*(oo.on+oo.off)*oo.tur)/60)+18;
+  const yapiNotuOO=`On-Off · ${seviye} — ${oo.set} set: ${oo.on}sn/${oo.off}sn × ${oo.tur} tur`;
   const turBloklar=[];
-  for(let t=0;t<cfg.tur;t++){
+  for(let t=0;t<oo.tur;t++){
     turBloklar.push({
-      baslik:`Tur ${t+1} — ${cfg.sets} set (${cfg.acik} ON / ${cfg.kapali} OFF)`,
+      baslik:`Tur ${t+1} — ${oo.set} set (${oo.on}sn ON / ${oo.off}sn OFF)`,
       detay:`ON: ${z5a} VO2max efor · OFF: ${z1} hafif koşu — ayaklar durmuyor · Form bozulmamalı`,
-      _rows:[{label:`Tur ${t+1} — ON`,sure_sn:ooAcikSn,zIdx:4,tekrar:ooTekrar,din_sn:ooKapaliSn,dinZIdx:0,rpe:'9–10'}]
+      _rows:[{label:`Tur ${t+1} — ON`,sure_sn:oo.on,zIdx:4,tekrar:oo.set,din_sn:oo.off,dinZIdx:0,rpe:'9–10'}]
     });
-    if(t<cfg.tur-1) turBloklar.push({
+    if(t<oo.tur-1) turBloklar.push({
       baslik:'Tur Arası Toparlanma',
       detay:'3–5 dk Z1 yürüyüş veya çok kolay koşu · Nefes toparla, bir sonraki tura hazırlan',
       _rows:[{label:'Tur Arası',sure_sn:240,zIdx:0}]
     });
   }
   return{
-    tip:'interval', sure_dk:cfg.sure,
+    tip:'interval', sure_dk,
     yapi_notu:yapiNotuOO,
     yapilar:[
       {baslik:'Isınma',detay:`10 dk Z1 kolay koşu`,_rows:_R.isinma(10)},
@@ -8040,32 +8134,31 @@ function tplOnOff(band, zones, phase='Gelişme'){
 }
 
 // ── Tempo Intervals ──────────────────────────────────────────────────────────
-function tplTempoInterval(band, sure_dk, zones, phase='Gelişme'){
+function tplTempoInterval(band, sure_dk, zones, phase='Gelişme', phaseStep=0){
   const z4=zoneInfo(zones,3)||'Z4';
-  const cfg={
-    'Temel':   {sets:band<=2?'2×10 dk':band===3?'2×12 dk':'3×10 dk', din:'3 dk', dinTur:'yürüyüş', extra:''},
-    'Gelişme': {sets:band<=2?'2×15 dk':band===3?'3×12 dk':'3×15 dk', din:band<=2?'3 dk':band===3?'3 dk':'2.5 dk', dinTur:'yürüyüş', extra:''},
-    'Zirve':   {sets:band<=2?'2×20 dk':band===3?'3×15 dk':'2×20 dk', din:'2.5 dk', dinTur:'yürüyüş', extra:''},
-  }[phase]||{sets:'2×10 dk',din:'3 dk',dinTur:'yürüyüş',extra:''};
-  // Açık phase_band → S-seviye haritası (çakışma giderildi, YAPI_NOTLARI ile tutarlı)
-  const tiLevel={'Temel_12':'S1','Temel_3':'S2','Temel_45':'S3','Gelişme_12':'S4','Gelişme_3':'S5','Gelişme_45':'S6','Zirve_12':'S7','Zirve_3':'S6','Zirve_45':'S7'};
-  const bandKeyTI=band<=2?'12':band===3?'3':'45';
-  const seviye=tiLevel[`${phase}_${bandKeyTI}`]||'';
-  const yapiNotu=`Tempo Interval · ${seviye} — ${cfg.sets} / ${cfg.din} ara`;
+  // Progresyon: TEMPO_INT_PROG[sIdx]
+  const phaseBase={Temel:0,Gelişme:3,Zirve:6}[phase]||0;
+  const bandOff=band<=2?0:band===3?1:2;
+  const phaseMax={Temel:2,Gelişme:5,Zirve:6}[phase]??6;
+  const sIdx=calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax);
+  const ti=TEMPO_INT_PROG[sIdx];
+  const seviye='S'+(sIdx+1);
+  const setsStr=`${ti.t}×${ti.s} dk`;
+  const yapiNotu=`Tempo Interval · ${seviye} — ${setsStr} / ${ti.din} ara`;
   return{
     tip:'tempo', sure_dk,
     yapi_notu:yapiNotu,
     yapilar:[
       {baslik:'Isınma',detay:`12 dk Z1 kolay koşu`,_rows:_R.isinma(12)},
       {baslik:'💡 Strides Önerisi',detay:`3×100m ısınma sonu strides — arası 45sn yürüyüş (opsiyonel)`,_rows:_R.strides('Strides',3,25)},
-      {baslik:'Z4 Tempo Blokları',detay:`${cfg.sets} — ${z4} · ${cfg.din} dinlenme${cfg.extra?' · '+cfg.extra:''}`,_rows:_R.blok('Z4 Tempo İnterval',cfg.sets,3,cfg.din, cfg.extra.startsWith(cfg.din)?`${cfg.sets} — ${z4}`:`${cfg.sets} — ${z4} · ${cfg.extra}`, cfg.extra.startsWith(cfg.din)?cfg.extra:`${cfg.din} ${cfg.dinTur}`)},
+      {baslik:'Z4 Tempo Blokları',detay:`${setsStr} — ${z4} · ${ti.din} dinlenme`,_rows:_R.blok('Z4 Tempo İnterval',setsStr,3,ti.din, `${setsStr} — ${z4}`, `${ti.din} yürüyüş`)},
       {baslik:'Soğuma',detay:`10 dk Z1 hafif koşu`,_rows:_R.soguma(10)},
     ]
   };
 }
 
 // ── Yarış Temposu (Race Pace) ─────────────────────────────────────────────────
-function tplYarisTempo(band, sure_dk, zones, phase='Zirve', race=null, racePaceSec=null){
+function tplYarisTempo(band, sure_dk, zones, phase='Zirve', race=null, racePaceSec=null, phaseStep=0){
   const km=parseFloat(race?.mesafe)||0;
   // Pace kaynağı: 1) raceHedefSure'dan gelen spesifik hedef pace (öncelikli)
   //               2) mesafeye göre zone fallback (5K→Z5a, 10K/HM→Z4, Maraton→Z3)
@@ -8082,46 +8175,50 @@ function tplYarisTempo(band, sure_dk, zones, phase='Zirve', race=null, racePaceS
     const raceZoneLabel=km>0&&km<=5?'Z5a 5K Yarış Temposu':km>21.5?'Z3 Maraton Temposu':'Z4 Yarış Temposu';
     zYT=zoneInfo(zones,raceZoneIdx)||raceZoneLabel;
   }
-  const cfg={
-    'Gelişme': {sets:band<=2?'3×10 dk':band===3?'4×8 dk':'4×8 dk',  din:band<=2?'2 dk':'90 sn', dinTur:'hafif koşu (Z1)', extra:'Yarış hissini tanı, paniklemeden sürdür'},
-    'Zirve':   {sets:band<=2?'4×10 dk':band===3?'5×8 dk':'5×8 dk',  din:'90 sn', dinTur:'hafif koşu (Z1)', extra:'Yarış günü psikolojisi: formun yeterli, güven'},
-    'Taper':   {sets:band<=2?'3×6 dk':band===3?'3×8 dk':'4×8 dk',   din:'2 dk', dinTur:'yürüyüş', extra:'Canlılık hissi için — bitkinlik değil aktivasyon'},
-  }[phase]||{sets:'3×6 dk',din:'2 dk',dinTur:'hafif koşu',extra:''};
-  // Açık phase_band → S-seviye haritası (indexOf bug'u giderildi, YAPI_NOTLARI ile tutarlı)
-  const ytLevel={'Taper_12':'S1','Taper_3':'S2','Taper_45':'S3','Gelişme_12':'S4','Gelişme_3':'S5','Gelişme_45':'S5','Zirve_12':'S6','Zirve_3':'S7','Zirve_45':'S7'};
-  const bandKeyYT=band<=2?'12':band===3?'3':'45';
-  const seviyeYT=ytLevel[`${phase}_${bandKeyYT}`]||'';
-  const yapiNotuYT=`Yarış Temposu · ${seviyeYT} — ${cfg.sets} / ${cfg.din} ara`;
+  // Progresyon: YARIS_TEMPO_PROG[sIdx]
+  const phaseBase={Taper:0,Gelişme:3,Zirve:5}[phase]||0;
+  const bandOff=band<=2?0:band===3?1:2;
+  const phaseMax={Taper:2,Gelişme:4,Zirve:6}[phase]??6;
+  const sIdx=calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax);
+  const yt=YARIS_TEMPO_PROG[sIdx];
+  const seviye='S'+(sIdx+1);
+  const setsStr=`${yt.t}×${yt.s} dk`;
+  const yapiNotuYT=`Yarış Temposu · ${seviye} — ${setsStr} / ${yt.din} ara`;
+  const extraYT=phase==='Taper'?'Canlılık hissi için — bitkinlik değil aktivasyon':
+                phase==='Gelişme'?'Yarış hissini tanı, paniklemeden sürdür':
+                'Yarış günü psikolojisi: formun yeterli, güven';
+  const dinTurYT=phase==='Taper'?'yürüyüş':'hafif koşu (Z1)';
   return{
     tip:'esik', sure_dk,
     yapi_notu:yapiNotuYT,
     yapilar:[
       {baslik:'Isınma',detay:`15 dk Z1 kolay koşu`,_rows:_R.isinma(15)},
       {baslik:'💡 Strides Önerisi',detay:`4×80m ısınma sonu strides — arası 45sn yürüyüş (opsiyonel)`,_rows:_R.strides('Strides',4,20)},
-      {baslik:'Yarış Pace Blokları',detay:`${cfg.sets} — ${zYT} · ${cfg.extra}`,_rows:_R.blok('Yarış Pace',cfg.sets,raceZoneIdx,cfg.din, `${cfg.sets} — ${zYT} · ${cfg.extra}`, `${cfg.din} ${cfg.dinTur}`)},
+      {baslik:'Yarış Pace Blokları',detay:`${setsStr} — ${zYT} · ${extraYT}`,_rows:_R.blok('Yarış Pace',setsStr,raceZoneIdx,yt.din, `${setsStr} — ${zYT} · ${extraYT}`, `${yt.din} ${dinTurYT}`)},
       {baslik:'Soğuma',detay:`10 dk Z1 hafif koşu`,_rows:_R.soguma(10)},
     ]
   };
 }
 
 // ── Hill Sprints ─────────────────────────────────────────────────────────────
-function tplHillSprint(band, zones, phase='Gelişme'){
-  const cfg={
-    'Temel':   {sets:band<=2?'5':band===3?'6':'6', sureSn:band<=2?8:band===3?8:10, din:band<=2?'2dk yürüyüş':band===3?'2dk yürüyüş':'2dk yürüyüş', sure:25, extra:'Form öncelikli: öne eğim, kolları kullan — nabız ölçütü yok'},
-    'Gelişme': {sets:band<=2?'8':band===3?'8':'10', sureSn:10, din:band<=2?'2dk yürüyüş':'90sn yürüyüş', sure:30, extra:'Her sette tam efor — toparlanma süresi kısalmaz'},
-    'Zirve':   {sets:'10', sureSn:10, din:'90sn yürüyüş', sure:35, extra:'Son 2 set: dik yokuşta (>%12) — maksimal güç çıkışı'},
-  }[phase]||{sets:'5',sureSn:8,din:'2dk yürüyüş',sure:25,extra:''};
-  const bandPhaseKey=`${phase}_${band<=2?'12':band===3?'3':'45'}`;
-  // WL yalnızca S1–S6 tanımlı; Zirve kombinasyonları S6'ya mapli
-  const hsLevel={'Temel_12':'S1','Temel_3':'S2','Temel_45':'S3','Gelişme_12':'S4','Gelişme_3':'S5','Gelişme_45':'S6','Zirve_12':'S6','Zirve_3':'S6','Zirve_45':'S6'};
-  const seviyeHS=hsLevel[bandPhaseKey]||'';
-  const yapiNotuHS=`Hill Sprint · ${seviyeHS} — ${cfg.sets}×${cfg.sureSn}sn / ${cfg.din}`;
+function tplHillSprint(band, zones, phase='Gelişme', phaseStep=0){
+  // Progresyon: HILL_SPRINT_PROG[sIdx]
+  const phaseBase={Temel:0,Gelişme:3,Zirve:5}[phase]||0;
+  const bandOff=band<=2?0:band===3?1:2;
+  const phaseMax={Temel:2,Gelişme:5,Zirve:5}[phase]??5;
+  const sIdx=calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax);
+  const hs=HILL_SPRINT_PROG[sIdx];
+  const seviye='S'+(sIdx+1);
+  const extraHS=phase==='Temel'?'Form öncelikli: öne eğim, kolları kullan — nabız ölçütü yok':
+                phase==='Gelişme'?'Her sette tam efor — toparlanma süresi kısalmaz':
+                'Son 2 set: dik yokuşta (>%12) — maksimal güç çıkışı';
+  const yapiNotuHS=`Hill Sprint · ${seviye} — ${hs.t}×${hs.s}sn / ${hs.din}`;
   return{
-    tip:'yokus_kisa', sure_dk:cfg.sure,
+    tip:'yokus_kisa', sure_dk:hs.sure,
     yapi_notu:yapiNotuHS,
     yapilar:[
       {baslik:'Isınma',detay:`15 dk Z1 kolay koşu`,_rows:_R.isinma(15)},
-      {baslik:'Maks. Yokuş Sprintleri',detay:`${cfg.sets}×${cfg.sureSn}sn maksimal çıkış (%8–12 eğim) · RPE 10 · ${cfg.extra}`,_rows:[{label:'Hill Sprint',sure_sn:cfg.sureSn,zIdx:5,tekrar:parseInt(cfg.sets),din_sn:parseDinStr(cfg.din),isSprint:true,rpe:'10'}]},
+      {baslik:'Maks. Yokuş Sprintleri',detay:`${hs.t}×${hs.s}sn maksimal çıkış (%8–12 eğim) · RPE 10 · ${extraHS}`,_rows:[{label:'Hill Sprint',sure_sn:hs.s,zIdx:5,tekrar:hs.t,din_sn:parseDinStr(hs.din),isSprint:true,rpe:'10'}]},
       {baslik:'Soğuma',detay:`10 dk düz zeminde Z1 hafif koşu + esneme`,_rows:_R.soguma(10)},
     ]
   };
@@ -10188,6 +10285,8 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   // rotIdx — generateTwoWeekPlan ile aynı formül (history/7 terimi yok, temiz +1/hafta)
   const _athHashRec=(athlete.id||'').split('').reduce((h,c)=>((h<<5)-h+c.charCodeAt(0))|0,0);
   const _rotIdxRec=Math.abs(_athHashRec%97)+Math.floor(Date.now()/(7*24*3600*1000))+(athlete._planRotOffset||0);
+  // phaseStep: recommendWorkout için rotIdx'ten hesapla
+  const _phaseStepRec=(phase==='Taper'||phase==='Yarış Sonrası')?0:(_rotIdxRec%4===3?0:_rotIdxRec%4);
 
   const wkStatsForPlan={
     count:wkSessions,
@@ -10203,6 +10302,7 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
     kaliteliSayisi: 0,
     turSonKullanim: _turSonKullanimRec,
     turFrekans: _turFrekansRec,
+    phaseStep: _phaseStepRec,
   };
   const todayStr=`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
   const simStateToday={
@@ -10318,10 +10418,10 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
     const kaliteTip=ctl>40?'interval':'esik';
     let kaliteTpl;
     if(kaliteTip==='interval'){
-      kaliteTpl=tplInterval(band,phase,zones);
+      kaliteTpl=tplInterval(band,phase,zones,phaseStep);
     } else {
       const kaliteSure=Math.round(55*yMod);
-      kaliteTpl=tplEsik(band,kaliteSure,zones,phase);
+      kaliteTpl=tplEsik(band,kaliteSure,zones,phase,phaseStep);
     }
     const kaliteSure=kaliteTpl.sure_dk||Math.round(50*yMod);
     tpl={...kaliteTpl,sure_dk:kaliteSure,_upgraded:true,_originalTip:orijinalTip};
@@ -10587,6 +10687,8 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
   const dpGun=wkStats.uzunYapildi&&phase!=='Zirve'?0:Math.round((wkStats.dpHedefHafta||0)/Math.max(1,wkStats.uzunKalanSayi||1));
   const sonYogunGun=wkStats.sonYogunGun||false;
   const haftaGunTipi=wkStats.haftaGunTipi||null;
+  // phaseStep: Taper/Yarış Sonrası fazlarında sıfıra düşürülür (yük azaltma dönemi)
+  const phaseStep=(phase==='Taper'||phase==='Yarış Sonrası')?0:(wkStats.phaseStep||0);
 
   // ── Yarışsız dönem antrenman amacı ───────────────────────────────────────
   // Sporcunun seçili amacı — yalnızca aktif yarış yokken antrenman seçimine etki eder
@@ -10595,38 +10697,38 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
   const amacKaliteliSeq=antrenmanAmaci?(()=>{
     switch(antrenmanAmaci){
       case 'hiz_gelistir': return[
-        ()=>tplInterval(band,phase,zones),
+        ()=>tplInterval(band,phase,zones,phaseStep),
         ()=>tplPiramit(band,zones,phase),
-        ()=>tplTempo(band,Math.round(45*yMod),zones,phase),
-        ()=>tplOnOff(band,zones,phase),
+        ()=>tplTempo(band,Math.round(45*yMod),zones,phase,phaseStep),
+        ()=>tplOnOff(band,zones,phase,phaseStep),
         ()=>tplKesintisizPiramit(band,zones,phase),
         ()=>tplStrides(band,Math.round(50*yMod),zones,phase),
       ];
       case 'kuvvet_gelistir': return[
-        ()=>tplYokusKisa(band,zones,phase),
-        ()=>tplHillSprint(band,zones,phase),
-        ()=>tplYokusUzun(band,zones,phase),
+        ()=>tplYokusKisa(band,zones,phase,phaseStep),
+        ()=>tplHillSprint(band,zones,phase,phaseStep),
+        ()=>tplYokusUzun(band,zones,phase,phaseStep),
         ()=>tplTirmanisAcik(band,Math.round(60*yMod),zones,dpGun||200),
-        ()=>tplInterval(band,phase,zones),
+        ()=>tplInterval(band,phase,zones,phaseStep),
       ];
       case 'vo2max_artir': return[
-        ()=>tplInterval(band,phase,zones),
+        ()=>tplInterval(band,phase,zones,phaseStep),
         ()=>tplPiramit(band,zones,phase),
         ()=>tplKesintisizPiramit(band,zones,phase),
-        ()=>tplOnOff(band,zones,phase),
-        ()=>tplTempoInterval(band,Math.round(50*yMod),zones,phase),
+        ()=>tplOnOff(band,zones,phase,phaseStep),
+        ()=>tplTempoInterval(band,Math.round(50*yMod),zones,phase,phaseStep),
       ];
       case 'aerobik_taban': return[
         ()=>tplAerobik(band,Math.round(60*yMod),zones,disiplin),
         ()=>tplProgressive(band,Math.round(55*yMod),zones,phase),
         ()=>tplStrides(band,Math.round(55*yMod),zones,phase),
-        ()=>tplCruise(band,Math.round(50*yMod),zones,phase),
+        ()=>tplCruise(band,Math.round(50*yMod),zones,phase,phaseStep),
       ];
       case 'hacim_artir': return[
         ()=>tplAerobik(band,Math.round(60*yMod),zones,disiplin),
         ()=>tplProgressive(band,Math.round(55*yMod),zones,phase),
-        ()=>tplTempo(band,Math.round(50*yMod),zones,phase),
-        ()=>tplCruise(band,Math.round(55*yMod),zones,phase),
+        ()=>tplTempo(band,Math.round(50*yMod),zones,phase,phaseStep),
+        ()=>tplCruise(band,Math.round(55*yMod),zones,phase,phaseStep),
         ()=>tplStrides(band,Math.round(55*yMod),zones,phase),
       ];
       case 'toparlanma': return[
@@ -10636,10 +10738,10 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
       ];
       case 'genel_kondisyon': return[
         ()=>tplProgressive(band,Math.round(50*yMod),zones,phase),
-        ()=>tplTempo(band,Math.round(45*yMod),zones,phase),
-        ()=>tplInterval(band,phase,zones),
-        ()=>isTrail&&band>=2?tplYokusKisa(band,zones,phase):tplEsik(band,Math.round(45*yMod),zones,phase),
-        ()=>tplCruise(band,Math.round(50*yMod),zones,phase),
+        ()=>tplTempo(band,Math.round(45*yMod),zones,phase,phaseStep),
+        ()=>tplInterval(band,phase,zones,phaseStep),
+        ()=>isTrail&&band>=2?tplYokusKisa(band,zones,phase,phaseStep):tplEsik(band,Math.round(45*yMod),zones,phase,phaseStep),
+        ()=>tplCruise(band,Math.round(50*yMod),zones,phase,phaseStep),
         ()=>tplStrides(band,Math.round(50*yMod),zones,phase),
       ];
       default: return null; // hacim_koru: mevcut mantığı kullan
@@ -10889,7 +10991,7 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
         if(taperKaliteliSira===0){
           // İlk kaliteli gün: kısa tempo
           const taperSure=Math.round(35*yMod);
-          kosuTpl=tplTempo(band,taperSure,zones,phase);
+          kosuTpl=tplTempo(band,taperSure,zones,phase,phaseStep);
           kosuUyari='Taper kaliteli antrenman — kısa tempo blokları, hız hissini koru';
         } else {
           // İkinci kaliteli gün (varsa): açıcı/strides
@@ -11077,7 +11179,7 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
           // İlk kaliteli: kısa tempo veya yarış temposu — hız hissini koru
           // Yarış Temposu yalnızca yol yarışı ve ≤maraton mesafesinde önerilir
           const _canYT=!race?.is_trail&&(parseFloat(race?.mesafe)||0)<=42.195&&(parseFloat(race?.mesafe)||0)>0;
-          kosuTpl=daysToRace<=10?tplTempo(band,Math.round(40*yMod),zones,phase):(_canYT?tplYarisTempo(band,Math.round(45*yMod),zones,phase,race,_ytPaceSec):tplTempo(band,Math.round(45*yMod),zones,phase));
+          kosuTpl=daysToRace<=10?tplTempo(band,Math.round(40*yMod),zones,phase,phaseStep):(_canYT?tplYarisTempo(band,Math.round(45*yMod),zones,phase,race,_ytPaceSec,phaseStep):tplTempo(band,Math.round(45*yMod),zones,phase,phaseStep));
           kosuUyari='Yarışa '+daysToRace+' gün — kaliteli antrenman, yoğunluk korunur, hacim düşük';
         } else {
           // 2. kaliteli: açıcı veya strides — aktivasyon
@@ -11088,41 +11190,41 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
         // Taper ama daysToRace>14 (geniş taper) — kaliteli sırasına göre farklılaştır
         const kalSira=wkStats.kaliteliSayisi||0;
         const _canYT=!race?.is_trail&&(parseFloat(race?.mesafe)||0)<=42.195&&(parseFloat(race?.mesafe)||0)>0;
-        kosuTpl=kalSira===0?(_canYT?tplYarisTempo(band,Math.round(45*yMod),zones,phase,race,_ytPaceSec):tplTempo(band,Math.round(45*yMod),zones,phase)):tplStrides(band,Math.round(35*yMod),zones,phase);
+        kosuTpl=kalSira===0?(_canYT?tplYarisTempo(band,Math.round(45*yMod),zones,phase,race,_ytPaceSec,phaseStep):tplTempo(band,Math.round(45*yMod),zones,phase,phaseStep)):tplStrides(band,Math.round(35*yMod),zones,phase);
       } else if(phase==='Zirve'){
         const zirveSeq=[
-          ()=>isTrail&&band>=3?tplYokusUzun(band,zones,phase):tplInterval(band,phase,zones),
+          ()=>isTrail&&band>=3?tplYokusUzun(band,zones,phase,phaseStep):tplInterval(band,phase,zones,phaseStep),
           ()=>tplPiramit(band,zones,phase),
           ()=>tplKesintisizPiramit(band,zones,phase),
-          ()=>tplCruise(band,Math.round(55*yMod),zones,phase),
-          ()=>tplTempoInterval(band,Math.round(52*yMod),zones,phase),
-          ()=>(isTrail||race?.is_trail||(parseFloat(race?.mesafe)||0)>42.195)?tplHillSprint(band,zones,phase):tplYarisTempo(band,Math.round(50*yMod),zones,phase,race,_ytPaceSec),
-          ()=>isTrail?tplYokusKisa(band,zones,phase):tplOnOff(band,zones,phase),
+          ()=>tplCruise(band,Math.round(55*yMod),zones,phase,phaseStep),
+          ()=>tplTempoInterval(band,Math.round(52*yMod),zones,phase,phaseStep),
+          ()=>(isTrail||race?.is_trail||(parseFloat(race?.mesafe)||0)>42.195)?tplHillSprint(band,zones,phase,phaseStep):tplYarisTempo(band,Math.round(50*yMod),zones,phase,race,_ytPaceSec,phaseStep),
+          ()=>isTrail?tplYokusKisa(band,zones,phase,phaseStep):tplOnOff(band,zones,phase,phaseStep),
         ];
         kosuTpl=pickSeq(zirveSeq);
       } else if(phase==='Gelişme'){
         const gelismeSeq=[
-          ()=>isTrail&&band>=3?tplYokusKisa(band,zones,phase):tplInterval(band,phase,zones),
-          ()=>tplTempoInterval(band,Math.round(50*yMod),zones,phase),
+          ()=>isTrail&&band>=3?tplYokusKisa(band,zones,phase,phaseStep):tplInterval(band,phase,zones,phaseStep),
+          ()=>tplTempoInterval(band,Math.round(50*yMod),zones,phase,phaseStep),
           ()=>tplPiramit(band,zones,phase),
           ()=>tplKesintisizPiramit(band,zones,phase),
-          ()=>tplCruise(band,Math.round(50*yMod),zones,phase),
-          ()=>tplEsik(band,Math.round(50*yMod),zones,phase),
-          ()=>tplTempo(band,Math.round(48*yMod),zones,phase),
-          ()=>tplOnOff(band,zones,phase),
-          ()=>(isTrail||race?.is_trail||(parseFloat(race?.mesafe)||0)>42.195)?tplHillSprint(band,zones,phase):tplYarisTempo(band,Math.round(48*yMod),zones,phase,race,_ytPaceSec),
+          ()=>tplCruise(band,Math.round(50*yMod),zones,phase,phaseStep),
+          ()=>tplEsik(band,Math.round(50*yMod),zones,phase,phaseStep),
+          ()=>tplTempo(band,Math.round(48*yMod),zones,phase,phaseStep),
+          ()=>tplOnOff(band,zones,phase,phaseStep),
+          ()=>(isTrail||race?.is_trail||(parseFloat(race?.mesafe)||0)>42.195)?tplHillSprint(band,zones,phase,phaseStep):tplYarisTempo(band,Math.round(48*yMod),zones,phase,race,_ytPaceSec,phaseStep),
         ];
         kosuTpl=pickSeq(gelismeSeq);
       } else {
         const temelSeq=amacKaliteliSeq||[
           ()=>tplProgressive(band,Math.round(50*yMod),zones,phase),
-          ()=>tplTempo(band,Math.round(45*yMod),zones,phase),
-          ()=>tplEsik(band,Math.round(45*yMod),zones,phase),
-          ()=>tplCruise(band,Math.round(45*yMod),zones,phase),
+          ()=>tplTempo(band,Math.round(45*yMod),zones,phase,phaseStep),
+          ()=>tplEsik(band,Math.round(45*yMod),zones,phase,phaseStep),
+          ()=>tplCruise(band,Math.round(45*yMod),zones,phase,phaseStep),
           ()=>tplStrides(band,Math.round(50*yMod),zones,phase),
-          ()=>tplYokusKisa(band,zones,phase),
-          ()=>tplHillSprint(band,zones,phase),
-          ()=>isTrail&&band>=2?tplYokusUzun(band,zones,phase):tplInterval(band,phase,zones),
+          ()=>tplYokusKisa(band,zones,phase,phaseStep),
+          ()=>tplHillSprint(band,zones,phase,phaseStep),
+          ()=>isTrail&&band>=2?tplYokusUzun(band,zones,phase,phaseStep):tplInterval(band,phase,zones,phaseStep),
         ];
         kosuTpl=pickSeq(temelSeq);
       }
@@ -11160,39 +11262,39 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
         const hIS=wkStats.kaliteliSayisi||0;
         if(hIS===0){
           const taperSure=Math.max(35,Math.round(40*yMod));
-          kosuTpl=tplTempo(band,taperSure,zones,phase);
+          kosuTpl=tplTempo(band,taperSure,zones,phase,phaseStep);
         } else {
           kosuTpl=daysToRace<=7?tplAcici(Math.round(25*yMod),phase):tplStrides(band,Math.round(35*yMod),zones,phase);
         }
       } else if(phase==='Zirve'){
         if(wkStats.kaliteliYok&&(tsb> -10||isSimulatedFuture)&&(acwr<1.2||isSimulatedFuture)){
           const zirveSeq=[
-            ()=>isTrail&&band>=3?tplYokusUzun(band,zones,phase):tplInterval(band,phase,zones),
+            ()=>isTrail&&band>=3?tplYokusUzun(band,zones,phase,phaseStep):tplInterval(band,phase,zones,phaseStep),
             ()=>tplPiramit(band,zones,phase),
             ()=>tplKesintisizPiramit(band,zones,phase),
-            ()=>tplCruise(band,Math.round(55*yMod),zones,phase),
-            ()=>tplTempoInterval(band,Math.round(52*yMod),zones,phase),
-            ()=>(isTrail||race?.is_trail||(parseFloat(race?.mesafe)||0)>42.195)?tplHillSprint(band,zones,phase):tplYarisTempo(band,Math.round(50*yMod),zones,phase,race,_ytPaceSec),
-            ()=>isTrail?tplYokusKisa(band,zones,phase):tplOnOff(band,zones,phase),
+            ()=>tplCruise(band,Math.round(55*yMod),zones,phase,phaseStep),
+            ()=>tplTempoInterval(band,Math.round(52*yMod),zones,phase,phaseStep),
+            ()=>(isTrail||race?.is_trail||(parseFloat(race?.mesafe)||0)>42.195)?tplHillSprint(band,zones,phase,phaseStep):tplYarisTempo(band,Math.round(50*yMod),zones,phase,race,_ytPaceSec,phaseStep),
+            ()=>isTrail?tplYokusKisa(band,zones,phase,phaseStep):tplOnOff(band,zones,phase,phaseStep),
           ];
           kosuTpl=fallbackPick(zirveSeq);
         } else if(!wkStats.uzunYapildi&&(!uzunGunTanimli||isUzunGun)){
           kosuTpl=isTrail?tplTirmanisAcik(band,Math.round(75*yMod),zones,dpGun):tplUzun(band,simState.ctl||0,zones,disiplin,dpGun,wkStats.recentLongRuns);
         } else {
-          kosuTpl=tplEsik(band,Math.round(55*yMod),zones,phase);
+          kosuTpl=tplEsik(band,Math.round(55*yMod),zones,phase,phaseStep);
         }
       } else if(phase==='Gelişme'){
         if(wkStats.kaliteliYok&&(tsb> -10||isSimulatedFuture)&&(acwr<1.2||isSimulatedFuture)){
           const gelismeSeq=[
-            ()=>isTrail&&band>=3?tplYokusKisa(band,zones,phase):tplInterval(band,phase,zones),
-            ()=>tplTempoInterval(band,Math.round(50*yMod),zones,phase),
+            ()=>isTrail&&band>=3?tplYokusKisa(band,zones,phase,phaseStep):tplInterval(band,phase,zones,phaseStep),
+            ()=>tplTempoInterval(band,Math.round(50*yMod),zones,phase,phaseStep),
             ()=>tplPiramit(band,zones,phase),
             ()=>tplKesintisizPiramit(band,zones,phase),
-            ()=>tplCruise(band,Math.round(50*yMod),zones,phase),
-            ()=>tplEsik(band,Math.round(50*yMod),zones,phase),
-            ()=>tplTempo(band,Math.round(48*yMod),zones,phase),
-            ()=>tplOnOff(band,zones,phase),
-            ()=>(isTrail||race?.is_trail||(parseFloat(race?.mesafe)||0)>42.195)?tplHillSprint(band,zones,phase):tplYarisTempo(band,Math.round(48*yMod),zones,phase,race,_ytPaceSec),
+            ()=>tplCruise(band,Math.round(50*yMod),zones,phase,phaseStep),
+            ()=>tplEsik(band,Math.round(50*yMod),zones,phase,phaseStep),
+            ()=>tplTempo(band,Math.round(48*yMod),zones,phase,phaseStep),
+            ()=>tplOnOff(band,zones,phase,phaseStep),
+            ()=>(isTrail||race?.is_trail||(parseFloat(race?.mesafe)||0)>42.195)?tplHillSprint(band,zones,phase,phaseStep):tplYarisTempo(band,Math.round(48*yMod),zones,phase,race,_ytPaceSec,phaseStep),
           ];
           kosuTpl=fallbackPick(gelismeSeq);
         } else if(isTrail&&band>=2&&!wkStats.kaliteliYok){
@@ -11205,13 +11307,13 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
         if(wkStats.kaliteliYok&&(tsb> -10||isSimulatedFuture)){
           const temelSeq=amacKaliteliSeq||[
             ()=>tplProgressive(band,Math.round(50*yMod),zones,phase),
-            ()=>tplTempo(band,Math.round(45*yMod),zones,phase),
-            ()=>tplEsik(band,Math.round(45*yMod),zones,phase),
-            ()=>tplCruise(band,Math.round(45*yMod),zones,phase),
+            ()=>tplTempo(band,Math.round(45*yMod),zones,phase,phaseStep),
+            ()=>tplEsik(band,Math.round(45*yMod),zones,phase,phaseStep),
+            ()=>tplCruise(band,Math.round(45*yMod),zones,phase,phaseStep),
             ()=>tplStrides(band,Math.round(50*yMod),zones,phase),
-            ()=>tplYokusKisa(band,zones,phase),
-            ()=>tplHillSprint(band,zones,phase),
-            ()=>isTrail&&band>=2?tplYokusUzun(band,zones,phase):tplInterval(band,phase,zones),
+            ()=>tplYokusKisa(band,zones,phase,phaseStep),
+            ()=>tplHillSprint(band,zones,phase,phaseStep),
+            ()=>isTrail&&band>=2?tplYokusUzun(band,zones,phase,phaseStep):tplInterval(band,phase,zones,phaseStep),
           ];
           kosuTpl=fallbackPick(temelSeq);
         } else if(antrenmanAmaci==='toparlanma'){
@@ -11481,7 +11583,9 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
     const _planTodayStr=localDateStr(today);
     const turSonKullanim=calcTurSonKullanim(athWorkouts,_planTodayStr);
     const turFrekans=calcTurFrekans(athWorkouts,_planTodayStr,42);
-    let wkStats={count:0,kaliteliYok:true,uzunYapildi:false,wkLoad:0,dpHedefHafta:(_effDpOverride??wt?.targetDp)??0,targetKmHafta:(_effKmOverride??wt?.targetKm)??0,_noRaceMaxGunlukKm:wt?._noRaceMaxGunlukKm||0,weekOff:rotIdx,isFutureWeek:weekOff>0,recentKaliteli,recentLongRuns,sonYogunGun:sonYogunGunGlobal,testPlanlar:testPlanlar||[],sonAntrenmanDate:sonAntrenman?.date||null,sonRecoveryHedef,sonRecoverySaatler,athWorkouts,buHaftaKaliteli:[],kaliteliSayisi:0,aerobikSayisi:0,turSonKullanim,turFrekans};
+    // phaseStep: 3+1 mesosikl adımı (0→1→2→0 toparlanma); Taper/Yarış Sonrası planDay'de 0'a çekilir
+    const phaseStepFromRot=rotIdx%4===3?0:rotIdx%4;
+    let wkStats={count:0,kaliteliYok:true,uzunYapildi:false,wkLoad:0,dpHedefHafta:(_effDpOverride??wt?.targetDp)??0,targetKmHafta:(_effKmOverride??wt?.targetKm)??0,_noRaceMaxGunlukKm:wt?._noRaceMaxGunlukKm||0,weekOff:rotIdx,isFutureWeek:weekOff>0,recentKaliteli,recentLongRuns,sonYogunGun:sonYogunGunGlobal,testPlanlar:testPlanlar||[],sonAntrenmanDate:sonAntrenman?.date||null,sonRecoveryHedef,sonRecoverySaatler,athWorkouts,buHaftaKaliteli:[],kaliteliSayisi:0,aerobikSayisi:0,turSonKullanim,turFrekans,phaseStep:phaseStepFromRot};
 
     // ── Hafta İskeleti — Antrenman Bilimi Prensipleri ─────────────────────────
     // Temel prensipler:
@@ -11761,8 +11865,8 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
           // Kalite fırsatı yalnızca mevcut hafta için geçerli (simülasyon belirsizliği)
           const kaliteTip=simState.ctl>40?'interval':'esik';
           const kaliteTpl=kaliteTip==='interval'
-            ?tplInterval(planBand,phase,planZones)
-            :tplEsik(planBand,Math.round(55*planYMod),planZones,phase);
+            ?tplInterval(planBand,phase,planZones,phaseStepFromRot)
+            :tplEsik(planBand,Math.round(55*planYMod),planZones,phase,phaseStepFromRot);
           const sureDk=kaliteTpl.sure_dk||Math.round(50*planYMod);
           planned={...kaliteTpl,sure_dk:sureDk,
             yukHedef:Math.round(sureDk*1.6),_upgraded:true,_originalTip:planned.tip,..._meta};
