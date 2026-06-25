@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.24-1900 --><!DOCTYPE html>
+<!-- Version: v2026.06.25-1230 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.24-1900';
+const APP_VERSION='v2026.06.25-1230';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -6038,7 +6038,9 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
     const b=(y.baslik||'');
     if(b.startsWith('🚴')||b.startsWith('➕')) return false;
     // Başlığı tam "Kuvvet Çalışması" veya "Çapraz Antrenman" olan yapıları çıkar
-    if(/^(kuvvet çalışması|çapraz antrenman)\b/i.test(b.trim())) return false;
+    // NOT: \b word boundary Türkçe karakter (ı, ş, ç...) sonrasında çalışmaz — toLocaleLowerCase ile kıyasla
+    const bL=b.trim().toLocaleLowerCase('tr');
+    if(bL==='kuvvet çalışması'||bL==='çapraz antrenman') return false;
     return true;
   });
 
@@ -12306,9 +12308,11 @@ function reviewPlanSnapshot(snapshot,athlete,history,races,workouts,testPlanlar)
 }
 
 
-// Koşu yapılarını al — çapraz aşama satırlarını tamamen dışla
+// Koşu yapılarını al — çapraz/kuvvet ve diğer koşu-dışı tipler dahil tüm non-koşu günleri dışla
+const _KOSU_TIP_SET=new Set(['kolay','serbest','aerobik','hazirlik','uzun','tempo','tempo_sureli','esik','esik_sureli','interval','piramit','kesintisiz_piramit','yokus_kisa','yokus_uzun','tirmanis','teknik','acici','progressive','cruise','yaris_tempo','on_off','tempo_interval','hill_sprint','strides','back_to_back','yuru_kos','yaris']);
 function kosuYapilarAl(day){
-  if(!day||day.tip==='capraz') return [];
+  // Koşu tipinde değilse VE birleşik gün (isKosuCapraz) değilse → boş döndür
+  if(!day||(!_KOSU_TIP_SET.has(day.tip)&&!day.isKosuCapraz)) return [];
   const yapilar=day.yapilar||[];
   if(!day.isKosuCapraz) return yapilar;
   // Birleşik gün: ➕ veya 🚴 ayracından önceki yapılar koşuya ait
@@ -15382,8 +15386,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               ),
               // İçerik — koşu/çapraz bölümleri (sıralama: tamamlanan üste, w.time'a göre)
               !isCancelledDay&&!isYapilmamis&&(()=>{
-                const showKosu=day.tip!=='capraz'; // koşu+çapraz veya saf koşu
-                const showCapraz=split.isKosuCapraz||split.isCaprazOnly||day.tip==='capraz';
+                const showKosu=_KOSU_TIP_SET.has(day.tip)||day.isKosuCapraz===true; // sadece koşu tiplerinde veya birleşik günde
+                const showCapraz=split.isKosuCapraz||split.isCaprazOnly||(!showKosu&&day.tip!=='dinlenme'&&day.tip!=='yaris'); // koşu değilse çapraz bölümü göster
                 const dualMode=showKosu&&showCapraz; // ikisi de gösterilecek → sub başlık göster
                 const kosuBolum=showKosu?React.createElement('div',{key:'k',style:{marginBottom:dualMode?8:0}},
                   dualMode&&React.createElement('div',{style:{display:'flex',alignItems:'center',gap:6,fontSize:11,fontWeight:700,marginBottom:4,color:'var(--text-secondary)'}},
@@ -15817,7 +15821,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   background:'var(--warn-bg)',borderRadius:6,marginBottom:8,
                   display:'flex',gap:6,alignItems:'center'
                 }},React.createElement('span',null,'⚠'),React.createElement('span',null,day.uyari)),
-                day.tip!=='capraz'&&React.createElement(ReceteTablosu,{
+                (_KOSU_TIP_SET.has(day.tip)||day.isKosuCapraz===true)&&React.createElement(ReceteTablosu,{
                   yapilar:injectRowsFromTpl(kosuYapilarAl(day),day.tip,day.yapi_notu,day.sure_dk,calcZones(athlete),athlete?.disiplin),
                   zones:calcZones(athlete),
                   isYuruyus:day.isYuruyus,
