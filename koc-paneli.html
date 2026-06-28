@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.26-1130 --><!DOCTYPE html>
+<!-- Version: v2026.06.28-1912 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.26-1130';
+const APP_VERSION='v2026.06.28-1912';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1884,7 +1884,7 @@ function compressImage(file,{maxW=800,maxH=800,quality=0.75,onDone,onError}){
   reader.readAsDataURL(file);
 }
 
-const TABS=[{id:'dashboard',label:'🏠 Pano'},{id:'motivasyon',label:'✨ Motivasyon'},{id:'bugun',label:'🗓️ Bugün ve Yarın'},{id:'plan',label:'📅 Plan'},{id:'lider',label:'🏆 Lider'},{id:'bolge',label:'❤️ Bölgeler'},{id:'test',label:'🧪 Testler'},{id:'yarislar',label:'🏁 Yarışlar'},{id:'karsilastir',label:'⚖️ Karşılaştır'},{id:'ekle',label:'➕ Ekle'},{id:'antrenmanlar',label:'📚 Antrenman'},{id:'gecmis',label:'🕐 Geçmiş'},{id:'analiz',label:'📊 Analiz'},{id:'yukle',label:'⬆️ Yükle'},{id:'sporcular',label:'👥 Sporcular & Yarışlar'}];
+const TABS=[{id:'dashboard',label:'🏠 Pano'},{id:'motivasyon',label:'✨ Motivasyon'},{id:'bugun',label:'🗓️ Bugün ve Yarın'},{id:'anketler',label:'📋 Anketler'},{id:'plan',label:'📅 Plan'},{id:'lider',label:'🏆 Lider'},{id:'bolge',label:'❤️ Bölgeler'},{id:'test',label:'🧪 Testler'},{id:'yarislar',label:'🏁 Yarışlar'},{id:'karsilastir',label:'⚖️ Karşılaştır'},{id:'ekle',label:'➕ Ekle'},{id:'antrenmanlar',label:'📚 Antrenman'},{id:'gecmis',label:'🕐 Geçmiş'},{id:'analiz',label:'📊 Analiz'},{id:'yukle',label:'⬆️ Yükle'},{id:'sporcular',label:'👥 Sporcular & Yarışlar'}];
 
 const SPOR_TURLERI=[
   {v:'kosu',     l:'Koşu',       k:1.00, emoji:'🏃'},
@@ -20787,6 +20787,156 @@ function SporcuGecmis({athHistory,athId,onDeleteEntry}){
   );
 }
 
+// ── Anketler Sekmesi ─────────────────────────────────────────────────────────
+function AnketlerTab({athletes}){
+  if(!athletes.length)return React.createElement('div',{className:'empty'},'Henüz sporcu eklenmemiş.');
+  const now=Date.now();
+  const DAY_MS=864e5;
+  const FIELD_META={
+    kilo:{label:'Kilo',unit:'kg'},
+    boy:{label:'Boy',unit:'cm'},
+    rhr:{label:'RHR',unit:'bpm'},
+    mhr:{label:'MHR',unit:'bpm'},
+    lthr:{label:'LTHR',unit:'bpm'},
+    vo2max:{label:'VO₂max',unit:''},
+    hrv_7gun:{label:'HRV',unit:'ms'},
+    sakatlık:{label:'Sakatlık',unit:'/10'},
+  };
+  const getLastChange=(ath)=>{
+    const hist=(ath.profileHistory||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
+    if(!hist.length)return null;
+    if(hist.length===1)return{type:'first',date:hist[0].date};
+    const last=hist[hist.length-1];
+    const prev=hist[hist.length-2];
+    const diffs=[];
+    Object.keys(FIELD_META).forEach(f=>{
+      const pv=parseFloat(prev[f]);const lv=parseFloat(last[f]);
+      if(!isNaN(pv)&&!isNaN(lv)&&pv!==lv){
+        const diff=round1(lv-pv);const sign=diff>0?'+':'';
+        diffs.push({label:FIELD_META[f].label,unit:FIELD_META[f].unit,from:pv,to:lv,diff,sign});
+      }
+    });
+    return{type:'diff',date:last.date,diffs};
+  };
+  const sorted=[...athletes].sort((a,b)=>{
+    const at=a.anket_guncelleme?new Date(a.anket_guncelleme).getTime():0;
+    const bt=b.anket_guncelleme?new Date(b.anket_guncelleme).getTime():0;
+    return bt-at;
+  });
+  const recentCount=athletes.filter(a=>a.anket_guncelleme&&(now-new Date(a.anket_guncelleme).getTime())<DAY_MS).length;
+  const neverCount=athletes.filter(a=>!a.anket_guncelleme).length;
+  const thisWeekCount=athletes.filter(a=>{
+    if(!a.anket_guncelleme)return false;
+    return new Date(a.anket_guncelleme)>=getWeekBounds(0).start;
+  }).length;
+  const initials=ath=>((ath.ad||'').charAt(0)+(ath.soyad||'').charAt(0)).toUpperCase();
+  const fmtAnketTarih=(iso)=>{
+    if(!iso)return null;
+    const d=new Date(iso);
+    const gunFarki=Math.floor((now-d.getTime())/DAY_MS);
+    const saat=String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+    const tarih=d.toLocaleDateString('tr-TR',{day:'2-digit',month:'short',year:'2-digit'});
+    const relative=gunFarki<=0?'Bugün':gunFarki===1?'Dün':gunFarki+' gün önce';
+    return{tarih,saat,relative,gunFarki};
+  };
+  const isRecent=(iso)=>!!(iso&&(now-new Date(iso).getTime())<DAY_MS);
+  const hrv_colors={düşük:'var(--danger)',dengesiz:'var(--warn)',dengeli:'var(--success)'};
+  const hrv_bgs={düşük:'var(--danger-bg)',dengesiz:'var(--warn-bg)',dengeli:'var(--success-bg)'};
+  return React.createElement('div',null,
+    // Özet kart
+    React.createElement('div',{className:'card',style:{marginBottom:16}},
+      React.createElement('div',{className:'grid4'},
+        React.createElement('div',{className:'metric'},
+          React.createElement('div',{className:'metric-label'},'Toplam Sporcu'),
+          React.createElement('div',{className:'metric-val'},athletes.length)
+        ),
+        React.createElement('div',{className:'metric'},
+          React.createElement('div',{className:'metric-label'},'Son 24 Saat'),
+          React.createElement('div',{className:'metric-val',style:{color:'var(--success)'}},recentCount)
+        ),
+        React.createElement('div',{className:'metric'},
+          React.createElement('div',{className:'metric-label'},'Bu Hafta'),
+          React.createElement('div',{className:'metric-val'},thisWeekCount)
+        ),
+        React.createElement('div',{className:'metric'},
+          React.createElement('div',{className:'metric-label'},'Hiç Girmedi'),
+          React.createElement('div',{className:'metric-val',style:{color:neverCount>0?'var(--warn)':'var(--text-primary)'}},neverCount)
+        )
+      )
+    ),
+    // Sporcu listesi
+    React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:10}},
+      sorted.map(ath=>{
+        const anket=fmtAnketTarih(ath.anket_guncelleme);
+        const recent=isRecent(ath.anket_guncelleme);
+        const change=getLastChange(ath);
+        const sak=parseInt(ath.sakatlık)||1;
+        const sakCls=sak>6?'badge-danger':sak>3?'badge-warn':'badge-good';
+        return React.createElement('div',{key:ath.id,className:'card',style:{padding:'14px 16px',margin:0}},
+          React.createElement('div',{style:{display:'flex',gap:12,alignItems:'flex-start'}},
+            // Avatar
+            React.createElement('div',{style:{
+              width:42,height:42,borderRadius:'50%',flexShrink:0,overflow:'hidden',
+              background:'var(--bg-secondary)',display:'flex',alignItems:'center',
+              justifyContent:'center',fontSize:15,fontWeight:700,color:'var(--text-secondary)'
+            }},
+              ath.foto
+                ?React.createElement('img',{src:ath.foto,style:{width:'100%',height:'100%',objectFit:'cover'}})
+                :initials(ath)
+            ),
+            // İçerik
+            React.createElement('div',{style:{flex:1,minWidth:0}},
+              // İsim + durum badge'leri
+              React.createElement('div',{style:{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',marginBottom:6}},
+                React.createElement('span',{style:{fontWeight:600,fontSize:14}},(ath.ad||'')+' '+(ath.soyad||'')),
+                ath.hrv_durum&&React.createElement('span',{style:{
+                  display:'inline-block',padding:'2px 8px',borderRadius:99,fontSize:11,fontWeight:600,
+                  background:hrv_bgs[ath.hrv_durum]||'var(--bg-secondary)',
+                  color:hrv_colors[ath.hrv_durum]||'var(--text-secondary)'
+                }},'HRV '+ath.hrv_durum),
+                sak>1&&React.createElement('span',{className:'badge '+sakCls},'Sakatlık '+sak+'/10')
+              ),
+              // Son anket tarihi
+              React.createElement('div',{style:{display:'flex',alignItems:'center',gap:6,marginBottom:6,flexWrap:'wrap'}},
+                React.createElement('span',{style:{fontSize:12,color:'var(--text-secondary)'}},'📋 Son anket:'),
+                anket
+                  ?React.createElement('span',{style:{
+                      fontSize:12,fontWeight:600,
+                      color:recent?'var(--success)':'var(--text-primary)',
+                      background:recent?'var(--success-bg)':'transparent',
+                      padding:recent?'2px 8px':'0',
+                      borderRadius:recent?99:0
+                    }},anket.relative+' · '+anket.tarih+' '+anket.saat)
+                  :React.createElement('span',{style:{fontSize:12,fontWeight:600,color:'var(--warn)'}},'Hiç girilmedi')
+              ),
+              // Değişiklik bilgisi
+              change
+                ?React.createElement('div',{style:{display:'flex',alignItems:'flex-start',gap:6,flexWrap:'wrap'}},
+                    React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)',flexShrink:0,paddingTop:1}},
+                      change.type==='first'?'İlk kayıt:':'Değişiklik:'
+                    ),
+                    change.type==='first'
+                      ?React.createElement('span',{style:{fontSize:11,color:'var(--info)'}},fmtDate(change.date))
+                      :change.diffs.length>0
+                        ?React.createElement('div',{style:{display:'flex',gap:4,flexWrap:'wrap'}},
+                            change.diffs.map((d,i)=>React.createElement('span',{key:i,style:{
+                              fontSize:11,padding:'1px 6px',borderRadius:4,
+                              background:'var(--bg-secondary)',color:'var(--text-secondary)'
+                            }},d.label+' '+d.from+'→'+d.to+' ('+d.sign+d.diff+(d.unit||'')+')')
+                            )
+                          )
+                        :React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)'}},
+                            'Son güncellemede fiziksel değişiklik yok')
+                  )
+                :React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)'}},'Fiziksel veri henüz girilmedi')
+            )
+          )
+        );
+      })
+    )
+  );
+}
+
 function App(){
   const [athletes,setAthletes]=useState([]);
   const [races,setRaces]=useState([]);
@@ -21263,6 +21413,7 @@ function App(){
     ),
     React.createElement('div',{className:'content'},
       tab==='bugun'&&React.createElement(BugunTab,{athletes,workouts,onSelChange:setSelId,onTabChange:setTab}),
+      tab==='anketler'&&React.createElement(AnketlerTab,{athletes}),
       tab==='dashboard'&&React.createElement(Dashboard,{workouts:athWks,athlete,history,races,teamLogo,teamName,planSnap}),
       tab==='motivasyon'&&React.createElement(ErrorBoundary,null,React.createElement(MotivasyonTab,{athlete,workouts:athWks,history})),
       tab==='plan'&&React.createElement(HaftalikPlanTab,{athlete,history,races,workouts,testPlanlar,planSnapInit:planSnap,onPlanSnapChange:setPlanSnapApp,onAthletesRefresh:freshList=>setAthletes(freshList),onUpdateAthlete:handleUpdateAthlete,onUpdateWorkout:handleUpdateWorkout,onSaveWorkout:w=>{const ath=athletes.find(a=>a.id===w.athleteId);const m=calcMetrics(w,ath);const rec=calcRecovery(w,ath,m.yukObj);const mergedHedef=mergeRecoveryHedef(rec.hedefISO,rec.saatler,workouts,w.athleteId);setWorkouts(p=>[...p,{...w,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:mergedHedef}]);}}),
