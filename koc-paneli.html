@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.29-2038 --><!DOCTYPE html>
+<!-- Version: v2026.06.29-2144 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.29-2038';
+const APP_VERSION='v2026.06.29-2144';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -3506,10 +3506,19 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
             if(acwr!==null&&acwr<0.65&&tsb>10) sorunlar.push('⚡ Düşük yük istisnası — zone kısıtı devre dışı (ACWR<0.65, TSB>10)');
             if(lowPct!==null&&lowPct<55) sorunlar.push('📉 Z1-2 kritik az ('+lowPct+'%) — kolay koşu hacmi artırılmalı');
             if(highPct!==null&&highPct>35) sorunlar.push('📈 Z3-4 çok fazla ('+highPct+'%) — tempo/eşik yük azaltılmalı');
+            const band=ctlBand(ctl);
+            const mechKardioRatio=ctl>5?((last?.mechCtl||0)*MECH_SCALE/ctl):null;
+            const mechKardioDanger=mechKardioRatio!==null&&mechKardioRatio<0.35;
+            const mechKardioWarn=mechKardioRatio!==null&&mechKardioRatio<0.6;
+            const mechAclOvl=mechAtl>(mechCtl||1)*1.3;
+            const weekStart=new Date(today); weekStart.setDate(today.getDate()-today.getDay()+1);
+            const weekStartStr=localDateStr(weekStart);
+            const kaliteliTipler=['interval','esik','esik_sureli','tempo','tempo_sureli','yokus_kisa','yokus_uzun','piramit','kesintisiz_piramit','on_off','tempo_interval','cruise','yaris_tempo','hill_sprint'];
+            const kaliteliYapildi=athWks.some(w=>w.date>=weekStartStr&&kaliteliTipler.includes(w.tur||w.spor));
             return{
               id:ath.id,
               ad:((ath.ad||'')+' '+(ath.soyad||'')).trim()||ath.id,
-              ctl,atl,tsb,acwr,phase,lowPct,highPct,anaPct,
+              ctl,atl,tsb,acwr,band,phase,lowPct,highPct,anaPct,
               sigLevel:sigs.level,
               sigReasons:(sigs.zoneReasons||[]).join(' · '),
               düşükYükIstisnası:!!sigs.düşükYükIstisnası,
@@ -3521,6 +3530,11 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
               antrenmanAmaci:ath.antrenman_amaci||'-',
               hrv:ath.hrv_durum||'-',
               disiplin:ath.disiplin||'karma',
+              seviye:ath.seviye||'baslangic',
+              sakatlık:parseInt(ath.sakatlık)||1,
+              mechAclOvl,mechKardioDanger,mechKardioWarn,
+              mechKardioRatio:mechKardioRatio!==null?round2(mechKardioRatio):null,
+              kaliteliYapildi,
               sorunlar,
               sorunSayisi:sorunlar.length,
             };
@@ -3578,19 +3592,29 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
           React.createElement('tr',{style:{background:'var(--bg-secondary)'}},
             React.createElement(TH,{k:'ad',ch:'Sporcu'}),
             React.createElement(TH,{k:'ctl',ch:'CTL',st:{textAlign:'right'}}),
+            React.createElement(TH,{k:'atl',ch:'ATL',st:{textAlign:'right'}}),
             React.createElement(TH,{k:'tsb',ch:'TSB',st:{textAlign:'right'}}),
             React.createElement(TH,{k:'acwr',ch:'ACWR',st:{textAlign:'right'}}),
+            React.createElement(TH,{k:'band',ch:'Band',st:{textAlign:'right'}}),
             React.createElement(TH,{k:'phase',ch:'Faz'}),
+            React.createElement(TH,{k:'seviye',ch:'Seviye'}),
+            React.createElement(TH,{k:'sakatlık',ch:'Sak.',st:{textAlign:'right'}}),
+            React.createElement(TH,{k:'hrv',ch:'HRV'}),
             React.createElement(TH,{k:'lowPct',ch:'Z1-2%',st:{textAlign:'right'}}),
             React.createElement(TH,{k:'highPct',ch:'Z3-4%',st:{textAlign:'right'}}),
             React.createElement(TH,{k:'anaPct',ch:'Z5%',st:{textAlign:'right'}}),
             React.createElement(TH,{k:'sigLevel',ch:'Sinyal'}),
+            React.createElement(TH,{k:'düşükYükIstisnası',ch:'DYİ?'}),
+            React.createElement(TH,{k:'kaliteliYapildi',ch:'Kal.?'}),
+            React.createElement(TH,{k:'mechAclOvl',ch:'ACL?'}),
+            React.createElement(TH,{k:'mechKardioDanger',ch:'MechK?'}),
+            React.createElement(TH,{k:'mechKardioRatio',ch:'M/K',st:{textAlign:'right'}}),
             React.createElement(TH,{k:'primaryAd',ch:'Yarış'}),
+            React.createElement(TH,{k:'daysToRace',ch:'Gün',st:{textAlign:'right'}}),
             React.createElement(TH,{k:'_raceDp',ch:'D+',st:{textAlign:'right'}}),
             React.createElement(TH,{k:'isTrail',ch:'isTrail'}),
             React.createElement(TH,{k:'_canHillSprint',ch:'Hill?'}),
             React.createElement(TH,{k:'disiplin',ch:'Disiplin/Amaç'}),
-            React.createElement(TH,{k:'hrv',ch:'HRV'}),
             React.createElement(TH,{k:'sorunSayisi',ch:'Sorunlar'})
           )
         ),
@@ -3598,19 +3622,29 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
           filtered.map(r=>React.createElement('tr',{key:r.id,style:{background:'transparent',borderBottom:'1px solid var(--border)'}},
             React.createElement(TD,{ch:r.ad,st:{fontWeight:600,whiteSpace:'nowrap'}}),
             React.createElement(TD,{ch:r.ctl,st:{textAlign:'right',fontFamily:'monospace'}}),
+            React.createElement(TD,{ch:r.atl,st:{textAlign:'right',fontFamily:'monospace',color:'var(--text-secondary)'}}),
             React.createElement(TD,{ch:r.tsb,st:{textAlign:'right',fontFamily:'monospace',color:r.tsb>10?'var(--success)':r.tsb<-10?'var(--danger)':'inherit'}}),
             React.createElement(TD,{ch:r.acwr===null?'-':r.acwr,st:{textAlign:'right',fontFamily:'monospace',color:r.acwr===null?'var(--text-tertiary)':r.acwr>1.25?'var(--danger)':r.acwr<0.65?'var(--warn)':'inherit'}}),
+            React.createElement(TD,{ch:r.band,st:{textAlign:'right',fontFamily:'monospace',color:'var(--text-secondary)'}}),
             React.createElement(TD,{ch:r.phase}),
+            React.createElement(TD,{ch:r.seviye,st:{color:r.seviye==='baslangic'?'var(--warn)':r.seviye==='ileri'?'var(--success)':'inherit',fontWeight:r.seviye==='baslangic'?600:400}}),
+            React.createElement(TD,{ch:r.sakatlık+'/10',st:{textAlign:'right',fontFamily:'monospace',color:r.sakatlık>=7?'var(--danger)':r.sakatlık>=4?'var(--warn)':'var(--text-tertiary)'}}),
+            React.createElement(TD,{ch:r.hrv,st:{color:r.hrv==='dengeli'?'var(--success)':r.hrv==='düşük'?'var(--danger)':r.hrv==='dengesiz'?'var(--warn)':'var(--text-tertiary)'}}),
             React.createElement(TD,{ch:r.lowPct===null?'-':r.lowPct+'%',st:{textAlign:'right',color:r.lowPct===null?'var(--text-tertiary)':r.lowPct<55?'var(--danger)':r.lowPct<70?'var(--warn)':'var(--success)'}}),
             React.createElement(TD,{ch:r.highPct===null?'-':r.highPct+'%',st:{textAlign:'right',color:r.highPct===null?'var(--text-tertiary)':r.highPct>35?'var(--danger)':r.highPct>25?'var(--warn)':'inherit'}}),
             React.createElement(TD,{ch:r.anaPct===null?'-':r.anaPct+'%',st:{textAlign:'right',color:r.anaPct===null?'var(--text-tertiary)':r.anaPct>20?'var(--danger)':r.anaPct>12?'var(--warn)':'inherit'}}),
             React.createElement(TD,{ch:SIG_TR[r.sigLevel]||r.sigLevel,st:{fontWeight:r.sigLevel!=='normal'?600:400,color:{forceEasy:'var(--danger)',forceLow:'var(--warn)',preferLow:'#ca8a04',forceQuality:'var(--success)',normal:'var(--text-tertiary)'}[r.sigLevel]||'inherit',whiteSpace:'nowrap'}}),
-            React.createElement(TD,{ch:r.primaryAd==='-'?'-':r.primaryAd+(r.primaryMesafe?' '+r.primaryMesafe+'K':''),st:{maxWidth:160,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}),
+            React.createElement(TD,{ch:r.düşükYükIstisnası?'✓':'—',st:{textAlign:'center',color:r.düşükYükIstisnası?'var(--success)':'var(--text-tertiary)'}}),
+            React.createElement(TD,{ch:r.kaliteliYapildi?'✓':'—',st:{textAlign:'center',color:r.kaliteliYapildi?'var(--success)':'var(--text-tertiary)'}}),
+            React.createElement(TD,{ch:r.mechAclOvl?'⚠':'—',st:{textAlign:'center',color:r.mechAclOvl?'var(--danger)':'var(--text-tertiary)'}}),
+            React.createElement(TD,{ch:r.mechKardioDanger?'❌':r.mechKardioWarn?'⚠':'—',st:{textAlign:'center',color:r.mechKardioDanger?'var(--danger)':r.mechKardioWarn?'var(--warn)':'var(--text-tertiary)'}}),
+            React.createElement(TD,{ch:r.mechKardioRatio===null?'-':r.mechKardioRatio,st:{textAlign:'right',fontFamily:'monospace',color:r.mechKardioDanger?'var(--danger)':r.mechKardioWarn?'var(--warn)':'inherit'}}),
+            React.createElement(TD,{ch:r.primaryAd==='-'?'-':r.primaryAd+(r.primaryMesafe?' '+r.primaryMesafe+'K':''),st:{maxWidth:140,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}),
+            React.createElement(TD,{ch:r.daysToRace===null?'-':r.daysToRace+'g',st:{textAlign:'right',fontFamily:'monospace',color:r.daysToRace!==null&&r.daysToRace<=7?'var(--danger)':r.daysToRace!==null&&r.daysToRace<=21?'var(--warn)':'inherit'}}),
             React.createElement(TD,{ch:r._raceDp>0?r._raceDp+'m':'-',st:{textAlign:'right',fontFamily:'monospace',color:r._raceDp>0&&r._raceDp<300&&r.primaryIsTrail?'var(--warn)':'inherit'}}),
             React.createElement(TD,{ch:r.isTrail?'⚠ evet':'hayır',st:{color:r.isTrail&&r._raceDp<300&&r.primaryIsTrail?'var(--warn)':'inherit'}}),
             React.createElement(TD,{ch:r._canHillSprint?'✓ evet':'✗ hayır',st:{color:r._canHillSprint?'var(--success)':'var(--text-tertiary)'}}),
             React.createElement(TD,{ch:r.disiplin+(r.antrenmanAmaci&&r.antrenmanAmaci!=='-'?' / '+r.antrenmanAmaci:'')}),
-            React.createElement(TD,{ch:r.hrv,st:{color:r.hrv==='dengeli'?'var(--success)':r.hrv==='düşük'?'var(--danger)':r.hrv==='dengesiz'?'var(--warn)':'var(--text-tertiary)'}}),
             React.createElement(TD,{ch:r.sorunlar.length
               ?r.sorunlar.map((s,i)=>React.createElement('div',{key:i,style:{fontSize:10,lineHeight:'1.5',color:'var(--text-secondary)'}},s))
               :React.createElement('span',{style:{color:'var(--text-tertiary)',fontSize:10}},'—'),st:{minWidth:260}})
