@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.29-1532 --><!DOCTYPE html>
+<!-- Version: v2026.06.29-1553 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.29-1532';
+const APP_VERSION='v2026.06.29-1553';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1884,7 +1884,7 @@ function compressImage(file,{maxW=800,maxH=800,quality=0.75,onDone,onError}){
   reader.readAsDataURL(file);
 }
 
-const TABS=[{id:'dashboard',label:'🏠 Pano'},{id:'motivasyon',label:'✨ Motivasyon'},{id:'bugun',label:'🗓️ Bugün ve Yarın'},{id:'anketler',label:'📋 Anketler'},{id:'plan',label:'📅 Plan'},{id:'lider',label:'🏆 Lider'},{id:'bolge',label:'❤️ Bölgeler'},{id:'test',label:'🧪 Testler'},{id:'yarislar',label:'🏁 Yarışlar'},{id:'karsilastir',label:'⚖️ Karşılaştır'},{id:'ekle',label:'➕ Ekle'},{id:'antrenmanlar',label:'📚 Antrenman'},{id:'gecmis',label:'🕐 Geçmiş'},{id:'analiz',label:'📊 Analiz'},{id:'yukle',label:'⬆️ Yükle'},{id:'sporcular',label:'👥 Sporcular & Yarışlar'}];
+const TABS=[{id:'dashboard',label:'🏠 Pano'},{id:'motivasyon',label:'✨ Motivasyon'},{id:'bugun',label:'🗓️ Bugün ve Yarın'},{id:'anketler',label:'📋 Anketler'},{id:'plan',label:'📅 Plan'},{id:'lider',label:'🏆 Lider'},{id:'bolge',label:'❤️ Bölgeler'},{id:'test',label:'🧪 Testler'},{id:'yarislar',label:'🏁 Yarışlar'},{id:'karsilastir',label:'⚖️ Karşılaştır'},{id:'ekle',label:'➕ Ekle'},{id:'antrenmanlar',label:'📚 Antrenman'},{id:'gecmis',label:'🕐 Geçmiş'},{id:'analiz',label:'📊 Analiz'},{id:'yukle',label:'⬆️ Yükle'},{id:'sporcular',label:'👥 Sporcular & Yarışlar'},{id:'tani',label:'🔍 Tanı'}];
 
 const SPOR_TURLERI=[
   {v:'kosu',     l:'Koşu',       k:1.00, emoji:'🏃'},
@@ -3449,6 +3449,242 @@ function BugunTab({athletes,workouts,onSelChange,onTabChange}){
         withRest.map(renderCard)
       )
     )
+  );
+}
+
+// ── Tanı Paneli ──────────────────────────────────────────────────────────────
+function TaniPaneliTab({athletes,allHistory,races,workouts}){
+  const [rows,setRows]=React.useState([]);
+  const [loading,setLoading]=React.useState(false);
+  const [sortKey,setSortKey]=React.useState('ad');
+  const [sortAsc,setSortAsc]=React.useState(true);
+  const [filtre,setFiltre]=React.useState('hepsi'); // hepsi|sorunlu|uyari
+
+  const hesapla=()=>{
+    setLoading(true);
+    setTimeout(()=>{
+      const today=new Date();
+      const todayStr=localDateStr(today);
+      const result=(athletes||[]).filter(a=>!a.pasif).map(ath=>{
+        const history=(allHistory||[]).filter(h=>h.athleteId===ath.id).sort((a,b)=>a.date<b.date?-1:1);
+        const last=history[history.length-1]||null;
+        const athWks=(workouts||[]).filter(w=>w.athleteId===ath.id);
+        // Fitness
+        const ctl=round1(last?.ctl||0);
+        const atl=round1(last?.atl||0);
+        const tsb=round1((last?.ctl||0)-(last?.atl||0));
+        const acwr=last?.acwr!=null?round2(last.acwr):null;
+        const phase=last?.phase||'Temel';
+        // Yarış & disiplin
+        const {primary,intermediate}=selectRaces(ath,races||[]);
+        const effDisiplin=effectiveDisiplin(ath,primary||null);
+        const isTrail=effDisiplin!=='yol';
+        const _raceDp=primary?(parseFloat(primary.d_plus)||0):0;
+        const _canHillSprint=primary?(_raceDp>300):(ath.disiplin==='trail');
+        const daysToRace=primary?Math.ceil((new Date(primary.tarih+'T12:00:00')-today)/864e5):null;
+        // Zone
+        const zoneDist=calcPeriodZoneDist(athWks,ath,4);
+        const lowPct=zoneDist?.lowPct??null;
+        const highPct=zoneDist?.highPct??null;
+        const anaPct=zoneDist?.anaPct??null;
+        // Signals
+        const mechAtl=last?.mechAtl||0; const mechCtl=last?.mechCtl||0;
+        const sigs=evaluateSignals({
+          acwr:acwr||1.0,tsb,inj:parseInt(ath.sakatlık)||1,
+          ifOverloaded:false,mechOverload:false,
+          mechAclOverload:mechAtl>(mechCtl||1)*1.3,
+          powerOverload:false,wkSessions:0,mechKardioDanger:false,
+          zoneDist4w:zoneDist,kaliteliYapildi:false,
+          planWeek:null,prevWeek:null,
+        });
+        // Bugün öneri — sadece koşu günüyse
+        let todayTip='-',todayBaslik='-',todayYapiNotu='-';
+        try{
+          const dayShort=DAYS_SHORT[today.getDay()];
+          const kosuGunleri=ath.kosu_gunleri||[];
+          if(kosuGunleri.includes(dayShort)&&ctl>0){
+            const simState={atl,ctl,tsb,acwr:acwr||1.0,mechCtl,mechAtl};
+            const dtInt=intermediate.length?Math.ceil((new Date(intermediate[0].tarih+'T12:00:00')-today)/864e5):null;
+            const wkStatsBase={count:0,kaliteliYok:true,uzunYapildi:false,wkLoad:0,
+              dpHedefHafta:0,targetKmHafta:0,_noRaceMaxGunlukKm:0,weekOff:0,
+              isFutureWeek:false,recentKaliteli:[],recentLongRuns:[],sonYogunGun:false,
+              testPlanlar:[],sonAntrenmanDate:null,sonRecoveryHedef:null,sonRecoverySaatler:0,
+              athWorkouts:athWks,buHaftaKaliteli:[],kaliteliSayisi:0,aerobikSayisi:0,
+              turSonKullanim:calcTurSonKullanim(athWks,todayStr),
+              turFrekans:calcTurFrekans(athWks,todayStr),phaseStep:0,
+              haftaGunTipi:'kaliteli'};
+            const pd=planDay(todayStr,ath,{...simState,ctl},phase,daysToRace,dtInt,
+              wkStatsBase,kosuGunleri,ath.capraz_gunleri||[],primary||null);
+            todayTip=pd?.tip||'-';
+            todayBaslik=pd?.baslik||'-';
+            todayYapiNotu=pd?.yapi_notu||'-';
+          }
+        }catch(e){todayBaslik='Hesap hatası';}
+        // Sorun tespiti
+        const sorunlar=[];
+        if(sigs.level==='forceEasy') sorunlar.push('❌ forceEasy');
+        if(sigs.level==='forceLow')  sorunlar.push('⚠ forceLow');
+        if(sigs.level==='preferLow') sorunlar.push('💡 preferLow');
+        if(isTrail&&_raceDp<300&&primary?.is_trail) sorunlar.push('⛰ isTrail/düz yarış');
+        if(_canHillSprint&&_raceDp<300) sorunlar.push('🏔 canHill/düz');
+        if(acwr!==null&&acwr<0.65&&tsb>10) sorunlar.push('⚡ düşük yük istisnası');
+        return{
+          id:ath.id,
+          ad:((ath.ad||'')+' '+(ath.soyad||'')).trim()||ath.id,
+          ctl,atl,tsb,acwr,phase,lowPct,highPct,anaPct,
+          sigLevel:sigs.level,sigReasons:(sigs.zoneReasons||[]).join(' · '),
+          düşükYükIstisnası:sigs.düşükYükIstisnası,
+          effDisiplin,isTrail,_raceDp,_canHillSprint,
+          primaryAd:primary?.ad||'-',
+          primaryMesafe:primary?parseFloat(primary.mesafe)||0:0,
+          primaryIsTrail:!!primary?.is_trail,
+          daysToRace,
+          todayTip,todayBaslik,todayYapiNotu,
+          antrenmanAmaci:ath.antrenman_amaci||'-',
+          hrv:ath.hrv_durum||'-',
+          sakatlık:parseInt(ath.sakatlık)||1,
+          disiplin:ath.disiplin||'karma',
+          sorunlar,
+          sorunSayisi:sorunlar.length,
+        };
+      });
+      setRows(result);
+      setLoading(false);
+    },50);
+  };
+
+  const LEVEL_BG={forceEasy:'var(--danger-bg)',forceLow:'var(--warn-bg)',preferLow:'#fefce8',forceQuality:'var(--success-bg)',normal:'transparent'};
+  const LEVEL_COLOR={forceEasy:'var(--danger)',forceLow:'var(--warn)',preferLow:'#ca8a04',forceQuality:'var(--success)',normal:'var(--text-tertiary)'};
+
+  const sort=(key)=>{if(sortKey===key)setSortAsc(a=>!a);else{setSortKey(key);setSortAsc(true);}};
+  const filtrelenmiş=rows
+    .filter(r=>filtre==='hepsi'||(filtre==='sorunlu'&&r.sorunSayisi>0)||(filtre==='uyari'&&r.sigLevel!=='normal'))
+    .sort((a,b)=>{
+      let av=a[sortKey],bv=b[sortKey];
+      if(av===null||av===undefined)av=-Infinity;
+      if(bv===null||bv===undefined)bv=-Infinity;
+      if(typeof av==='string')av=av.toLowerCase();
+      if(typeof bv==='string')bv=bv.toLowerCase();
+      return sortAsc?(av<bv?-1:av>bv?1:0):(av>bv?-1:av<bv?1:0);
+    });
+
+  const TH=({k,children,style={}})=>React.createElement('th',{
+    onClick:()=>sort(k),
+    style:{padding:'6px 8px',textAlign:'left',borderBottom:'2px solid var(--border)',
+      whiteSpace:'nowrap',fontSize:10,color:'var(--text-secondary)',cursor:'pointer',
+      background:sortKey===k?'var(--bg-secondary)':'transparent',...style}
+  },children+(sortKey===k?(sortAsc?' ↑':' ↓'):''));
+
+  const sorunluSayisi=rows.filter(r=>r.sorunSayisi>0).length;
+  const uyariSayisi=rows.filter(r=>r.sigLevel!=='normal').length;
+
+  return React.createElement('div',{style:{padding:16}},
+    // Başlık + kontroller
+    React.createElement('div',{style:{display:'flex',gap:10,marginBottom:14,alignItems:'center',flexWrap:'wrap'}},
+      React.createElement('button',{className:'btn btn-primary btn-sm',onClick:hesapla,disabled:loading},
+        loading?'⏳ Hesaplanıyor...':'🔍 Analizi Çalıştır'),
+      rows.length>0&&React.createElement(React.Fragment,null,
+        React.createElement('span',{style:{fontSize:11,color:'var(--text-secondary)'}},
+          `${rows.length} sporcu · ⚠ ${sorunluSayisi} sorunlu · 🔔 ${uyariSayisi} uyarı`),
+        React.createElement('div',{style:{display:'flex',gap:4}},
+          ['hepsi','sorunlu','uyari'].map(f=>React.createElement('button',{
+            key:f,
+            className:'btn btn-sm'+(filtre===f?' btn-primary':''),
+            onClick:()=>setFiltre(f)
+          },{hepsi:'Hepsi',sorunlu:`⚠ Sorunlu (${sorunluSayisi})`,uyari:`🔔 Uyarı (${uyariSayisi})`}[f]))
+        )
+      )
+    ),
+    // Legend
+    rows.length>0&&React.createElement('div',{style:{display:'flex',gap:8,marginBottom:12,flexWrap:'wrap',fontSize:11}},
+      [{l:'forceEasy',c:'var(--danger)',t:'❌ forceEasy — yoğun antrenman tamamen engellendi'},
+       {l:'forceLow',c:'var(--warn)',t:'⚠ forceLow — zone: yalnızca aerobik'},
+       {l:'preferLow',c:'#ca8a04',t:'💡 preferLow — zone: aerobik tercih'},
+       {l:'forceQuality',c:'var(--success)',t:'✅ forceQuality — kalite fırsatı'},
+      ].map(({l,c,t})=>React.createElement('span',{key:l,style:{display:'flex',alignItems:'center',gap:4}},
+        React.createElement('span',{style:{width:10,height:10,borderRadius:2,background:c,display:'inline-block'}}),
+        React.createElement('span',{style:{color:'var(--text-secondary)'}},t)
+      ))
+    ),
+    // Tablo
+    rows.length>0&&React.createElement('div',{style:{overflowX:'auto',borderRadius:8,border:'1px solid var(--border)'}},
+      React.createElement('table',{style:{width:'100%',fontSize:11,borderCollapse:'collapse'}},
+        React.createElement('thead',null,
+          React.createElement('tr',{style:{background:'var(--bg-secondary)'}},
+            React.createElement(TH,{k:'ad'},'Sporcu'),
+            React.createElement(TH,{k:'ctl',style:{textAlign:'right'}},'CTL'),
+            React.createElement(TH,{k:'tsb',style:{textAlign:'right'}},'TSB'),
+            React.createElement(TH,{k:'acwr',style:{textAlign:'right'}},'ACWR'),
+            React.createElement(TH,{k:'phase'},'Faz'),
+            React.createElement(TH,{k:'lowPct',style:{textAlign:'right'}},'Z1-2%'),
+            React.createElement(TH,{k:'highPct',style:{textAlign:'right'}},'Z3-4%'),
+            React.createElement(TH,{k:'anaPct',style:{textAlign:'right'}},'Z5%'),
+            React.createElement(TH,{k:'sigLevel'},'Sinyal'),
+            React.createElement(TH,{k:'todayBaslik'},'Bugün Öneri'),
+            React.createElement(TH,{k:'primaryAd'},'Yarış'),
+            React.createElement(TH,{k:'_raceDp',style:{textAlign:'right'}},'D+'),
+            React.createElement(TH,{k:'isTrail'},'Trail?'),
+            React.createElement(TH,{k:'_canHillSprint'},'Hill?'),
+            React.createElement(TH,{k:'disiplin'},'Disiplin/Amaç'),
+            React.createElement(TH,{k:'hrv'},'HRV'),
+            React.createElement(TH,{k:'sorunSayisi'},'Sorunlar'),
+          )
+        ),
+        React.createElement('tbody',null,
+          filtrelenmiş.map(r=>React.createElement('tr',{
+            key:r.id,
+            style:{background:r.sorunSayisi>0?LEVEL_BG[r.sigLevel]||LEVEL_BG.forceLow:'transparent',
+              borderBottom:'1px solid var(--border)'}
+          },
+            React.createElement('td',{style:{padding:'5px 8px',fontWeight:600,whiteSpace:'nowrap'}},r.ad),
+            React.createElement('td',{style:{padding:'5px 8px',textAlign:'right',fontFamily:'monospace'}},r.ctl),
+            React.createElement('td',{style:{padding:'5px 8px',textAlign:'right',fontFamily:'monospace',
+              color:r.tsb>10?'var(--success)':r.tsb<-10?'var(--danger)':'inherit'}},r.tsb),
+            React.createElement('td',{style:{padding:'5px 8px',textAlign:'right',fontFamily:'monospace',
+              color:r.acwr===null?'var(--text-tertiary)':r.acwr>1.25?'var(--danger)':r.acwr<0.65?'var(--warn)':'inherit'}},
+              r.acwr===null?'-':r.acwr),
+            React.createElement('td',{style:{padding:'5px 8px'}},r.phase),
+            React.createElement('td',{style:{padding:'5px 8px',textAlign:'right',
+              color:r.lowPct===null?'var(--text-tertiary)':r.lowPct<55?'var(--danger)':r.lowPct<70?'var(--warn)':'var(--success)'}},
+              r.lowPct===null?'-':r.lowPct+'%'),
+            React.createElement('td',{style:{padding:'5px 8px',textAlign:'right',
+              color:r.highPct===null?'var(--text-tertiary)':r.highPct>35?'var(--danger)':r.highPct>25?'var(--warn)':'inherit'}},
+              r.highPct===null?'-':r.highPct+'%'),
+            React.createElement('td',{style:{padding:'5px 8px',textAlign:'right',
+              color:r.anaPct===null?'var(--text-tertiary)':r.anaPct>20?'var(--danger)':r.anaPct>12?'var(--warn)':'inherit'}},
+              r.anaPct===null?'-':r.anaPct+'%'),
+            React.createElement('td',{style:{padding:'5px 8px',fontWeight:600,
+              color:LEVEL_COLOR[r.sigLevel]||'var(--text-secondary)'}},r.sigLevel),
+            React.createElement('td',{style:{padding:'5px 8px',maxWidth:160,overflow:'hidden',
+              textOverflow:'ellipsis',whiteSpace:'nowrap'},title:r.todayYapiNotu},
+              r.todayBaslik),
+            React.createElement('td',{style:{padding:'5px 8px',maxWidth:140,overflow:'hidden',
+              textOverflow:'ellipsis',whiteSpace:'nowrap'},title:r.primaryAd+' ('+r.primaryMesafe+'km)'},
+              r.primaryAd==='-'?'-':r.primaryAd+' '+r.primaryMesafe+'K'),
+            React.createElement('td',{style:{padding:'5px 8px',textAlign:'right',
+              color:r._raceDp>0&&r._raceDp<300&&r.primaryIsTrail?'var(--warn)':'inherit',fontFamily:'monospace'}},
+              r._raceDp>0?r._raceDp+'m':'-'),
+            React.createElement('td',{style:{padding:'5px 8px',
+              color:r.isTrail&&r._raceDp<300?'var(--warn)':'inherit'}},
+              r.isTrail?'⚠ evet':'hayır'),
+            React.createElement('td',{style:{padding:'5px 8px',
+              color:r._canHillSprint?'var(--success)':'var(--text-tertiary)'}},
+              r._canHillSprint?'✓ evet':'✗ hayır'),
+            React.createElement('td',{style:{padding:'5px 8px',fontSize:10}},
+              r.disiplin+(r.antrenmanAmaci&&r.antrenmanAmaci!=='-'?' / '+r.antrenmanAmaci:'')),
+            React.createElement('td',{style:{padding:'5px 8px',
+              color:r.hrv==='dengeli'?'var(--success)':r.hrv==='düşük'?'var(--danger)':r.hrv==='dengesiz'?'var(--warn)':'var(--text-tertiary)'}},
+              r.hrv),
+            React.createElement('td',{style:{padding:'5px 8px',fontSize:10,color:'var(--text-secondary)',
+              maxWidth:180,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'},
+              title:(r.sorunlar.join(' | ')||'-')+(r.sigReasons?' | '+r.sigReasons:'')},
+              r.sorunlar.length>0?r.sorunlar.join(' '):'-')
+          ))
+        )
+      )
+    ),
+    !rows.length&&!loading&&React.createElement('div',{style:{padding:40,textAlign:'center',color:'var(--text-tertiary)'}},
+      '🔍 "Analizi Çalıştır" butonuna basarak tüm sporcuların durumunu görün.')
   );
 }
 
@@ -21499,7 +21735,8 @@ function App(){
         onUpdateRace:r=>setRaces(p=>p.map(x=>x.id===r.id?r:x)),
         onDeleteRace:id=>setRaces(p=>p.filter(x=>x.id!==id)),
         onDeleteHistoryEntry:entry=>setAthHistory(p=>p.filter(e=>e!==entry))
-      })
+      }),
+      tab==='tani'&&React.createElement(TaniPaneliTab,{athletes,allHistory,races,workouts})
     )
   );
 }
