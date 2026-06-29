@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.29-1210 --><!DOCTYPE html>
+<!-- Version: v2026.06.29-1240 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.29-1210';
+const APP_VERSION='v2026.06.29-1240';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -9963,6 +9963,21 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
   if(planForceEasy&&!forceEasy) forceEasy=true;
   if(planPreferLow&&!forceEasy&&!forceLow&&!preferLow) preferLow=true;
 
+  // ── Öncelik 5.5: Aşırı düşük yük istisnası ─────────────────────────────────
+  // ACWR < 0.65 + TSB > 10: sporcu kronik yük açığında, zone kaynaklı kısıtlar
+  // antrenman yükünü engellememeli. forceLow/preferLow zone sinyallerinden geliyorsa
+  // kaldırılır; forceQuality normal akışa girebilir.
+  // Korunan: forceEasy (akut overload), planForceEasy (planlı dinlenme haftası),
+  // mechKardioDanger (mekanik/kardio dengesizliği), planPreferLow (hafta bazlı kararlar).
+  const düşükYükIstisnası=!forceEasy&&!planForceEasy&&!mechKardioDanger&&acwr<0.65&&tsb>10;
+  if(düşükYükIstisnası){
+    if(forceLow){
+      forceLow=false;
+      zoneReasons.push('⚡ Yük çok düşük (ACWR '+acwr.toFixed(2)+', TSB +'+tsb.toFixed(1)+') — zone kısıtı devre dışı. Antrenman yükü artırılmalı.');
+    }
+    if(preferLow&&!planPreferLow) preferLow=false;
+  }
+
   // ── Öncelik 6: forceQuality (kalite fırsatı) — faz filtrelemeli ─────────────
   // Taper fazında tamamen kapalı; Zirve fazında (recovery değil) eşik gevşetilir.
   const planPhaseNow=planWeek?.phase||'';
@@ -9992,7 +10007,7 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
   if(isPlanRecoveryNow) yModZone=Math.min(yModZone,0.85);
 
   const level=forceEasy?'forceEasy':forceLow?'forceLow':preferLow?'preferLow':forceQuality?'forceQuality':'normal';
-  return{level,forceEasy,forceLow,preferLow,forceQuality,planForceEasy,planPreferLow,yModZone,zoneReasons};
+  return{level,forceEasy,forceLow,preferLow,forceQuality,planForceEasy,planPreferLow,yModZone,zoneReasons,düşükYükIstisnası};
 }
 
 // ── Tür son kullanım & frekans yardımcıları (global) ─────────────────────────
@@ -11338,7 +11353,7 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
         const sure=Math.round(35*yMod);
         kosuTpl={...tplKolay(band,sure,zones),sure_dk:sure,_downgraded:true,_originalTip:orijinalTip};
         kosuUyari=`HRV düşük — ${orijinalTip} yerine kolay koşu (sinir sistemi toparlanmadı)`;
-      } else if(hrvDengesiz&&haftaGunTipi==='kaliteli'){
+      } else if(hrvDengesiz&&haftaGunTipi==='kaliteli'&&!(acwr<0.65&&tsb>10)){
         const orijinalTip=kosuTpl.tip;
         const sure=Math.round(55*yMod);
         kosuTpl={...tplAerobik(band,sure,zones,disiplin),sure_dk:sure,_downgraded:true,_originalTip:orijinalTip};
