@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.30-1555 --><!DOCTYPE html>
+<!-- Version: v2026.06.30-1607 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.30-1555';
+const APP_VERSION='v2026.06.30-1607';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -13648,7 +13648,19 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
             const hasActualToday=athActualDates.has(day.date);
             if(hasActualToday){
               const ov=planSnap.overrideMap?.[day.date];
-              if(ov?.yapilar?.length>0) return{...day,yapilar:ov.yapilar,tip:ov.tip||day.tip,baslik:ov.baslik||day.baslik,yapi_notu:('yapi_notu' in ov)?ov.yapi_notu:(day.yapi_notu||'')};
+              // Profil uyumluluk kontrolü (isPast dalıyla AYNI mantık — bkz. yukarıda _isStillOk):
+              // override'ın tipi artık sporcunun güncel koşu/çapraz profiline uymuyorsa
+              // (örn. koşu günü Salı'dan başka bir güne taşındı) bayat reçeteyi gösterme.
+              // generateTwoWeekPlan zaten bugün için GERÇEK antrenmanı (actual) yansıtacak
+              // şekilde day'i kendi içinde düzeltir (tip/baslik/yapilar) — ov bayatsa ona düş.
+              const _dayShortToday=DAYS_SHORT[new Date(day.date+'T12:00:00').getDay()];
+              const _ovTipToday=ov?.tip;
+              const _curKosuToday=athlete.kosu_gunleri||[];
+              const _curCaprazToday=athlete.capraz_gunleri||[];
+              const _ovStillOkToday=!ov||_ovTipToday==='dinlenme'||_ovTipToday==='yaris'||
+                (_ovTipToday==='capraz'&&_curCaprazToday.includes(_dayShortToday))||
+                (_ovTipToday!=='dinlenme'&&_ovTipToday!=='yaris'&&_ovTipToday!=='capraz'&&_curKosuToday.includes(_dayShortToday));
+              if(_ovStillOkToday&&ov?.yapilar?.length>0) return{...day,yapilar:ov.yapilar,tip:ov.tip||day.tip,baslik:ov.baslik||day.baslik,yapi_notu:('yapi_notu' in ov)?ov.yapi_notu:(day.yapi_notu||'')};
               return day;
             }
             // Bugün antrenman kaydı yok — koşu günüyse taze plan öncelikli kontrol
@@ -22769,7 +22781,17 @@ function SporcuPlanView(){
     } else if(isToday){
       // Bugün: tamamlanan her zaman gösterilir; tamamlanmamışsa sadece onaylı göster
       if(hasActuals){
-        dayInfos.push({date,status:'today_done',ov,actuals});
+        // Profil uyumluluk kontrolü (isPast dalıyla aynı mantık): override'ın tipi
+        // artık sporcunun güncel profiline uymuyorsa (örn. koşu günü taşındı) bayat
+        // reçeteyi gösterme — ov'u null geç, kart sadece gerçekleşen antrenmanı göstersin.
+        const _dayShortToday=DAYS_SHORT[new Date(date+'T12:00:00').getDay()];
+        const _ovTipToday=ov?.tip;
+        const _curKosuToday=athlete?.kosu_gunleri||[];
+        const _curCaprazToday=athlete?.capraz_gunleri||[];
+        const _ovStillOkToday=!ov||_ovTipToday==='dinlenme'||_ovTipToday==='yaris'||
+          (_ovTipToday==='capraz'&&_curCaprazToday.includes(_dayShortToday))||
+          (_ovTipToday!=='dinlenme'&&_ovTipToday!=='yaris'&&_ovTipToday!=='capraz'&&_curKosuToday.includes(_dayShortToday));
+        dayInfos.push({date,status:'today_done',ov:_ovStillOkToday?ov:null,actuals});
       } else if(hasNonRestPlan&&isApproved){
         dayInfos.push({date,status:'today',ov,actuals});
       } else if(ov?.tip==='dinlenme'&&ov?.approved===true){
