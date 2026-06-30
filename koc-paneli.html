@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.30-2134 --><!DOCTYPE html>
+<!-- Version: v2026.06.30-2240 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.30-2134';
+const APP_VERSION='v2026.06.30-2240';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -3691,6 +3691,7 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
             const _canHillSprint=primary?(_raceDp>300):(ath.disiplin==='trail');
             const daysToRace=primary?Math.ceil((new Date(primary.tarih+'T12:00:00')-today)/864e5):null;
             const zoneDist=calcPeriodZoneDist(athWks,ath,4);
+            const zoneDist2=calcPeriodZoneDist(athWks,ath,2);
             const lowPct=zoneDist?.lowPct??null;
             const highPct=zoneDist?.highPct??null;
             const anaPct=zoneDist?.anaPct??null;
@@ -3700,7 +3701,7 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
               ifOverloaded:false,mechOverload:false,
               mechAclOverload:mechAtl>(mechCtl||1)*1.3,
               powerOverload:false,wkSessions:0,mechKardioDanger:false,
-              zoneDist4w:zoneDist,kaliteliYapildi:false,
+              zoneDist4w:zoneDist,zoneDist2w:zoneDist2,kaliteliYapildi:false,
               planWeek:null,prevWeek:null,
               hrv:ath.hrv_durum||'',
             });
@@ -10297,14 +10298,23 @@ function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, ram
 //   zoneReasons : string[] — plan değişikliği açıklamaları (warnings'e eklenir)
 // ═══════════════════════════════════════════════════════════════════════════════
 function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload,
-  powerOverload,wkSessions,mechKardioDanger,zoneDist4w,kaliteliYapildi,
+  powerOverload,wkSessions,mechKardioDanger,zoneDist4w,zoneDist2w,kaliteliYapildi,
   planWeek,prevWeek,aerEffDecline=false,hrv=''}){
 
+  // Kronik birikim kararları (forceEasy/forceLow/preferLow): 4 haftalık pencere
   const z=zoneDist4w||{};
   const anaPct=z.anaPct??null;
   const highPct=z.highPct??null;
   const lowPct=z.lowPct??null;
   const hasZone=zoneDist4w!=null&&lowPct!=null;
+
+  // Akut kalite fırsatı kararı (forceQuality): 2 haftalık pencere
+  // 4w havuzunda ana düşük görünse bile son 2 haftada yüksek yoğunluk varsa
+  // forceQuality açılmaz — gerçek akut durumu yansıtır.
+  const z2=zoneDist2w||zoneDist4w||{};
+  const anaPct2w=z2.anaPct??anaPct;
+  const lowPct2w=z2.lowPct??lowPct;
+  const hasZone2w=zoneDist2w!=null&&z2.lowPct!=null;
 
   let forceEasy=false, forceLow=false, preferLow=false, forceQuality=false;
   let planForceEasy=false, planPreferLow=false;
@@ -10466,18 +10476,22 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
 
   // ── Öncelik 6: forceQuality (kalite fırsatı) — faz filtrelemeli ─────────────
   // Taper fazında tamamen kapalı; Zirve fazında (recovery değil) eşik gevşetilir.
+  // ÇİFT PENCERE: forceQuality kararı 2 haftalık (akut) pencereyle alınır.
+  // Mantık: kronik ortalama (4w) düşük görünse bile son 2 haftada yoğunluk
+  // yükseldiyse kalite fırsatı açılmamalı — sporcu zaten stimüle edilmekte.
   const planPhaseNow=planWeek?.phase||'';
   const isPlanRecoveryNow=!!planWeek?.isRecovery;
   const isTaper=planPhaseNow==='Taper';
   const isZirveActive=planPhaseNow==='Zirve'&&!isPlanRecoveryNow;
 
-  if(!forceEasy&&!forceLow&&!preferLow&&!isTaper&&hasZone){
+  if(!forceEasy&&!forceLow&&!preferLow&&!isTaper&&(hasZone||hasZone2w)){
     const anaEsik=isZirveActive?5:3;
-    const anaEksik=anaPct<anaEsik&&lowPct<85;
-    if(anaEksik&&tsb>5&&acwr<1.1&&!kaliteliYapildi){
+    const anaEksik2w=anaPct2w<anaEsik&&lowPct2w<85;
+    if(anaEksik2w&&tsb>5&&acwr<1.1&&!kaliteliYapildi){
       forceQuality=true;
-      const fazEk=isZirveActive?' (Zirve fazı — kalite penceresi genişletildi)':'';
-      zoneReasons.push('Anaerobik stimulus düşük (%'+anaPct+'%), sporcu dinlenmiş (TSB +'+tsb.toFixed(1)+', ACWR '+acwr.toFixed(2)+') — kaliteli antrenman fırsatı.'+fazEk);
+      const pencereEk=hasZone2w?' (son 2 hafta)':' (son 4 hafta — 2h veri yetersiz)';
+      const fazEk=isZirveActive?' · Zirve fazı — kalite penceresi genişletildi':'';
+      zoneReasons.push('Anaerobik stimulus düşük (%'+anaPct2w+pencereEk+'), sporcu dinlenmiş (TSB +'+tsb.toFixed(1)+', ACWR '+acwr.toFixed(2)+') — kaliteli antrenman fırsatı.'+fazEk);
     }
   }
 
@@ -10720,6 +10734,7 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
 
   const athAllWorkouts=(allWorkouts||[]).filter(w=>w.athleteId===athlete.id);
   const zoneDist4w=calcPeriodZoneDist(athAllWorkouts,athlete,4);
+  const zoneDist2w=calcPeriodZoneDist(athAllWorkouts,athlete,2); // akut pencere — forceQuality için
   const zoneStatus=zoneDist4w?zoneDist_status(zoneDist4w):null;
   if(zoneStatus){
     zoneStatus.issues.forEach(i=>warnings.push({icon:'📊',text:i.msg}));
@@ -10737,7 +10752,7 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   // ── Birleşik sinyal değerlendirmesi — öncelik hiyerarşisi ────────────────
   const sigs=evaluateSignals({
     acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload,powerOverload,wkSessions,
-    mechKardioDanger,zoneDist4w,kaliteliYapildi,
+    mechKardioDanger,zoneDist4w,zoneDist2w,kaliteliYapildi,
     planWeek:thisWeekTarget||null,
     prevWeek:prevWeekTarget||null,
     aerEffDecline,hrv  // HRV durumu — düşük/dengesiz ise düşükYükIstisnası devre dışı
@@ -12011,7 +12026,9 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
   let plannedKaliteliCarry=[]; // Hafta 0'da planlanan kaliteli tipler → hafta 1'de tekrar önleme
 
   // Zone dağılımı bir kez hesapla — her günün plan kararına aktarılır
+  // 4 hafta: kronik overload kararları; 2 hafta: akut kalite fırsatı kararı
   const zoneDist4wPlan=calcPeriodZoneDist(athWorkouts,athlete,4);
+  const zoneDist2wPlan=calcPeriodZoneDist(athWorkouts,athlete,2);
 
   for(let weekOff=0;weekOff<2;weekOff++){
     const {start}=getWeekBounds(weekOff);
@@ -12358,6 +12375,7 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
           wkSessions:wkStats.count||0,
           mechKardioDanger:mechKardioD,
           zoneDist4w:zoneDist4wPlan,
+          zoneDist2w:zoneDist2wPlan,
           kaliteliYapildi:kaliteliVarMi,
           planWeek:wt||null,
           prevWeek:prevWt||null,
