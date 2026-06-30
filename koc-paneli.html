@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.30-1408 --><!DOCTYPE html>
+<!-- Version: v2026.06.30-1456 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.30-1408';
+const APP_VERSION='v2026.06.30-1456';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -9081,6 +9081,70 @@ function estimateWeekKmDp(week, zones, athWorkouts, allRacesForAth, _targetKm, _
   return {km:round1(totalKm), dp:Math.round(totalDp), breakdown};
 }
 
+// ── Gün/Hafta "Önerilen Toplam Mesafe" — ▼ Reçete tablosuyla BİREBİR AYNI KAYNAK ──
+// estimateDayKmDp() yukarıda süre/pace üzerinden bağımsız bir tahmin üretiyor.
+// Bu fonksiyon ise tahmin YAPMAZ: ReceteTablosu'nun ekranda gösterdiği satırları
+// üreten adimToRows()/calcRowM() çıktısını birebir kullanır ve toplar — yani
+// koçun "▼ Reçete" açtığında gördüğü satır mesafeleriyle her zaman tutarlıdır.
+// rowOverridesForDay: planSnap.rowOverrides[day.date] — coach'un tek tek satırda
+// yaptığı manuel mesafe düzeltmeleri varsa, ReceteTablosu ile aynı şekilde uygulanır.
+function gunOneriMesafeKm(day, zones, allRacesForAth, disiplin, rowOverridesForDay){
+  if(!day) return 0;
+  const dayDateStr=_normDateStr(day.date);
+
+  // Yarış günü: yarış kaydındaki/yapı içindeki net mesafe — tahmine gerek yok
+  const raceMatch=(allRacesForAth||[]).find(r=>r&&_normDateStr(r.tarih)===dayDateStr);
+  if(raceMatch) return round1(parseFloat(raceMatch.mesafe)||0);
+  if(day.tip==='yaris'&&day.yapilar?.length){
+    const yarisYapi=day.yapilar.find(y=>y._yaris||y._yarisMesafe);
+    if(yarisYapi) return round1(parseFloat(yarisYapi._yarisMesafe)||0);
+  }
+
+  if(day.tip==='dinlenme'||day.tip==='capraz'||!day.yapilar?.length) return 0;
+
+  // ReceteTablosu'na giden yapılarla AYNI kaynak (gün koşu+çapraz birleşikse
+  // yalnızca koşu kısmı, _rows eksikse şablon'dan tamamlanır)
+  let yapilar=kosuYapilarAl(day);
+  try{ yapilar=injectRowsFromTpl(yapilar, day.tip, day.yapi_notu, day.sure_dk, zones, disiplin); }catch(e){}
+
+  // ReceteTablosu ile birebir aynı filtre: çapraz/kuvvet/öneri bloklarını çıkar
+  yapilar=(yapilar||[]).filter(y=>{
+    if(y._caprazNot) return false;
+    const b=(y.baslik||'');
+    if(b.startsWith('🚴')||b.startsWith('➕')) return false;
+    const bL=b.trim().toLocaleLowerCase('tr');
+    if(bL==='kuvvet çalışması'||bL==='çapraz antrenman') return false;
+    return true;
+  });
+  const normalYapilar=yapilar.filter(y=>{
+    if((y.baslik||'').startsWith('💡')) return false;
+    if(!y._rows&&!y._yaris&&!y._caprazNot){
+      const b=(y.baslik||'').trim().toLocaleLowerCase('tr');
+      if(b==='dinlenme'||b==='blok arası dinlenme') return false;
+    }
+    return true;
+  });
+
+  const baseRows=normalYapilar.flatMap(y=>{try{return adimToRows(y,zones)||[];}catch(e){return[];}});
+  const ov=rowOverridesForDay||{};
+  let totalM=0;
+  baseRows.forEach((r,i)=>{
+    if(r.type==='header') return;
+    const row=ov[i]?{...r,...ov[i]}:r;
+    totalM += (row.mesafe||0)*(row.repeatCount||1);
+  });
+  return round1(totalM/1000);
+}
+
+function haftaOneriMesafeKm(week, zones, allRacesForAth, disiplin, rowOverridesMap){
+  if(!week?.days) return 0;
+  let total=0;
+  for(const day of week.days){
+    total += gunOneriMesafeKm(day, zones, allRacesForAth, disiplin, (rowOverridesMap||{})[day.date]);
+  }
+  return round1(total);
+}
+
 // Mevcut hafta için tüm muhtemel azaltma sebeplerini topla.
 // Bu sebepler haftalık hedefe doğrudan uygulanmaz (effective hedef bottom-up
 // hesaplanır), ancak farkın açıklaması olarak bildirimde gösterilir.
@@ -15421,6 +15485,17 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       // gün üretiminde de band tek seferde, hafta dışında hesaplanır).
       const _uzunBandHafta=ctlBand((history&&history[history.length-1]?.ctl)||0);
       const _uzunZonesHafta=calcZones(athlete);
+      // Haftanın önerilen (reçeteden) toplam mesafesi — ▼ Reçete tablosunda
+      // GÖRÜNEN satır mesafeleriyle (calcRowM) birebir aynı kaynaktan toplanır.
+      // Süre/pace üzerinden ayrı bir tahmin YAPILMAZ.
+      const _haftaOneriRaceIds=(athlete?.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
+      const _haftaOneriRaces=(races||[]).filter(r=>_haftaOneriRaceIds.includes(r.id));
+      const haftaOneriKm=haftaOneriMesafeKm(week,_uzunZonesHafta,_haftaOneriRaces,athlete?.disiplin,planSnap?.rowOverrides);
+      const haftaOneriDp=Math.round((week.days||[]).reduce((s,d)=>{
+        let dp=parseFloat(d.dpHedef)||0;
+        if(!dp){ for(const y of d.yapilar||[]) dp+=parseFloat(y.dpHedef)||0; }
+        return s+dp;
+      },0));
       // Mevcut hafta revize hedef: curWeekEffective (yoğunluk düzeltmeli) — tekrar hesap gereksiz
       // curWeekEffective yoksa (plan yok / gelecek hafta) null döner
       const weekEffKm=week.weekOff===0&&displayCurWeekEff?displayCurWeekEff.effKm:0;
@@ -15514,6 +15589,10 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                 _uzunHedefHafta.capped?' ⚡':''
               );
             })(),
+            haftaOneriKm>0&&React.createElement('span',{
+              style:{color:'var(--info)'},
+              title:'▼ Reçete tablolarındaki satır mesafelerinin toplamı'
+            },'📋 Önerilen: '+haftaOneriKm+' km'+(haftaOneriDp>0?' / D+'+haftaOneriDp+'m':'')),
             week.wkActualKm>0&&React.createElement('span',{style:{color:'var(--success)'}},'Gerçek: '+week.wkActualKm+' km'+(week.wkActualDp>0?' / D+'+week.wkActualDp+'m':''))
           ),
           antrenmanGunleri.length>0&&React.createElement('button',{
