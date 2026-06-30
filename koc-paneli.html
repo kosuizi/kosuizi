@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.30-2250 --><!DOCTYPE html>
+<!-- Version: v2026.06.30-2300 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.30-2250';
+const APP_VERSION='v2026.06.30-2300';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -5014,26 +5014,33 @@ function calcPeriodZoneDist(workouts,athlete,weeks=4){
 }
 
 // Dağılım durumu — Seiler 80/20 modeli referans
-function zoneDist_status(dist){
+function zoneDist_status(dist, dist2w){
   if(!dist)return null;
   const {lowPct,highPct,anaPct}=dist;
   const issues=[];
   const flags=[];
 
-  // Düşük aerobik fazla mı az?
-  if(lowPct<65) issues.push({type:'low_eksik',msg:'Düşük aerobik yetersiz ('+lowPct+'%). Kolay koşu hacmi artırılmalı.'});
+  // Düşük aerobik — eşik 70: evaluateSignals preferLow sınırıyla hizalı
+  // 55–70 arası → uyarı (preferLow); <55 → ayrıca forceLow devreye girer
+  if(lowPct<70) issues.push({type:'low_eksik',msg:'Düşük aerobik yetersiz ('+lowPct+'%). Kolay koşu hacmi artırılmalı.'});
   if(lowPct>90) flags.push({type:'low_fazla',msg:'Çok düşük yoğunluk. Kaliteli antrenman eksik.'});
 
   // Yüksek aerobik
   if(highPct>25) issues.push({type:'high_fazla',msg:'Yüksek aerobik fazla ('+highPct+'%). Tempo/eşik yoğunluğu azaltılabilir.'});
 
-  // Anaerobik
+  // Anaerobik fazla — seçili periyot bazlı (kronik birikim)
   if(anaPct>15) issues.push({type:'ana_fazla',msg:'Anaerobik yük yüksek ('+anaPct+'%). Dinlenme veya kolay antrenman gerekli.'});
-  if(anaPct<3&&lowPct<85) flags.push({type:'ana_eksik',msg:'Anaerobik stimulus düşük. Kaliteli antrenman eklenebilir.'});
+
+  // Anaerobik stimulus eksik — forceQuality ile hizalı: 2H penceresi varsa onu kullan
+  // Mantık: forceQuality da 2H'e bakıyor; UI flag aynı pencereyi yansıtmalı
+  const anaEksikPct=dist2w?dist2w.anaPct:anaPct;
+  const anaEksikLowPct=dist2w?dist2w.lowPct:lowPct;
+  const pencereNot=dist2w?' (son 2 hafta)':'';
+  if(anaEksikPct<3&&anaEksikLowPct<85) flags.push({type:'ana_eksik',msg:'Anaerobik stimulus düşük'+pencereNot+'. Kaliteli antrenman eklenebilir.'});
 
   // Genel durum
   const isOk=issues.length===0;
-  const score= isOk?100:Math.max(0,100-issues.length*20-flags.length*5);
+  const score=isOk?100:Math.max(0,100-issues.length*20-flags.length*5);
   return{issues,flags,isOk,score,
     label:isOk?'Dengeli':issues.length===1?'İyileştirilebilir':'Dengesiz',
     cls:isOk?'badge-good':issues.length===1?'badge-warn':'badge-danger'};
@@ -10778,7 +10785,7 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   const athAllWorkouts=(allWorkouts||[]).filter(w=>w.athleteId===athlete.id);
   const zoneDist4w=calcPeriodZoneDist(athAllWorkouts,athlete,4);
   const zoneDist2w=calcPeriodZoneDist(athAllWorkouts,athlete,2); // akut pencere — forceQuality için
-  const zoneStatus=zoneDist4w?zoneDist_status(zoneDist4w):null;
+  const zoneStatus=zoneDist4w?zoneDist_status(zoneDist4w,zoneDist2w):null;
   if(zoneStatus){
     zoneStatus.issues.forEach(i=>warnings.push({icon:'📊',text:i.msg}));
     if(zoneStatus.flags.length>0) warnings.push({icon:'💡',text:zoneStatus.flags[0].msg});
@@ -19414,7 +19421,7 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
   // Bölge dağılımı — seçili periyot (görsel çubuk için)
   const [zonePeriod,setZonePeriod]=React.useState(4);
   const zoneDist=React.useMemo(()=>calcPeriodZoneDist(workouts,athlete,zonePeriod),[workouts,athlete,zonePeriod]);
-  const zoneStatus=zoneDist?zoneDist_status(zoneDist):null;
+  const zoneStatus=zoneDist?zoneDist_status(zoneDist,zoneDist2wFixed):null;
   // Sabit pencereler — trend hesabı için (periyot seçiminden bağımsız)
   const zoneDist4wFixed=React.useMemo(()=>calcPeriodZoneDist(workouts,athlete,4),[workouts,athlete]);
   const zoneDist2wFixed=React.useMemo(()=>calcPeriodZoneDist(workouts,athlete,2),[workouts,athlete]);
