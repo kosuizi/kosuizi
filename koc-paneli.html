@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.30-1022 --><!DOCTYPE html>
+<!-- Version: v2026.06.30-1052 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.30-1022';
+const APP_VERSION='v2026.06.30-1052';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1193,7 +1193,7 @@ function extractFeedbackSignals(allSnapsObj, athlete){
             } else hrOk=true; // zone içinde
           }
         }
-        if(paceDir||hrDir||paceOk||hrOk) signals.push({date,paceDir,hrDir,paceOk,hrOk,hrWeight,zi:zi??0});
+        if(paceDir||hrDir||paceOk||hrOk) signals.push({date,paceDir,hrDir,paceOk,hrOk,hrWeight,zi:zi??0,zoneId:hr?.id||null});
       };
 
       Object.values(rowOvs).forEach(scanRow);
@@ -1272,6 +1272,7 @@ function analyzeRecipeFeedbackSignals(signals){
     const confidence=Math.max(0,Math.min(1,(avgScore-1)/3));
     return{
       action:(dominantDir&&dominantDayCount>=2&&dominantScore>=BPM_SIGNAL_SCORE_THRESHOLD)?dominantDir:null,
+      pendingDir:dominantDir, // eylem eşiği henüz karşılanmasa da baskın yönü gösterir (örn. "1/2 gün" iken)
       dominantDayCount,
       totalScore:dominantScore,
       avgScore:round2(avgScore),
@@ -1298,6 +1299,30 @@ function analyzeRecipeFeedbackSignals(signals){
     totalDays:vltResult.totalDays,
     noCombined:vltResult.noCombined,
   };
+}
+
+// ── Reçete Geri Bildirim — Tanı Kırılımı ──────────────────────────────────────
+// "Çakışma" fazlarının yönü (hızlı+yüksek nabız mı, yavaş+düşük nabız mı — pacing
+// disiplini hakkında bilgi verir) ve sapmaların hangi yoğunluk bölgesinde (Z1-Z5c)
+// yoğunlaştığını gösterir. vLT sinyali üretmez ama koç için tanı/telkin amaçlıdır.
+const FB_ZONE_ORDER=['Z1','Z2','Z3','Z4','Z5a','Z5b','Z5c'];
+function summarizeFeedbackBreakdown(signals){
+  if(!signals||!signals.length) return null;
+  let fastHigh=0, slowLow=0;
+  const byZone={};
+  signals.forEach(s=>{
+    const z=s.zoneId||'Bilinmiyor';
+    if(!byZone[z]) byZone[z]={paceOff:0,hrOff:0,conflict:0};
+    if(s.paceDir) byZone[z].paceOff++;
+    if(s.hrDir)   byZone[z].hrOff++;
+    if(s.paceDir&&s.hrDir){
+      if(s.paceDir==='fast'&&s.hrDir==='high'){fastHigh++;byZone[z].conflict++;}
+      else if(s.paceDir==='slow'&&s.hrDir==='low'){slowLow++;byZone[z].conflict++;}
+    }
+  });
+  const orderedKeys=[...FB_ZONE_ORDER.filter(z=>byZone[z]),...Object.keys(byZone).filter(z=>!FB_ZONE_ORDER.includes(z))];
+  const zones=orderedKeys.map(z=>({zoneId:z,...byZone[z]}));
+  return {conflict:{fastHigh,slowLow},zones};
 }
 
   // Öncelik: manuel giriş → PB zinciri (doğruluk + güncellik birlikte değerlendirilir)
@@ -16233,6 +16258,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
   const [fbRawCount,setFbRawCount]=useState(null); // {pace, hr}
   const [fbApplied,setFbApplied]=useState(null);   // 'vlt' (LTHR bu mekanizmadan kaldırıldı)
   const [fbError,setFbError]=useState(null);
+  const [fbBreakdown,setFbBreakdown]=useState(null); // {conflict:{fastHigh,slowLow}, zones:[...]}
 
   const FB_SCAN_WINDOW_DAYS=21; // Son 21 gün (≈1 mezosiklus) — eski form verisi karışmasın
   const FB_SCAN_WEEKS_FETCH=5;  // 21 günü her takvim hizalamasında garanti kapsayan cömert üst sınır
@@ -16248,7 +16274,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
 
   const runFbScan=async()=>{
     if(!athlete?.id) return;
-    setFbScanLoading(true);setFbAnalysis(null);setFbRawCount(null);setFbApplied(null);setFbError(null);
+    setFbScanLoading(true);setFbAnalysis(null);setFbRawCount(null);setFbApplied(null);setFbError(null);setFbBreakdown(null);
     try{
       // Tüm geçmiş yerine sadece son birkaç haftayı çek — weekKey'ler Pazartesi tarihiyle anahtarlı
       const weekKeys=Array.from({length:FB_SCAN_WEEKS_FETCH},(_,i)=>getWeekKey(-i));
@@ -16268,6 +16294,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       });
       const analysis=analyzeRecipeFeedbackSignals(sigs);
       setFbAnalysis(analysis);
+      setFbBreakdown(summarizeFeedbackBreakdown(sigs));
     }catch(e){
       setFbError('Veri okunamadı: '+e.message);
     }finally{
@@ -16532,7 +16559,8 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
               ?(fbAnalysis.vlt.noCombined?'—'
                 :fbAnalysis.vltAction
                   ?'✓ '+fbAnalysis.vlt.dominantDayCount+'/2 gün · '+(fbAnalysis.vltAction==='up'?'⬆ vLT ↑':'⬇ vLT ↓')
-                  :fbAnalysis.vlt.dominantDayCount+'/2 gün — 1 gün daha bekleniyor')
+                  :fbAnalysis.vlt.dominantDayCount+'/2 gün — 1 gün daha bekleniyor'+
+                    (fbAnalysis.vlt.pendingDir?' (olası yön: '+(fbAnalysis.vlt.pendingDir==='up'?'⬆ vLT ↑':'⬇ vLT ↓')+')':''))
               :'—')
         )
       ),
@@ -16589,6 +16617,37 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
           if(msgs.length) return msgs.join(' · ')+' — Antrenman verisi girmeye devam edin.';
           return 'Her fazda hem pace hem nabız girildiğinde sinyal üretilebilir.';
         })()
+      ),
+      // Tanı kırılımı — çakışma yönü (pacing disiplini) + bölge dağılımı (hangi yoğunlukta sapma var)
+      fbBreakdown&&(fbBreakdown.conflict.fastHigh+fbBreakdown.conflict.slowLow>0||fbBreakdown.zones.length>0)&&
+      React.createElement('div',{style:{marginTop:10,paddingTop:10,borderTop:'1px solid var(--border)'}},
+        React.createElement('div',{style:{fontSize:11,fontWeight:600,color:'var(--text-secondary)',marginBottom:6}},'Tanı Kırılımı'),
+        (fbBreakdown.conflict.fastHigh+fbBreakdown.conflict.slowLow>0)&&React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:8}},
+          'Çakışma yönü: ',
+          React.createElement('span',{style:{color:'var(--text-secondary)'}},'Hızlı+Yüksek Nabız '+fbBreakdown.conflict.fastHigh),
+          '  ·  ',
+          React.createElement('span',{style:{color:'var(--text-secondary)'}},'Yavaş+Düşük Nabız '+fbBreakdown.conflict.slowLow)
+        ),
+        fbBreakdown.zones.length>0&&React.createElement('div',{className:'table-wrap'},
+          React.createElement('table',{className:'table',style:{fontSize:11}},
+            React.createElement('thead',null,
+              React.createElement('tr',null,
+                React.createElement('th',null,'Bölge'),
+                React.createElement('th',null,'Pace'),
+                React.createElement('th',null,'Nabız'),
+                React.createElement('th',null,'Çakışma')
+              )
+            ),
+            React.createElement('tbody',null,
+              fbBreakdown.zones.map(z=>React.createElement('tr',{key:z.zoneId},
+                React.createElement('td',null,z.zoneId),
+                React.createElement('td',null,z.paceOff||'—'),
+                React.createElement('td',null,z.hrOff||'—'),
+                React.createElement('td',null,z.conflict||'—')
+              ))
+            )
+          )
+        )
       ),
       !fbRawCount&&!fbScanLoading&&React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',fontStyle:'italic'}},
         'Tarama başlatılmadı.'
