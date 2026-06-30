@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.30-1101 --><!DOCTYPE html>
+<!-- Version: v2026.06.30-1408 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.30-1101';
+const APP_VERSION='v2026.06.30-1408';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -21049,10 +21049,29 @@ function ShareBtn({elRef,filename,title,text,style}){
 
 function MetrikGrafikKarti({profHist,metrikList}){
   const [aktif,setAktif]=useState(metrikList[0]?.key||'kilo');
+  const [period,setPeriod]=useState(4);
   const canvasRef=useRef(null);
   const instRef=useRef(null);
   const metrik=metrikList.find(m=>m.key===aktif)||metrikList[0];
-  const veriler=profHist.filter(s=>s[aktif]!=null&&s[aktif]!=='');
+
+  // Seçilen pencereye göre tarih bazlı filtre (profHist günlük dizi değil,
+  // seyrek/sporadik profil/anket kayıtları olduğundan slice değil tarih kıyası kullanılır)
+  const cutoff=React.useMemo(()=>{
+    const d=new Date();d.setHours(0,0,0,0);d.setDate(d.getDate()-period*7);
+    return d;
+  },[period]);
+  const veriler=profHist.filter(s=>s[aktif]!=null&&s[aktif]!==''&&new Date(s.date+'T12:00:00')>=cutoff);
+
+  const PeriodBtn=({w,l})=>React.createElement('button',{
+    onClick:()=>setPeriod(w),
+    style:{
+      padding:'3px 8px',fontSize:11,fontWeight:600,borderRadius:4,border:'1px solid',cursor:'pointer',
+      background:period===w?'var(--info)':'transparent',
+      color:period===w?'#fff':'var(--text-secondary)',
+      borderColor:period===w?'var(--info)':'var(--border)',
+      transition:'all .15s'
+    }
+  },l);
 
   useEffect(()=>{
     if(!canvasRef.current||!metrik||!veriler.length)return;
@@ -21086,14 +21105,23 @@ function MetrikGrafikKarti({profHist,metrikList}){
       }
     });
     return()=>{if(instRef.current)instRef.current.destroy();};
-  },[aktif,profHist]);
+  },[aktif,profHist,period]);
 
   if(!metrikList.length)return null;
 
+  const toplamKayit=profHist.filter(s=>s[aktif]!=null&&s[aktif]!=='').length;
+
   return React.createElement('div',{className:'card',style:{marginBottom:12}},
-    React.createElement('div',{className:'card-title',style:{marginBottom:10}},'📈 Sporcu Metrikleri'),
+    React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10,flexWrap:'wrap',gap:8}},
+      React.createElement('div',{className:'card-title',style:{margin:0}},'📈 Sporcu Metrikleri'),
+      React.createElement('div',{style:{display:'flex',gap:3}},
+        [{w:1,l:'1H'},{w:2,l:'2H'},{w:4,l:'4H'},{w:8,l:'8H'},{w:12,l:'12H'}].map(({w,l})=>
+          React.createElement(PeriodBtn,{key:w,w,l})
+        )
+      )
+    ),
     // Tab seçici
-    React.createElement('div',{style:{display:'flex',flexWrap:'wrap',gap:4,marginBottom:12}},
+    React.createElement('div',{style:{display:'flex',flexWrap:'wrap',gap:4,marginBottom:8}},
       metrikList.map(m=>React.createElement('button',{
         key:m.key,
         onClick:()=>setAktif(m.key),
@@ -21106,10 +21134,13 @@ function MetrikGrafikKarti({profHist,metrikList}){
         }
       },m.label))
     ),
+    React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:8}},'Son '+period+' hafta'),
     // Grafik
     veriler.length<2
       ?React.createElement('div',{style:{textAlign:'center',color:'var(--text-tertiary)',fontSize:12,padding:'20px 0'}},
-        veriler.length===1?'Grafik için en az 2 kayıt gerekiyor':'Henüz veri yok'
+        veriler.length===0&&toplamKayit>0
+          ?'Seçilen dönemde veri yok · daha geniş bir pencere deneyin (8H/12H)'
+          :veriler.length===1?'Grafik için en az 2 kayıt gerekiyor':'Henüz veri yok'
       )
       :React.createElement('div',{style:{height:180,position:'relative'}},
         React.createElement('canvas',{ref:canvasRef})
