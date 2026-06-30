@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.30-2240 --><!DOCTYPE html>
+<!-- Version: v2026.06.30-2250 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.30-2240';
+const APP_VERSION='v2026.06.30-2250';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -5037,6 +5037,49 @@ function zoneDist_status(dist){
   return{issues,flags,isOk,score,
     label:isOk?'Dengeli':issues.length===1?'İyileştirilebilir':'Dengesiz',
     cls:isOk?'badge-good':issues.length===1?'badge-warn':'badge-danger'};
+}
+
+// ── Zone Trend: 4 Hafta → 2 Hafta Karşılaştırması ────────────────────────────
+// Kronik ortalama (4H) ile akut durum (2H) arasındaki anlamlı farkları tespit eder.
+// Koça "sayı nerede" değil "sayı nereye gidiyor" bilgisini verir.
+// Eşikler: aerobik taban ≥5pp, eşik/tempo ≥4pp, anaerobik ≥3pp değişimde raporlanır.
+// Referans: Seiler (2010) kronik yük izleme prensipleri.
+function calcZoneTrend(dist4w, dist2w){
+  if(!dist4w||!dist2w)return null;
+  const items=[];
+
+  const lowDelta =dist2w.lowPct -dist4w.lowPct;
+  const highDelta=dist2w.highPct-dist4w.highPct;
+  const anaDelta =dist2w.anaPct -dist4w.anaPct;
+
+  // Aerobik taban: artması iyi (↑ taban güçlenme), azalması sorun (↓ taban erozyonu)
+  if(Math.abs(lowDelta)>=5) items.push({
+    label:'Aerobik taban',
+    from:dist4w.lowPct, to:dist2w.lowPct, delta:lowDelta,
+    good:lowDelta>0,
+    icon:lowDelta>0?'↑':'↓',
+    cls:lowDelta>0?'good':'warn'
+  });
+
+  // Anaerobik yük: azalması iyi (↓ toparlanma), artması birikim uyarısı (↑ uyarı)
+  if(Math.abs(anaDelta)>=3) items.push({
+    label:'Anaerobik yük',
+    from:dist4w.anaPct, to:dist2w.anaPct, delta:anaDelta,
+    good:anaDelta<0,
+    icon:anaDelta>0?'↑':'↓',
+    cls:anaDelta>0?'warn':'good'
+  });
+
+  // Eşik/tempo yükü: artması gri bölge riski, azalması denge yönünde
+  if(Math.abs(highDelta)>=4) items.push({
+    label:'Eşik/tempo yükü',
+    from:dist4w.highPct, to:dist2w.highPct, delta:highDelta,
+    good:highDelta<0,
+    icon:highDelta>0?'↑':'↓',
+    cls:highDelta>0?'warn':'good'
+  });
+
+  return items.length>0?items:null;
 }
 
 // ── Antrenman Profili Analizi ─────────────────────────────────────────────────
@@ -19368,10 +19411,14 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
   // Yarış hazırlık skoru
   const readiness=nextRace?raceReadinessScore(last?.ctl,last?.acwr,last?.phase,athlete?.sakatlık,athlete?.hrv_durum,daysToRace,nextRace,athlete,workouts):null;
 
-  // Bölge dağılımı — seçili periyot
+  // Bölge dağılımı — seçili periyot (görsel çubuk için)
   const [zonePeriod,setZonePeriod]=React.useState(4);
   const zoneDist=React.useMemo(()=>calcPeriodZoneDist(workouts,athlete,zonePeriod),[workouts,athlete,zonePeriod]);
   const zoneStatus=zoneDist?zoneDist_status(zoneDist):null;
+  // Sabit pencereler — trend hesabı için (periyot seçiminden bağımsız)
+  const zoneDist4wFixed=React.useMemo(()=>calcPeriodZoneDist(workouts,athlete,4),[workouts,athlete]);
+  const zoneDist2wFixed=React.useMemo(()=>calcPeriodZoneDist(workouts,athlete,2),[workouts,athlete]);
+  const zoneTrend=React.useMemo(()=>calcZoneTrend(zoneDist4wFixed,zoneDist2wFixed),[zoneDist4wFixed,zoneDist2wFixed]);
 
   const chart=history.slice(-90);
   if(!workouts.length)return React.createElement('div',{className:'empty'},'Bu sporcu için henüz antrenman kaydı yok.');
@@ -19690,6 +19737,23 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
             background:item.type.includes('fazla')||item.type.includes('eksik')?'var(--warn-bg)':'var(--info-bg)',
             color:'var(--text-primary)'
           }},(item.type.includes('fazla')?'⚠ ':item.type.includes('eksik')?'💡 ':'ℹ ')+item.msg)
+        )
+      ),
+      // Trend: 4 Hafta → 2 Hafta karşılaştırması (periyot seçiminden bağımsız, her zaman gösterilir)
+      zoneTrend&&React.createElement('div',{style:{marginTop:zoneStatus&&(zoneStatus.issues.length>0||zoneStatus.flags.length>0)?8:0,padding:'8px 10px',borderRadius:'var(--radius)',background:'var(--bg-secondary)',border:'1px solid var(--border)'}},
+        React.createElement('div',{style:{fontSize:11,fontWeight:600,color:'var(--text-secondary)',marginBottom:5,textTransform:'uppercase',letterSpacing:'.4px'}},
+          '📈 Trend — 4H → 2H'
+        ),
+        React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:3}},
+          zoneTrend.map((t,i)=>React.createElement('div',{key:i,style:{
+            fontSize:12,display:'flex',alignItems:'center',gap:6,
+            color:t.cls==='good'?'var(--success)':'var(--warn)'
+          }},
+            React.createElement('span',{style:{fontWeight:700,fontSize:13}},t.icon),
+            React.createElement('span',null,t.label+': '),
+            React.createElement('span',{style:{fontWeight:600}},t.from+'% → '+t.to+'%'),
+            React.createElement('span',{style:{fontSize:11,opacity:0.75}},'('+( t.delta>0?'+':'')+t.delta+'pp)')
+          ))
         )
       )
     ),
