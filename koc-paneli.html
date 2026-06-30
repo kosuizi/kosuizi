@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.30-1607 --><!DOCTYPE html>
+<!-- Version: v2026.06.30-1930 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.30-1607';
+const APP_VERSION='v2026.06.30-1930';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1151,7 +1151,7 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         if(row.type==='header'||row.rpe||row._isSprint) return;
         if(row.type==='rest'||row.type==='walk') return;
         if(row.label&&SKIP_RE.test(row.label)) return;
-        let paceDir=null, hrDir=null, paceOk=false, hrOk=false;
+        let paceDir=null, hrDir=null, paceOk=false, hrOk=false, paceDiff=null, paceTol=null;
         const pm=row.pm, ps=row.ps;
         if((pm>0)||(ps>0)){
           const enteredSec=(pm||0)*60+(ps||0);
@@ -1159,6 +1159,7 @@ function extractFeedbackSignals(allSnapsObj, athlete){
           if(enteredSec>0&&origPace>0){
             const diff=enteredSec-origPace;
             const tol=row._isGapRow?50:25;
+            paceDiff=diff; paceTol=tol; // ham sapma + kullanılan tolerans — hassas yakınlık skoru (bkz. paceClosenessScore) için saklanır
             if(diff<-tol)      paceDir='fast';
             else if(diff>tol)  paceDir='slow';
             else               paceOk=true;   // pace girildi ve zone içinde
@@ -1193,7 +1194,7 @@ function extractFeedbackSignals(allSnapsObj, athlete){
             } else hrOk=true; // zone içinde
           }
         }
-        if(paceDir||hrDir||paceOk||hrOk) signals.push({date,paceDir,hrDir,paceOk,hrOk,hrWeight,zi:zi??0,zoneId:hr?.id||null});
+        if(paceDir||hrDir||paceOk||hrOk) signals.push({date,paceDir,hrDir,paceOk,hrOk,hrWeight,zi:zi??0,zoneId:hr?.id||null,paceDiff,paceTol});
       };
 
       Object.values(rowOvs).forEach(scanRow);
@@ -1212,6 +1213,75 @@ function extractFeedbackSignals(allSnapsObj, athlete){
     });
   });
   return signals;
+}
+
+// ── Verilen Antrenmanı Yapabilme Puanı — pace uyum/disiplin skorlaması ─────────
+// Amaç: bir sporcunun reçetelenen pace hedeflerine ne kadar sadık kaldığını HEM
+// "% kaçında tutturdu/hızlı/yavaş kaldı" oranlarıyla HEM DE "tutturamadığında ne
+// kadar uzaktaydı" (Hedef Bölge yakınlığı) ile birlikte tek bir puana indirgemek.
+// Veri kaynağı extractFeedbackSignals() — vLT kalibrasyonuyla AYNI ham sinyal
+// listesi kullanılır, ayrı bir tarama/eşik mantığı icat edilmez.
+
+// Tolerans-oranlı (ratio=|sapma|/tolerans) parçalı-doğrusal yakınlık eğrisi.
+// Normal fazlar (±25sn) ile GAP/tırmanış fazları (±50sn) farklı mutlak tolerans
+// kullandığından, sapmayı doğrudan saniye yerine "tolerans payının kaç katı"
+// üzerinden puanlamak ikisini ortak ve adil bir ölçekte kıyaslanabilir kılar.
+//   ratio=0   → 100  (tam hedefte)
+//   ratio=1   →  80  (tolerans sınırında — hâlâ "Hedef Bölge" sayılır ama mükemmel değil)
+//   ratio=2   →  40  ("Biraz Hızlı/Yavaş" rozet sınırı civarı)
+//   ratio=3   →  15  ("Çok Hızlı/Yavaş" bandı)
+//   ratio≥4   →   0  (ciddi sapma)
+const PACE_CLOSENESS_CURVE=[[0,100],[1,80],[2,40],[3,15],[4,0]];
+function paceClosenessScore(diffSec,tolSec){
+  if(diffSec==null||!tolSec) return null;
+  const ratio=Math.abs(diffSec)/tolSec;
+  if(ratio>=4) return 0;
+  for(let i=0;i<PACE_CLOSENESS_CURVE.length-1;i++){
+    const[r0,s0]=PACE_CLOSENESS_CURVE[i],[r1,s1]=PACE_CLOSENESS_CURVE[i+1];
+    if(ratio>=r0&&ratio<=r1){
+      const t=(ratio-r0)/(r1-r0);
+      return Math.round(s0+(s1-s0)*t);
+    }
+  }
+  return 0;
+}
+
+// extractFeedbackSignals() çıktısından (veya onun bir alt-kümesinden) pace uyum
+// puanını hesaplar. Yalnızca pace karşılaştırması yapılabilen fazlar (paceDir
+// veya paceOk dolu) sayılır — ısınma/soğuma/dinlenme zaten extractFeedbackSignals
+// içinde elenmiş durumda.
+// puan = %50 uyumPct + %50 yakınlıkPuanı: salt "kaç kez tuttu" oranı sınırda
+// gezinmeyle istikrarlı hedeflemeyi ayırt edemez; yakınlık puanı bu farkı yakalar.
+// Eşit ağırlık tercih edildi çünkü ikisi farklı ama tamamlayıcı bilgi taşıyor —
+// biri diğerine baskın kılınırsa (örn. sadece yakınlık) "hiç tutturamayan ama
+// her seferinde aynı kadar yakın ıskalayan" biri yanıltıcı şekilde yüksek puan alabilir.
+function calcPaceComplianceScore(signals){
+  const paceSignals=(signals||[]).filter(s=>s.paceDir||s.paceOk);
+  const total=paceSignals.length;
+  if(total===0) return null;
+  let uyum=0,hizli=0,yavas=0,closenessSum=0,closenessN=0;
+  paceSignals.forEach(s=>{
+    if(s.paceOk) uyum++;
+    else if(s.paceDir==='fast') hizli++;
+    else if(s.paceDir==='slow') yavas++;
+    const c=paceClosenessScore(s.paceDiff,s.paceTol);
+    if(c!=null){closenessSum+=c;closenessN++;}
+  });
+  const uyumPct=round1(uyum/total*100);
+  const hizliPct=round1(hizli/total*100);
+  const yavasPct=round1(yavas/total*100);
+  const yakinlikPuani=closenessN>0?round1(closenessSum/closenessN):null;
+  const puan=yakinlikPuani!=null?Math.round(uyumPct*0.5+yakinlikPuani*0.5):Math.round(uyumPct);
+  return{total,uyum,hizli,yavas,uyumPct,hizliPct,yavasPct,yakinlikPuani,puan};
+}
+
+function paceComplianceLabel(puan){
+  if(puan==null) return{text:'Veri yetersiz',cls:'nötr'};
+  if(puan>=85) return{text:'Mükemmel disiplin ✓',cls:'iyi'};
+  if(puan>=70) return{text:'İyi uyum',cls:'iyi'};
+  if(puan>=50) return{text:'Orta düzey',cls:'nötr'};
+  if(puan>=30) return{text:'Tutarsız',cls:'kotu'};
+  return{text:'Ciddi sapma',cls:'kotu'};
 }
 
 // Sinyalleri çapraz doğrulamayla analiz eder.
@@ -17192,6 +17262,126 @@ function AerobikVerimlilikKarti({history,athlete}){
   );
 }
 
+// ── Verilen Antrenmanı Yapabilme Puanı Kartı (1H/2H/4H/8H/12H/Tümü periyot seçimli) ──
+// Aerobik Verimlilik kartının hemen altında — "sporcu koçun verdiği pace'i ne kadar
+// dinliyor" sorusuna doğrudan cevap verir. Veri kaynağı plan_snapshots/rowOverrides
+// (extractFeedbackSignals ile aynı tarama) — Aerobik Verimlilik kartının kullandığı
+// günlük 'history' dizisinden FARKLI bir kaynak, çünkü faz bazlı reçete-vs-gerçek
+// pace karşılaştırması yalnızca plan_snapshots'ta mevcut.
+// Periyot seçimleri haftalara karşılık gelir; her periyodun sonucu o periyot için
+// önbelleğe alınır (period değiştirip geri dönüldüğünde tekrar Firebase'e gidilmez).
+function VerilenAntrenmaniYapabilmePuaniKarti({athlete}){
+  const [period,setPeriod]=React.useState(4); // 1|2|4|8|12|'all'
+  const [cache,setCache]=React.useState({});  // { periodKey: {score,loading,error} }
+  const cardRef=React.useRef();
+  const e=React.createElement;
+
+  const PC_HARD_CAP_WEEKS=104;   // 'Tümü' için güvenlik üst sınırı (~2 yıl)
+  const PC_EMPTY_STREAK_STOP=6;  // ardışık 6 boş hafta → veri başlangıcına ulaşıldı varsayılır
+
+  const fetchForPeriod=React.useCallback(async(p)=>{
+    if(!athlete?.id) return;
+    const pk=String(p);
+    setCache(c=>({...c,[pk]:{...(c[pk]||{}),loading:true,error:null}}));
+    try{
+      let signals=[];
+      if(p==='all'){
+        let emptyStreak=0;
+        for(let i=0;i<PC_HARD_CAP_WEEKS;i++){
+          const wk=getWeekKey(-i);
+          const snap=await fbGet('plan_snapshots/'+athlete.id+'/'+wk);
+          if(snap){
+            emptyStreak=0;
+            signals=signals.concat(extractFeedbackSignals({[wk]:snap},athlete));
+          }else{
+            emptyStreak++;
+            if(emptyStreak>=PC_EMPTY_STREAK_STOP) break;
+          }
+        }
+      }else{
+        const weeksFetch=p+1; // takvim hizalama tamponu — son gün kayıp gitmesin
+        const weekKeys=Array.from({length:weeksFetch},(_,i)=>getWeekKey(-i));
+        const weekSnaps=await Promise.all(weekKeys.map(wk=>fbGet('plan_snapshots/'+athlete.id+'/'+wk)));
+        const allSnaps={};
+        weekKeys.forEach((wk,i)=>{ if(weekSnaps[i]) allSnaps[wk]=weekSnaps[i]; });
+        const cutoffStr=localDateStr(new Date(Date.now()-p*7*864e5));
+        signals=extractFeedbackSignals(allSnaps,athlete).filter(s=>s.date>=cutoffStr);
+      }
+      const score=calcPaceComplianceScore(signals);
+      setCache(c=>({...c,[pk]:{score,loading:false,error:null}}));
+    }catch(err){
+      setCache(c=>({...c,[pk]:{score:null,loading:false,error:'Veri okunamadı: '+err.message}}));
+    }
+  },[athlete?.id]);
+
+  React.useEffect(()=>{ setCache({}); },[athlete?.id]); // sporcu değişince önbelleği sıfırla
+
+  React.useEffect(()=>{
+    if(!athlete?.id) return;
+    const pk=String(period);
+    if(!cache[pk]) fetchForPeriod(period);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[period,athlete?.id]);
+
+  const PeriodBtn=({w,l})=>e('button',{
+    onClick:()=>setPeriod(w),
+    style:{
+      padding:'3px 8px',fontSize:11,fontWeight:600,borderRadius:4,border:'1px solid',cursor:'pointer',
+      background:period===w?'var(--info)':'transparent',
+      color:period===w?'#fff':'var(--text-secondary)',
+      borderColor:period===w?'var(--info)':'var(--border)',
+      transition:'all .15s'
+    }
+  },l);
+
+  const pk=String(period);
+  const data=cache[pk]||{};
+  const{score,loading,error}=data;
+  const lbl=paceComplianceLabel(score?.puan);
+  const puanColor=score?.puan==null?'var(--text-tertiary)':score.puan>=70?'var(--success)':score.puan>=50?'var(--warn)':'var(--danger)';
+
+  return e('div',{ref:cardRef,className:'card',style:{marginBottom:12}},
+    e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4,flexWrap:'wrap',gap:8}},
+      e('div',null,
+        e('div',{className:'card-title',style:{margin:0}},'Verilen Antrenmanı Yapabilme Puanı'),
+        e('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:2}},'Reçetedeki pace hedeflerine ne kadar sadık kalındığının ölçümü.')
+      ),
+      e('div',{style:{display:'flex',alignItems:'center',gap:6}},
+        e('div',{style:{display:'flex',gap:3,flexWrap:'wrap'}},
+          [{w:1,l:'1H'},{w:2,l:'2H'},{w:4,l:'4H'},{w:8,l:'8H'},{w:12,l:'12H'},{w:'all',l:'Tümü'}].map(({w,l})=>
+            e(PeriodBtn,{key:w,w,l})
+          )
+        ),
+        e(ShareBtn,{elRef:cardRef,filename:'antrenman_disiplin.png',title:'Verilen Antrenmanı Yapabilme Puanı',text:athlete?.ad+' pace uyum disiplini'})
+      )
+    ),
+    loading?e('div',{style:{fontSize:12,color:'var(--text-tertiary)',padding:'14px 0'}},'Hesaplanıyor…'):
+    error?e('div',{className:'alert alert-danger',style:{fontSize:12}},error):
+    !score?e('div',{style:{fontSize:12,color:'var(--text-tertiary)',padding:'14px 0'}},'Seçilen dönemde pace girilmiş antrenman fazı bulunamadı.'):
+    e('div',null,
+      e('div',{style:{display:'flex',alignItems:'baseline',gap:10,marginBottom:10,flexWrap:'wrap'}},
+        e('div',{style:{fontSize:34,fontWeight:800,color:puanColor,lineHeight:1}},score.puan),
+        e('div',{style:{fontSize:13,fontWeight:600,color:'var(--text-secondary)'}},lbl.text),
+        e('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginLeft:'auto'}},score.total+' faz değerlendirildi')
+      ),
+      e('div',{style:{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:10}},
+        [
+          {label:'Uyumlu',pct:score.uyumPct,n:score.uyum,color:'#16a34a'},
+          {label:'Hızlı',pct:score.hizliPct,n:score.hizli,color:'#f59e0b'},
+          {label:'Yavaş',pct:score.yavasPct,n:score.yavas,color:'#3b82f6'},
+        ].map((x,i)=>e('div',{key:i,style:{padding:'8px 10px',borderRadius:'var(--radius)',background:'var(--bg-secondary)',border:'1px solid var(--border)'}},
+          e('div',{style:{fontSize:11,fontWeight:600,color:x.color}},x.label),
+          e('div',{style:{fontSize:18,fontWeight:700}},x.pct+'%'),
+          e('div',{style:{fontSize:10,color:'var(--text-tertiary)'}},x.n+' faz')
+        ))
+      ),
+      score.yakinlikPuani!=null&&e('div',{style:{fontSize:12,color:'var(--text-secondary)',padding:'7px 11px',background:'var(--info-bg)',borderRadius:'var(--radius)',borderLeft:'3px solid var(--info)'}},
+        'Hedef Bölge yakınlık puanı: ',e('b',null,score.yakinlikPuani+'/100'),' — sadece "hedefte mi" değil, sapmaların büyüklüğü de ölçülür. Genel puan, uyum oranı (%50) ile bu yakınlık puanının (%50) bileşimidir.'
+      )
+    )
+  );
+}
+
 function ReadinessBar({score,detaylar}){
   const [acik,setAcik]=useState(false);
   if(score===null||score===undefined)
@@ -19314,6 +19504,8 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
 
     // Aerobik verimlilik (1H/2H/4H/8H/12H periyot seçimli)
     React.createElement(AerobikVerimlilikKarti,{history,athlete}),
+    // Verilen Antrenmanı Yapabilme Puanı — pace uyum/disiplin (1H/2H/4H/8H/12H/Tümü)
+    React.createElement(VerilenAntrenmaniYapabilmePuaniKarti,{athlete}),
     // ── Son 24 Hafta Özeti (mesafe/süre/tempo sadece koşu, yük tüm sporlar) ──
     React.createElement(Hafta24Karti,{workouts,athlete}),
 
