@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.30-1930 --><!DOCTYPE html>
+<!-- Version: v2026.06.30-2019 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.30-1930';
+const APP_VERSION='v2026.06.30-2019';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1282,6 +1282,43 @@ function paceComplianceLabel(puan){
   if(puan>=50) return{text:'Orta düzey',cls:'nötr'};
   if(puan>=30) return{text:'Tutarsız',cls:'kotu'};
   return{text:'Ciddi sapma',cls:'kotu'};
+}
+
+// 'Tümü' periyodu için plan_snapshots taramasının güvenlik sınırları —
+// VerilenAntrenmaniYapabilmePuaniKarti (sporcu kartı) ve PaceDisiplinSiralamasiKarti
+// (Karşılaştır sekmesi takım sıralaması) tarafından ortak kullanılır.
+const PC_HARD_CAP_WEEKS=104;   // 'Tümü' için üst sınır (~2 yıl)
+const PC_EMPTY_STREAK_STOP=6;  // ardışık 6 boş hafta → veri başlangıcına ulaşıldı varsayılır
+
+// Bir sporcu için seçilen periyotta (hafta sayısı: 1|2|4|8|12, veya 'all') pace uyum
+// puanını Firebase'den çekip hesaplar. Sporcu kartı ile takım sıralaması AYNI fonksiyonu
+// kullanır — iki yerde ayrı tarama mantığı bakım yükünü ve tutarsızlık riskini artırır.
+async function fetchPaceComplianceScore(athlete,period){
+  if(!athlete?.id) return null;
+  let signals=[];
+  if(period==='all'){
+    let emptyStreak=0;
+    for(let i=0;i<PC_HARD_CAP_WEEKS;i++){
+      const wk=getWeekKey(-i);
+      const snap=await fbGet('plan_snapshots/'+athlete.id+'/'+wk);
+      if(snap){
+        emptyStreak=0;
+        signals=signals.concat(extractFeedbackSignals({[wk]:snap},athlete));
+      }else{
+        emptyStreak++;
+        if(emptyStreak>=PC_EMPTY_STREAK_STOP) break;
+      }
+    }
+  }else{
+    const weeksFetch=period+1; // takvim hizalama tamponu
+    const weekKeys=Array.from({length:weeksFetch},(_,i)=>getWeekKey(-i));
+    const weekSnaps=await Promise.all(weekKeys.map(wk=>fbGet('plan_snapshots/'+athlete.id+'/'+wk)));
+    const allSnaps={};
+    weekKeys.forEach((wk,i)=>{ if(weekSnaps[i]) allSnaps[wk]=weekSnaps[i]; });
+    const cutoffStr=localDateStr(new Date(Date.now()-period*7*864e5));
+    signals=extractFeedbackSignals(allSnaps,athlete).filter(s=>s.date>=cutoffStr);
+  }
+  return calcPaceComplianceScore(signals);
 }
 
 // Sinyalleri çapraz doğrulamayla analiz eder.
@@ -17276,38 +17313,12 @@ function VerilenAntrenmaniYapabilmePuaniKarti({athlete}){
   const cardRef=React.useRef();
   const e=React.createElement;
 
-  const PC_HARD_CAP_WEEKS=104;   // 'Tümü' için güvenlik üst sınırı (~2 yıl)
-  const PC_EMPTY_STREAK_STOP=6;  // ardışık 6 boş hafta → veri başlangıcına ulaşıldı varsayılır
-
   const fetchForPeriod=React.useCallback(async(p)=>{
     if(!athlete?.id) return;
     const pk=String(p);
     setCache(c=>({...c,[pk]:{...(c[pk]||{}),loading:true,error:null}}));
     try{
-      let signals=[];
-      if(p==='all'){
-        let emptyStreak=0;
-        for(let i=0;i<PC_HARD_CAP_WEEKS;i++){
-          const wk=getWeekKey(-i);
-          const snap=await fbGet('plan_snapshots/'+athlete.id+'/'+wk);
-          if(snap){
-            emptyStreak=0;
-            signals=signals.concat(extractFeedbackSignals({[wk]:snap},athlete));
-          }else{
-            emptyStreak++;
-            if(emptyStreak>=PC_EMPTY_STREAK_STOP) break;
-          }
-        }
-      }else{
-        const weeksFetch=p+1; // takvim hizalama tamponu — son gün kayıp gitmesin
-        const weekKeys=Array.from({length:weeksFetch},(_,i)=>getWeekKey(-i));
-        const weekSnaps=await Promise.all(weekKeys.map(wk=>fbGet('plan_snapshots/'+athlete.id+'/'+wk)));
-        const allSnaps={};
-        weekKeys.forEach((wk,i)=>{ if(weekSnaps[i]) allSnaps[wk]=weekSnaps[i]; });
-        const cutoffStr=localDateStr(new Date(Date.now()-p*7*864e5));
-        signals=extractFeedbackSignals(allSnaps,athlete).filter(s=>s.date>=cutoffStr);
-      }
-      const score=calcPaceComplianceScore(signals);
+      const score=await fetchPaceComplianceScore(athlete,p);
       setCache(c=>({...c,[pk]:{score,loading:false,error:null}}));
     }catch(err){
       setCache(c=>({...c,[pk]:{score:null,loading:false,error:'Veri okunamadı: '+err.message}}));
@@ -18466,6 +18477,108 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,o
 
 
 
+// ── Pace Disiplin Sıralaması — Verilen Antrenmanı Yapabilme Puanı (takım geneli) ──
+// Karşılaştır sekmesinde kullanılır. Sporcu detayındaki VerilenAntrenmaniYapabilmePuaniKarti
+// ile AYNI fetchPaceComplianceScore() fonksiyonunu kullanır — tek skorlama mantığı,
+// iki farklı görünüm (tekil sporcu kartı / takım sıralaması).
+function PaceDisiplinSiralamasiKarti({athletes}){
+  const [period,setPeriod]=React.useState(4); // 1|2|4|8|12|'all'
+  const [cache,setCache]=React.useState({});  // { periodKey: {loading,error,rows,noData} }
+  const e=React.createElement;
+
+  const athKey=(athletes||[]).map(a=>a.id).join(',');
+
+  const fetchForPeriod=React.useCallback(async(p)=>{
+    if(!athletes?.length) return;
+    const pk=String(p);
+    setCache(c=>({...c,[pk]:{...(c[pk]||{}),loading:true,error:null}}));
+    try{
+      const results=await Promise.all(athletes.map(async ath=>{
+        const score=await fetchPaceComplianceScore(ath,p);
+        return{athlete:ath,score};
+      }));
+      const rows=results.filter(r=>r.score).sort((a,b)=>b.score.puan-a.score.puan);
+      const noData=results.filter(r=>!r.score).map(r=>r.athlete);
+      setCache(c=>({...c,[pk]:{loading:false,error:null,rows,noData}}));
+    }catch(err){
+      setCache(c=>({...c,[pk]:{loading:false,error:'Veri okunamadı: '+err.message,rows:[],noData:[]}}));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[athKey]);
+
+  React.useEffect(()=>{ setCache({}); },[athKey]); // sporcu listesi (filtre) değişince önbelleği sıfırla
+
+  React.useEffect(()=>{
+    const pk=String(period);
+    if(!cache[pk]) fetchForPeriod(period);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[period,athKey]);
+
+  const PeriodBtn=({w,l})=>e('button',{
+    onClick:()=>setPeriod(w),
+    style:{
+      padding:'3px 8px',fontSize:11,fontWeight:600,borderRadius:4,border:'1px solid',cursor:'pointer',
+      background:period===w?'var(--info)':'transparent',
+      color:period===w?'#fff':'var(--text-secondary)',
+      borderColor:period===w?'var(--info)':'var(--border)',
+      transition:'all .15s'
+    }
+  },l);
+
+  if(!athletes?.length) return null;
+
+  const pk=String(period);
+  const data=cache[pk]||{};
+  const{rows,loading,error,noData}=data;
+
+  return e('div',{className:'card',style:{marginBottom:12}},
+    e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4,flexWrap:'wrap',gap:8}},
+      e('div',null,
+        e('div',{className:'card-title',style:{margin:0}},'Verilen Antrenmanı Yapabilme Puanı — Takım Sıralaması'),
+        e('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:2}},'Reçetelenen pace hedeflerine kim ne kadar sadık kalıyor — sıralı liste.')
+      ),
+      e('div',{style:{display:'flex',gap:3,flexWrap:'wrap'}},
+        [{w:1,l:'1H'},{w:2,l:'2H'},{w:4,l:'4H'},{w:8,l:'8H'},{w:12,l:'12H'},{w:'all',l:'Tümü'}].map(({w,l})=>
+          e(PeriodBtn,{key:w,w,l})
+        )
+      )
+    ),
+    loading?e('div',{style:{fontSize:12,color:'var(--text-tertiary)',padding:'14px 0'}},'Hesaplanıyor… ('+athletes.length+' sporcu taranıyor)'):
+    error?e('div',{className:'alert alert-danger',style:{fontSize:12}},error):
+    (!rows||rows.length===0)?e('div',{style:{fontSize:12,color:'var(--text-tertiary)',padding:'14px 0'}},'Seçilen dönemde pace girilmiş antrenman fazı bulunan sporcu yok.'):
+    e('div',null,
+      e('div',{className:'table-wrap'},
+        e('table',null,
+          e('thead',null,e('tr',null,
+            ['#','Sporcu','Puan','Uyumlu','Hızlı','Yavaş','Yakınlık','Faz'].map(h=>e('th',{key:h},h))
+          )),
+          e('tbody',null,
+            rows.map((r,i)=>{
+              const lbl=paceComplianceLabel(r.score.puan);
+              const puanColor=r.score.puan>=70?'var(--success)':r.score.puan>=50?'var(--warn)':'var(--danger)';
+              return e('tr',{key:r.athlete.id},
+                e('td',null,e('span',{style:{color:'var(--text-tertiary)',fontSize:11}},i+1)),
+                e('td',null,e('strong',null,(r.athlete.ad||'')+' '+(r.athlete.soyad||''))),
+                e('td',null,
+                  e('span',{style:{fontWeight:700,fontSize:15,color:puanColor}},r.score.puan),
+                  ' ',e('span',{style:{fontSize:10,color:'var(--text-tertiary)'}},lbl.text)
+                ),
+                e('td',null,r.score.uyumPct+'%'),
+                e('td',null,r.score.hizliPct+'%'),
+                e('td',null,r.score.yavasPct+'%'),
+                e('td',null,r.score.yakinlikPuani!=null?r.score.yakinlikPuani:'—'),
+                e('td',null,r.score.total)
+              );
+            })
+          )
+        )
+      ),
+      noData&&noData.length>0&&e('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:10}},
+        'Veri yetersiz (seçilen dönemde pace girilmemiş): '+noData.map(a=>(a.ad||'')+' '+(a.soyad||'')).join(', ')
+      )
+    )
+  );
+}
 
 function KarsilastirTab({athletes,races,workouts,allHistory}){
   const [raceFilter,setRaceFilter]=useState('');
@@ -18494,6 +18607,9 @@ function KarsilastirTab({athletes,races,workouts,allHistory}){
         )
       )
     ),
+
+    // Verilen Antrenmanı Yapabilme Puanı — Takım Sıralaması (1H/2H/4H/8H/12H/Tümü)
+    React.createElement(PaceDisiplinSiralamasiKarti,{athletes:displayAthletes}),
 
     // Karşılaştırma tablosu
     React.createElement('div',{className:'card'},
