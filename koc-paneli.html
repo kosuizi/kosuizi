@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.30-1515 --><!DOCTYPE html>
+<!-- Version: v2026.06.30-1550 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.30-1515';
+const APP_VERSION='v2026.06.30-1550';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -12129,9 +12129,17 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       // Uzun koşu payı: faz ve disipline göre değişir (bkz. uzunKosuPayOrani) —
       // yükleme planı tablosundaki "Uzun" tahminiyle aynı kaynağı kullanır.
       // Band tavanı (uzunKosuBandMaxKm) da uygulanır — badge ile tutarlı olsun.
+      // DÜZELTME (2026.06.30): Önceden burada proxyBandFromWeeklyKm() ile haftanın
+      // KALAN km'sinden kaba bir band tahmini üretiliyordu. Bu, proxyBandFromWeeklyKm'in
+      // asıl amacından (yalnızca CTL simülasyonu olmayan UZAK gelecek haftalar için kaba
+      // tahmin — bkz. fonksiyon yorumu) sapan bir kullanımdı: hem (a) "kalan" km hafta
+      // ilerledikçe doğal olarak küçülüp yüksek hacimli bir sporcuyu bile "band 1" gibi
+      // gösterebiliyordu, hem de (b) bu fonksiyonun birkaç satır üstünde zaten gerçek
+      // CTL simülasyonundan gelen `band` (satır ~11023) mevcutken onu yok sayıyordu.
+      // Artık badge'in (estimateUzunKosuHedefi) kullandığı gerçek CTL-band ve zones
+      // kaynağıyla birebir aynı kaynak kullanılıyor.
       const _uzunDisiplin=effectiveDisiplin(athlete,primary);
-      const _uzunBandProxy=proxyBandFromWeeklyKm(wkStats.targetKmHafta||kalanTargetKm);
-      const _uzunBandCap=uzunKosuBandMaxKm(_uzunBandProxy,_uzunDisiplin,athlete.zones||{});
+      const _uzunBandCap=uzunKosuBandMaxKm(band,_uzunDisiplin,zones);
       let uzunGunKm=uzunKalanSayi>0?round1(kalanTargetKm*uzunKosuPayOrani(fazPhase,_uzunDisiplin)):0;
       if(_uzunBandCap>0&&uzunGunKm>_uzunBandCap) uzunGunKm=_uzunBandCap;
       // Kolay/aerobik günlere kalan km'yi eşit dağıt
@@ -12501,6 +12509,39 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
     // Haftalık gerçekleşen toplam
     const wkActualKm=round1(days.reduce((s,d2)=>s+d2.actualKm,0));
     const wkActualDp=Math.round(days.reduce((s,d2)=>s+d2.actualDp,0));
+
+    // ── Hafta-içi mesafe sağlık kontrolü ──────────────────────────────────────
+    // Periyotlama prensibi: uzun koşu, haftanın TEK EN UZUN seansı olmalı.
+    // Taper/yarış haftalarında uzun koşu bilinçli olarak kısaltıldığından
+    // (tplKolay'a düşürülür) bu haftalarda kontrol anlamsız — atlanır.
+    if(!(wt?.phase==='Taper'||wt?.isRaceWeek)){
+      try{
+        const _sanityZones=calcZones(athlete);
+        const _sanityRaceIds=(athlete?.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
+        const _sanityRaces=(races||[]).filter(r=>_sanityRaceIds.includes(r.id));
+        const _uzunTipSet=new Set(['uzun','tirmanis','back_to_back']);
+        const _dayKmCache={};
+        let _uzunMaxKm=0;
+        for(const d of days){
+          const km=gunOneriMesafeKm(d,_sanityZones,_sanityRaces,effDisiplinPlan);
+          _dayKmCache[d.date]=km;
+          if(_uzunTipSet.has(d.tip)&&km>_uzunMaxKm) _uzunMaxKm=km;
+        }
+        if(_uzunMaxKm>0){
+          // %5 tolerans — yuvarlama farklarını yanlış pozitif saymamak için
+          const _esik=_uzunMaxKm*1.05;
+          for(const d of days){
+            if(_uzunTipSet.has(d.tip)||d.tip==='dinlenme'||d.tip==='capraz'||d.tip==='yaris') continue;
+            const km=_dayKmCache[d.date];
+            if(km>_esik){
+              const _msg=`Bu günün mesafesi (~${km}km) haftanın uzun koşusundan (~${_uzunMaxKm}km) fazla — periyotlama prensibine aykırı, kontrol edilmeli`;
+              d.uyari=d.uyari?d.uyari+' · '+_msg:_msg;
+            }
+          }
+        }
+      }catch(e){console.warn('Hafta-içi mesafe sağlık kontrolü hatası:',e);}
+    }
+
     weeks.push({weekOff,start,days,primary,intermediate,wkStats,wt,wkActualKm,wkActualDp});
 
     // Bu haftanın planlanan kaliteli tiplerini bir sonraki haftaya taşı
