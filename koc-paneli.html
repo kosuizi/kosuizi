@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.30-1052 --><!DOCTYPE html>
+<!-- Version: v2026.06.30-1101 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.30-1052';
+const APP_VERSION='v2026.06.30-1101';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1323,6 +1323,47 @@ function summarizeFeedbackBreakdown(signals){
   const orderedKeys=[...FB_ZONE_ORDER.filter(z=>byZone[z]),...Object.keys(byZone).filter(z=>!FB_ZONE_ORDER.includes(z))];
   const zones=orderedKeys.map(z=>({zoneId:z,...byZone[z]}));
   return {conflict:{fastHigh,slowLow},zones};
+}
+
+// Çakışma örüntüsünden (Hızlı+Yüksek Nabız / Yavaş+Düşük Nabız) koç ve sporcu için
+// telkin metni üretir. vLT sinyali değil — pacing disiplini / yorgunluk-toparlanma
+// tanısı amaçlıdır. Az veri varken (total<2) telkin üretilmez, gürültüye dayalı
+// yanıltıcı tavsiye verilmesin diye.
+function generateFeedbackTelkin(breakdown){
+  if(!breakdown) return null;
+  const {fastHigh,slowLow}=breakdown.conflict;
+  const total=fastHigh+slowLow;
+  if(total<2) return null;
+  const zones=breakdown.zones||[];
+  const easyConflict=zones.filter(z=>z.zoneId==='Z1'||z.zoneId==='Z2').reduce((a,z)=>a+(z.conflict||0),0);
+  const qualityConflict=zones.filter(z=>z.zoneId!=='Z1'&&z.zoneId!=='Z2').reduce((a,z)=>a+(z.conflict||0),0);
+  const mostlyEasy=easyConflict>=qualityConflict;
+  const ratio=fastHigh/total;
+
+  if(ratio>=0.65){
+    return{
+      pattern:'fastHigh',
+      title:'Baskın örüntü: Hızlı + Yüksek Nabız ('+fastHigh+'/'+total+')',
+      coach:mostlyEasy
+        ?'Sapmalar ağırlıklı olarak kolay/aerobik bölgelerde (Z1-Z2) — klasik "kolay günler çok sert" örüntüsü. Aerobik gelişimi sulandırır, yorgunluk ve yaralanma riskini artırır. vLT\'ye dokunmaya gerek yok; pace disiplini konuşulmalı.'
+        :'Sapmalar ağırlıklı olarak kalite/eşik bölgelerinde — sporcu hedeflenenden hızlı koşup karşılığında daha yüksek efor harcıyor. Antrenman amacının ötesine geçiyor olabilir (yarış modu, grup baskısı, sabırsızlık).',
+      athlete:'Son antrenmanlarında hedef pace\'in üzerine çıkma eğilimin var ve nabzın da buna paralel yükseliyor — planlanandan daha sert koşuyorsun. Kısa vadede iyi hissettirse de, özellikle kolay günlerde toparlanmayı ve uzun vadeli gelişimi olumsuz etkileyebilir. Hedef pace\'e güvenip kolay günleri gerçekten kolay tutmayı deneyelim.'
+    };
+  }
+  if(ratio<=0.35){
+    return{
+      pattern:'slowLow',
+      title:'Baskın örüntü: Yavaş + Düşük Nabız ('+slowLow+'/'+total+')',
+      coach:'Sporcu hedeflenenden yavaş koşuyor ve nabzı da buna paralel düşük kalıyor — birikmiş yorgunluk, uyku/beslenme/stres faktörleri ya da kasıtlı konservatif yaklaşım olabilir. CTL/ATL ve ACWR\'ı gözden geçir, son haftalardaki yük artışını kontrol et; gerekirse toparlanma odaklı bir sohbet planla.',
+      athlete:'Son antrenmanlarında hedef pace\'in altında kalma ve buna paralel düşük nabız eğilimi var. Bu bazen vücudun dinlenmeye ihtiyacı olduğunun işaretidir. Uyku, beslenme ve genel yorgunluk seviyeni birlikte değerlendirelim — gerekirse planı ayarlayabiliriz.'
+    };
+  }
+  return{
+    pattern:'mixed',
+    title:'Karışık örüntü: Hızlı+Yüksek '+fastHigh+' · Yavaş+Düşük '+slowLow,
+    coach:'Belirgin tek yönlü bir eğilim yok — sapmalar antrenmandan antrenmana değişken. GPS/saat tutarlılığını, parkur/hava koşullarını ve pace hedeflerinin sporcu tarafından doğru anlaşılıp anlaşılmadığını kontrol etmek faydalı olabilir.',
+    athlete:'Bazı antrenmanlarda hedeften hızlı, bazılarında yavaş gidiyorsun. Bu tutarsızlık genelde hava, parkur veya grup koşusu gibi dış faktörlerden ya da pace hedeflerini takip etme şeklinden kaynaklanır — birlikte gözden geçirelim.'
+  };
 }
 
   // Öncelik: manuel giriş → PB zinciri (doğruluk + güncellik birlikte değerlendirilir)
@@ -16259,6 +16300,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
   const [fbApplied,setFbApplied]=useState(null);   // 'vlt' (LTHR bu mekanizmadan kaldırıldı)
   const [fbError,setFbError]=useState(null);
   const [fbBreakdown,setFbBreakdown]=useState(null); // {conflict:{fastHigh,slowLow}, zones:[...]}
+  const [fbTelkin,setFbTelkin]=useState(null); // {pattern,title,coach,athlete}
 
   const FB_SCAN_WINDOW_DAYS=21; // Son 21 gün (≈1 mezosiklus) — eski form verisi karışmasın
   const FB_SCAN_WEEKS_FETCH=5;  // 21 günü her takvim hizalamasında garanti kapsayan cömert üst sınır
@@ -16274,7 +16316,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
 
   const runFbScan=async()=>{
     if(!athlete?.id) return;
-    setFbScanLoading(true);setFbAnalysis(null);setFbRawCount(null);setFbApplied(null);setFbError(null);setFbBreakdown(null);
+    setFbScanLoading(true);setFbAnalysis(null);setFbRawCount(null);setFbApplied(null);setFbError(null);setFbBreakdown(null);setFbTelkin(null);
     try{
       // Tüm geçmiş yerine sadece son birkaç haftayı çek — weekKey'ler Pazartesi tarihiyle anahtarlı
       const weekKeys=Array.from({length:FB_SCAN_WEEKS_FETCH},(_,i)=>getWeekKey(-i));
@@ -16294,7 +16336,9 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       });
       const analysis=analyzeRecipeFeedbackSignals(sigs);
       setFbAnalysis(analysis);
-      setFbBreakdown(summarizeFeedbackBreakdown(sigs));
+      const breakdown=summarizeFeedbackBreakdown(sigs);
+      setFbBreakdown(breakdown);
+      setFbTelkin(generateFeedbackTelkin(breakdown));
     }catch(e){
       setFbError('Veri okunamadı: '+e.message);
     }finally{
@@ -16647,6 +16691,20 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
               ))
             )
           )
+        )
+      ),
+      // Telkin önerisi — çakışma örüntüsünden üretilen koç/sporcu mesajları
+      fbTelkin&&React.createElement('div',{style:{marginTop:10,paddingTop:10,borderTop:'1px solid var(--border)'}},
+        React.createElement('div',{style:{fontSize:11,fontWeight:600,color:'var(--info)',marginBottom:8}},
+          '💬 '+fbTelkin.title
+        ),
+        React.createElement('div',{style:{background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:6,padding:8,marginBottom:6,fontSize:12}},
+          React.createElement('div',{style:{fontWeight:600,marginBottom:3,color:'var(--text-secondary)'}},'Koç için'),
+          React.createElement('div',{style:{color:'var(--text-tertiary)'}},fbTelkin.coach)
+        ),
+        React.createElement('div',{style:{background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:6,padding:8,fontSize:12}},
+          React.createElement('div',{style:{fontWeight:600,marginBottom:3,color:'var(--text-secondary)'}},'Sporcuya iletilebilecek mesaj'),
+          React.createElement('div',{style:{color:'var(--text-tertiary)'}},fbTelkin.athlete)
         )
       ),
       !fbRawCount&&!fbScanLoading&&React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',fontStyle:'italic'}},
