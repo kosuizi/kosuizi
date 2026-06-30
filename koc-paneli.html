@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.30-2019 --><!DOCTYPE html>
+<!-- Version: v2026.06.30-2025 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.30-2019';
+const APP_VERSION='v2026.06.30-2025';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1250,6 +1250,21 @@ function paceClosenessScore(diffSec,tolSec){
 // puanını hesaplar. Yalnızca pace karşılaştırması yapılabilen fazlar (paceDir
 // veya paceOk dolu) sayılır — ısınma/soğuma/dinlenme zaten extractFeedbackSignals
 // içinde elenmiş durumda.
+
+// Üç (veya daha fazla) sayacı, toplamı HER ZAMAN tam 100.0 olacak şekilde yüzdeye
+// çevirir ("en büyük kalan" yöntemi, 0.1 puan hassasiyetinde). Her sayacı bağımsız
+// round1 ile yuvarlamak matematiksel olarak toplamı 99.9/100.1 gibi sapmalara açık
+// bırakır (örn. 1/1/1'lik 3 faz: %33.3+%33.3+%33.3=%99.9) — bu fonksiyon bunu engeller.
+function allocatePercentages(counts,total){
+  if(!total) return counts.map(()=>0);
+  const units=counts.map(n=>n/total*1000); // 0.1 puanlık birimlere böl (1000 birim = %100)
+  const floors=units.map(Math.floor);
+  let remainder=1000-floors.reduce((s,v)=>s+v,0);
+  const order=units.map((u,i)=>({i,frac:u-floors[i]})).sort((a,b)=>b.frac-a.frac);
+  for(let k=0;k<remainder;k++) floors[order[k%order.length].i]++;
+  return floors.map(v=>round1(v/10));
+}
+
 // puan = %50 uyumPct + %50 yakınlıkPuanı: salt "kaç kez tuttu" oranı sınırda
 // gezinmeyle istikrarlı hedeflemeyi ayırt edemez; yakınlık puanı bu farkı yakalar.
 // Eşit ağırlık tercih edildi çünkü ikisi farklı ama tamamlayıcı bilgi taşıyor —
@@ -1267,9 +1282,9 @@ function calcPaceComplianceScore(signals){
     const c=paceClosenessScore(s.paceDiff,s.paceTol);
     if(c!=null){closenessSum+=c;closenessN++;}
   });
-  const uyumPct=round1(uyum/total*100);
-  const hizliPct=round1(hizli/total*100);
-  const yavasPct=round1(yavas/total*100);
+  // uyum+hizli+yavas===total her zaman geçerlidir (her faz tam olarak bu üç
+  // kovadan birine düşer) — bu yüzden yüzdeler de tam 100.0'a toplanmalı.
+  const[uyumPct,hizliPct,yavasPct]=allocatePercentages([uyum,hizli,yavas],total);
   const yakinlikPuani=closenessN>0?round1(closenessSum/closenessN):null;
   const puan=yakinlikPuani!=null?Math.round(uyumPct*0.5+yakinlikPuani*0.5):Math.round(uyumPct);
   return{total,uyum,hizli,yavas,uyumPct,hizliPct,yavasPct,yakinlikPuani,puan};
