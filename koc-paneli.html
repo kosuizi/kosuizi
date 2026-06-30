@@ -16574,6 +16574,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
   const [fbError,setFbError]=useState(null);
   const [fbBreakdown,setFbBreakdown]=useState(null); // {conflict:{fastHigh,slowLow}, zones:[...]}
   const [fbTelkin,setFbTelkin]=useState(null); // {pattern,title,coach,athlete}
+  const [fbNoNewData,setFbNoNewData]=useState(false); // son fbLastCalib'den sonra yeni antrenman yok
 
   const FB_SCAN_WINDOW_DAYS=21; // Son 21 gün (≈1 mezosiklus) — eski form verisi karışmasın
   const FB_SCAN_WEEKS_FETCH=5;  // 21 günü her takvim hizalamasında garanti kapsayan cömert üst sınır
@@ -16589,7 +16590,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
 
   const runFbScan=async()=>{
     if(!athlete?.id) return;
-    setFbScanLoading(true);setFbAnalysis(null);setFbRawCount(null);setFbApplied(null);setFbError(null);setFbBreakdown(null);setFbTelkin(null);
+    setFbScanLoading(true);setFbAnalysis(null);setFbRawCount(null);setFbApplied(null);setFbError(null);setFbBreakdown(null);setFbTelkin(null);setFbNoNewData(false);
     try{
       // Tüm geçmiş yerine sadece son birkaç haftayı çek — weekKey'ler Pazartesi tarihiyle anahtarlı
       const weekKeys=Array.from({length:FB_SCAN_WEEKS_FETCH},(_,i)=>getWeekKey(-i));
@@ -16600,6 +16601,19 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       const cutoffStr=localDateStr(new Date(Date.now()-FB_SCAN_WINDOW_DAYS*864e5));
       const sigsAll=extractFeedbackSignals(allSnaps,athlete);
       const sigs=sigsAll.filter(s=>s.date>=cutoffStr); // tam 21 günlük pencereye kırp
+
+      // ── Veri tabanlı tekrar kalibrasyonu engeli ──────────────────────────
+      // fbLastCalib: Reçete kalibrasyonunun en son uygulandığı ISO tarih-saati.
+      // Son kalibrasyondan sonra yeni antrenman verisi girdiyse → taramaya devam.
+      // Girmediyse → aynı sinyal tekrar üretilip art arda uygulama yapılmasını engelle.
+      const fbLastCalibStr=athlete.fbLastCalib?athlete.fbLastCalib.substring(0,10):null;
+      if(fbLastCalibStr){
+        const hasNewData=sigs.some(s=>s.date>fbLastCalibStr);
+        if(!hasNewData){
+          setFbNoNewData(true);
+          return; // analiz yapılmaz, buton görünmez
+        }
+      }
 
       setFbRawCount({
         pace:sigs.filter(s=>s.paceDir).length,
@@ -16621,6 +16635,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
 
   // Mekanizma 2 artık yalnızca vLT önerisi uygular — LTHR bu akıştan kaldırıldı.
   // Adım büyüklüğü artık sabit değil: ortalama gün puanından türetilen güvene (vlt.confidence) orantılı.
+  // fbLastCalib: Reçete mekanizmasına özgü kalibrasyon tarihi — vltLastCalib (Otomatik) ile ayrı tutuluyor.
   const applyFbCalib=()=>{
     if(!fbAnalysis?.vltAction||!athlete.vlt) return;
     const grad=gradualVltUpdate(athlete.vlt,
@@ -16630,7 +16645,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       fbAnalysis.vlt?.confidence ?? 0.5
     );
     if(grad){
-      onUpdateAthlete({...athlete,vlt:String(grad.newVlt),vltLastCalib:new Date().toISOString()});
+      onUpdateAthlete({...athlete,vlt:String(grad.newVlt),fbLastCalib:new Date().toISOString()});
       setFbApplied('vlt');
     }
   };
@@ -16836,7 +16851,9 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
         React.createElement('div',null,
           React.createElement('div',{className:'card-title',style:{margin:0}},'Reçete Geri Bildirim Kalibrasyonu'),
           React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:2}},
-            'Tamamlanan antrenman fazlarındaki gerçek pace ve nabız verilerinden sinyal üretir.'
+            athlete.fbLastCalib
+              ?'Son kalibrasyon: '+localDateStr(new Date(athlete.fbLastCalib))
+              :'Tamamlanan antrenman fazlarındaki gerçek pace ve nabız verilerinden sinyal üretir.'
           )
         ),
         React.createElement('button',{
@@ -16848,6 +16865,10 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:8}},
         'vLT sinyali iki kanaldan gelir: (1) pace + nabız birlikte sapıyor, (2) pace hedefte ama nabız sapıyor. ',
         '≥2 farklı günde uyumlu yön + yeterli puan → eylem önerisi; adım büyüklüğü sinyal gücüne göre değişir. Isınma, soğuma, dinlenme hariç.'
+      ),
+      // Yeni veri yok uyarısı
+      fbNoNewData&&React.createElement('div',{className:'alert alert-warn',style:{fontSize:12}},
+        '🔁 Son kalibrasyondan bu yana yeni antrenman verisi girilmemiş — bir sonraki antrenmanın ardından tekrar tarayın.'
       ),
       fbError&&React.createElement('div',{className:'alert alert-warn',style:{fontSize:12}},fbError),
       fbRawCount&&React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:10}},
@@ -16892,7 +16913,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
         return React.createElement('div',null,
           fbApplied
             ?React.createElement('div',{className:'alert alert-info',style:{fontSize:12}},
-              '✓ Kalibrasyon uygulandı (vLT).'
+              '✓ Kalibrasyon uygulandı (vLT). Bir sonraki antrenman verisi girildikten sonra tekrar tarayın.'
             )
             :React.createElement('div',null,
               React.createElement('div',{style:{background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:6,padding:10,marginBottom:8,fontSize:12}},
