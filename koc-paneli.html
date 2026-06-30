@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.30-2025 --><!DOCTYPE html>
+<!-- Version: v2026.06.30-2134 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.30-2025';
+const APP_VERSION='v2026.06.30-2134';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1337,14 +1337,20 @@ async function fetchPaceComplianceScore(athlete,period){
 }
 
 // Sinyalleri çapraz doğrulamayla analiz eder.
-// vLT iki ayrı kanaldan besleniyor:
+// vLT üç ayrı kanaldan besleniyor:
 //   A) Çapraz doğrulama: pace VE nabız ikisi birden, tutarlı yönde sapıyor (iki bağımsız kanıt)
+//   A2) Z1-Z2 özel çakışma kuralı: kolay zonda hızlı + nabız yüksek → DOWN sinyali.
+//      Gerekçe: kolay antrenman zonunda bile nabız beklenenden yüksekse, eşik gerçek değerinden
+//      düşük kalibre edilmiş olabilir — sporcu "kolay" olması gereken eforta fazla tepki veriyor.
+//      fast+low kombinasyonu (hızlı ama nabız düşük → UP) aynı mantıkla geçerlidir.
 //   B) Pace hedefte ama nabız sapıyor: doğru pace'i sürdürmek için beklenenden fazla/az efor
-//      harcanıyor → eşiğin kendisi yanlış kalibre olabilir (eskiden LTHR sinyaliydi, artık vLT'ye yönlendiriliyor)
-// Eylem önerisi: ≥2 farklı günde uyumlu yön VE toplam ağırlıklı puan ≥ BPM_SIGNAL_SCORE_THRESHOLD.
+//      harcanıyor → eşiğin kendisi yanlış kalibre olabilir. Z3+ kısıtı korunuyor.
+// Eylem önerisi: (≥2 gün VE ≥BPM_SIGNAL_SCORE_THRESHOLD puan) VEYA (≥1 gün VE ≥FAST_TRIGGER_SCORE puan).
+// İkinci yol güçlü tek günlük kanıtın (örn. 4 kritik nabız sapması = 16 puan) tetikleme yapmasını sağlar.
 // Büyüklük: ortalama gün puanından (toplam puan / baskın gün sayısı) türetilen güven skoru —
 // güçlü/yoğun sinyaller (Tehlikeli ağırlıklı) daha büyük adım, zayıf/dağınık sinyaller (Biraz
 // ağırlıklı) daha küçük adım üretir. Mekanizma 1'in R²'siyle aynı [0,1] ölçeğine eşleniyor.
+const FAST_TRIGGER_SCORE=8; // tek günlük hızlı tetik eşiği (≥1 gün VE ≥8 puan)
 function analyzeRecipeFeedbackSignals(signals){
   if(!signals||signals.length===0) return null;
 
@@ -1353,10 +1359,16 @@ function analyzeRecipeFeedbackSignals(signals){
     if(paceDir&&hrDir){
       if(paceDir==='fast'&&hrDir!=='high') return 'up';
       if(paceDir==='slow'&&hrDir!=='low')  return 'down';
-      return null; // çakışma — pace ve nabız birbirini doğrulamıyor
+      // A2) Z1-Z2 özel çakışma kuralı: kolay zonda fast+high → DOWN, fast+low → UP
+      // Z3+ zaten Kanal B ile kapsanıyor; burada yalnızca Z1-Z2 (zi<2) ele alınır.
+      if(zi<2){
+        if(paceDir==='fast'&&hrDir==='high') return 'down'; // kolay zonda hızlı + nabız yüksek → eşik düşük
+        if(paceDir==='fast'&&hrDir==='low')  return 'up';   // kolay zonda hızlı + nabız düşük → eşik yüksek
+      }
+      return null; // diğer çakışmalar (slow+high Z3+, slow+low Z3+ vb.) belirsiz → filtrele
     }
     // B) Pace hedefte, nabız sapıyor — YALNIZCA Z3+ (zi≥2)
-    // Z1–Z2 kolay koşu nabzı vLT için güvenilmez: aerobik taban ≠ eşik kapasitesi.
+    // Z1–Z2 kolay koşu nabzı vLT için tek başına güvenilmez: aerobik taban ≠ eşik kapasitesi.
     // Aerobik bazı iyi ama eşiği zayıf sporcu Z2'yi düşük nabızla rahat koşabilir
     // → yanlış 'up' sinyali üretir. Z3 (Tempo) ve üstü zone'lar bu kanalı besleyebilir.
     if(zi>=2&&paceOk&&hrDir&&!paceDir){
@@ -1366,7 +1378,11 @@ function analyzeRecipeFeedbackSignals(signals){
     return null;
   };
 
-  // Gün bazlı AĞIRLIKLI puan birikimi — ≥2 gün VE ≥BPM_SIGNAL_SCORE_THRESHOLD puan ikisi birden gerekli
+  // Gün bazlı AĞIRLIKLI puan birikimi
+  // Tetikleme iki yoldan biri sağlanırsa gerçekleşir:
+  //   • Normal yol: ≥2 farklı gün VE ≥BPM_SIGNAL_SCORE_THRESHOLD toplam puan
+  //   • Hızlı yol:  ≥1 gün    VE ≥FAST_TRIGGER_SCORE toplam puan
+  //     (güçlü tek günlük kanıt — örn. 4 kritik nabız sapması = 16 puan)
   const analyzeByDay=(combined)=>{
     if(combined.length===0) return{action:null,dominantDayCount:0,totalDays:0,totalSignals:0,totalScore:0,avgScore:0,confidence:0,noCombined:true};
     const byDate={};
@@ -1392,8 +1408,11 @@ function analyzeRecipeFeedbackSignals(signals){
     // Ortalama gün puanı: BPM_SIGNAL_WEIGHT aralığı [1,4] → güvene [0,1] doğrusal eşleme
     const avgScore=dominantDayCount>0?dominantScore/dominantDayCount:0;
     const confidence=Math.max(0,Math.min(1,(avgScore-1)/3));
+    // Tetikleme: normal yol VEYA hızlı yol
+    const normalTrigger=dominantDayCount>=2&&dominantScore>=BPM_SIGNAL_SCORE_THRESHOLD;
+    const fastTrigger  =dominantDayCount>=1&&dominantScore>=FAST_TRIGGER_SCORE;
     return{
-      action:(dominantDir&&dominantDayCount>=2&&dominantScore>=BPM_SIGNAL_SCORE_THRESHOLD)?dominantDir:null,
+      action:(dominantDir&&(normalTrigger||fastTrigger))?dominantDir:null,
       pendingDir:dominantDir, // eylem eşiği henüz karşılanmasa da baskın yönü gösterir (örn. "1/2 gün" iken)
       dominantDayCount,
       totalScore:dominantScore,
