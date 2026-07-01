@@ -1,4 +1,4 @@
-<!-- Version: v2026.06.30-2302 --><!DOCTYPE html>
+<!-- Version: v2026.07.01-1038 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.06.30-2302';
+const APP_VERSION='v2026.07.01-1038';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1194,7 +1194,7 @@ function extractFeedbackSignals(allSnapsObj, athlete){
             } else hrOk=true; // zone içinde
           }
         }
-        if(paceDir||hrDir||paceOk||hrOk) signals.push({date,paceDir,hrDir,paceOk,hrOk,hrWeight,zi:zi??0,zoneId:hr?.id||null,paceDiff,paceTol});
+        if(paceDir||hrDir||paceOk||hrOk) signals.push({date,label:row.label||null,paceDir,hrDir,paceOk,hrOk,hrWeight,zi:zi??0,zoneId:hr?.id||null,paceDiff,paceTol});
       };
 
       Object.values(rowOvs).forEach(scanRow);
@@ -1275,19 +1275,24 @@ function calcPaceComplianceScore(signals){
   const total=paceSignals.length;
   if(total===0) return null;
   let uyum=0,hizli=0,yavas=0,closenessSum=0,closenessN=0;
+  const detay=[];
   paceSignals.forEach(s=>{
-    if(s.paceOk) uyum++;
-    else if(s.paceDir==='fast') hizli++;
-    else if(s.paceDir==='slow') yavas++;
+    let dir;
+    if(s.paceOk){ uyum++; dir='uyum'; }
+    else if(s.paceDir==='fast'){ hizli++; dir='hizli'; }
+    else if(s.paceDir==='slow'){ yavas++; dir='yavas'; }
     const c=paceClosenessScore(s.paceDiff,s.paceTol);
     if(c!=null){closenessSum+=c;closenessN++;}
+    detay.push({date:s.date,label:s.label||null,dir,diffSec:s.paceDiff,tolSec:s.paceTol,closeness:c});
   });
   // uyum+hizli+yavas===total her zaman geçerlidir (her faz tam olarak bu üç
   // kovadan birine düşer) — bu yüzden yüzdeler de tam 100.0'a toplanmalı.
   const[uyumPct,hizliPct,yavasPct]=allocatePercentages([uyum,hizli,yavas],total);
   const yakinlikPuani=closenessN>0?round1(closenessSum/closenessN):null;
   const puan=yakinlikPuani!=null?Math.round(uyumPct*0.5+yakinlikPuani*0.5):Math.round(uyumPct);
-  return{total,uyum,hizli,yavas,uyumPct,hizliPct,yavasPct,yakinlikPuani,puan};
+  // En yeni tarih en üstte — kart bunu "hangi faz ne zaman/nasıl sayıldı" dökümü için kullanır
+  detay.sort((a,b)=>b.date<a.date?-1:b.date>a.date?1:0);
+  return{total,uyum,hizli,yavas,uyumPct,hizliPct,yavasPct,yakinlikPuani,puan,detay};
 }
 
 function paceComplianceLabel(puan){
@@ -17439,6 +17444,7 @@ function AerobikVerimlilikKarti({history,athlete}){
 function VerilenAntrenmaniYapabilmePuaniKarti({athlete}){
   const [period,setPeriod]=React.useState(4); // 1|2|4|8|12|'all'
   const [cache,setCache]=React.useState({});  // { periodKey: {score,loading,error} }
+  const [acikDetay,setAcikDetay]=React.useState(false); // faz dökümü açık/kapalı
   const cardRef=React.useRef();
   const e=React.createElement;
 
@@ -17454,7 +17460,7 @@ function VerilenAntrenmaniYapabilmePuaniKarti({athlete}){
     }
   },[athlete?.id]);
 
-  React.useEffect(()=>{ setCache({}); },[athlete?.id]); // sporcu değişince önbelleği sıfırla
+  React.useEffect(()=>{ setCache({}); setAcikDetay(false); },[athlete?.id]); // sporcu değişince önbelleği ve dökümü sıfırla
 
   React.useEffect(()=>{
     if(!athlete?.id) return;
@@ -17517,6 +17523,31 @@ function VerilenAntrenmaniYapabilmePuaniKarti({athlete}){
       ),
       score.yakinlikPuani!=null&&e('div',{style:{fontSize:12,color:'var(--text-secondary)',padding:'7px 11px',background:'var(--info-bg)',borderRadius:'var(--radius)',borderLeft:'3px solid var(--info)'}},
         'Hedef Bölge yakınlık puanı: ',e('b',null,score.yakinlikPuani+'/100'),' — sadece "hedefte mi" değil, sapmaların büyüklüğü de ölçülür. Genel puan, uyum oranı (%50) ile bu yakınlık puanının (%50) bileşimidir.'
+      ),
+      score.detay?.length>0&&e('div',{style:{marginTop:10}},
+        e('div',{
+          onClick:()=>setAcikDetay(a=>!a),
+          style:{cursor:'pointer',fontSize:11,fontWeight:600,color:'var(--text-tertiary)',display:'flex',alignItems:'center',gap:4,userSelect:'none'}
+        },(acikDetay?'▲ ':'▼ ')+'Faz dökümü ('+score.detay.length+')'),
+        acikDetay&&e('div',{style:{marginTop:8,display:'flex',flexDirection:'column',gap:4,maxHeight:320,overflowY:'auto'}},
+          score.detay.map((d,i)=>{
+            const dirMeta={
+              uyum:{text:'Uyumlu',color:'#16a34a',bg:'var(--success-bg)'},
+              hizli:{text:'Hızlı',color:'#f59e0b',bg:'var(--warn-bg)'},
+              yavas:{text:'Yavaş',color:'#3b82f6',bg:'var(--info-bg)'}
+            }[d.dir]||{text:'—',color:'var(--text-tertiary)',bg:'var(--bg-secondary)'};
+            const diffTxt=d.diffSec!=null?(d.diffSec>0?'+':'')+d.diffSec+' sn':null;
+            return e('div',{key:i,style:{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,padding:'6px 9px',borderRadius:6,background:dirMeta.bg,fontSize:11}},
+              e('span',{style:{fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},
+                fmtShort(d.date)+(d.label?' — '+d.label:'')
+              ),
+              e('div',{style:{display:'flex',alignItems:'center',gap:8,flexShrink:0}},
+                diffTxt&&e('span',{style:{color:'var(--text-tertiary)'}},diffTxt+(d.tolSec?' (±'+d.tolSec+')':'')),
+                e('span',{style:{fontWeight:700,color:dirMeta.color}},dirMeta.text)
+              )
+            );
+          })
+        )
       )
     )
   );
