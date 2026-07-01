@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.01-1129 --><!DOCTYPE html>
+<!-- Version: v2026.07.01-1151 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.01-1129';
+const APP_VERSION='v2026.07.01-1151';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -5715,6 +5715,15 @@ function getWalkPace(zones){
   const z1=getPaceFromZone(0,zones);
   return Math.min(720, Math.round(z1*1.25));
 }
+// ── Koşu → Tempolu Yürüyüş pratik alt sınırı ──────────────────────────────
+// 9:30/km (570 sn/km) altı pace'lerde jogging biyomekanik olarak verimsiz/garip
+// hale geliyor (walk-run crossover) — bu paceler için "koş" yerine "tempolu yürü"
+// önerilir. Hedef zon/nabız/pace AYNI kalır, sadece icra biçimi (etiket) değişir.
+// Render-time genel dönüşüm (avgPaceSec bazlı) ile aynı eşik — bkz. kosuToTempoluYuruyus kullanım yerleri.
+const KOSU_MIN_PACE_SEC=570;
+function kosuToTempoluYuruyus(s){
+  return (s||'').replace(/Kolay Koşu/g,'Kolay Tempolu Yürüyüş').replace(/kolay koşu/gi,'Kolay Tempolu Yürüyüş').replace(/Aerobik Koşu/g,'Aerobik Tempolu Yürüyüş').replace(/aerobik koşu/gi,'Aerobik Tempolu Yürüyüş').replace(/Uzun Koşu/g,'Uzun Tempolu Yürüyüş').replace(/uzun koşu/gi,'Uzun Tempolu Yürüyüş').replace(/\bKoşu\b/g,'Tempolu Yürüyüş').replace(/\bkoşu\b/gi,'Tempolu Yürüyüş').replace('🏃 Tempolu Yürüyüş','🏃 Tempolu Yürüyüş / Hafif Koşu');
+}
 // ── MAF nabız hedefi — sporcu bazlı dinamik hesap ─────────────────────────
 // Hem 180-yaş hem de LTHR×%80-85 değerlerini hesaplar; mevcut olanları gösterir.
 function mafNabizDetay(ath, mesafe, sure){
@@ -6957,9 +6966,8 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
   // 'serbest' her zaman hariç: hedefsiz/spontane antrenman, etiketi asla otomatik
   // değiştirilmemeli (render sırasında satır objelerini mutasyona uğratan bu blok
   // ayrıca 'Serbest Koşu' → 'Serbest Tempolu Yürüyüş' gibi istenmeyen dönüşüme yol açıyordu).
-  if(!['interval','piramit','kesintisiz_piramit','on_off','tempo_interval','cruise','yaris_tempo','hill_sprint','yokus_kisa','yokus_uzun','tirmanis','teknik','tempo','tempo_sureli','esik','esik_sureli','serbest'].includes(tip)&&avgPaceSec>0&&avgPaceSec>570){
-    const kosuDon=(s)=>(s||'').replace(/Kolay Koşu/g,'Kolay Tempolu Yürüyüş').replace(/kolay koşu/gi,'Kolay Tempolu Yürüyüş').replace(/Aerobik Koşu/g,'Aerobik Tempolu Yürüyüş').replace(/aerobik koşu/gi,'Aerobik Tempolu Yürüyüş').replace(/Uzun Koşu/g,'Uzun Tempolu Yürüyüş').replace(/uzun koşu/gi,'Uzun Tempolu Yürüyüş').replace(/\bKoşu\b/g,'Tempolu Yürüyüş').replace(/\bkoşu\b/gi,'Tempolu Yürüyüş').replace('🏃 Tempolu Yürüyüş','🏃 Tempolu Yürüyüş / Hafif Koşu');
-    rows.forEach(r=>{r.label=kosuDon(r.label);});
+  if(!['interval','piramit','kesintisiz_piramit','on_off','tempo_interval','cruise','yaris_tempo','hill_sprint','yokus_kisa','yokus_uzun','tirmanis','teknik','tempo','tempo_sureli','esik','esik_sureli','serbest'].includes(tip)&&avgPaceSec>0&&avgPaceSec>KOSU_MIN_PACE_SEC){
+    rows.forEach(r=>{r.label=kosuToTempoluYuruyus(r.label);});
   }
 
   const cell=(val,bold=false)=>({padding:'5px 4px',textAlign:'center',fontFamily:'monospace',fontSize:11,fontWeight:700,color:'#000'});
@@ -9090,6 +9098,25 @@ function tplYuruKos(sLevel, zones){
      ]},
   ];
   var seans=SEANSLAR[s];
+  // Seansın hedef koşu pace'i pratik alt sınırın (9:30/km) altındaysa (yani hesaplanan
+  // pace bu sayıdan yavaşsa) bu seansın "Koşu" etiketlerini "Tempolu Yürüyüş"e çevir.
+  // Hedef zon/nabız/pace AYNI kalır — sadece icra biçimi (jogging yerine hızlı yürüyüş) değişir.
+  // Isınma/Soğuma Yürüyüşü satırları zaten "Yürüyüş" içeriyor, regex'ten etkilenmez.
+  if(rPace>KOSU_MIN_PACE_SEC){
+    seans={
+      ...seans,
+      yapi:kosuToTempoluYuruyus(seans.yapi),
+      detay:kosuToTempoluYuruyus(seans.detay),
+      yapilar:seans.yapilar.map(function(y){
+        return {
+          ...y,
+          baslik:kosuToTempoluYuruyus(y.baslik),
+          detay:kosuToTempoluYuruyus(y.detay),
+          _rows:(y._rows||[]).map(function(r){ return {...r,label:kosuToTempoluYuruyus(r.label)}; })
+        };
+      })
+    };
+  }
   return{
     tip:seans.tip||'kolay',
     sure_dk:seans.sure,
