@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.02-1558 --><!DOCTYPE html>
+<!-- Version: v2026.07.02-1809 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.02-1558';
+const APP_VERSION='v2026.07.02-1809';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -7524,29 +7524,36 @@ function tplFromYapiNotu(tur, yapiNotu, band, sure_dk, zones, disiplin, phase, c
   }
 
   // Kesintisiz Piramit
-  // NOT (düzeltme): Eskiden burada yapiNotu metnindeki "Z2→Z3→Z4..." zincirini
-  // regex ile ayrıştırıp segmentleri YENİDEN üretiyorduk. Bu, tplKesintisizPiramit'in
-  // kanonik band/faz bazlı segment sürelerinden (kpSegCfg) bağımsız, kopya bir mantıktı
-  // ve iki sorun yaratıyordu:
-  //  1) yapiNotu "Kesintisiz Piramit · S1 — Temel" formatında geldiğinde (tplKesintisizPiramit'in
-  //     kendi ürettiği yapi_notu — Ata modali ilk açıldığında ve injectRowsFromTpl'de bu format
-  //     kullanılıyor) regex zincir bulamıyor, tek parçaya düşüyor → "Sürekli Tempo Değişimi"
-  //     bloğu 5-7 segment yerine TEK (ve yanlış etiketli) segmente iniyor. Bu da Ata ile
-  //     atanan antrenmanın şablon kütüphanesindeki (7 fazlı) yerine 3 fazlı (Isınma+1+Soğuma)
-  //     görünmesine sebep oluyordu.
-  //  2) yapiNotu doğru ayrıştırılsa bile segment süreleri burada sure_dk'ye göre kabaca
-  //     eşit bölünüyordu; tplKesintisizPiramit'teki band'e özel (b12/b3/b45) süre dağılımıyla
-  //     birebir eşleşmiyordu.
-  // Düzeltme: yapiNotu içindeki "S1/S2/S3" seviyesinden faz'ı geri çözüp tek kanonik
-  // kaynağa (tplKesintisizPiramit) yönlendiriyoruz — şablon kütüphanesi ile Ata sonrası
-  // görünüm artık her zaman birebir aynı.
   if(tur==='kesintisiz_piramit'){
-    const seviyeKPM=yapiNotu.match(/·\s*S(\d+)/);
-    const seviyeKPNo=seviyeKPM?parseInt(seviyeKPM[1]):null;
-    const seviyeFazMapKP={1:'Temel',2:'Gelişme',3:'Zirve'};
-    const mappedPhaseKP=(seviyeKPNo&&seviyeFazMapKP[seviyeKPNo])||phase||'Gelişme';
-    const canonicalKP=tplKesintisizPiramit(band,zones,mappedPhaseKP);
-    return{...canonicalKP,sure_dk:sure_dk||canonicalKP.sure_dk,yapi_notu:yapiNotu};
+    const bolumM=yapiNotu.match(/—\s*(.+?)(?:\s*\(|$)/);
+    const bolumStr=bolumM?bolumM[1].trim():'Z2→Z3→Z4→Z3→Z2';
+    const ZONE_IDX_MAP={'Z1':0,'Z2':1,'Z3':2,'Z4':3,'Z5a':4,'Z5b':5,'Z5c':6};
+    const bolumlar=bolumStr.split('→').map(z=>z.trim());
+    // yapi_notu, YAPI_NOTLARI'ndeki "Z2→Z3→Z4→..." ok formatında DEĞİLSE (örn.
+    // tplKesintisizPiramit'in kendi ürettiği "· Sx — Faz" formatı) — split('→') tek
+    // elemanlı kalır ve reçete yanlışlıkla tek segmente düşer (kütüphanedeki 5-7
+    // segmentlik yapıyla eşleşmez). Bu durumda gerçek üreticiye (tplKesintisizPiramit)
+    // düşerek yapi_notu'dan faz adını çıkar ve doğru segment sayısını üret.
+    if(bolumlar.length<2){
+      const fazM=yapiNotu.match(/—\s*(Temel|Gelişme|Zirve|Taper)\b/);
+      const fazVal=fazM?fazM[1]:'Gelişme';
+      try{
+        const kpTpl=tplKesintisizPiramit(band||3,zones,fazVal);
+        if(kpTpl) return{...kpTpl,yapi_notu:yapiNotu};
+      }catch(e){}
+    }
+    const segDk=Math.max(3,Math.round((sure_dk-20)/bolumlar.length));
+    const kpRows=bolumlar.map((z,i)=>({
+      label:z+' Segment '+(i+1),
+      sure_sn:segDk*60,
+      zIdx:ZONE_IDX_MAP[z]??1,
+      _cue: segDk+' dk '+( (ZONE_IDX_MAP[z]!==undefined) ? (zoneInfo(zones,ZONE_IDX_MAP[z])||z) : z )
+    }));
+    return{tip:'kesintisiz_piramit',sure_dk,yapi_notu:yapiNotu,yapilar:[
+      {baslik:'Isınma',detay:'10 dk Z1 kolay koşu — tempo değişimine hazırlık',_rows:_R.isinma(10)},
+      {baslik:'Sürekli Tempo Değişimi',detay:'Durma yok — geçişler 30–60sn içinde yumuşak',_rows:kpRows},
+      {baslik:'Soğuma',detay:'10 dk Z1 hafif koşu + esneme',_rows:_R.soguma(10)},
+    ]};
   }
 
   // On-Off
@@ -14463,7 +14470,10 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       yapi_notu:tpl.yapi_notu||'',
       approved:false,
       isKosuCapraz:_isKosuCaprazForDate||false,
-      yapilar:(tpl.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||'',_caprazNot:y._caprazNot}))
+      // _rows korunur: Kesintisiz Piramit gibi çok-segmentli şablonlarda asıl yapı
+      // _rows içinde taşınır — bunu atmak reçetenin daha sonra (yapi_notu'dan) hatalı/eksik
+      // yeniden türetilmesine yol açar. Ata anında önizlemedekiyle birebir aynısı kaydedilir.
+      yapilar:(tpl.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||'',_caprazNot:y._caprazNot,...(y._rows?{_rows:y._rows}:{})}))
     }};
     const newManualOverrides={...(curSnap?.manualOverrides||{}),[dateStr]:{tip:_saveTip,baslik,atAt:now.toISOString()}};
     // ── OP-3: Back-to-Back Gün 2 oto-enjeksiyonu (manuel atama) ──
