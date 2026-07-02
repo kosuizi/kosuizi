@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.02-1534 --><!DOCTYPE html>
+<!-- Version: v2026.07.02-1558 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.02-1534';
+const APP_VERSION='v2026.07.02-1558';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -5432,58 +5432,7 @@ const fixBaslik=(b)=>TIP_NAMES[b]||b;
 // Antrenman adı: yapi_notu varsa spesifik isim (ör. "Tempo · S1 — 2×6 dk / 3dk dinlenme"),
 // yoksa genel baslik (ör. "Tempo Blokları") — geriye dönük uyumluluk korunur
 const workoutLabel=(day)=>day?.yapi_notu||fixBaslik(day?.baslik);
-// ── Revize tespiti ──────────────────────────────────────────────────────────
-const _isWarmCool=(b)=>/^(ısınma|isinma|soğuma|soguma)/i.test((b||'').trim());
-const _REVIZE_TOL=0.15;
-function _isRevised(day){
-  try{
-    const tip=day?.tip,yn=day?.yapi_notu;
-    if(!tip||!yn) return false;
-    const detail=(yn.split(' — ')[1]||'').trim();
-    const dkM=/^(\d+)\s*dk/.exec(detail);
-    const naturalDk=dkM?parseInt(dkM[1]):50;
-    const ref=tplFromYapiNotu(tip,yn,1,naturalDk,null,'karma','Gelişme',0);
-    if(!ref?.yapilar?.length) return false;
-    const skipY=(y)=>_isWarmCool(y.baslik)||/^💡/.test(y.baslik||'')||y._caprazNot;
-    const refY=ref.yapilar.filter(y=>!skipY(y));
-    const planY=(day.yapilar||[]).filter(y=>!skipY(y));
-    if(refY.length!==planY.length) return true;
-    for(let i=0;i<refY.length;i++){
-      const rv=refY[i],pv=planY[i];
-      const rRows=(rv._rows||[]).filter(r=>r.type!=='rest'&&r.type!=='header');
-      const pRows=(pv._rows||[]).filter(r=>r.type!=='rest'&&r.type!=='header');
-      if(!rRows.length&&!pRows.length){
-        const rDk=rv.sure_dk||0,pDk=pv.sure_dk||0;
-        if(rDk>0&&pDk>0&&Math.abs(pDk-rDk)/rDk>_REVIZE_TOL) return true;
-        continue;
-      }
-      if(rRows.length>0&&!pRows.length){
-        const rDk=rv.sure_dk||0,pDk=pv.sure_dk||0;
-        if(rDk>0&&pDk>0&&Math.abs(pDk-rDk)/rDk>_REVIZE_TOL) return true;
-        continue;
-      }
-      if(rRows.length!==pRows.length) return true;
-      for(let j=0;j<rRows.length;j++){
-        const rr=rRows[j],pr=pRows[j];
-        const rTek=rr.tekrar??1,pTek=pr.tekrar??1;
-        if(rTek!==pTek) return true;
-        const rSn=rr.sure_sn||0,pSn=pr.sure_sn||0;
-        if(rSn>0&&pSn>0&&Math.abs(pSn-rSn)/rSn>_REVIZE_TOL) return true;
-      }
-    }
-    return false;
-  }catch(e){return false;}
-}
-// Revize edilmiş mi? (flag veya render-time tespit)
-const isRevizedWorkout=(day)=>{
-  if(!day) return false;
-  if(day._revised) return true;
-  const base=day.yapi_notu;
-  if(!base) return day.tip==='tirmanis'&&(day.sure_dk||0)>0;
-  if(!(YAPI_NOTLARI[day.tip]||[]).includes(base)) return true;
-  return _isRevised(day);
-};
-// Alt başlık (revize etiketi bu fonksiyondan değil, ayrı span ile render edilir)
+// Alt başlık
 const planYapiNotu=(day)=>{
   const tip=day?.tip,sureDk=day?.sure_dk||0,base=day?.yapi_notu;
   if(!base){
@@ -8913,8 +8862,7 @@ function tplTirmanisAcik(band, sure_dk, zones, dpHedef){
   const tirAvgPaceSec=calcTirmanisAvgPaceSec(dpHedef,adjustedSure,zones);
 
   return{
-    tip:'tirmanis', sure_dk:adjustedSure, _revised:true,
-    _revizeNeden:'Süre, sporcunun yük hedefi'+(dpHedef>0?' ve D+ hedefi':'')+' doğrultusunda '+adjustedSure+' dk olarak belirlendi.',
+    tip:'tirmanis', sure_dk:adjustedSure,
     yapi_notu:'Tırmanış · '+adjustedSure+' dk / Z2–Z3 çıkış'+(dpHedef>0?' · ~'+dpHedef+'m D+':''),
     yapilar:[
       {baslik:'Isınma',detay:`10 dk — ${zoneInfoZ1(zones)||'Z1 kolay'} düz`,_rows:_R.isinma(10)},
@@ -11043,8 +10991,6 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
     const eskiSure=tpl.sure_dk;
     tpl={...tpl,sure_dk:Math.min(tpl.sure_dk+bonus,Math.round(130*yMod))};
     if(tpl.sure_dk>eskiSure){
-      tpl._revised=true;
-      tpl._revizeNeden=`TSB ${tsb.toFixed(1)} iyi, ACWR düşük — süre ${eskiSure}dk → ${tpl.sure_dk}dk artırıldı`;
       warnings.push({icon:'📈',text:`TSB ${tsb.toFixed(1)} iyi, ACWR ${acwr?.toFixed(2)||'—'} düşük — süre ${eskiSure}dk→${tpl.sure_dk}dk artırıldı`});
     }
   }
@@ -11057,16 +11003,12 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
       const extraMin=Math.min(25,Math.round(kmGunBasiHedef*6));
       if(extraMin>3){
         tpl.sure_dk=Math.min(tpl.sure_dk+extraMin,Math.round(120*yMod));
-        tpl._revised=true;
-        tpl._revizeNeden=`+${extraMin}dk eklendi — haftalık km hedefinin gerisinde (${Math.round(wkKm)}/${targetKm}km)`;
       }
     } else if(kmFazla&&!['uzun'].includes(tpl.tip)){
       // Fazla — süre hafifçe kıs (max -%15)
       const reduceMin=Math.min(15,Math.round(tpl.sure_dk*0.10));
       if(reduceMin>3){
         tpl.sure_dk=Math.max(25,tpl.sure_dk-reduceMin);
-        tpl._revised=true;
-        tpl._revizeNeden=`-${reduceMin}dk kısaltıldı — haftalık km hedefi aşıldı (${Math.round(wkKm)}/${targetKm}km)`;
       }
     }
   }
@@ -11084,15 +11026,11 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
       tpl={
         ...tplPowerHiking(band,zones,dpGunBasiHedef),
         sure_dk:tirSure,
-        _revised:true,
         _originalTip:orijinalTip,
-        _revizeNeden:`D+ açığı — hafta ${wkDp}/${targetDp}m, günlük ~${dpGunBasiHedef}m hedef`,
         uyari:`D+ açığı: haftalık ${wkDp}/${targetDp}m tamamlandı — tırmanış antrenmanına yönlendirildi (~${dpGunBasiHedef}m hedef)`
       };
     } else {
       // Şablon aynı kalır; D+ hedefi uyari alanında gösterilir, detay'a dokunulmaz
-      tpl._revised=true;
-      tpl._revizeNeden=`D+ notu — hafta ${wkDp}/${targetDp}m, günlük ~${dpGunBasiHedef}m hedef`;
       tpl.uyari=tpl.uyari||`D+ açığı: haftalık ${wkDp}/${targetDp}m — arazi/tırmanış güzergah tercihli (~${dpGunBasiHedef}m hedef)`;
     }
   }
@@ -11670,12 +11608,9 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
         const _z2Sec=getPaceSec(zones,1)||360;
         const _hedefDk=Math.round(wkStats.uzunGunKm*_z2Sec/60);
         if(_hedefDk>10&&kosuTpl.sure_dk>_hedefDk){
-          const _eskiDk=kosuTpl.sure_dk;
           const _mainDk=Math.max(10,_hedefDk-20); // 15dk ısınma + 5dk soğuma rezerve
           kosuTpl={...kosuTpl,
             sure_dk:_hedefDk,
-            _revised:true,
-            _revizeNeden:`Haftalık hedef üst sınırı: ~${wkStats.uzunGunKm}km (~${_hedefDk}dk), progresyon ${_eskiDk}dk öneriyordu`,
             yapilar:(kosuTpl.yapilar||[]).map(y=>{
               if((y.baslik||'').includes('Z2 Uzun')){
                 return{...y,
@@ -12518,8 +12453,7 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
             planned={
               ...tplPowerHiking(planBand,planZones,_kalanDp),
               sure_dk:tirSure,yukHedef:Math.round(tirSure*0.9),
-              _revised:true,_originalTip:planned.tip,
-              _revizeNeden:`D+ açığı — hafta kalan ${Math.round(_kalanDp)}m, tırmanış antrenmanı`,
+              _originalTip:planned.tip,
               ..._meta
             };
           }
@@ -16084,7 +16018,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                       value:planYapiNotu(day),
                       onSave:v=>handleYapiNotuDegistir(day.date,v)
                     }),
-                    isRevizedWorkout(day)&&(planSnap?.overrideMap?.[day.date]?._revizeOnaylandi)&&React.createElement('span',{'data-no-export':true,style:{color:'var(--warn)',fontWeight:700,marginLeft:3,fontSize:10}},'(revize)')
+                    (planSnap?.overrideMap?.[day.date]?._revizeOnaylandi)&&React.createElement('span',{'data-no-export':true,style:{color:'var(--warn)',fontWeight:700,marginLeft:3,fontSize:10}},'(revize)')
                   )
                 ),
                 isDone&&React.createElement('span',{style:{fontSize:20,color:'var(--success)',fontWeight:900,lineHeight:1}},'✔'),
@@ -16179,15 +16113,14 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     }
                   })
                 ):null;
-                // ── Revize bilgi kutusu (sadece koç, paylaşım dışı) ──────────
+                // ── Revize onay kutusu (sadece koç, paylaşım dışı, tamamen manuel) ──
                 const revizeKutusu=(()=>{
-                  // Checkbox yalnızca sistem açıkça revize ettiğinde gösterilir:
-                  // Sadece _revised (içerik/süre değişikliği) durumunda göster.
-                  // _downgraded (tip değişikliği: esik→aerobik vb.) durumunda gösterilmez.
-                  if(!day._revised) return null;
+                  // Sistem tespiti yok — kutu her antrenman gününde gösterilir
+                  // (yarış ve dinlenme günleri hariç). Koç işaretlerse "(revize)"
+                  // etiketi antrenman adının yanında görünür.
+                  if(day.tip==='yaris'||day.tip==='dinlenme') return null;
                   const ov=planSnap?.overrideMap?.[day.date];
                   const onaylandi=ov?._revizeOnaylandi||false;
-                  const neden=day._revizeNeden;
                   return React.createElement('div',{'data-no-export':true,style:{
                     marginTop:8,padding:'8px 10px',
                     background:'var(--warn-bg)',border:'1px solid var(--warn)',
@@ -16200,9 +16133,6 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                         onChange:(e)=>{e.stopPropagation();handleRevizeOnayDegistir(day.date,!onaylandi);}
                       }),
                       'Antrenman isminde "(revize)" olarak göster'
-                    ),
-                    neden&&React.createElement('div',{style:{marginTop:4,color:'var(--text-secondary)',lineHeight:1.4}},
-                      React.createElement('span',{style:{fontWeight:600}},'📝 Neden: '),neden
                     )
                   );
                 })();
