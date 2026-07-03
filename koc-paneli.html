@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.03-1229 --><!DOCTYPE html>
+<!-- Version: v2026.07.03-1525 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.03-1229';
+const APP_VERSION='v2026.07.03-1525';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -18204,10 +18204,12 @@ function calcTestTiming(athlete, history, races, workouts){
 }
 
 // Koşu dinamikleri analizi
-function analyzeDynamics(workouts, athleteId){
+function analyzeDynamics(workouts, athleteId, selectedTur, selectedYapiNotu){
   // Sabit tempolu antrenman tespiti — iki yol:
   // 1. Antrenman türü bilgisi varsa onu kullan
   // 2. Yoksa veri bazlı otomatik tespit
+  // selectedTur verilmişse (kullanıcı belirli bir tür seçtiyse), otomatik tespit devre dışı kalır
+  // ve sadece o tür (varsa selectedYapiNotu ile birlikte) eşleştirilir — "aynı tip" kıyas.
   const STEADY_TYPES=['kolay','aerobik','uzun'];
   const YOĞUN_TYPES=['interval','esik','esik_sureli','tempo','tempo_sureli','yokus_kisa','yokus_uzun','tirmanis','teknik','acici','depar','yaris'];
 
@@ -18251,15 +18253,23 @@ function analyzeDynamics(workouts, athleteId){
 
   const athWks=(workouts||[]).filter(w=>{
     if(w.athleteId!==athleteId) return false;
-    if(!isSteady(w)) return false;
+    if(selectedTur){
+      // Kullanıcı belirli bir tür seçti — sadece o türü (ve varsa seviyeyi) eşleştir.
+      // Otomatik tespit burada devre dışı: tür açıkça belli olduğu için tahmine gerek yok.
+      if(w.tur!==selectedTur) return false;
+      if(selectedYapiNotu&&w.yapi_notu!==selectedYapiNotu) return false;
+    }else{
+      // 'Tümü' — varsayılan: sabit tempolu antrenmanlar (kolay+aerobik+uzun + otomatik tespit)
+      if(!isSteady(w)) return false;
+    }
     // Dinamik verisi olan antrenmanlar
     return parseFloat(w.kadans)>0||parseFloat(w.yer_kontak)>0||parseFloat(w.dikey_salinim)>0;
   }).sort((a,b)=>new Date(a.date)-new Date(b.date));
 
-  if(!athWks.length)return null;
+  if(!athWks.length)return{sonuc:null,wkCount:0,autoDetected:0,filtered:!!selectedTur};
 
-  // Kaç tanesi otomatik tespit edildi vs tür bilgisiyle?
-  const autoDetected=athWks.filter(w=>!w.tur||!STEADY_TYPES.includes(w.tur)).length;
+  // Kaç tanesi otomatik tespit edildi vs tür bilgisiyle? (yalnızca 'Tümü' modunda anlamlı)
+  const autoDetected=selectedTur?0:athWks.filter(w=>!w.tur||!STEADY_TYPES.includes(w.tur)).length;
 
   const refs={
     kadans:{iyi:180,kabul:170,birim:'spm',yuksek_iyi:true},
@@ -18288,7 +18298,7 @@ function analyzeDynamics(workouts, athleteId){
     })():'yetersiz_veri';
     sonuc[k]={avg,son,seviye,trend,vals,birim:ref.birim,ref};
   });
-  return{sonuc,wkCount:athWks.length,autoDetected};
+  return{sonuc,wkCount:athWks.length,autoDetected,filtered:!!selectedTur};
 }
 
 function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,onUpdateWorkout,onDeleteWorkout,testPlanlar,onSaveTestPlan,onDeleteTestPlan}){
@@ -18301,14 +18311,20 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,o
   const [editRecord,setEditRecord]=useState(null);
   const [editForm,setEditForm]=useState({});
   const setEF=(k,v)=>setEditForm(f=>({...f,[k]:v}));
+  const [dinTur,setDinTur]=useState('');       // '' = Tümü (varsayılan: sabit tempolu antrenmanlar)
+  const [dinYapiNotu,setDinYapiNotu]=useState(''); // '' = seçilen türün tüm alt seviyeleri
 
   const oneriler=React.useMemo(()=>
     athlete?calcTestTiming(athlete,history,races,workouts):[]
   ,[athlete,history,races,workouts]);
 
   const dinamikler=React.useMemo(()=>
-    athlete?analyzeDynamics(workouts,athlete.id):null
-  ,[workouts,athlete]);
+    athlete?analyzeDynamics(workouts,athlete.id,dinTur,dinYapiNotu):null
+  ,[workouts,athlete,dinTur,dinYapiNotu]);
+
+  // Tür seçim paneli için: sadece koşu türleri + seçili türün yapı notu (seviye) listesi
+  const dinKosuTurler=ANTRENMAN_TURLERI.filter(t=>t.v&&t.spor==='kosu');
+  const dinYapiNotlari=dinTur?(YAPI_NOTLARI[dinTur]||[]):[];
 
   const LEGACY_TUR_MAP_TAB={'test_maf':'maf','test_cooper':'cooper','test_5k':'zaman_5k','test_laktat':'lthr_test'};
   const athTestWks=(workouts||[]).filter(w=>w.athleteId===athlete?.id&&(w._isTest||LEGACY_TUR_MAP_TAB[w.tur]));
@@ -18593,12 +18609,35 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,o
     ),
 
     subTab==='dinamikler'&&React.createElement('div',null,
-      !dinamikler&&React.createElement('div',{className:'empty'},'Sabit tempolu antrenmanlarda kadans, yer temas veya dikey salınım verisi bulunamadı.'),
-      dinamikler&&React.createElement('div',null,
+      // Antrenman türü / seviye seçim paneli — "aynı tip antrenman" kıyası için
+      React.createElement('div',{className:'card',style:{marginBottom:12,padding:'12px 14px'}},
+        React.createElement('div',{style:{fontSize:11,fontWeight:700,color:'var(--text-tertiary)',textTransform:'uppercase',letterSpacing:'0.4px',marginBottom:8}},'🔍 Kıyaslanacak Antrenman'),
+        React.createElement('div',{style:{display:'flex',gap:10,flexWrap:'wrap'}},
+          React.createElement('div',{style:{flex:'1 1 200px',minWidth:160}},
+            React.createElement('label',null,'Antrenman Türü'),
+            React.createElement('select',{value:dinTur,onChange:ev=>{setDinTur(ev.target.value);setDinYapiNotu('');}},
+              React.createElement('option',{value:''},'— Tümü (Sabit Tempo) —'),
+              dinKosuTurler.map(t=>React.createElement('option',{key:t.v,value:t.v},t.l))
+            )
+          ),
+          dinTur&&dinYapiNotlari.length>0&&React.createElement('div',{style:{flex:'1 1 200px',minWidth:160}},
+            React.createElement('label',null,'Seviye / Alt Tür'),
+            React.createElement('select',{value:dinYapiNotu,onChange:ev=>setDinYapiNotu(ev.target.value)},
+              React.createElement('option',{value:''},'— Tümü —'),
+              dinYapiNotlari.map((n,i)=>React.createElement('option',{key:i,value:n},n))
+            )
+          )
+        )
+      ),
+      (!dinamikler||dinamikler.wkCount===0)&&React.createElement('div',{className:'empty'},
+        dinTur?'Seçilen antrenman türünde kadans, yer temas veya dikey salınım verisi bulunamadı.':'Sabit tempolu antrenmanlarda kadans, yer temas veya dikey salınım verisi bulunamadı.'
+      ),
+      dinamikler&&dinamikler.wkCount>0&&React.createElement('div',null,
         React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:12,padding:'10px 12px',background:'var(--bg-secondary)',borderRadius:'var(--radius)'}},
-          '📊 Sadece sabit tempolu antrenmanlar dahil edildi — ',React.createElement('strong',null,dinamikler.wkCount+' antrenman'),
-          dinamikler.autoDetected>0&&React.createElement('span',{style:{color:'var(--text-tertiary)'}},' ('+dinamikler.autoDetected+' tanesi otomatik tespit edildi)'),
-          ' · İnterval, tempo ve eşik hariç'
+          dinTur?('📊 '+(TUR_LABELS[dinTur]||dinTur)+(dinYapiNotu?(' · '+dinYapiNotu):'')+' antrenmanları kullanıldı — '):'📊 Sadece sabit tempolu antrenmanlar dahil edildi — ',
+          React.createElement('strong',null,dinamikler.wkCount+' antrenman'),
+          !dinTur&&dinamikler.autoDetected>0&&React.createElement('span',{style:{color:'var(--text-tertiary)'}},' ('+dinamikler.autoDetected+' tanesi otomatik tespit edildi)'),
+          !dinTur&&' · İnterval, tempo ve eşik hariç'
         ),
         React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(240px,1fr))',gap:12,marginBottom:16}},
           [{k:'kadans',l:'Kadans',aciklama:'Yüksek kadans (≥180 spm) eklem yükünü azaltır.',oneri:{gelistir:'Metronom ile kadansını artır. Hedef: haftada +2–3 spm.',kabul:'İyi seviye. Kısa yokuş tekrarları kadansı artırabilir.',iyi:'Mükemmel kadans!'}},
