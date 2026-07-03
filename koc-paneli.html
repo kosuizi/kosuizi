@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.03-1154 --><!DOCTYPE html>
+<!-- Version: v2026.07.03-1201 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.03-1154';
+const APP_VERSION='v2026.07.03-1201';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -9102,7 +9102,13 @@ function tplYuruKos(sLevel, zones){
     };
   }
   return{
-    tip:seans.tip||'kolay',
+    // KÖK NEDEN DÜZELTMESİ: seans.tip SEANSLAR dizisinin iç zorluk sınıflandırmasıydı
+    // (S1-S5 'kolay', S6-S12 'aerobik') — bu fonksiyon içinde başka hiçbir yerde
+    // kullanılmıyordu (yalnızca burada okunuyordu), ama sistem genelinde "antrenman
+    // türü" olarak okunan tip alanının üzerine yazarak day.tip/_KOSU_TIPLERI/
+    // paceValidation gibi her yerde bu antrenmanın 'yuru_kos' değil 'kolay'/'aerobik'
+    // sanılmasına yol açıyordu (rozet, emoji, tür tespiti hep buna bağlıydı).
+    tip:'yuru_kos',
     sure_dk:seans.sure,
     yapi_notu:seans.yapi,
     baslik:'🚶🏃 Yürü-Koş S'+s,
@@ -12943,6 +12949,19 @@ function reviewPlanSnapshot(snapshot,athlete,history,races,workouts,testPlanlar)
 }
 
 
+// ── Yürü-Koş tip öz-iyileştirme ─────────────────────────────────────────────
+// KÖK NEDEN artık tplYuruKos()'ta düzeltildi (tip her zaman 'yuru_kos' döner),
+// ama bu düzeltmeden ÖNCE "Ata" ile atanmış veya otomatik planlanmış eski
+// kayıtlarda tip hâlâ 'kolay'/'aerobik' olarak donmuş olabilir. Bu fonksiyon
+// yapi_notu/baslik'ten "Yürü-Koş · S<N>" deseni tespit ederek tip'i düzeltir.
+// Birden fazla render yerinde (Plan sekmesi, Geçmiş sekmesi vb.) AYNI mantığı
+// kullanmak için paylaşılan tek fonksiyon — bkz. Panel paritesi kuralı.
+function resolveEffectiveTip(tip, yapiNotu, baslik){
+  if(tip==='yuru_kos') return tip;
+  const src=(baslik||'')+' '+(yapiNotu||'');
+  return /Yürü-Koş[\s·]*S\d+/i.test(src) ? 'yuru_kos' : tip;
+}
+
 // Koşu yapılarını al — çapraz/kuvvet ve diğer koşu-dışı tipler dahil tüm non-koşu günleri dışla
 const _KOSU_TIP_SET=new Set(['kolay','serbest','aerobik','hazirlik','uzun','tempo','tempo_sureli','esik','esik_sureli','interval','piramit','kesintisiz_piramit','yokus_kisa','yokus_uzun','tirmanis','teknik','acici','progressive','cruise','yaris_tempo','on_off','tempo_interval','hill_sprint','strides','back_to_back','yuru_kos','yaris']);
 function kosuYapilarAl(day){
@@ -16058,7 +16077,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                       onSave:v=>handleYapiNotuDegistir(day.date,v)
                     }),
                     (planSnap?.overrideMap?.[day.date]?._revizeOnaylandi)&&React.createElement('span',{'data-no-export':true,style:{color:'var(--warn)',fontWeight:700,marginLeft:3,fontSize:10}},'(revize)'),
-                    React.createElement('span',{'data-no-export':true,style:{fontFamily:'monospace',fontSize:9,fontWeight:700,color:'#fff',background:'#7c3aed',padding:'1px 5px',borderRadius:3,marginLeft:3}},'🔧 tip: '+(day.tip||'—'))
+                    React.createElement('span',{'data-no-export':true,style:{fontFamily:'monospace',fontSize:9,fontWeight:700,color:'#fff',background:'#7c3aed',padding:'1px 5px',borderRadius:3,marginLeft:3}},'🔧 ham: '+(day.tip||'—')+' → efektif: '+resolveEffectiveTip(day.tip,day.yapi_notu,day.baslik))
                   )
                 ),
                 isDone&&React.createElement('span',{style:{fontSize:20,color:'var(--success)',fontWeight:900,lineHeight:1}},'✔'),
@@ -16077,10 +16096,10 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     !split.kosuDone&&!day.isPast&&React.createElement('span',{style:{color:'var(--text-tertiary)',fontSize:10,fontStyle:'italic'}},'(bekliyor)')
                   ),
                   React.createElement(ReceteTablosu,{
-                    yapilar:injectRowsFromTpl(kosuYapilarAl(day),day.tip,day.yapi_notu,day.sure_dk,zones,athlete?.disiplin),
+                    yapilar:injectRowsFromTpl(kosuYapilarAl(day),resolveEffectiveTip(day.tip,day.yapi_notu,day.baslik),day.yapi_notu,day.sure_dk,zones,athlete?.disiplin),
                     zones,
                     isYuruyus:day.isYuruyus,
-                    tip:day.tip,
+                    tip:resolveEffectiveTip(day.tip,day.yapi_notu,day.baslik),
                     savedOverrides:(planSnap?.rowOverrides||{})[day.date],
                     savedCuePatches:(planSnap?.overrideMap?.[day.date]?._cuePatch)||{},
                     actualOrtNabiz:split.kosuActuals.find(w=>parseFloat(w.ort_nabiz)>0)?.ort_nabiz||null,
