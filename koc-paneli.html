@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.03-0944 --><!DOCTYPE html>
+<!-- Version: v2026.07.03-1102 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.03-0944';
+const APP_VERSION='v2026.07.03-1102';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -6686,7 +6686,10 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
   // slowBoundarySec = 1000/lo_ms → zone'un en yavaş izin verilen pace'i (çok sn/km)
   // Zone içindeyse → yeşil | sınır dışı ≤tol → sarı | daha fazlası → kırmızı
   const paceValidation=(row)=>{
-    if(!row||row.type==='header'||row.rpe||row._isSprint) return null;
+    // NOT: row.rpe kontrolü Yürü-Koş için istisna edildi — bu antrenman tipinde koşu/yürüyüş
+    // satırları hem RPE hem hedef pace taşıyor (ikili rehberlik); önceden rpe alanı dolu
+    // olduğu için badge hiç üretilmiyordu (bkz. OP-YK1).
+    if(!row||row.type==='header'||(row.rpe&&tip!=='yuru_kos')||row._isSprint) return null;
     if(tip==='yaris') return null; // Yarışlarda pace kontrolü yapma
     if(tip==='serbest') return null; // Serbest Koşu: hedef yok — fallback _origPaceSec'e göre de validasyon yapma
     if(/[iı]sınma|isinma|soğuma|soguma/i.test(row.label||'')) return null; // Isınma/soğuma geçiş fazı — valide etme
@@ -6695,6 +6698,23 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
     if((pm==null||pm===0)&&(ps==null||ps===0)) return null;
     const enteredSec=(pm||0)*60+(ps||0);
     if(enteredSec<=0) return null;
+    // ── OP-YK1: Yürü-Koş yürüyüş (toparlanma) satırları ──────────────────────
+    // Sabit hedef pace (10:00/km) etrafında sabit toleransla değerlendir — koşu zone
+    // genişliği (Z1 sınırları) kullanılmaz, çünkü yürüyüş pace bandı koşu zone'undan
+    // tamamen farklı bir aralıkta (yürüyüş ~10:00/km iken Z1 koşu çok daha hızlı).
+    if(tip==='yuru_kos'&&row.type==='walk'){
+      const origPace=row._origPaceSec;
+      if(!origPace||origPace<=0) return null;
+      const diff=enteredSec-origPace; // pozitif = yavaş, negatif = hızlı
+      const absDiff=Math.abs(diff);
+      if(absDiff<=25) return{label:'Hedef Bölge',color:'#22c55e',bg:'#f0fdf4',icon:'✓'};
+      if(absDiff<=50) return diff>0
+        ?{label:'Biraz Yavaş',color:'#f59e0b',bg:'#fffbeb',icon:'▼'}
+        :{label:'Biraz Hızlı',color:'#f59e0b',bg:'#fffbeb',icon:'▲'};
+      return diff>0
+        ?{label:'Çok Yavaş',color:'#ef4444',bg:'#fef2f2',icon:'▼▼'}
+        :{label:'Çok Hızlı',color:'#ef4444',bg:'#fef2f2',icon:'▲▲'};
+    }
     // Zone sınırlarını kullan (lo_ms / hi_ms mevcut ise)
     const zi=row._origZIdx;
     const pz=zi!=null?zones?.paceZones?.[zi]:null;
