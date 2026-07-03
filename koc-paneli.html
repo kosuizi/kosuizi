@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.02-1809 --><!DOCTYPE html>
+<!-- Version: v2026.07.03-0944 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.02-1809';
+const APP_VERSION='v2026.07.03-0944';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -19373,8 +19373,167 @@ function MotivasyonTab({athlete,workouts,history}){
   );
 }
 
+// ── Dinlenme Uyarı Bandı — Koç Paneli (Pano) ve Koşu İzlerim'in ORTAK tek kaynağı ──
+// Girdi: workouts = seçili sporcunun antrenmanları, athlete = sporcu objesi,
+// races = tüm yarışlar, planSnap = ilgili haftanın plan_snapshots kaydı (formSnap içerir).
+// Bu fonksiyon değiştirilirse iki panel de otomatik aynı kalır — kopyalamayın.
+// ── Antrenman kaydedilir kaydedilmez formSnap'i (CTL/ATL/TSB/ACWR) hesaplayıp
+//    Firebase'e yazar — Pano ve Koşu İzlerim'in aynı anda güncel olmasını sağlar.
+//    Normalde bu hesap yalnızca Plan sekmesi açıkken (HaftalikPlanTab'ın effect'i)
+//    çalışıyordu; bu fonksiyon aynı hesabı antrenman girişi anında da tetikler.
+// athleteWorkouts: SADECE ilgili sporcunun güncel haliyle TÜM antrenmanları.
+// localSnap: elde zaten varsa (App state'inden) o anki plan_snapshots kaydı —
+//   weekEff/overrideMap/cancelledDays gibi diğer alanların kaybolmaması için temel alınır.
+//   Yoksa (null) Firebase'den taze okunur.
+async function persistFreshFormSnap(athlete,athleteWorkouts,races,localSnap){
+  if(!athlete?.id) return null;
+  try{
+    const weekKey=getWeekKey(0);
+    const hist=buildHistory(athleteWorkouts,athlete,races);
+    const last=hist[hist.length-1];
+    if(!last) return null;
+    const newFormSnap={ctl:last.ctl??null,atl:last.atl??null,tsb:last.tsb??null,acwr:last.acwr??null,date:last.date||null};
+    const baseSnap=localSnap||(await fbGet('plan_snapshots/'+athlete.id+'/'+weekKey))||null;
+    const ex=baseSnap?.formSnap;
+    if(ex&&ex.ctl===newFormSnap.ctl&&ex.atl===newFormSnap.atl&&ex.tsb===newFormSnap.tsb&&ex.acwr===newFormSnap.acwr&&ex.date===newFormSnap.date){
+      return baseSnap; // değişiklik yok — gereksiz yazma yapma
+    }
+    const merged={...(baseSnap||{}),formSnap:newFormSnap};
+    await fbSet('plan_snapshots/'+athlete.id+'/'+weekKey,stripUndefined(merged));
+    return merged;
+  }catch(e){console.warn('formSnap anında güncelleme hatası:',e);return null;}
+}
+
+function RestWarningBanner({workouts,athlete,races,planSnap}){
+  if(!athlete) return null;
+  // Veri hazırlığı — CTL/ATL/TSB/ACWR planSnap.formSnap'ten (Koç paneli yazar, buildHistory çalıştırılmaz)
+  const _formSnap=planSnap?.formSnap||null;
+  const _tsb=_formSnap?.tsb??null;
+  const _acwr=_formSnap?.acwr??null;
+
+  // Toparlanma süresi — tüm son antrenmanlar birleştirilir (aynı gün birden fazla olabilir)
+  const _sortedW=[...(workouts||[])].sort((a,b)=>new Date(b.date)-new Date(a.date));
+  let _kalanSaat=0;
+  try{
+    const _merged=calcMergedRecovery(_sortedW,athlete);
+    if(_merged) _kalanSaat=_merged.kalanSaat;
+  }catch(e){}
+
+  // Faz (yarış takviminden)
+  const _athRaceIdsW=(athlete.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
+  const _athRacesW=(races||[]).filter(r=>_athRaceIdsW.includes(r.id));
+  const {primary:_nextRaceW}=selectRaces(athlete,_athRacesW);
+  const _phase=calcPhase(localDateStr(new Date()),_nextRaceW?.tarih,_nextRaceW?.prep_weeks,_nextRaceW||{});
+
+  // Arka arkaya antrenman sayısı (bugün dahil geriye doğru)
+  let _consec=0;
+  for(let _ci=0;_ci<8;_ci++){
+    const _cd=new Date();_cd.setDate(_cd.getDate()-_ci);
+    if((workouts||[]).some(w=>w.date===localDateStr(_cd))) _consec++;
+    else break;
+  }
+
+  // ── Uyarı seviyesi belirle (en yüksek seviye kazanır) ────────────────
+  let lvl=0,icon='',title='',text='',bg='',border='',titleClr='';
+
+  // SEVİYE 3 — Kritik
+  const _critCount=[_kalanSaat>36,_acwr!=null&&_acwr>1.5,_tsb!=null&&_tsb<-25].filter(Boolean).length;
+  if(_phase==='Yarış Sonrası'){
+    lvl=3;icon='🛑';title='Yarış Sonrası Toparlanma';
+    text='Yarış sonrası toparlanma dönemindesin. İlk 48–72 saat kolay hareket, sonrası tam dinlenme. Bir sonraki antrenman bloğuna acele etme.';
+    bg='var(--danger-bg)';border='var(--danger)';titleClr='var(--danger)';
+  } else if(_critCount>=2||(_critCount>=1&&_kalanSaat>36)){
+    lvl=3;icon='🛑';title='Yüksek Stres — Dinlenme Gerekli';
+    text='Vücudun yüksek stres altında. Bu aşamada ekstra antrenman yarardan çok zarar verir — bugün ya da yarın mutlaka tam dinlenme.';
+    bg='var(--danger-bg)';border='var(--danger)';titleClr='var(--danger)';
+  } else if(_kalanSaat>36){
+    lvl=3;icon='🛑';title='Ciddi Yorgunluk';
+    text='Vücudun yüksek stres altında. Bu aşamada ekstra antrenman yarardan çok zarar verir — bugün ya da yarın mutlaka tam dinlenme.';
+    bg='var(--danger-bg)';border='var(--danger)';titleClr='var(--danger)';
+  } else if(_acwr!=null&&_acwr>1.5){
+    lvl=3;icon='🛑';title='Yük Aşırı Yüksek';
+    text='Vücudun yüksek stres altında. Bu aşamada ekstra antrenman yarardan çok zarar verir — bugün ya da yarın mutlaka tam dinlenme.';
+    bg='var(--danger-bg)';border='var(--danger)';titleClr='var(--danger)';
+  } else if(_tsb!=null&&_tsb<-25){
+    lvl=3;icon='🛑';title='Aşırı Yorgunluk';
+    text='Vücudun yüksek stres altında. Bu aşamada ekstra antrenman yarardan çok zarar verir — bugün ya da yarın mutlaka tam dinlenme.';
+    bg='var(--danger-bg)';border='var(--danger)';titleClr='var(--danger)';
+  }
+
+  // SEVİYE 2 — Uyarı
+  if(lvl<2){
+    if(_kalanSaat>12&&_kalanSaat<=36){
+      lvl=2;icon='⚠️';title='Toparlanma Devam Ediyor';
+      text='Kasların yeniden yapılanma sürecinde. Sıradaki antrenman için tam dinlenmiş olmak performansını %10–15 artırır.';
+      bg='var(--warn-bg)';border='var(--warn)';titleClr='var(--warn)';
+    } else if(_acwr!=null&&_acwr>1.3){
+      lvl=2;icon='⚠️';title='Yüksek Haftalık Yük';
+      text='Bu haftaki yük son 4 haftanın ortalamasının belirgin üzerinde. Hafta içi ekstra bir dinlenme günü sakatlık riskini ciddi ölçüde düşürür.';
+      bg='var(--warn-bg)';border='var(--warn)';titleClr='var(--warn)';
+    } else if(_consec>=3){
+      lvl=2;icon='⚠️';title=_consec+' Gündür Arka Arkaya Antrenman';
+      text='Son '+_consec+' gündür arka arkaya çalıştın. Bir dinlenme veya çapraz antrenman günü kaslara yeniden yapılanma fırsatı verir.';
+      bg='var(--warn-bg)';border='var(--warn)';titleClr='var(--warn)';
+    }
+  }
+
+  // SEVİYE 1 — Bilgi
+  if(lvl<1){
+    if(_kalanSaat>0&&_kalanSaat<=12){
+      lvl=1;icon='ℹ️';title='Toparlanma Süreci';
+      text='Son antrenmandan toparlanıyorsun. Yeterli uyku ve sıvı alımı süreci hızlandırır.';
+      bg='var(--info-bg)';border='var(--info)';titleClr='var(--info)';
+    } else if(_phase==='Taper'){
+      lvl=1;icon='🎯';title='Taper — Dinlenme Formunu Açığa Çıkarıyor';
+      text='Yarış öncesi azaltma dönemindeyiz. Daha az çalışmak formunu açığa çıkarıyor — dinlenme antrenmanın bir parçası.';
+      bg='var(--info-bg)';border='var(--info)';titleClr='var(--info)';
+    }
+  }
+
+  if(lvl===0) return null;
+
+  return React.createElement('div',{style:{
+    background:bg,
+    border:'1px solid '+border,
+    borderLeft:'4px solid '+border,
+    borderRadius:'var(--radius-lg)',
+    padding:'14px 16px',
+    marginBottom:16,
+    display:'flex',alignItems:'flex-start',gap:12
+  }},
+    React.createElement('div',{style:{fontSize:22,flexShrink:0,marginTop:1}},icon),
+    React.createElement('div',null,
+      React.createElement('div',{style:{fontSize:13,fontWeight:700,color:titleClr,marginBottom:3}},title),
+      React.createElement('div',{style:{fontSize:12,color:'var(--text-primary)',lineHeight:1.6}},text),
+      React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',marginTop:6,fontStyle:'italic'}},
+        '⏱ Tahmini süre — Yük, tür, D+ ve CTL bandınıza göre hesaplanır. Uyku kalitesi, beslenme ve HRV bu süreyi değiştirebilir.'
+      )
+    )
+  );
+}
+
 function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
   if(!athlete)return React.createElement('div',{className:'empty'},'Sporcu seçilmedi.');
+
+  // ── Dinlenme Uyarı Bandı verisi — Koşu İzlerim ile birebir aynı kaynak ──────
+  // App seviyesindeki `planSnap` prop'u yalnızca Plan sekmesi bu oturumda ziyaret
+  // edilmişse dolu olur. Banner her zaman doğru olsun diye haftanın snapshot'ı
+  // burada, Koşu İzlerim'in yaptığı gibi, doğrudan Firebase'den ayrıca okunur.
+  const [restBandSnap,setRestBandSnap]=useState(null);
+  useEffect(()=>{
+    let cancelled=false;
+    if(!athlete?.id){setRestBandSnap(null);return;}
+    fbGet('plan_snapshots/'+athlete.id+'/'+getWeekKey(0))
+      .then(s=>{if(!cancelled)setRestBandSnap(s||null);})
+      .catch(()=>{if(!cancelled)setRestBandSnap(null);});
+    return()=>{cancelled=true;};
+  },[athlete?.id]);
+  // Aynı oturum içinde planSnap App seviyesinde güncellenirse (örn. Ekle sekmesinden
+  // antrenman kaydedilip formSnap anında hesaplandığında, ya da Plan sekmesi ziyaret
+  // edildiğinde) banner'ı yeniden fetch beklemeden anında senkronize et.
+  useEffect(()=>{
+    if(planSnap) setRestBandSnap(planSnap);
+  },[planSnap]);
   const last=history[history.length-1];
   // Bugün ve yarının planı koç tarafından iletildi mi?
   const todayDashStr=(()=>{const d=new Date();return d.toISOString().slice(0,10);})();
@@ -19458,6 +19617,9 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
   ].filter(m=>profHist.some(s=>s[m.key]!=null&&s[m.key]!==''));
 
   return React.createElement('div',null,
+
+    // ── Dinlenme Uyarı Bandı — Koşu İzlerim ile birebir aynı ──────────────
+    RestWarningBanner({workouts,athlete,races,planSnap:restBandSnap}),
 
     // Faz + yarış + hazırlık skoru
     (last?.phase||nextRace||athlete?.antrenman_amaci)&&React.createElement('div',{className:'card',style:{marginBottom:12,padding:'12px 16px'}},
@@ -22444,12 +22606,21 @@ function App(){
         const updatedWorkouts=[...workouts,{...w,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:mergedHedef}];
         setWorkouts(updatedWorkouts);
         // O gün otomatik iptal edildiyse cancelledDays'ten çıkar — plan kilidine dokunma
+        let baseSnapForForm=(selId===w.athleteId)?planSnap:null;
         if(planSnap?.cancelledDays?.[w.date]){
           const newCancelled={...planSnap.cancelledDays};delete newCancelled[w.date];
           const newOverride={...planSnap.overrideMap};delete newOverride[w.date];
           const updSnap={...planSnap,cancelledDays:newCancelled,overrideMap:newOverride};
           setPlanSnapApp(updSnap);
           fbSet(`plan_snapshots/${ath?.id}/${planSnap.weekKey}`,updSnap).catch(()=>{});
+          baseSnapForForm=updSnap;
+        }
+        // ── Antrenman kaydedilir kaydedilmez CTL/ATL/TSB/ACWR'ı anında hesapla ve
+        //    Firebase'e yaz — Pano ve Koşu İzlerim aynı anda güncel olsun.
+        if(ath){
+          const athWksNew=updatedWorkouts.filter(x=>x.athleteId===ath.id);
+          persistFreshFormSnap(ath,athWksNew,races,baseSnapForForm)
+            .then(merged=>{if(merged&&selId===ath.id)setPlanSnapApp(merged);});
         }
       },athlete,athletes,selId,onSelChange:setSelId,allHistory,workouts,races,testPlanlar}),
       tab==='antrenmanlar'&&React.createElement(AntrenmanlarTab,{athlete}),
@@ -23697,113 +23868,8 @@ function SporcuPlanView(){
       })(),
 
 
-      // ── Dinlenme Uyarı Bandı ─────────────────────────────────────────────────
-      (()=>{
-        // Veri hazırlığı — CTL/ATL/TSB/ACWR planSnap.formSnap'ten (Koç paneli yazar, buildHistory çalıştırılmaz)
-        const _formSnap=planSnap?.formSnap||null;
-        const _tsb=_formSnap?.tsb??null;
-        const _acwr=_formSnap?.acwr??null;
-
-        // Toparlanma süresi — tüm son antrenmanlar birleştirilir (aynı gün birden fazla olabilir)
-        const _sortedW=[...workouts].sort((a,b)=>new Date(b.date)-new Date(a.date));
-        let _kalanSaat=0;
-        try{
-          const _merged=calcMergedRecovery(_sortedW,athlete);
-          if(_merged) _kalanSaat=_merged.kalanSaat;
-        }catch(e){}
-
-        // Faz (yarış takviminden)
-        const _athRaceIdsW=(athlete.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
-        const _athRacesW=(races||[]).filter(r=>_athRaceIdsW.includes(r.id));
-        const {primary:_nextRaceW}=selectRaces(athlete,_athRacesW);
-        const _phase=calcPhase(localDateStr(new Date()),_nextRaceW?.tarih,_nextRaceW?.prep_weeks,_nextRaceW||{});
-
-        // Arka arkaya antrenman sayısı (bugün dahil geriye doğru)
-        let _consec=0;
-        for(let _ci=0;_ci<8;_ci++){
-          const _cd=new Date();_cd.setDate(_cd.getDate()-_ci);
-          if(workouts.some(w=>w.date===localDateStr(_cd))) _consec++;
-          else break;
-        }
-
-        // ── Uyarı seviyesi belirle (en yüksek seviye kazanır) ────────────────
-        let lvl=0,icon='',title='',text='',bg='',border='',titleClr='';
-
-        // SEVİYE 3 — Kritik
-        const _critCount=[_kalanSaat>36,_acwr!=null&&_acwr>1.5,_tsb!=null&&_tsb<-25].filter(Boolean).length;
-        if(_phase==='Yarış Sonrası'){
-          lvl=3;icon='🛑';title='Yarış Sonrası Toparlanma';
-          text='Yarış sonrası toparlanma dönemindesin. İlk 48–72 saat kolay hareket, sonrası tam dinlenme. Bir sonraki antrenman bloğuna acele etme.';
-          bg='var(--danger-bg)';border='var(--danger)';titleClr='var(--danger)';
-        } else if(_critCount>=2||(_critCount>=1&&_kalanSaat>36)){
-          lvl=3;icon='🛑';title='Yüksek Stres — Dinlenme Gerekli';
-          text='Vücudun yüksek stres altında. Bu aşamada ekstra antrenman yarardan çok zarar verir — bugün ya da yarın mutlaka tam dinlenme.';
-          bg='var(--danger-bg)';border='var(--danger)';titleClr='var(--danger)';
-        } else if(_kalanSaat>36){
-          lvl=3;icon='🛑';title='Ciddi Yorgunluk';
-          text='Vücudun yüksek stres altında. Bu aşamada ekstra antrenman yarardan çok zarar verir — bugün ya da yarın mutlaka tam dinlenme.';
-          bg='var(--danger-bg)';border='var(--danger)';titleClr='var(--danger)';
-        } else if(_acwr!=null&&_acwr>1.5){
-          lvl=3;icon='🛑';title='Yük Aşırı Yüksek';
-          text='Vücudun yüksek stres altında. Bu aşamada ekstra antrenman yarardan çok zarar verir — bugün ya da yarın mutlaka tam dinlenme.';
-          bg='var(--danger-bg)';border='var(--danger)';titleClr='var(--danger)';
-        } else if(_tsb!=null&&_tsb<-25){
-          lvl=3;icon='🛑';title='Aşırı Yorgunluk';
-          text='Vücudun yüksek stres altında. Bu aşamada ekstra antrenman yarardan çok zarar verir — bugün ya da yarın mutlaka tam dinlenme.';
-          bg='var(--danger-bg)';border='var(--danger)';titleClr='var(--danger)';
-        }
-
-        // SEVİYE 2 — Uyarı
-        if(lvl<2){
-          if(_kalanSaat>12&&_kalanSaat<=36){
-            lvl=2;icon='⚠️';title='Toparlanma Devam Ediyor';
-            text='Kasların yeniden yapılanma sürecinde. Sıradaki antrenman için tam dinlenmiş olmak performansını %10–15 artırır.';
-            bg='var(--warn-bg)';border='var(--warn)';titleClr='var(--warn)';
-          } else if(_acwr!=null&&_acwr>1.3){
-            lvl=2;icon='⚠️';title='Yüksek Haftalık Yük';
-            text='Bu haftaki yük son 4 haftanın ortalamasının belirgin üzerinde. Hafta içi ekstra bir dinlenme günü sakatlık riskini ciddi ölçüde düşürür.';
-            bg='var(--warn-bg)';border='var(--warn)';titleClr='var(--warn)';
-          } else if(_consec>=3){
-            lvl=2;icon='⚠️';title=_consec+' Gündür Arka Arkaya Antrenman';
-            text='Son '+_consec+' gündür arka arkaya çalıştın. Bir dinlenme veya çapraz antrenman günü kaslara yeniden yapılanma fırsatı verir.';
-            bg='var(--warn-bg)';border='var(--warn)';titleClr='var(--warn)';
-          }
-        }
-
-        // SEVİYE 1 — Bilgi
-        if(lvl<1){
-          if(_kalanSaat>0&&_kalanSaat<=12){
-            lvl=1;icon='ℹ️';title='Toparlanma Süreci';
-            text='Son antrenmandan toparlanıyorsun. Yeterli uyku ve sıvı alımı süreci hızlandırır.';
-            bg='var(--info-bg)';border='var(--info)';titleClr='var(--info)';
-          } else if(_phase==='Taper'){
-            lvl=1;icon='🎯';title='Taper — Dinlenme Formunu Açığa Çıkarıyor';
-            text='Yarış öncesi azaltma dönemindeyiz. Daha az çalışmak formunu açığa çıkarıyor — dinlenme antrenmanın bir parçası.';
-            bg='var(--info-bg)';border='var(--info)';titleClr='var(--info)';
-          }
-        }
-
-        if(lvl===0) return null;
-
-        return React.createElement('div',{style:{
-          background:bg,
-          border:'1px solid '+border,
-          borderLeft:'4px solid '+border,
-          borderRadius:'var(--radius-lg)',
-          padding:'14px 16px',
-          marginBottom:16,
-          display:'flex',alignItems:'flex-start',gap:12
-        }},
-          React.createElement('div',{style:{fontSize:22,flexShrink:0,marginTop:1}},icon),
-          React.createElement('div',null,
-            React.createElement('div',{style:{fontSize:13,fontWeight:700,color:titleClr,marginBottom:3}},title),
-            React.createElement('div',{style:{fontSize:12,color:'var(--text-primary)',lineHeight:1.6}},text),
-            React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',marginTop:6,fontStyle:'italic'}},
-              '⏱ Tahmini süre — Yük, tür, D+ ve CTL bandınıza göre hesaplanır. Uyku kalitesi, beslenme ve HRV bu süreyi değiştirebilir.'
-            )
-          )
-        );
-      })(),
+      // ── Dinlenme Uyarı Bandı — Koç Panelindeki Pano ile birebir aynı ───────────
+      RestWarningBanner({workouts,athlete,races,planSnap}),
 
       // 3-sütun: [Durumum] [Antrenmanlarım] [Liderlik]
       (()=>{
