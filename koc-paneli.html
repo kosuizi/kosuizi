@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.04-2231 --><!DOCTYPE html>
+<!-- Version: v2026.07.05-0040 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.04-2231';
+const APP_VERSION='v2026.07.05-0040';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -5011,19 +5011,21 @@ function calcWorkoutZoneDist(w,athlete){
   if(w._rowZoneDist){
     const rzd=w._rowZoneDist;
     // v2+ : zaten o günün tarihsel LTHR/MHR'sine göre hesaplanmış — doğrudan güvenilir.
-    if(rzd._zoneCalcV>=2) return rzd;
-    // v2-öncesi (marker yok): o zamanki değil, hesaplama anındaki GÜNCEL profille
-    // hesaplanmıştı. Sporcunun LTHR/MHR/RHR'si o antrenman tarihinden bugüne
-    // değişmediyse sorun yok, eski hesap zaten doğrudur — güven. Değiştiyse
-    // güvenme, aşağıdaki tarihsel-doğru ortalama nabız tahminine düş.
+    if(rzd._zoneCalcV>=2) return {...rzd,_precise:true};
+    // v2-öncesi (marker yok): hesaplama anındaki GÜNCEL profille yapılmıştı.
+    // Sporcunun LTHR/MHR haftalık küçük revizyonlarla (~1-2 bpm) sürekli güncellendiği
+    // biliniyor — bu kadar küçük farklar bölge sınırlarını pratikte değiştirmez, bu
+    // yüzden TAM eşitlik yerine bir tolerans kullanılır. Sadece bu payı aşan gerçek
+    // bir profil değişikliğinde eski hesaba güvenilmez.
+    const PROFIL_TOLERANS_BPM=3;
     const athThen=athleteAtDate(athlete,w.date||'');
     const athNow=athlete||{};
-    const profileChanged=
-      (parseSayi(athThen?.lthr)||0)!==(parseSayi(athNow?.lthr)||0)||
-      (parseSayi(athThen?.mhr)||0)!==(parseSayi(athNow?.mhr)||0)||
-      (parseSayi(athThen?.rhr)||0)!==(parseSayi(athNow?.rhr)||0);
-    if(!profileChanged) return rzd;
-    // profil değişmiş + eski hesap → dikkate alma, fonksiyonun devamında yeniden hesaplanacak
+    const dLthr=Math.abs((parseSayi(athThen?.lthr)||0)-(parseSayi(athNow?.lthr)||0));
+    const dMhr =Math.abs((parseSayi(athThen?.mhr)||0) -(parseSayi(athNow?.mhr)||0));
+    const dRhr =Math.abs((parseSayi(athThen?.rhr)||0) -(parseSayi(athNow?.rhr)||0));
+    const profileChanged=dLthr>PROFIL_TOLERANS_BPM||dMhr>PROFIL_TOLERANS_BPM||dRhr>PROFIL_TOLERANS_BPM;
+    if(!profileChanged) return {...rzd,_precise:true};
+    // profil anlamlı ölçüde değişmiş + eski hesap → dikkate alma, aşağıda yeniden hesaplanacak
   }
 
   const durMin=(()=>{
@@ -5076,6 +5078,7 @@ function calcWorkoutZoneDist(w,athlete){
     totalMin:round1(durMin),
     lowPct:dist.low, highPct:dist.high, anaPct:dist.ana,
     _hrBased:true,
+    _precise:false,
   };
 }
 
@@ -5083,11 +5086,12 @@ function calcWorkoutZoneDist(w,athlete){
 function calcPeriodZoneDist(workouts,athlete,weeks=4){
   const cutoff=new Date();cutoff.setDate(cutoff.getDate()-weeks*7);
   const wks=workouts.filter(w=>new Date(w.date+'T12:00:00')>=cutoff);
-  let low=0,high=0,ana=0,total=0;
+  let low=0,high=0,ana=0,total=0,preciseMin=0;
   wks.forEach(w=>{
     const d=calcWorkoutZoneDist(w,athlete);
     if(!d)return;
     low+=d.lowMin;high+=d.highMin;ana+=d.anaMin;total+=d.totalMin;
+    if(d._precise) preciseMin+=d.totalMin;
   });
   if(total<1)return null;
   return{
@@ -5096,6 +5100,10 @@ function calcPeriodZoneDist(workouts,athlete,weeks=4){
     highPct:Math.round(high/total*100),
     anaPct:Math.round(ana/total*100),
     weeks,
+    // Pencere dakikalarının kaçı hassas (faz-bazlı, tarihsel doğru profille
+    // sınıflandırılmış) kaynaktan geldi — kalanı ortalama-nabız Gauss tahmini.
+    // evaluateSignals zone-kaynaklı kısıtlamaları buna göre kısar (bkz. ZONE_CONF_*).
+    confidencePct:Math.round(preciseMin/total*100),
   };
 }
 
@@ -10479,10 +10487,32 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
   const lowPct2w=z2.lowPct??lowPct;
   const hasZone2w=zoneDist2w!=null&&z2.lowPct!=null;
 
+  // ── Zone-kaynaklı kısıtlamalar için veri güveni eşikleri ───────────────────
+  // confidencePct: pencere dakikalarının kaçı hassas (faz-bazlı, tarihsel doğru
+  // profille sınıflandırılmış) kaynaktan geldi — kalanı ortalama-nabız Gauss
+  // tahmini (yapısal/interval antrenmanlarda gerçek dağılımdan sapabilir).
+  // FULL (≥70): tüm zone eşikleri (sınır/gri-bölge dahil) aktif.
+  // PARTIAL (≥40): yalnızca büyük/net sapma gösteren "kritik" eşikler aktif;
+  //   ince ayarlı sınır/gri-bölge eşikleri (ölçüm gürültüsüne daha duyarlı) pas geçilir.
+  // <40: zone-kaynaklı kısıtlama uygulanmaz (ACWR/TSB/mekanik/HRV sinyalleri etkilenmez).
+  // confidencePct alanı yoksa (eski format) geriye dönük uyumluluk için tam güven varsayılır.
+  const ZONE_CONF_FULL=70, ZONE_CONF_PARTIAL=40;
+  const conf4w=zoneDist4w?.confidencePct;
+  const conf2w=zoneDist2w?.confidencePct??conf4w;
+  const zone4wPartial=conf4w==null||conf4w>=ZONE_CONF_PARTIAL;
+  const zone4wFull   =conf4w==null||conf4w>=ZONE_CONF_FULL;
+  const zone2wFull   =conf2w==null||conf2w>=ZONE_CONF_FULL;
+
   let forceEasy=false, forceLow=false, preferLow=false, forceQuality=false;
   let planForceEasy=false, planPreferLow=false;
   let yModZone=1.0;
   const zoneReasons=[];
+
+  if(hasZone&&!zone4wPartial){
+    zoneReasons.push('ℹ️ Zone-kaynaklı kısıtlamalar bu dönem devre dışı — ölçüm güveni düşük (%'+conf4w+' hassas veri, 4 hafta).');
+  } else if(hasZone&&!zone4wFull){
+    zoneReasons.push('ℹ️ Zone ölçüm güveni orta düzeyde (%'+conf4w+' hassas, 4 hafta) — yalnızca kritik zone kısıtları aktif, sınır/gri-bölge kısıtları pas geçildi.');
+  }
 
   // ── Öncelik 1: Plan hedefi sinyalleri ──────────────────────────────────────
   // Plan motorundan gelen yapısal kısıtlar — sporcu seviyesi veya anlık fitness
@@ -10532,7 +10562,7 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
   const anaForceEasyEsik=isZirveFazı?28:20;
   const formuKotu=tsb<0||acwr>1.1;
 
-  if(hasZone){
+  if(hasZone&&zone4wPartial){
     if(anaPct>anaForceEasyEsik){
       forceEasy=true;
       zoneReasons.push('Anaerobik yük kronik olarak çok yüksek (%'+anaPct+' > %'+anaForceEasyEsik+') — zorunlu toparlanma, yoğun antrenman engellendi.');
@@ -10553,7 +10583,7 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
   if(!forceEasy){
     if(mechKardioDanger){ forceLow=true; }
 
-    if(hasZone){
+    if(hasZone&&zone4wPartial){
       // Aerobik taban kritik eşiğin altı
       if(lowPct<55){
         forceLow=true;
@@ -10564,26 +10594,30 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
         forceLow=true;
         zoneReasons.push('Kronik eşik fazlalığı (%'+highPct+' > %35) — tempo/eşik yükü riskli, aerobik öncelikli.');
       }
-      // Anaerobik birikim + yük artışı birlikte
-      if(anaPct>15&&acwr>1.05){
-        forceLow=true;
-        zoneReasons.push('Anaerobik birikim (%'+anaPct+') + yük artışı (ACWR '+acwr.toFixed(2)+') — yoğun antrenman aerobiğe indirildi.');
-      }
-      // Düşük taban + yüksek ana birlikte (çift sorun)
-      if(lowPct>=55&&lowPct<70&&anaPct>12){
-        forceLow=true;
-        zoneReasons.push('Düşük aerobik taban (%'+lowPct+') + yüksek anaerobik yük (%'+anaPct+') — aerobik öncelikli.');
-      }
-      // Gri bölge tuzağı: yüksek eşik + yetersiz taban
-      if(highPct>25&&highPct<=35&&lowPct<70){
-        forceLow=true;
-        zoneReasons.push('Gri bölge tuzağı: eşik yükü yüksek (%'+highPct+') + aerobik taban yetersiz (%'+lowPct+') — aerobik öncelikli.');
+      // Aşağıdaki 3 tetikleyici ince ayarlı sınır/gri-bölge kombinasyonları —
+      // ölçüm gürültüsüne daha duyarlı, bu yüzden tam güven (%70+) şart.
+      if(zone4wFull){
+        // Anaerobik birikim + yük artışı birlikte
+        if(anaPct>15&&acwr>1.05){
+          forceLow=true;
+          zoneReasons.push('Anaerobik birikim (%'+anaPct+') + yük artışı (ACWR '+acwr.toFixed(2)+') — yoğun antrenman aerobiğe indirildi.');
+        }
+        // Düşük taban + yüksek ana birlikte (çift sorun)
+        if(lowPct>=55&&lowPct<70&&anaPct>12){
+          forceLow=true;
+          zoneReasons.push('Düşük aerobik taban (%'+lowPct+') + yüksek anaerobik yük (%'+anaPct+') — aerobik öncelikli.');
+        }
+        // Gri bölge tuzağı: yüksek eşik + yetersiz taban
+        if(highPct>25&&highPct<=35&&lowPct<70){
+          forceLow=true;
+          zoneReasons.push('Gri bölge tuzağı: eşik yükü yüksek (%'+highPct+') + aerobik taban yetersiz (%'+lowPct+') — aerobik öncelikli.');
+        }
       }
     }
   }
 
   // ── Öncelik 4: preferLow (yumuşak baskı — yoğun engelle, aerobik/kolay geçer) ──
-  if(!forceEasy&&!forceLow&&hasZone){
+  if(!forceEasy&&!forceLow&&hasZone&&zone4wFull){
     let sarıSayac=0;
     if(lowPct>=55&&lowPct<70)  sarıSayac++;
     if(highPct>25&&highPct<=35) sarıSayac++;
@@ -10647,7 +10681,7 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
   const isTaper=planPhaseNow==='Taper';
   const isZirveActive=planPhaseNow==='Zirve'&&!isPlanRecoveryNow;
 
-  if(!forceEasy&&!forceLow&&!preferLow&&!isTaper&&(hasZone||hasZone2w)){
+  if(!forceEasy&&!forceLow&&!preferLow&&!isTaper&&(hasZone||hasZone2w)&&zone2wFull){
     const anaEsik=isZirveActive?5:3;
     const anaEksik2w=anaPct2w<anaEsik&&lowPct2w<85;
     if(anaEksik2w&&tsb>5&&acwr<1.1&&!kaliteliYapildi){
@@ -10659,7 +10693,7 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
   }
 
   // ── Zone kaynaklı yMod üst sınırı ──────────────────────────────────────────
-  if(hasZone){
+  if(hasZone&&zone4wPartial){
     if(anaPct>20)        yModZone=Math.min(yModZone,0.80);
     else if(anaPct>15)   yModZone=Math.min(yModZone,0.85);
     else if(anaPct>12)   yModZone=Math.min(yModZone,0.90);
