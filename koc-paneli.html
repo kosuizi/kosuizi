@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.04-1340 --><!DOCTYPE html>
+<!-- Version: v2026.07.04-2004 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.04-1340';
+const APP_VERSION='v2026.07.04-2004';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -14842,15 +14842,30 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
 
     // Dinlenme günleriyle swap'a izin ver (iptal edilmiş günler dahil)
     // Antrenman verilerini ayıkla — overrideMap'ten ham veri öncelikli (tüm alanlar korunur)
+    // ── BUGFIX (v2026.07.04-2004): `day` parametresi `plan` useMemo'sundan geliyor;
+    // o useMemo, gün artık sporcunun kosu_gunleri/capraz_gunleri listesinde değilse VE
+    // manualOverrides'ta işaretli değilse VE gerçek antrenman kaydı yoksa, Firebase'deki
+    // gerçek veriden BAĞIMSIZ olarak day.tip='dinlenme' döndürüyor (bkz. plan useMemo,
+    // "Antrenman günü değilse VE manuel atanmamışsa VE gerçek kayıt yoksa → dinlenme").
+    // Swap önceden SADECE yapilar için ham overrideMap'i önceliklendiriyordu; tip/baslik/
+    // sure_dk/yukHedef hâlâ bu ekrana-özel "zorla dinlenme" değerinden okunuyordu. Sonuç:
+    // kaynak günde Firebase'de gerçek bir antrenman kayıtlı olsa bile, ekran onu (yanlışlıkla)
+    // dinlenme gösteriyorsa, swap bu YANLIŞ dinlenme durumunu hedef güne taşıyordu — asıl
+    // antrenman verisi kaybolmuş gibi görünüyordu. Düzeltme: ham overrideMap'te gerçek
+    // antrenman verisi (dinlenme değil VEYA yapılar dolu) varsa TÜM alanlarda ona öncelik ver.
     const curSnap=planSnapRef.current||{};
     const extractData=(day)=>{
       const rawOv=(curSnap.overrideMap||{})[day.date];
+      const rawHasRealData=!!rawOv&&(rawOv.tip!=='dinlenme'||(rawOv.yapilar&&rawOv.yapilar.length>0));
       const baseYapilar=rawOv?.yapilar||day.yapilar||[];
       return {
-        tip:day.tip, baslik:day.baslik, sure_dk:day.sure_dk,
-        yukHedef:day.yukHedef||0, isKosuCapraz:day.isKosuCapraz||false,
+        tip:rawHasRealData?rawOv.tip:day.tip,
+        baslik:rawHasRealData?(rawOv.baslik||day.baslik):day.baslik,
+        sure_dk:rawHasRealData?(rawOv.sure_dk??day.sure_dk):day.sure_dk,
+        yukHedef:rawHasRealData?(rawOv.yukHedef??day.yukHedef??0):(day.yukHedef||0),
+        isKosuCapraz:rawHasRealData?(rawOv.isKosuCapraz??day.isKosuCapraz??false):(day.isKosuCapraz||false),
         yapilar:baseYapilar.map(y=>({...y})), // spread: _rows, _yaris vb. korunur
-        yapi_notu:day.yapi_notu||rawOv?.yapi_notu||'',
+        yapi_notu:(rawHasRealData?rawOv.yapi_notu:null)??day.yapi_notu??rawOv?.yapi_notu??'',
         approved:false // swap sonrası onay sıfırla
       };
     };
