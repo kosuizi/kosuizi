@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.04-2004 --><!DOCTYPE html>
+<!-- Version: v2026.07.04-2133 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.04-2004';
+const APP_VERSION='v2026.07.04-2133';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -14840,7 +14840,26 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       return;
     }
 
-    // Dinlenme günleriyle swap'a izin ver (iptal edilmiş günler dahil)
+    // Dinlenme günleriyle swap ARTIK ENGELLENİR — sadece iki antrenman günü
+    // arasında yer değiştirilebilir. Gerekçe: swap'ın antrenman/dinlenme
+    // desenini değiştirmesi, sporcunun kalıcı kosu_gunleri/capraz_gunleri
+    // profiliyle (anket + sporcu kartı) tutarsızlık yaratıyordu. Bu kısıtla
+    // profile hiç dokunmaya gerek kalmıyor — swap sadece hangi antrenmanın
+    // hangi günde yapılacağını değiştirir, antrenman/dinlenme dağılımını değil.
+    // (v2026.07.04-2133)
+    const curSnap=planSnapRef.current||{};
+    const isEffectivelyRestDay=(day)=>{
+      const rawOv=(curSnap.overrideMap||{})[day.date];
+      const rawHasRealData=!!rawOv&&(rawOv.tip!=='dinlenme'||(rawOv.yapilar&&rawOv.yapilar.length>0));
+      const effectiveTip=rawHasRealData?rawOv.tip:day.tip;
+      return effectiveTip==='dinlenme';
+    };
+    if(isEffectivelyRestDay(sourceDay)||isEffectivelyRestDay(targetDay)){
+      setReviewMsg('Yer değiştirme sadece iki antrenman günü arasında yapılabilir. Dinlenme günü ile antrenman yer değiştirilemez.');
+      setSwapSource(null);
+      return;
+    }
+
     // Antrenman verilerini ayıkla — overrideMap'ten ham veri öncelikli (tüm alanlar korunur)
     // ── BUGFIX (v2026.07.04-2004): `day` parametresi `plan` useMemo'sundan geliyor;
     // o useMemo, gün artık sporcunun kosu_gunleri/capraz_gunleri listesinde değilse VE
@@ -14853,7 +14872,6 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     // dinlenme gösteriyorsa, swap bu YANLIŞ dinlenme durumunu hedef güne taşıyordu — asıl
     // antrenman verisi kaybolmuş gibi görünüyordu. Düzeltme: ham overrideMap'te gerçek
     // antrenman verisi (dinlenme değil VEYA yapılar dolu) varsa TÜM alanlarda ona öncelik ver.
-    const curSnap=planSnapRef.current||{};
     const extractData=(day)=>{
       const rawOv=(curSnap.overrideMap||{})[day.date];
       const rawHasRealData=!!rawOv&&(rawOv.tip!=='dinlenme'||(rawOv.yapilar&&rawOv.yapilar.length>0));
@@ -16111,7 +16129,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
             const isCancelledDay=!!cancelledDays[day.date];
             const isYapilmamis=!hasAnyActual&&!isCancelledDay&&day.isPast&&!day.isToday&&day.tip!=='dinlenme';
             const isSwapSource=swapSource?.date===day.date;
-            const isSwapTarget=swapSource&&swapSource.date!==day.date&&!day.isPast;
+            const isSwapTarget=swapSource&&swapSource.date!==day.date&&!day.isPast&&day.tip!=='dinlenme';
             return React.createElement('div',{key:day.date,style:{
               borderLeft:'3px solid '+(isSwapSource?'var(--warn)':isDone?'var(--success)':isPartial?'var(--warn)':(isCancelledDay||isYapilmamis)?'var(--danger)':tipColor(day.tip)),
               paddingLeft:10,
@@ -16456,8 +16474,9 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     style:{display:'block',width:'100%',marginTop:3,padding:'2px 0',fontSize:9,background:'var(--info-bg)',border:'1px solid var(--info)',borderRadius:'var(--radius)',color:'var(--info)',cursor:'pointer'},
                     onClick:function(){setManuelAtaGun(day.date);}
                   },'Ata'),
-                  // Swap butonu — geçmiş ve yarış günleri hariç
-                  !day.isPast&&!isRaceDay&&React.createElement('button',{
+                  // Swap butonu — geçmiş, yarış ve dinlenme günleri hariç
+                  // (dinlenme günleri ile swap engellenir; bkz. handleSwapDays guard)
+                  !day.isPast&&!isRaceDay&&day.tip!=='dinlenme'&&React.createElement('button',{
                     style:{display:'block',width:'100%',marginTop:3,padding:'2px 0',fontSize:9,
                       background:swapSource?.date===day.date?'var(--warn)':'transparent',
                       border:'1px solid '+(swapSource?.date===day.date?'var(--warn)':'var(--border)'),
