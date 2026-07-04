@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.04-2142 --><!DOCTYPE html>
+<!-- Version: v2026.07.04-2231 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.04-2142';
+const APP_VERSION='v2026.07.04-2231';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -4994,7 +4994,12 @@ function computeZoneDistFromRows(baseRows,rowOverrides,zones,aralikOv){
     lowPct:Math.round(low/total*100),
     highPct:Math.round(high/total*100),
     anaPct:Math.round(ana/total*100),
-    _fromRows:true
+    _fromRows:true,
+    // v2: zones parametresi artık çağıran taraftan o günün TARİHSEL profiline göre
+    // (athleteAtDate) hesaplanmış olarak geliyor — bkz. calcWorkoutZoneDist'teki
+    // v2-öncesi güvenlik kontrolü. Bu marker olmayan kayıtlar güncel (o anki) LTHR
+    // ile hesaplanmıştı ve profil sonradan değiştiyse yanlış bölgeye düşmüş olabilir.
+    _zoneCalcV:2
   };
 }
 
@@ -5003,7 +5008,23 @@ function computeZoneDistFromRows(baseRows,rowOverrides,zones,aralikOv){
 // Öncelik: _rowZoneDist (aşama bazlı bpm) → ort_nabiz+maks_nabiz → hariç tut
 function calcWorkoutZoneDist(w,athlete){
   // 1. Aşama bazlı kesin dağılım (reçete tablosundan — en hassas)
-  if(w._rowZoneDist) return w._rowZoneDist;
+  if(w._rowZoneDist){
+    const rzd=w._rowZoneDist;
+    // v2+ : zaten o günün tarihsel LTHR/MHR'sine göre hesaplanmış — doğrudan güvenilir.
+    if(rzd._zoneCalcV>=2) return rzd;
+    // v2-öncesi (marker yok): o zamanki değil, hesaplama anındaki GÜNCEL profille
+    // hesaplanmıştı. Sporcunun LTHR/MHR/RHR'si o antrenman tarihinden bugüne
+    // değişmediyse sorun yok, eski hesap zaten doğrudur — güven. Değiştiyse
+    // güvenme, aşağıdaki tarihsel-doğru ortalama nabız tahminine düş.
+    const athThen=athleteAtDate(athlete,w.date||'');
+    const athNow=athlete||{};
+    const profileChanged=
+      (parseSayi(athThen?.lthr)||0)!==(parseSayi(athNow?.lthr)||0)||
+      (parseSayi(athThen?.mhr)||0)!==(parseSayi(athNow?.mhr)||0)||
+      (parseSayi(athThen?.rhr)||0)!==(parseSayi(athNow?.rhr)||0);
+    if(!profileChanged) return rzd;
+    // profil değişmiş + eski hesap → dikkate alma, fonksiyonun devamında yeniden hesaplanacak
+  }
 
   const durMin=(()=>{
     const s=parseInt(w.sure_sa||0)*3600+parseInt(w.sure_dk||0)*60+parseInt(w.sure_sn||0);
@@ -6421,7 +6442,12 @@ function dangerHighLabel(hr){
   return hr?.id==='Z5c' ? 'Tehlikeli Nabız' : 'Aşırı Yüksek Nabız';
 }
 
-function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOverrides, onSaveDetay, readOnly, originalCueOnly, savedCuePatches, actualOrtNabiz}){
+function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverrides, onSaveOverrides, onSaveDetay, readOnly, originalCueOnly, savedCuePatches, actualOrtNabiz}){
+  // measureZones: girilen gerçek bpm'i bölgeye (Z1-Z5c) yerleştirirken kullanılacak
+  // zone sınırları — o antrenmanın TARİHİNDEKİ LTHR/MHR'ye göre hesaplanmış olmalı.
+  // Verilmezse (readOnly görünümler, eski çağrılar) 'zones' (güncel profil) ile
+  // geriye dönük uyumluluk sağlanır — hedef pace/renk gösterimi hep 'zones' kullanır.
+  const _mZones=measureZones||zones;
   const [customCues, setCustomCues] = useState(_cueCache.data||{});
   const [editingLabel, setEditingLabel] = useState(null);
   const [editText, setEditText] = useState('');
@@ -6830,7 +6856,7 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
       }
     }
     setRowOverrides(newRowOv);
-    if(onSaveOverrides){const __zd=computeZoneDistFromRows(baseRows,newRowOv,zones,aralikOverrides);onSaveOverrides({...newRowOv,__aralik:aralikOverrides,...(__zd?{__zoneDist:__zd}:{})});}
+    if(onSaveOverrides){const __zd=computeZoneDistFromRows(baseRows,newRowOv,_mZones,aralikOverrides);onSaveOverrides({...newRowOv,__aralik:aralikOverrides,...(__zd?{__zoneDist:__zd}:{})});}
   };
 
   // Hücre güncelleme: mesafe, pm veya ps değişince diğerlerini hesapla
@@ -6884,7 +6910,7 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
     const newOverrides={...rowOverrides,[rowIdx]:{...(rowOverrides[rowIdx]||{}), ...origFields, ...upd}};
     setRowOverrides(newOverrides);
     setEditCell(null);
-    if(onSaveOverrides){const __zd=computeZoneDistFromRows(baseRows,newOverrides,zones,aralikOverrides);onSaveOverrides({...newOverrides,__aralik:aralikOverrides,...(__zd?{__zoneDist:__zd}:{})});}
+    if(onSaveOverrides){const __zd=computeZoneDistFromRows(baseRows,newOverrides,_mZones,aralikOverrides);onSaveOverrides({...newOverrides,__aralik:aralikOverrides,...(__zd?{__zoneDist:__zd}:{})});}
   };
 
   // Aralıklar editörü için per-rep cell güncelleme
@@ -6951,7 +6977,7 @@ function ReceteTablosu({yapilar, zones, isYuruyus, tip, savedOverrides, onSaveOv
         ...upd
       };
       // Firebase'e yaz: rowOverrides + __aralik birleşimi
-      if(onSaveOverrides){const __zd=computeZoneDistFromRows(baseRows,rowOverrides,zones,next);onSaveOverrides({...rowOverrides,__aralik:next,...(__zd?{__zoneDist:__zd}:{})});}
+      if(onSaveOverrides){const __zd=computeZoneDistFromRows(baseRows,rowOverrides,_mZones,next);onSaveOverrides({...rowOverrides,__aralik:next,...(__zd?{__zoneDist:__zd}:{})});}
       return next;
     });
   };
@@ -16199,6 +16225,10 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   React.createElement(ReceteTablosu,{
                     yapilar:injectRowsFromTpl(kosuYapilarAl(day),resolveEffectiveTip(day.tip,day.yapi_notu,day.baslik),day.yapi_notu,day.sure_dk,zones,athlete?.disiplin),
                     zones,
+                    // Gerçekleşen bpm'i bölgeye yerleştirirken o GÜNÜN tarihindeki LTHR/MHR
+                    // kullanılır — güncel profil değil. LTHR sonradan değiştiyse geçmiş
+                    // antrenmanın yük yoğunluğu dağılımı yanlış bölgeye kaymasın diye.
+                    measureZones:calcZones(athleteAtDate(athlete,day.date)),
                     isYuruyus:day.isYuruyus,
                     tip:resolveEffectiveTip(day.tip,day.yapi_notu,day.baslik),
                     savedOverrides:(planSnap?.rowOverrides||{})[day.date],
@@ -16622,6 +16652,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                 (_KOSU_TIP_SET.has(day.tip)||day.isKosuCapraz===true)&&React.createElement(ReceteTablosu,{
                   yapilar:injectRowsFromTpl(kosuYapilarAl(day),resolveEffectiveTip(day.tip,day.yapi_notu,day.baslik),day.yapi_notu,day.sure_dk,calcZones(athlete),athlete?.disiplin),
                   zones:calcZones(athlete),
+                  // Bkz. gün kartındaki aynı not — tarihsel LTHR/MHR ile ölçüm sınıflandırması
+                  measureZones:calcZones(athleteAtDate(athlete,day.date)),
                   isYuruyus:day.isYuruyus,
                   tip:resolveEffectiveTip(day.tip,day.yapi_notu,day.baslik),
                   savedOverrides:(planSnap?.rowOverrides||{})[day.date],
