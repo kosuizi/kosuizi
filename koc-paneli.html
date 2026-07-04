@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.03-2135 --><!DOCTYPE html>
+<!-- Version: v2026.07.04-1340 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.03-2135';
+const APP_VERSION='v2026.07.04-1340';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1993,6 +1993,41 @@ const FB_PASSWORD = 'Kz#9mPw$vL2qR8!x';           // Firebase Console'd aki şif
 let db=null;
 let _authReady=null; // Auth tamamlanınca resolve olan Promise
 
+// ── Tek-Oturum Kilidi (yalnızca Koç Paneli/App) ─────────────────────────────
+// Amaç: Panel aynı anda birden fazla sekme/cihazda açık kalırsa, bayat
+// sekmedeki eski `workouts`/`athletes`/... dizisi "tüm diziyi üzerine yaz"
+// senkronizasyonuyla (fbSet('wks',...) vb.) güncel veriyi ezmesin.
+// Çalışma şekli: Her sekme kendine rastgele bir SESSION_ID üretir, yüklenince
+// bunu `active_session` yoluna yazıp "ben aktifim" der (öncekini geçersiz
+// kılar). Firebase realtime dinleyicisiyle, kendi ID'sinden FARKLI bir ID
+// aktif olduğunda anlar ve `_sessionLocked=true` yaparak BU SEKMEDEN yapılan
+// TÜM fbSet() yazmalarını sessizce engeller (bkz. fbSet fonksiyonu altta).
+// NOT: SporcuAnketi / SporcuPlanView (sporcu PIN ile giriş yaptığı sayfalar)
+// bu kilidi hiç çağırmaz — sporcu anket girişleri bundan etkilenmez.
+const SESSION_ID=uid()+'_'+Date.now();
+let _sessionLocked=false;
+let _sessionListenerAttached=false;
+function attachSessionLock(onLockChange){
+  if(_sessionListenerAttached)return;
+  _sessionListenerAttached=true;
+  (async()=>{
+    try{
+      if(!db&&!initFirebase())return;
+      if(_authReady) await _authReady;
+      // Bu sekmeyi aktif oturum ilan et — açıksa önceki sekmeyi geçersiz kılar
+      await db.ref('active_session').set({id:SESSION_ID,ts:Date.now()});
+      // Başka bir sekme/cihaz aktif olursa bunu anlık yakala
+      db.ref('active_session').on('value',snap=>{
+        const v=snap.val();
+        if(v&&v.id&&v.id!==SESSION_ID){
+          _sessionLocked=true;
+          onLockChange&&onLockChange(true);
+        }
+      });
+    }catch(e){console.warn('Oturum kilidi kurulamadı:',e);}
+  })();
+}
+
 function initFirebase(){
   try{
     if(typeof firebase==='undefined')return false;
@@ -2038,6 +2073,10 @@ function stripUndefined(obj){
 
 // Firebase yazma — yoksa localStorage fallback
 async function fbSet(key,val){
+  if(_sessionLocked){
+    console.warn('[Oturum Kilidi] Bu sekme artık aktif oturum değil, yazma engellendi:',key);
+    return;
+  }
   if(!db&&!initFirebase()){
     lsSet(key,val);return;
   }
@@ -22398,7 +22437,11 @@ function App(){
   const [teamName,setTeamName]=useState('Koşu İzi');
   const [teamLogo,setTeamLogo]=useState('');
   const [showSettings,setShowSettings]=useState(false);
+  const [sessionLocked,setSessionLocked]=useState(false);
   const {pcView,zoom:pcZoom,toggle:togglePcView}=usePcView();
+
+  // Tek-oturum kilidini mümkün olduğunca erken bağla (veri yüklenmesini beklemeden)
+  useEffect(()=>{ attachSessionLock(setSessionLocked); },[]);
 
   useEffect(()=>{
     // Firebase'den yükle, yoksa localStorage'dan migration yap
@@ -22665,6 +22708,19 @@ function App(){
   );
 
   return React.createElement('div',null,
+    sessionLocked&&React.createElement('div',{style:{
+      position:'fixed',top:0,left:0,right:0,zIndex:99999,
+      background:'var(--danger)',color:'#fff',
+      padding:'10px 14px',display:'flex',alignItems:'center',justifyContent:'center',
+      gap:10,flexWrap:'wrap',fontSize:13,fontWeight:600,
+      boxShadow:'0 2px 8px rgba(0,0,0,0.2)'
+    }},
+      React.createElement('span',null,'🔒 Bu sekme başka bir cihaz/sekmede açıldığı için pasif hale geldi — buradaki değişiklikler artık kaydedilmiyor.'),
+      React.createElement('button',{
+        onClick:()=>window.location.reload(),
+        style:{background:'#fff',color:'var(--danger)',border:'none',borderRadius:6,padding:'4px 12px',fontWeight:700,cursor:'pointer'}
+      },'Sayfayı Yenile')
+    ),
     showSettings&&React.createElement('div',{className:'modal-bg',onClick:e=>{if(e.target.className==='modal-bg')setShowSettings(false)}},
       React.createElement('div',{className:'modal',style:{maxWidth:420}},
         React.createElement('div',{className:'modal-title'},
