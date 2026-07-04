@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.03-1553 --><!DOCTYPE html>
+<!-- Version: v2026.07.03-2135 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.03-1553';
+const APP_VERSION='v2026.07.03-2135';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1339,6 +1339,27 @@ async function fetchPaceComplianceScore(athlete,period){
     signals=extractFeedbackSignals(allSnaps,athlete).filter(s=>s.date>=cutoffStr);
   }
   return calcPaceComplianceScore(signals);
+}
+
+// ── Verilen Antrenmanı Yapabilme Puanı — Haftalık Trend ────────────────────────
+// fetchPaceComplianceScore() seçilen periyodun TÜMÜNÜ tek bir puana indirger;
+// bu fonksiyon her haftayı AYRI AYRI hesaplayıp dizi döner — trend grafiği içindir.
+// Veri kaynağı ve hesap mantığı birebir aynı (extractFeedbackSignals +
+// calcPaceComplianceScore) — ayrı bir puanlama icat edilmez, sadece haftalara bölünür.
+async function fetchWeeklyPaceComplianceScores(athlete,weeks){
+  if(!athlete?.id) return [];
+  // eskiden yeniye sıralı hafta anahtarları (grafikte solda eski, sağda güncel hafta)
+  const weekKeys=Array.from({length:weeks},(_,i)=>getWeekKey(-(weeks-1-i)));
+  const snaps=await Promise.all(weekKeys.map(wk=>fbGet('plan_snapshots/'+athlete.id+'/'+wk)));
+  const out=[];
+  weekKeys.forEach((wk,i)=>{
+    const snap=snaps[i];
+    if(!snap) return; // o hafta hiç plan/geri bildirim yoksa noktayı hiç eklemiyoruz
+    const signals=extractFeedbackSignals({[wk]:snap},athlete);
+    const score=calcPaceComplianceScore(signals);
+    if(score) out.push({weekKey:wk,puan:score.puan,total:score.total});
+  });
+  return out;
 }
 
 // Sinyalleri çapraz doğrulamayla analiz eder.
@@ -17586,6 +17607,138 @@ function VerilenAntrenmaniYapabilmePuaniKarti({athlete}){
   );
 }
 
+// Haftalık puan gelişimini çizen Chart.js grafiği — VerilenAntrenmaniYapabilmePuaniTrendKarti'nin alt bileşeni.
+function ChartPaceComplianceTrend({data}){
+  const ref=React.useRef();const inst=React.useRef();
+  React.useEffect(()=>{
+    if(!ref.current)return;
+    if(data.length<2){if(inst.current){inst.current.destroy();inst.current=null;}return;}
+    const isDark=window.matchMedia('(prefers-color-scheme:dark)').matches;
+    const gridColor=isDark?'rgba(255,255,255,.08)':'rgba(0,0,0,.08)';
+    const tickColor=isDark?'#777':'#888';
+    // Kart üstündeki puanColor eşikleriyle birebir aynı (>=70 iyi, >=50 orta, altı kötü)
+    const puanColorFor=p=>p==null?'#94a3b8':p>=70?'#16a34a':p>=50?'#f59e0b':'#dc2626';
+    if(inst.current)inst.current.destroy();
+    inst.current=new Chart(ref.current,{
+      type:'line',
+      data:{
+        labels:data.map(d=>fmtShort(d.weekKey)),
+        datasets:[{
+          label:'Puan',
+          data:data.map(d=>d.puan),
+          borderColor:'#3b82f6',borderWidth:2,tension:.3,fill:false,
+          pointRadius:4,
+          pointBackgroundColor:data.map(d=>puanColorFor(d.puan)),
+          pointBorderColor:data.map(d=>puanColorFor(d.puan))
+        }]
+      },
+      options:{
+        responsive:true,maintainAspectRatio:false,
+        plugins:{
+          legend:{display:false},
+          tooltip:{callbacks:{
+            label:ctx=>{
+              const d=data[ctx.dataIndex];
+              return 'Puan: '+d.puan+' ('+d.total+' faz değerlendirildi)';
+            }
+          }}
+        },
+        scales:{
+          x:{ticks:{color:tickColor,font:{size:10},maxTicksLimit:10},grid:{color:gridColor},border:{display:false}},
+          y:{min:0,max:100,ticks:{color:tickColor,font:{size:10},stepSize:25},grid:{color:gridColor},border:{display:false}}
+        }
+      }
+    });
+    return()=>{if(inst.current)inst.current.destroy();};
+  },[data]);
+  if(data.length<2)return React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',padding:'20px 0',textAlign:'center'}},
+    data.length===0?'Seçilen dönemde haftalık veri bulunamadı.':'Grafik için en az 2 haftalık veri gerekiyor.'
+  );
+  return React.createElement('div',{style:{position:'relative',height:180}},React.createElement('canvas',{ref}));
+}
+
+// ── Verilen Antrenmanı Yapabilme Puanı — Haftalık Trend Kartı (8H/12H/26H/52H) ──
+// Yukarıdaki VerilenAntrenmaniYapabilmePuaniKarti seçilen periyodun TÜMÜNÜ tek bir
+// puana indirger; bu kart aynı puanı HAFTA HAFTA ayrıştırıp gelişim/gerileme
+// trendini görselleştirir. Aynı veri kaynağı ve hesap mantığı kullanılır
+// (fetchWeeklyPaceComplianceScores → extractFeedbackSignals + calcPaceComplianceScore).
+function VerilenAntrenmaniYapabilmePuaniTrendKarti({athlete}){
+  const [weeks,setWeeks]=React.useState(12);
+  const [cache,setCache]=React.useState({});
+  const cardRef=React.useRef();
+  const e=React.createElement;
+
+  const fetchForWeeks=React.useCallback(async(w)=>{
+    if(!athlete?.id) return;
+    const wk=String(w);
+    setCache(c=>({...c,[wk]:{...(c[wk]||{}),loading:true,error:null}}));
+    try{
+      const data=await fetchWeeklyPaceComplianceScores(athlete,w);
+      setCache(c=>({...c,[wk]:{data,loading:false,error:null}}));
+    }catch(err){
+      setCache(c=>({...c,[wk]:{data:[],loading:false,error:'Veri okunamadı: '+err.message}}));
+    }
+  },[athlete?.id]);
+
+  React.useEffect(()=>{ setCache({}); },[athlete?.id]); // sporcu değişince önbelleği sıfırla
+
+  React.useEffect(()=>{
+    if(!athlete?.id) return;
+    const wk=String(weeks);
+    if(!cache[wk]) fetchForWeeks(weeks);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[weeks,athlete?.id]);
+
+  const WeekBtn=({w,l})=>e('button',{
+    onClick:()=>setWeeks(w),
+    style:{
+      padding:'3px 8px',fontSize:11,fontWeight:600,borderRadius:4,border:'1px solid',cursor:'pointer',
+      background:weeks===w?'var(--info)':'transparent',
+      color:weeks===w?'#fff':'var(--text-secondary)',
+      borderColor:weeks===w?'var(--info)':'var(--border)',
+      transition:'all .15s'
+    }
+  },l);
+
+  const wk=String(weeks);
+  const entry=cache[wk]||{};
+  const{data,loading,error}=entry;
+  const list=data||[];
+
+  return e('div',{ref:cardRef,className:'card',style:{marginBottom:12}},
+    e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4,flexWrap:'wrap',gap:8}},
+      e('div',null,
+        e('div',{className:'card-title',style:{margin:0}},'Haftalık Puan Gelişimi'),
+        e('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:2}},'Verilen Antrenmanı Yapabilme Puanı\'nın hafta hafta seyri.')
+      ),
+      e('div',{style:{display:'flex',alignItems:'center',gap:6}},
+        e('div',{style:{display:'flex',gap:3,flexWrap:'wrap'}},
+          [{w:8,l:'8H'},{w:12,l:'12H'},{w:26,l:'26H'},{w:52,l:'52H'}].map(({w,l})=>
+            e(WeekBtn,{key:w,w,l})
+          )
+        ),
+        e(ShareBtn,{elRef:cardRef,filename:'antrenman_disiplin_trend.png',title:'Haftalık Puan Gelişimi',text:athlete?.ad+' pace uyum disiplini haftalık trend'})
+      )
+    ),
+    loading?e('div',{style:{fontSize:12,color:'var(--text-tertiary)',padding:'14px 0'}},'Hesaplanıyor…'):
+    error?e('div',{className:'alert alert-danger',style:{fontSize:12}},error):
+    e('div',null,
+      e(ChartPaceComplianceTrend,{data:list}),
+      list.length>=2&&(()=>{
+        const first=list[0].puan,last=list[list.length-1].puan;
+        const diff=last-first;
+        const cls=diff>5?'good':diff<-5?'warn':'info';
+        const bg=cls==='good'?'var(--success-bg)':cls==='warn'?'var(--warn-bg)':'var(--info-bg)';
+        const col=cls==='good'?'var(--success)':cls==='warn'?'var(--warn)':'var(--info)';
+        const icon=diff>5?'📈':diff<-5?'📉':'➡';
+        return e('div',{style:{marginTop:8,fontSize:12,padding:'7px 11px',borderRadius:'var(--radius)',background:bg,color:col,borderLeft:'3px solid '+col}},
+          icon+' İlk hafta '+first+' → son hafta '+last+' puan ('+(diff>=0?'+':'')+diff+')'
+        );
+      })()
+    )
+  );
+}
+
 function ReadinessBar({score,detaylar}){
   const [acik,setAcik]=useState(false);
   if(score===null||score===undefined)
@@ -20037,6 +20190,8 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
     React.createElement(AerobikVerimlilikKarti,{history,athlete}),
     // Verilen Antrenmanı Yapabilme Puanı — pace uyum/disiplin (1H/2H/4H/8H/12H/Tümü)
     React.createElement(VerilenAntrenmaniYapabilmePuaniKarti,{athlete}),
+    // Verilen Antrenmanı Yapabilme Puanı — haftalık gelişim grafiği (8H/12H/26H/52H)
+    React.createElement(VerilenAntrenmaniYapabilmePuaniTrendKarti,{athlete}),
     // ── Son 24 Hafta Özeti (mesafe/süre/tempo sadece koşu, yük tüm sporlar) ──
     React.createElement(Hafta24Karti,{workouts,athlete}),
 
