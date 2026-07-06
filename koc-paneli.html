@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.05-0055 --><!DOCTYPE html>
+<!-- Version: v2026.07.06-1140 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.05-0055';
+const APP_VERSION='v2026.07.06-1140';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -10329,8 +10329,36 @@ function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, ram
   // ama başlangıç noktası tek haftaya bakıyordu, bu tutarsızlık D+ tarafında
   // özellikle belirgindi: tek bir "o hafta tırmanış yapılmadı" haftası, gerçek
   // kümülatif eğilim ne olursa olsun projeksiyonu sıfırlayabiliyordu).
-  const curEffActive=curEffKm!=null&&curEffKm>0&&curEffKm<currentWeek.targetKm*0.98;
-  const lastDoneKm=curEffActive?curEffKm:(recent.length?round1(recent.reduce((s,w)=>s+(w.actualKm||0),0)/recent.length):currentWeek.targetKm*0.5);
+  // DÜZELTME (rampa sıfırlanma hatası — Yükleme Planı Tablosu ile tutarlılık,
+  // bkz. ~satır 15458): eskiden başlangıç noktası doğrudan o haftanın kendi
+  // curEffKm parametresiydi — hafta döndüğünde (özellikle Dinlenme haftası
+  // mevcut olduğunda) önceki haftaların gerçek tırmanışı unutulup rampa
+  // sıfırdan başlıyordu. Artık GEÇMİŞ haftalardan (Dinlenme/Taper/Yarış pas
+  // geçilerek) kronolojik olarak simüle ediliyor, mevcut hafta da (Dinlenme
+  // değilse) aynı büyüme/kapanma formülüyle bu simülasyona dahil ediliyor.
+  let _simKm2=null;
+  for(const _pw2 of weeks.filter(w=>w.isPast).sort((a,b)=>(a.weekIdx||0)-(b.weekIdx||0))){
+    if(_pw2.isRecovery||_pw2.isRaceWeek||_pw2.phase==='Taper')continue;
+    if(_simKm2===null){
+      if(_pw2.targetKm>0&&_pw2.actualKm<_pw2.targetKm*0.98)_simKm2=_pw2.actualKm;
+    } else {
+      const _rampImplied2=Math.min(_pw2.targetKm,round1(_simKm2*weeklyGrowthRate));
+      _simKm2=Math.max(_pw2.actualKm,_rampImplied2);
+      if(_simKm2>=_pw2.targetKm)_simKm2=null;
+    }
+  }
+  if(!currentWeek.isRecovery&&!currentWeek.isRaceWeek&&currentWeek.phase!=='Taper'){
+    const _curRef2=curEffKm!=null&&curEffKm>0?curEffKm:currentWeek.targetKm;
+    if(_simKm2===null){
+      if(currentWeek.targetKm>0&&_curRef2<currentWeek.targetKm*0.98)_simKm2=_curRef2;
+    } else {
+      const _rampImplied2=Math.min(currentWeek.targetKm,round1(_simKm2*weeklyGrowthRate));
+      _simKm2=Math.max(_curRef2,_rampImplied2);
+      if(_simKm2>=currentWeek.targetKm)_simKm2=null;
+    }
+  }
+  const curEffActive=_simKm2!=null&&_simKm2>0;
+  const lastDoneKm=curEffActive?_simKm2:(recent.length?round1(recent.reduce((s,w)=>s+(w.actualKm||0),0)/recent.length):currentWeek.targetKm*0.5);
   const lastDoneDp=curEffActive&&curEffDp!=null?curEffDp:(recent.length?Math.round(recent.reduce((s,w)=>s+(w.actualDp||0),0)/recent.length):currentWeek.targetDp*0.5);
 
   const currentIdx=weeks.findIndex(w=>w.isCurrent);
@@ -10366,7 +10394,7 @@ function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, ram
   // dahil ediliyor (aşağıda actionItems içinde kullanılır).
   let catchUpWeekIdx=null,catchUpWeekDate=null;
   if(curEffActive){
-    let pKm=curEffKm;
+    let pKm=_simKm2;
     for(const fw of weeks.filter(w=>!w.isPast&&!w.isCurrent)){
       const maxKm=round1(pKm*weeklyGrowthRate);
       const onTrack=fw.targetKm<=pKm||maxKm>=fw.targetKm;
@@ -10375,7 +10403,7 @@ function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, ram
     }
   }
   const catchUpInfo=curEffActive?{
-    effKm:curEffKm,ratePct:Math.round((weeklyGrowthRate-1)*100),
+    effKm:_simKm2,ratePct:Math.round((weeklyGrowthRate-1)*100),
     catchUpWeekIdx,catchUpWeekDate,
     weeksUntilCatchUp:catchUpWeekIdx!=null?catchUpWeekIdx-(currentWeek.weekIdx||0):null
   }:null;
@@ -15456,35 +15484,50 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               const _uzunRealBand=ctlBand((history&&history[history.length-1]?.ctl)||0);
 
               // ── "Herşey Yolunda Giderse" Projeksiyonu ─────────────────────────
-              // Rampa modu kapalıysa sabit %10, açıksa kullanıcının seçtiği oran veya
-              // dinamik hedef-yakınsayan oran (hangisi küçükse: seçili oran kulanılır).
+              // Rampa modu kapalıysa sabit %10, açıksa kullanıcının seçtiği oran.
               const _curWtForProj=weekTargets.find(w=>w.isCurrent);
-              const _projActive=_curWtForProj&&displayCurWeekEff?.isRevised&&displayCurWeekEff.effKm<_curWtForProj.targetKm*0.98;
+              const _catchupRate=rampModeOn?1+(rampRatePct/100):1.10;
+
+              // ── DÜZELTME (rampa sıfırlanma hatası — 06.07.2026 sohbeti) ───────
+              // ESKİ MANTIK: rampanın başlangıç noktası her render'da yalnızca O
+              // ANKİ haftanın kendi "curWeekEffective" tahminiydi (günlük plan
+              // üretiminden gelen, ayrı ve bazen dinlenme nedeniyle doğal olarak
+              // düşük bir sayı). Sonuç: hafta döndüğünde (ör. Zirve içi bir
+              // Dinlenme haftası mevcut hafta olduğunda) rampa kendi tırmandığı
+              // noktayı unutup SIFIRDAN başlıyordu — revize hedef tam tutturulmuş
+              // olsa bile gelecek haftalar küçülüyormuş GİBİ görünüyordu.
+              // YENİ MANTIK: rampanın açık/kapalı durumu ve açılış değeri yalnızca
+              // GEÇMİŞ (tamamlanmış, gerçek km'si belli) haftalardan simüle
+              // edilir — Dinlenme/Taper/Yarış haftaları bu simülasyonda pas
+              // geçilir (kendi doğal düşük hedefleri rampayı yanlışlıkla kapatıp
+              // sıfırlamasın diye). Mevcut hafta ARTIK ayrı ele alınmıyor — aynı
+              // gelecek-hafta döngüsüne dahil ediliyor, tıpkı eskiden bir sonraki
+              // haftanın işlendiği gibi. Böylece rampa yalnızca gerçek performansa
+              // göre büyür/kapanır, hafta geçişinde asla geriye sıçramaz.
+              let _simKm=null; // null = rampa şu an kapalı, ham hedefler geçerli
+              for(const _pw of weekTargets.filter(w=>w.isPast).sort((a,b)=>(a.weekIdx||0)-(b.weekIdx||0))){
+                if(_pw.isRecovery||_pw.isRaceWeek||_pw.phase==='Taper')continue;
+                if(_simKm===null){
+                  if(_pw.targetKm>0&&_pw.actualKm<_pw.targetKm*0.98)_simKm=_pw.actualKm;
+                } else {
+                  const _rampImplied=Math.min(_pw.targetKm,round1(_simKm*_catchupRate));
+                  _simKm=Math.max(_pw.actualKm,_rampImplied);
+                  if(_simKm>=_pw.targetKm)_simKm=null;
+                }
+              }
+
+              const _projActive=_curWtForProj&&_simKm!==null;
               const futureProj={};
               let _projCatchUpIdx=null;
-              let _appliedCatchupRate=0.10;
+              let _appliedCatchupRate=_catchupRate-1;
               if(_projActive){
-                // Catch-up oranı belirle
-                let _catchupRate;
-                if(!rampModeOn){
-                  _catchupRate=1.10; // sabit %10 (varsayılan, en sağlıklı)
-                } else {
-                  // Dinamik: kullanıcının seçtiği oran VEYA zirveye yakınsayan oran — ikisi arasında büyük olan
-                  const _futBuild=weekTargets.filter(w=>!w.isPast&&!w.isCurrent&&w.phase!=='Taper'&&!w.isRaceWeek);
-                  const _peakFw=_futBuild.length?_futBuild.reduce((mx,w)=>w.targetKm>mx.targetKm?w:mx):null;
-                  const _weeksToP=_peakFw?Math.max(1,_peakFw.weekIdx-(_curWtForProj.weekIdx||0)):1;
-                  const _neededRate=_peakFw&&displayCurWeekEff.effKm>0
-                    ?Math.pow(_peakFw.targetKm/displayCurWeekEff.effKm,1/_weeksToP):1.10;
-                  const _userRate=1+(rampRatePct/100);
-                  // Kullanıcı oranını uygula — dinamik hesap bilgi amaçlı özet kutusunda gösterilir
-                  _catchupRate=_userRate;
-                }
-                _appliedCatchupRate=_catchupRate-1;
-
-                let _pKm=displayCurWeekEff.effKm;
-                let _pDp=displayCurWeekEff.effDp||_curWtForProj.targetDp||0;
+                let _pKm=_simKm;
+                let _pDp=_curWtForProj.targetDp||0;
                 let _foundOnTrack=false;
-                for(const _fw of weekTargets.filter(w=>!w.isPast&&!w.isCurrent)){
+                // Döngü artık MEVCUT haftadan başlıyor (eskiden yalnızca gelecek
+                // haftalar işleniyordu, mevcut hafta yukarıdaki ayrı/tutarsız
+                // curWeekEffective kısayoluyla ele alınıyordu).
+                for(const _fw of weekTargets.filter(w=>!w.isPast)){
                   const _fwk=localDateStr(_fw.weekStart);
                   const _maxKm=round1(_pKm*_catchupRate);
                   const _dpRatio=_fw.targetKm>0&&_fw.targetDp>0?_fw.targetDp/_fw.targetKm:0;
