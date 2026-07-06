@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.06-1210 --><!DOCTYPE html>
+<!-- Version: v2026.07.06-1303 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.06-1210';
+const APP_VERSION='v2026.07.06-1303';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -8227,14 +8227,17 @@ function tplAerobik(band, sure_dk, zones, disiplin){
   };
 }
 
-function tplUzun(band, ctl, zones, disiplin, dpHedef, recentLongRuns){
+function tplUzun(band, ctl, zones, disiplin, dpHedef, recentLongRuns, raceKm=0){
   const isUltra=disiplin==='ultra';
   const isPatika=disiplin==='patika'||disiplin==='ultra'||disiplin==='karma';
 
   // ── Band bazlı maksimum tavan (faz/band sınırı) ──────────────────────────
-  const bandMax=isUltra
+  // raceKm verilmişse uzunKosuMesafeCarpani ile tavan yarış mesafesine göre
+  // büyütülür (bkz. ~satır 9802 uzunKosuBandMaxKm notu — aynı mantık, gerçek
+  // gün üretimiyle tabloda gösterilen tahmin arasında tutarlılık için).
+  const bandMax=Math.round((isUltra
     ?(band<=1?80:band===2?100:band===3?130:band===4?160:200)
-    :(band<=1?60:band===2?75:band===3?90:band===4?110:130);
+    :(band<=1?60:band===2?75:band===3?90:band===4?110:130))*uzunKosuMesafeCarpani(raceKm));
 
   // ── Son uzun koşulardan progresyon hesapla ───────────────────────────────
   // recentLongRuns: son 6 haftanın uzun koşuları [{date, sure_dk}], yeniden eskiye
@@ -8282,14 +8285,14 @@ function tplUzun(band, ctl, zones, disiplin, dpHedef, recentLongRuns){
 // Gün 1: Uzun Z2 koşu (ana yük)
 // ── OP-3: Back-to-Back Tur Antrenmanları — Gün 1 ve Gün 2 ayrı şablonlar ──
 // Gün 1: Uzun Z2 koşu (ana yük) — progresif süre + disiplin desteği
-function tplBackToBack(band, zones, dpHedef, disiplin, recentLongRuns){
+function tplBackToBack(band, zones, dpHedef, disiplin, recentLongRuns, raceKm=0){
   disiplin=disiplin||'karma';
   recentLongRuns=recentLongRuns||[];
   const isTrail=disiplin!=='yol';
   const isUltra=disiplin==='ultra';
-  const bandMax=isUltra
+  const bandMax=Math.round((isUltra
     ?(band<=1?80:band===2?100:band===3?130:band===4?160:200)
-    :(band<=1?60:band===2?75:band===3?90:band===4?110:130);
+    :(band<=1?60:band===2?75:band===3?90:band===4?110:130))*uzunKosuMesafeCarpani(raceKm));
   let gun1=bandMax;
   if(recentLongRuns.length>0){
     const sonUzun=recentLongRuns[0].sure_dk||0;
@@ -9787,6 +9790,26 @@ function proxyBandFromWeeklyKm(km){
   return 5;
 }
 
+// ── Haftanın Uzunu — Yarış Mesafesine Göre Tavan Çarpanı ──────────────────
+// DÜZELTME (06.07.2026 sohbeti — 160K hazırlığı): uzunKosuBandMaxKm'deki
+// mutlak dakika tavanı yalnızca CTL bandına göreydi, yarış mesafesine göre
+// HİÇ değişmiyordu. Sonuç: 50K hazırlayan biriyle 160K hazırlayan biri aynı
+// tavanı (band5'te 200dk) alıyordu — ki bu, tipik pace'lerde ~25km'ye denk
+// geliyor ve 100 mil/160K zirve haftası tek seferlik uzun koşu ihtiyacının
+// (genellikle 40-60km aralığı) çok altında kalıyordu. Haftalık km hedefi
+// zaten baseKmRaw ile yarış mesafesine göre ölçekleniyordu (bkz. satır
+// ~9929) — uzunKosuPayOrani'nin ürettiği pay da (Zirve+ultra: %36) bu
+// ölçeklenmiş haftalık hedeften pay aldığı için ZATEN makul bir mesafeye
+// (örn. 115km hafta × %36 ≈ 41km) işaret ediyordu; sorun sadece MUTLAK
+// tavanın bunu erkenden kesmesiydi. Bu çarpan yalnızca o tavanı gevşetir —
+// haftalık hedefi veya pay oranını değiştirmez.
+function uzunKosuMesafeCarpani(raceKm){
+  if(!raceKm||raceKm<=50) return 1.0;
+  if(raceKm<=80) return 1.35;
+  if(raceKm<=120) return 1.7;
+  return 2.1; // 120K üzeri (160K, 100 mil ve üstü)
+}
+
 // ── Haftanın Uzunu — Band Bazlı Mutlak Tavan (km) ─────────────────────────
 // tplUzun, gerçek üretimde uzun koşu süresini CTL bandına göre mutlak bir
 // dakika tavanıyla (bandMax) sınırlar — uzunKosuPayOrani'nin ürettiği yüzde
@@ -9799,13 +9822,16 @@ function proxyBandFromWeeklyKm(km){
 // Bu, yalnızca GERÇEKLEŞMİŞ geçmiş uzun koşulara bağlı olduğundan uzak
 // gelecek haftalar için önceden simüle edilemez — bu fonksiyon yalnızca
 // mutlak (band) tavanı uygular, ilerleme tavanını değil.
-function uzunKosuBandMaxKm(band, disiplin, zones){
+// raceKm: hedef yarış mesafesi — verilmişse uzunKosuMesafeCarpani ile tavan
+// büyütülür (bkz. yukarıdaki fonksiyon notu); verilmezse eski davranış (×1.0).
+function uzunKosuBandMaxKm(band, disiplin, zones, raceKm=0){
   const isUltra=disiplin==='ultra';
   const bandMaxDk=isUltra
     ?(band<=1?80:band===2?100:band===3?130:band===4?160:200)
     :(band<=1?60:band===2?75:band===3?90:band===4?110:130);
+  const mesafeCarpani=uzunKosuMesafeCarpani(raceKm);
   const paceSec=(zones&&typeof getPaceSec==='function')?(getPaceSec(zones,1)||360):360;
-  return round1(bandMaxDk/(paceSec/60));
+  return round1((bandMaxDk*mesafeCarpani)/(paceSec/60));
 }
 
 // ── Haftanın Uzunu — Mesafe ve D+ Hedefi Tahmini ──────────────────────────
@@ -9820,11 +9846,11 @@ function uzunKosuBandMaxKm(band, disiplin, zones){
 // mantığıyla tutarlı olacak şekilde haftalık D+ hedefinin tamamı tek uzun
 // güne atfedilir (back-to-back günlerinde gerçek dağılım Gün1/Gün2 arasında
 // bölünür — bu yalnızca ileriye dönük bir planlama tahminidir).
-function estimateUzunKosuHedefi(targetKm, targetDp, phase, disiplin, zones, band){
+function estimateUzunKosuHedefi(targetKm, targetDp, phase, disiplin, zones, band, raceKm=0){
   const pay=uzunKosuPayOrani(phase, disiplin);
   let km=round1((targetKm||0)*pay);
   const effBand=band||proxyBandFromWeeklyKm(targetKm||0);
-  const bandCapKm=uzunKosuBandMaxKm(effBand, disiplin, zones);
+  const bandCapKm=uzunKosuBandMaxKm(effBand, disiplin, zones, raceKm);
   let capped=false;
   if(bandCapKm>0&&km>bandCapKm){ km=bandCapKm; capped=true; }
   const dp=disiplin!=='yol'?Math.round(targetDp||0):0;
@@ -11705,7 +11731,7 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
         const taperUzunFactor=taperPeakMissed?0.75:isIkinciUzun?0.55:0.65;
         kosuTpl=isTrail&&dpGun>200
           ?tplTirmanisAcik(band,Math.round(70*uzunYMod),zones,dpGun)
-          :tplUzun(band,simState.ctl||0,zones,disiplin,dpGun,wkStats.recentLongRuns);
+          :tplUzun(band,simState.ctl||0,zones,disiplin,dpGun,wkStats.recentLongRuns,race?.mesafe);
         // tplUzun için taper süre indirimini uygula (tplTirmanisAcik zaten uzunYMod ile çağrılır)
         // sure_dk VE _rows.sure_sn birlikte ölçeklenmeli — estimateDayKmDp _rows'dan km hesaplar
         if(!(isTrail&&dpGun>200)){
@@ -11753,7 +11779,7 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
       } else if(b2bAktif&&isUzunGun&&!cokYorgun&&(daysToRace===null||daysToRace>3)){
         // Taper'da ardışık 2 uzun koşu günü seçilmişse B2B planla (yarışa >3 gün kaldıysa)
         if(dayShort===b2bAktif.gun1){
-          kosuTpl=tplBackToBack(band,zones,0,disiplin,wkStats.recentLongRuns);
+          kosuTpl=tplBackToBack(band,zones,0,disiplin,wkStats.recentLongRuns,race?.mesafe);
           kosuTpl.sure_dk=Math.round(kosuTpl.sure_dk*(daysToRace!==null&&daysToRace<=14?0.65:0.80));
           kosuUyari='Taper B2B Gün 1 — ardışık uzun koşu (taper hacmi düşürüldü)';
         } else {
@@ -11782,7 +11808,7 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
       // Ardışık 2 uzun koşu günü → back-to-back otomatik
       if(b2bAktif&&isUzunGun){
         if(dayShort===b2bAktif.gun1){
-          kosuTpl=tplBackToBack(band,zones,dpGun,disiplin,wkStats.recentLongRuns);
+          kosuTpl=tplBackToBack(band,zones,dpGun,disiplin,wkStats.recentLongRuns,race?.mesafe);
           kosuUyari='Ardışık uzun koşu — Gün 1 (Back-to-Back)';
         } else {
           kosuTpl=tplBackToBackGun2(band,zones,dpGun,disiplin);
@@ -11793,7 +11819,7 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
       const uzunYMod=cokYorgun?0.65:yorgun?0.80:isIkinciUzun?Math.min(sureMod,0.65):sureMod;
       kosuTpl=isTrail&&dpGun>200
         ?tplTirmanisAcik(band,Math.round(70*uzunYMod),zones,dpGun)
-        :tplUzun(band,simState.ctl||0,zones,disiplin,dpGun,wkStats.recentLongRuns);
+        :tplUzun(band,simState.ctl||0,zones,disiplin,dpGun,wkStats.recentLongRuns,race?.mesafe);
       // ── Haftalık uzun koşu hedefini ÜSTTEN sınırla (alt sınır değil) ─────
       // Progresyon tarihçesi haftalık hedefin üzerinde bir uzun koşu önerirse
       // (özellikle taper/zirve haftalarında gereksiz yük) hedefle kısıtla.
@@ -11826,7 +11852,7 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
       const ikincıUzunUygun=!cokYorgun&&acwr<1.3&&['Zirve','Gelişme'].includes(phase)&&band>=3;
       if(ikincıUzunUygun){
         const uzunYMod2=yorgun?0.55:0.65;
-        const tpl2=tplUzun(band,simState.ctl||0,zones,disiplin,0,wkStats.recentLongRuns);
+        const tpl2=tplUzun(band,simState.ctl||0,zones,disiplin,0,wkStats.recentLongRuns,race?.mesafe);
         tpl2.sure_dk=Math.round(tpl2.sure_dk*uzunYMod2);
         tpl2.baslik='Yorgun Bacak Uzun Koşusu (B2B 2. Gün)';
         tpl2.yapilar=[
@@ -12027,7 +12053,7 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
           ];
           kosuTpl=fallbackPick(zirveSeq);
         } else if(!wkStats.uzunYapildi&&(!uzunGunTanimli||isUzunGun)){
-          kosuTpl=isTrail?tplTirmanisAcik(band,Math.round(75*yMod),zones,dpGun):tplUzun(band,simState.ctl||0,zones,disiplin,dpGun,wkStats.recentLongRuns);
+          kosuTpl=isTrail?tplTirmanisAcik(band,Math.round(75*yMod),zones,dpGun):tplUzun(band,simState.ctl||0,zones,disiplin,dpGun,wkStats.recentLongRuns,race?.mesafe);
         } else {
           kosuTpl=tplEsik(band,Math.round(55*yMod),zones,phase,phaseStep);
         }
@@ -12513,7 +12539,7 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       // kullandığı ctlBand() ile aynı mantık, böylece ikisi tutarlı kalıyor.
       const _uzunDisiplin=effectiveDisiplin(athlete,primary);
       const _uzunZonesCap=calcZones(athlete);
-      const _uzunBandCap=uzunKosuBandMaxKm(band,_uzunDisiplin,_uzunZonesCap);
+      const _uzunBandCap=uzunKosuBandMaxKm(band,_uzunDisiplin,_uzunZonesCap,primary?.mesafe);
       let uzunGunKm=uzunKalanSayi>0?round1(kalanTargetKm*uzunKosuPayOrani(fazPhase,_uzunDisiplin)):0;
       if(_uzunBandCap>0&&uzunGunKm>_uzunBandCap) uzunGunKm=_uzunBandCap;
       // Kolay/aerobik günlere kalan km'yi eşit dağıt
@@ -13080,7 +13106,7 @@ function reviewPlanSnapshot(snapshot,athlete,history,races,workouts,testPlanlar)
     const last=history[history.length-1];
     const band=ctlBand(last?.ctl||0);
     const zones=calcZones(athlete);
-    const b2bTpl=tplBackToBack(band,zones,0,athlete.disiplin||'karma',wkStats?.recentLongRuns||[]);
+    const b2bTpl=tplBackToBack(band,zones,0,athlete.disiplin||'karma',wkStats?.recentLongRuns||[],selectRaces(athlete,races).primary?.mesafe);
     newMap[b2bDay]={
       tip:'uzun',
       baslik:'B2B Telafi — Kaçırılan Uzun Koşu',
@@ -13296,6 +13322,7 @@ function computeEffectiveSureDk(yapilar, zones, savedOverrides, fallbackSureDk){
 function ManuelAtamaModal(props){
   var date=props.date,athlete=props.athlete,history=props.history,onSave=props.onSave,onClose=props.onClose,phase=props.phase||'Temel';
   var recentLongRuns=props.recentLongRuns||[];
+  var raceKm=props.raceKm||0;
   var _tur=useState('kolay'),tur=_tur[0],setTur=_tur[1];
   var _prev=useState(null),preview=_prev[0],setPreview=_prev[1];
   var _yapi=useState(''),yapiNotu=_yapi[0],setYapiNotu=_yapi[1];
@@ -13312,7 +13339,7 @@ function ManuelAtamaModal(props){
       if(tur==='kolay')tpl=tplKolay(band,dk,zones);
       else if(tur==='serbest')tpl=tplSerbest(dk);
       else if(tur==='aerobik')tpl=tplAerobik(band,dk,zones,dis);
-      else if(tur==='uzun')tpl=tplUzun(band,ctl,zones,dis,0,[]);
+      else if(tur==='uzun')tpl=tplUzun(band,ctl,zones,dis,0,[],raceKm);
       else if(tur==='tempo')tpl=tplTempo(band,dk,zones,phase);
       else if(tur==='esik')tpl=tplEsik(band,dk,zones,phase);
       else if(tur==='interval')tpl=tplInterval(band,phase,zones);
@@ -13330,7 +13357,7 @@ function ManuelAtamaModal(props){
       else if(tur==='hill_sprint')tpl=tplHillSprint(band,zones,phase);
       else if(tur==='strides')tpl=tplStrides(band,dk,zones,phase);
       else if(tur==='teknik')tpl=tplTeknikInis(band,dk,zones);
-      else if(tur==='back_to_back')tpl=tplBackToBack(band,zones,0,dis||'karma',recentLongRuns);
+      else if(tur==='back_to_back')tpl=tplBackToBack(band,zones,0,dis||'karma',recentLongRuns,raceKm);
       else if(tur==='power_hiking')tpl=tplPowerHiking(band,zones,0);
       else if(tur==='yuru_kos')tpl=tplYuruKos(1,zones);
       else if(tur==='hazirlik')tpl=tplHazirlik(band,dk,zones);
@@ -15639,17 +15666,24 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               // pay alır, ham orijinal hedeften değil. Böylece hafta revize edildiğinde
               // (örn. HRV/sakatlık nedeniyle hedef düşürüldüğünde ya da taper cascade
               // devreye girdiğinde) uzun koşu önerisi de aynı revizyonu yansıtır.
+              // DÜZELTME (06.07.2026 sohbeti): isRecovery burada artık gizlemiyor.
+              // Gerçek gün ataması (haftaIskeleti, ~satır 12373) dinlenme haftalarında
+              // da athlete.uzun_gun'a göre bir uzun koşu günü atıyor — sadece haftanın
+              // (kmPct=0.70 ile zaten küçültülmüş) hedefinden daha küçük bir pay alıyor.
+              // Yani dinlenme haftasında GERÇEKTEN bir uzun koşu var, sadece kısa —
+              // bunu gizlemek yanıltıcıydı. isRaceWeek/Yarış Sonrası gizli kalmaya
+              // devam ediyor çünkü onların ayrı/yok bir "uzun koşu" kavramı var.
               const _dispKmForUzun=showRevised?effKm:(showCascade?cascadeKm:(_showFutProj?_futPrj.projKm:wt.targetKm));
               const _dispDpForUzun=(showRevised&&wt.targetDp>0)?effDp:((showCascade&&wt.targetDp>0)?cascadeDp:(((_showFutProj&&wt.targetDp>0&&_futPrj.projDp>0))?_futPrj.projDp:wt.targetDp));
-              const _uzunHedef=wt.isRecovery||wt.isRaceWeek||wt.phase==='Yarış Sonrası'
+              const _uzunHedef=wt.isRaceWeek||wt.phase==='Yarış Sonrası'
                 ?null
-                :estimateUzunKosuHedefi(_dispKmForUzun,_dispDpForUzun,wt.phase,_uzunDisiplin,_uzunZones,wt.isCurrent?_uzunRealBand:null);
+                :estimateUzunKosuHedefi(_dispKmForUzun,_dispDpForUzun,wt.phase,_uzunDisiplin,_uzunZones,wt.isCurrent?_uzunRealBand:null,plan.primary?.mesafe);
               // Orijinal (revize mekanizmalarından bağımsız) uzun koşu hedefi —
               // tablo haftalık km için "üstü çizili orijinal → revize" gösterdiği gibi
               // uzun koşu için de farkı göstermek için kullanılır.
-              const _uzunHedefOrijinal=wt.isRecovery||wt.isRaceWeek||wt.phase==='Yarış Sonrası'
+              const _uzunHedefOrijinal=wt.isRaceWeek||wt.phase==='Yarış Sonrası'
                 ?null
-                :estimateUzunKosuHedefi(wt.targetKm,wt.targetDp,wt.phase,_uzunDisiplin,_uzunZones,null);
+                :estimateUzunKosuHedefi(wt.targetKm,wt.targetDp,wt.phase,_uzunDisiplin,_uzunZones,null,plan.primary?.mesafe);
 
               const diffKm=round1(act.km-wt.targetKm);
               const diffDp=Math.round(act.dp-wt.targetDp);
@@ -16074,6 +16108,10 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               // Haftanın uzunu — bu kartta GÖRÜNEN hedeften (revize/rampa projeksiyonu
               // dahil) pay alır, ham orijinal hedeften değil — yukarıdaki "Hedef:" rozeti
               // ile aynı mantık. Orijinal farklıysa üstü çizili gösterilir.
+              // DÜZELTME (06.07.2026 sohbeti): isRecovery artık gizlemiyor — bkz.
+              // tablodaki aynı düzeltme notu (~satır 15665). Sadece isRaceWeek/
+              // Yarış Sonrası gizli kalıyor.
+              if(week.wt.isRaceWeek||week.wt.phase==='Yarış Sonrası')return null;
               let _dKm=week.wt.targetKm, _dDp=week.wt.targetDp;
               if(weekShowRevised){
                 _dKm=weekEffKm;
@@ -16082,8 +16120,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                 const _p1=round1((displayCurWeekEff.effKm||0)*(1+rampRatePct/100));
                 if(_p1>0&&_p1<week.wt.targetKm*0.99)_dKm=_p1;
               }
-              const _uzunHedefHafta=estimateUzunKosuHedefi(_dKm,_dDp,week.wt.phase,effectiveDisiplin(athlete,plan.primary),_uzunZonesHafta,_uzunBandHafta);
-              const _uzunHedefHaftaOrijinal=estimateUzunKosuHedefi(week.wt.targetKm,week.wt.targetDp,week.wt.phase,effectiveDisiplin(athlete,plan.primary),_uzunZonesHafta,null);
+              const _uzunHedefHafta=estimateUzunKosuHedefi(_dKm,_dDp,week.wt.phase,effectiveDisiplin(athlete,plan.primary),_uzunZonesHafta,_uzunBandHafta,plan.primary?.mesafe);
+              const _uzunHedefHaftaOrijinal=estimateUzunKosuHedefi(week.wt.targetKm,week.wt.targetDp,week.wt.phase,effectiveDisiplin(athlete,plan.primary),_uzunZonesHafta,null,plan.primary?.mesafe);
               const _haftalikDegisti=_uzunHedefHaftaOrijinal.km!==_uzunHedefHafta.km;
               const _haftalikDpDegisti=_uzunHedefHaftaOrijinal.dp>0&&_uzunHedefHaftaOrijinal.dp!==_uzunHedefHafta.dp;
               return _uzunHedefHafta.km>0&&React.createElement('span',{
@@ -16633,6 +16671,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         date:manuelAtaGun,athlete:athlete,history:history,
         recentLongRuns:(plan?.weeks||[]).find(w=>w.days.some(d=>d.date===manuelAtaGun))?.wkStats?.recentLongRuns||[],
         phase:(plan?.weeks||[]).flatMap(w=>w.days).find(d=>d.date===manuelAtaGun)?.phase||'Temel',
+        raceKm:plan.primary?.mesafe,
         onSave:handleManuelAta,
         onClose:function(){setManuelAtaGun(null);}
       }),
