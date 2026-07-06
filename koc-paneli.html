@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.07-0142 --><!DOCTYPE html>
+<!-- Version: v2026.07.07-0204 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.07-0142';
+const APP_VERSION='v2026.07.07-0204';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -3761,19 +3761,28 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
             const highPct=zoneDist?.highPct??null;
             const anaPct=zoneDist?.anaPct??null;
             const mechAtl=last?.mechAtl||0; const mechCtl=last?.mechCtl||0;
+            // Yükleme Planı'ndan bu haftanın (ve bir öncekinin) gerçek durumunu al —
+            // Koç Panelindeki plan üreticisiyle aynı planWeek/prevWeek kaynağı olmalı
+            // (paritesizlik: bu olmadan planlı-dinlenme-haftası sinyali burada hiç görünmez)
+            let planWeekReal=null, prevWeekReal=null;
+            try{
+              const _wt=calcWeeklyTargets(ath,races||[],athWks,false,history,{});
+              const _idx=(_wt||[]).findIndex(w=>w.isCurrent);
+              if(_idx>=0){planWeekReal=_wt[_idx];prevWeekReal=_idx>0?_wt[_idx-1]:null;}
+            }catch(eWt){/* Yükleme Planı hesaplanamadıysa sinyal zone-bazlı kalmaya devam eder */}
             const sigs=evaluateSignals({
               acwr:acwr||1.0,tsb,inj:parseInt(ath.sakatlık)||1,
               ifOverloaded:false,mechOverload:false,
               mechAclOverload:mechAtl>(mechCtl||1)*1.3,
               powerOverload:false,wkSessions:0,mechKardioDanger:false,
               zoneDist4w:zoneDist,zoneDist2w:zoneDist2,kaliteliYapildi:false,
-              planWeek:null,prevWeek:null,
+              planWeek:planWeekReal,prevWeek:prevWeekReal,
               hrv:ath.hrv_durum||'',
             });
             const sorunlar=[];
-            if(sigs.level==='forceEasy') sorunlar.push('❌ Sadece kolay öneri (ACWR/zona tehlikeli yüksek)');
+            if(sigs.level==='forceEasy') sorunlar.push(sigs.planForceEasy?'❌ Sadece kolay öneri (planlı dinlenme haftası)':'❌ Sadece kolay öneri (ACWR/zona tehlikeli yüksek)');
             if(sigs.level==='forceLow') sorunlar.push('⚠ Aerobik zorunlu (zone dengesi bozuk — kaliteli bloke)');
-            if(sigs.level==='preferLow') sorunlar.push('💡 Aerobik tercih (hafif zone uyarısı)');
+            if(sigs.level==='preferLow') sorunlar.push(sigs.planPreferLow?'💡 Aerobik tercih (planlı dinlenme haftası)':'💡 Aerobik tercih (hafif zone uyarısı)');
             if(_canHillSprint&&_raceDp<=300) sorunlar.push('🏔 Hill sprint / düz yarış uyumsuzluğu (D+≤300m)');
             if(sigs.düşükYükIstisnası){
               sorunlar.push('⚡ Düşük yük istisnası aktif — zone kısıtı devre dışı (ACWR<0.65, TSB>10, sak<4, HRV dengeli)');
@@ -12636,20 +12645,34 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
 
         if(planSigs.forceEasy&&YOGUN_L.includes(planned.tip)){
           const sureDk=Math.round((simState.tsb<-20?30:40)*planYMod);
+          const _origTip=planned.tip;
+          const _kokNeden=planSigs.planForceEasy?'planlı dinlenme haftası':'yük/toparlanma durumu';
+          const _detay=(planSigs.zoneReasons&&planSigs.zoneReasons.length)?' '+planSigs.zoneReasons.join(' '):'';
           planned={...tplKolay(planBand,sureDk,planZones),sure_dk:sureDk,
-            yukHedef:Math.round(sureDk*0.8),_downgraded:true,_originalTip:planned.tip,..._meta};
+            yukHedef:Math.round(sureDk*0.8),_downgraded:true,_originalTip:_origTip,
+            uyari:(TUR_LABELS[_origTip]||_origTip)+' antrenmanı ('+_kokNeden+' olmasa önerilecekti) yerine Kolay Koşu ('+_kokNeden+' nedeniyle) seçildi.'+_detay,
+            ..._meta};
         } else if(planSigs.forceLow&&YOGUN_L.includes(planned.tip)
             // Trail sporcusu için tırmanış (tirmanis) aerobik taban çalışmasıdır.
             // forceLow'un amacı aerobik taban geliştirmek — tırmanışı düşürmek çelişkili olur.
             &&!(planned.tip==='tirmanis'&&effDisiplinPlan!=='yol')){
           const sureDk=Math.round(55*planYMod);
+          const _origTip=planned.tip;
+          const _detay=(planSigs.zoneReasons&&planSigs.zoneReasons.length)?' '+planSigs.zoneReasons.join(' '):'';
           planned={...tplAerobik(planBand,sureDk,planZones,effDisiplinPlan),sure_dk:sureDk,
-            yukHedef:Math.round(sureDk*1.1),_downgraded:true,_originalTip:planned.tip,..._meta};
+            yukHedef:Math.round(sureDk*1.1),_downgraded:true,_originalTip:_origTip,
+            uyari:(TUR_LABELS[_origTip]||_origTip)+' antrenmanı (zone yük dengesi olmasa önerilecekti) yerine Aerobik Koşu (zone yük dengesi nedeniyle) seçildi.'+_detay,
+            ..._meta};
         } else if(planSigs.preferLow&&YOGUN_L.includes(planned.tip)
             &&!(planned.tip==='tirmanis'&&effDisiplinPlan!=='yol')){
           const sureDk=Math.round(60*planYMod);
+          const _origTip=planned.tip;
+          const _kokNeden=planSigs.planPreferLow?'planlı dinlenme haftası':'zone yük dengesi';
+          const _detay=(planSigs.zoneReasons&&planSigs.zoneReasons.length)?' '+planSigs.zoneReasons.join(' '):'';
           planned={...tplAerobik(planBand,sureDk,planZones,effDisiplinPlan),sure_dk:sureDk,
-            yukHedef:Math.round(sureDk*1.1),_downgraded:true,_originalTip:planned.tip,..._meta};
+            yukHedef:Math.round(sureDk*1.1),_downgraded:true,_originalTip:_origTip,
+            uyari:(TUR_LABELS[_origTip]||_origTip)+' antrenmanı ('+_kokNeden+' olmasa önerilecekti) yerine Aerobik Koşu ('+_kokNeden+' nedeniyle) seçildi.'+_detay,
+            ..._meta};
         } else if(planSigs.forceQuality&&weekOff===0&&['aerobik','kolay'].includes(planned.tip)){
           // Kalite fırsatı yalnızca mevcut hafta için geçerli (simülasyon belirsizliği)
           const kaliteTip=simState.ctl>40?'interval':'esik';
