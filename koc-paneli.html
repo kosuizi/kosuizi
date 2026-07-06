@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.06-1140 --><!DOCTYPE html>
+<!-- Version: v2026.07.06-1210 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.06-1140';
+const APP_VERSION='v2026.07.06-1210';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -10336,9 +10336,13 @@ function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, ram
   // sıfırdan başlıyordu. Artık GEÇMİŞ haftalardan (Dinlenme/Taper/Yarış pas
   // geçilerek) kronolojik olarak simüle ediliyor, mevcut hafta da (Dinlenme
   // değilse) aynı büyüme/kapanma formülüyle bu simülasyona dahil ediliyor.
+  // DÜZELTME 2 (faz sızıntısı) — Yükleme Planı Tablosu ile aynı gerekçe
+  // (bkz. ~satır 15507): geçmişe bakış MEVCUT haftayla aynı faza sınırlanır,
+  // aksi halde eski/başka fazdan zayıf haftalar rampayı yanlışlıkla kapatabilir.
   let _simKm2=null;
   for(const _pw2 of weeks.filter(w=>w.isPast).sort((a,b)=>(a.weekIdx||0)-(b.weekIdx||0))){
     if(_pw2.isRecovery||_pw2.isRaceWeek||_pw2.phase==='Taper')continue;
+    if(_pw2.phase!==currentWeek.phase)continue;
     if(_simKm2===null){
       if(_pw2.targetKm>0&&_pw2.actualKm<_pw2.targetKm*0.98)_simKm2=_pw2.actualKm;
     } else {
@@ -15504,9 +15508,21 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               // gelecek-hafta döngüsüne dahil ediliyor, tıpkı eskiden bir sonraki
               // haftanın işlendiği gibi. Böylece rampa yalnızca gerçek performansa
               // göre büyür/kapanır, hafta geçişinde asla geriye sıçramaz.
+              // ── DÜZELTME 2 (faz sızıntısı) ────────────────────────────────────
+              // Gerçek veriyle test edilince ortaya çıktı: yukarıdaki simülasyon
+              // TÜM geçmiş haftaları (Gelişme dahil) zincirleme işliyordu. Rampa-
+              // ima-edilen tavan (Math.min(hedef, simKm*oran)) gerçek performanstan
+              // bağımsız yükselebildiği için, birkaç zayıf Gelişme haftası bile
+              // (H20 %73, H23 %11 "km" güven rozetli haftalar dahil) matematiksel
+              // olarak Zirve'nin ilk haftasının (H24) hedefine "yetişebiliyor" ve
+              // rampayı H24'te gerçek performans çok düşükken (56.7/89.6) yanlışlıkla
+              // KAPATIYORDU. Düzeltme: geçmişe bakış MEVCUT haftayla AYNI faza
+              // sınırlandırılır — Gelişme'deki eski veriler Zirve'nin rampasına
+              // hiç karışmaz.
               let _simKm=null; // null = rampa şu an kapalı, ham hedefler geçerli
               for(const _pw of weekTargets.filter(w=>w.isPast).sort((a,b)=>(a.weekIdx||0)-(b.weekIdx||0))){
                 if(_pw.isRecovery||_pw.isRaceWeek||_pw.phase==='Taper')continue;
+                if(_curWtForProj&&_pw.phase!==_curWtForProj.phase)continue;
                 if(_simKm===null){
                   if(_pw.targetKm>0&&_pw.actualKm<_pw.targetKm*0.98)_simKm=_pw.actualKm;
                 } else {
