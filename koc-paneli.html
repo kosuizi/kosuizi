@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.07-0347 --><!DOCTYPE html>
+<!-- Version: v2026.07.07-2131 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.07-0347';
+const APP_VERSION='v2026.07.07-2131';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -2090,6 +2090,47 @@ async function fbSet(key,val){
     lsSet(key,clean);
     if(key.includes('plan_snapshots')){
       console.error('PLAN KAYIT HATASI:',e.message,e.code);
+    }
+  }
+}
+
+// Firebase PARÇALI yazma (merge) — plan_snapshots gibi ÇOK YAZICILI (aynı hafta objesine
+// birden fazla farklı effect/handler'ın ayrı ayrı yazdığı) yollar için.
+// KÖK NEDEN (rampa butonu kapanması / revize hedefin hafta içi değişmesi — Temmuz 2026):
+// fbSet() .set() kullanıyordu — bu TÜM node'u SİLİP baştan yazar. plan_snapshots altında
+// weekEff, rampModeOn, formSnap, weekActuals, cancelledDays gibi alanlar farklı effect'ler
+// tarafından, birbirinden BAĞIMSIZ olarak (kendi elindeki, o an güncel olmayabilecek bir
+// kopya üzerinden) yazılıyordu. İki yazma yarışırsa (ör. bir antrenman girişi sonrası
+// formSnap/weekActuals effect'i ile HaftalikPlanTab dışından persistFreshFormSnap çağrısı
+// aynı anda tetiklenirse), HANGİSİ SONRA TAMAMLANIRSA o kazanır ve kendi elindeki eksik
+// kopyadaki alanlar (ör. rampModeOn veya dondurulmuş weekEff) DB'den sessizce SİLİNİR —
+// "kayıp güncelleme" (lost update) yarışı. fbUpdate() ise Firebase'in .update() metodunu
+// kullanır: yalnızca verilen ÜST SEVİYE alanları birleştirir, o objede bulunmayan diğer
+// alanlara (başka bir yazıcının az önce eklediği alanlar dahil) DOKUNMAZ. Bu, yarışı
+// DB seviyesinde kökten çözer — çağıran taraf hangi alanların "yeni" olduğunu bilmek
+// zorunda değildir, sadece elindeki (belki bayat) kopyayı gönderir, DB eksik alanları korur.
+async function fbUpdate(key,val){
+  if(_sessionLocked){
+    console.warn('[Oturum Kilidi] Bu sekme artık aktif oturum değil, yazma engellendi:',key);
+    return;
+  }
+  const clean=stripUndefined(val);
+  if(!db&&!initFirebase()){
+    const cur=lsGet(key)||{};
+    lsSet(key,{...cur,...clean});
+    return;
+  }
+  try{
+    if(_authReady) await _authReady; // Auth bitmeden yazma yapma
+    await db.ref(key).update(clean);
+    const cur=lsGet(key)||{};
+    lsSet(key,{...cur,...clean});
+  }catch(e){
+    console.warn('fbUpdate error',key,e);
+    const cur=lsGet(key)||{};
+    lsSet(key,{...cur,...clean});
+    if(key.includes('plan_snapshots')){
+      console.error('PLAN KAYIT HATASI (update):',e.message,e.code);
     }
   }
 }
@@ -14041,7 +14082,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     if(snap&&!snap.athleteProfile){
       const withProfile={...snap,athleteProfile:{kosu_gunleri:athlete.kosu_gunleri,capraz_gunleri:athlete.capraz_gunleri,disiplin:athlete.disiplin,uzun_gun:athlete.uzun_gun}};
       setPlanSnap(withProfile);
-      fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,withProfile).catch(()=>{});
+      fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,withProfile).catch(()=>{});
     }
   },[snapReady,athlete?.id]);
 
@@ -14325,7 +14366,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     // Bu sayede manuel kontrol sağlanır ve tüm antrenmanların tamamlanmış olduğundan koç emin olabilir.
     
     setPlanSnap(updated);
-    fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(updated)).catch(()=>{});
+    fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(updated)).catch(()=>{});
   },[curWeekEffective,athlete?.id,weekKey]);
 
   // planSnap'e formSnap yaz — Koşu İzlerim CTL/ATL/TSB/ACWR için buildHistory çalıştırmaz
@@ -14347,7 +14388,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
        ex.tsb===newFormSnap.tsb&&ex.acwr===newFormSnap.acwr&&ex.date===newFormSnap.date)return;
     const updated={...snap,formSnap:newFormSnap};
     setPlanSnap(updated);
-    fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(updated)).catch(()=>{});
+    fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(updated)).catch(()=>{});
   },[history,athlete?.id,weekKey]);
 
   // planSnap'e weekActuals yaz — Koşu İzlerim actualKm/actualDp/actualLoad için buildHistory/calcMetrics çalıştırmaz
@@ -14364,7 +14405,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     if(ex&&ex.km===newWA.km&&ex.dp===newWA.dp&&ex.load===newWA.load)return;
     const updated={...snap,weekActuals:newWA};
     setPlanSnap(updated);
-    fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(updated)).catch(()=>{});
+    fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(updated)).catch(()=>{});
   },[weekActuals,weekTargets,athlete?.id,weekKey]);
 
   const cancelledDays = React.useMemo(()=>planSnap?.cancelledDays||{},[planSnap]);
@@ -14726,7 +14767,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       }));
     }catch(_e){}
     setPlanSnap(newSnap);
-    fbSet(`plan_snapshots/${freshAthlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
+    fbUpdate(`plan_snapshots/${freshAthlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
     setReviewMsg('✅ Plan güncellendi');
   };
 
@@ -14836,7 +14877,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     // Otomatik Firebase kaydı
     if(db||initFirebase()){
       const _ataSnap=stripUndefined(newSnap);
-      db.ref(`plan_snapshots/${athlete.id}/${weekKey}`).set(_ataSnap)
+      fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,_ataSnap)
         .then(()=>{ _planSnapsCache[athlete.id]=_ataSnap; })
         .catch(e=>console.error('Ata kayıt hatası:',e));
     }
@@ -14878,7 +14919,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     setPlanSnap(newSnap);
     if(db||initFirebase()){
       const _appSnap=stripUndefined(newSnap);
-      db.ref(`plan_snapshots/${athlete.id}/${weekKey}`).set(_appSnap)
+      fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,_appSnap)
         .then(()=>{ _planSnapsCache[athlete.id]=_appSnap; })
         .catch(e=>console.error('Onay kayıt hatası:',e));
     }
@@ -14897,7 +14938,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     setPlanSnap(newSnap);
     if(db||initFirebase()){
       const _snap=stripUndefined(newSnap);
-      db.ref(`plan_snapshots/${athlete.id}/${weekKey}`).set(_snap)
+      fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,_snap)
         .then(()=>{ _planSnapsCache[athlete.id]=_snap; })
         .catch(e=>console.error('Dinlenme onay kayıt hatası:',e));
     }
@@ -14912,7 +14953,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     const newSnap={...curSnap,overrideMap:newMap,lastSavedAt:new Date().toISOString()};
     setPlanSnap(newSnap);
     if(db||initFirebase()){
-      db.ref(`plan_snapshots/${athlete.id}/${weekKey}`).set(stripUndefined(newSnap)).catch(()=>{});
+      fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
     }
   };
 
@@ -14972,7 +15013,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     setReviewMsg(`${dateStr} antrenmanı iptal edildi${redistMsg}`);
     if(db||initFirebase()){
       const _cancelSnap=stripUndefined(newSnap);
-      db.ref(`plan_snapshots/${athlete.id}/${weekKey}`).set(_cancelSnap)
+      fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,_cancelSnap)
         .then(()=>{ _planSnapsCache[athlete.id]=_cancelSnap; })
         .catch(e=>console.error('Cancel kayıt hatası:',e));
     }
@@ -14994,7 +15035,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     setReviewMsg(`${dateStr} iptali geri alındı`);
     if(db||initFirebase()){
       const _uncancelSnap=stripUndefined(newSnap);
-      db.ref(`plan_snapshots/${athlete.id}/${weekKey}`).set(_uncancelSnap)
+      fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,_uncancelSnap)
         .then(()=>{ _planSnapsCache[athlete.id]=_uncancelSnap; })
         .catch(e=>console.error('Uncancel kayıt hatası:',e));
     }
@@ -15122,7 +15163,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     // Firebase kayıt
     if(db||initFirebase()){
       const _swapSnap=stripUndefined(newSnap);
-      db.ref(`plan_snapshots/${athlete.id}/${weekKey}`).set(_swapSnap)
+      fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,_swapSnap)
         .then(()=>{ _planSnapsCache[athlete.id]=_swapSnap; })
         .catch(e=>console.error('Swap kayıt hatası:',e));
     }
@@ -15144,7 +15185,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     const newMap={...(curSnap.overrideMap||{}),[dateStr]:newOv};
     const newSnap={...curSnap,overrideMap:newMap,lastSavedAt:new Date().toISOString()};
     setPlanSnap(newSnap);
-    fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
+    fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
   };
 
   // ── Antrenman alt başlığı güncelle (overrideMap.yapi_notu) ─────────────────
@@ -15163,7 +15204,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     const newMap={...(curSnap.overrideMap||{}),[dateStr]:newOv};
     const newSnap={...curSnap,overrideMap:newMap,lastSavedAt:new Date().toISOString()};
     setPlanSnap(newSnap);
-    fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
+    fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
   };
 
   const handleRevizeOnayDegistir=(dateStr,newVal)=>{
@@ -15177,7 +15218,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     const newMap={...(curSnap.overrideMap||{}),[dateStr]:newOv};
     const newSnap={...curSnap,overrideMap:newMap,lastSavedAt:new Date().toISOString()};
     setPlanSnap(newSnap);
-    fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
+    fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
   };
 
   if(!athlete)return React.createElement('div',{className:'empty'},'Sporcu seçilmedi.');
@@ -15267,7 +15308,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   const updated={...curSnap,selectedPrimary:val,lastSavedAt:new Date().toISOString()};
                   setPlanSnap(updated);
                   const _primSnap=stripUndefined(updated);
-                  db.ref(`plan_snapshots/${athlete.id}/${weekKey}`).set(_primSnap)
+                  fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,_primSnap)
                     .then(()=>{ _planSnapsCache[athlete.id]=_primSnap; })
                     .catch(e=>console.error('selectedPrimary kayıt hatası:',e));
                 }
@@ -15376,7 +15417,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
             onClick:()=>{
               setPlanModeLocal('optimize');
               const s=planSnapRef.current;
-              if(s&&(db||initFirebase())){const u={...s,planMode:'optimize',lastSavedAt:new Date().toISOString()};setPlanSnap(u);db.ref(`plan_snapshots/${athlete.id}/${weekKey}`).set(stripUndefined(u)).catch(()=>{});}
+              if(s&&(db||initFirebase())){const u={...s,planMode:'optimize',lastSavedAt:new Date().toISOString()};setPlanSnap(u);fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(u)).catch(()=>{});}
             },
             title:'Tüm yarışları optimize ederek haftalık hedef belirle'
           },'⚡ Optimize'),
@@ -15385,7 +15426,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
             onClick:()=>{
               setPlanModeLocal('orijinal');
               const s=planSnapRef.current;
-              if(s&&(db||initFirebase())){const u={...s,planMode:'orijinal',lastSavedAt:new Date().toISOString()};setPlanSnap(u);db.ref(`plan_snapshots/${athlete.id}/${weekKey}`).set(stripUndefined(u)).catch(()=>{});}
+              if(s&&(db||initFirebase())){const u={...s,planMode:'orijinal',lastSavedAt:new Date().toISOString()};setPlanSnap(u);fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(u)).catch(()=>{});}
             },
             title:'Sadece birincil yarış için orijinal yükleme planı'
           },'📋 Orijinal'),
@@ -15420,7 +15461,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
             const s=planSnapRef.current||{};
             const u={...s,rampModeOn:newVal,rampRatePct,lastSavedAt:new Date().toISOString()};
             setPlanSnap(u);
-            fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,u).catch(()=>{});
+            fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,u).catch(()=>{});
           }
         },rampModeOn?'📈 Rampa Açık':'📈 Rampa'),
         rampModeOn&&React.createElement(React.Fragment,null,
@@ -15433,13 +15474,13 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               const v=parseInt(e.target.value);
               const u={...(planSnapRef.current||{}),rampModeOn,rampRatePct:v,lastSavedAt:new Date().toISOString()};
               setPlanSnap(u);
-              fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,u).catch(()=>{});
+              fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,u).catch(()=>{});
             },
             onTouchEnd:e=>{
               const v=parseInt(e.target.value);
               const u={...(planSnapRef.current||{}),rampModeOn,rampRatePct:v,lastSavedAt:new Date().toISOString()};
               setPlanSnap(u);
-              fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,u).catch(()=>{});
+              fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,u).catch(()=>{});
             },
             style:{width:90,accentColor:'var(--success)',cursor:'pointer'}
           }),
@@ -16051,7 +16092,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   targetDp:nextWeek.targetDp
                 }
               };
-              fbSet(`plan_snapshots/${athlete.id}/${nextWeekKey}`,stripUndefined(updated)).catch(()=>{});
+              fbUpdate(`plan_snapshots/${athlete.id}/${nextWeekKey}`,stripUndefined(updated)).catch(()=>{});
             }
           }catch(e){console.warn('Gelecek hafta lock hatası:',e);}
         })();
@@ -16433,7 +16474,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                       if(newOverrideMap[day.date]) newOverrideMap[day.date]={...newOverrideMap[day.date],_editedAt:new Date().toISOString()};
                       const newSnap={...curSnap,rowOverrides:newRowOverrides,overrideMap:newOverrideMap,lastSavedAt:new Date().toISOString()};
                       setPlanSnap(newSnap);
-                      fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
+                      fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
                       if(_zd&&onUpdateWorkout){const mw=workouts.find(w=>w.date===day.date&&w.athleteId===athlete?.id&&(w.spor||'kosu')==='kosu');if(mw)onUpdateWorkout(mw.id,{_rowZoneDist:_zd});}
                     },
                     onSaveDetay:(label, text, rowUpdate, rowLabel)=>{
@@ -16490,7 +16531,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                       }
                       const newSnap={...curSnap,overrideMap:newOverrideMap,rowOverrides:newRowOverrides,lastSavedAt:new Date().toISOString()};
                       setPlanSnap(newSnap);
-                      fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
+                      fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
                     }
                   })
                 ):null;
@@ -16860,7 +16901,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     if(newOverrideMap[day.date]) newOverrideMap[day.date]={...newOverrideMap[day.date],_editedAt:new Date().toISOString()};
                     const newSnap={...curSnap,rowOverrides:newRowOverrides,overrideMap:newOverrideMap,lastSavedAt:new Date().toISOString()};
                     setPlanSnap(newSnap);
-                    fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
+                    fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
                     if(_zd&&onUpdateWorkout){const mw=workouts.find(w=>w.date===day.date&&w.athleteId===athlete?.id&&(w.spor||'kosu')==='kosu');if(mw)onUpdateWorkout(mw.id,{_rowZoneDist:_zd});}
                   },
                   onSaveDetay:(label, text, rowUpdate, rowLabel)=>{
@@ -16917,7 +16958,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   }
                   const newSnap={...curSnap,overrideMap:newOverrideMap,rowOverrides:newRowOverrides,lastSavedAt:new Date().toISOString()};
                   setPlanSnap(newSnap);
-                  fbSet(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
+                  fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
                   }
                 })
               ),
@@ -19940,7 +19981,7 @@ async function persistFreshFormSnap(athlete,athleteWorkouts,races,localSnap){
       return baseSnap; // değişiklik yok — gereksiz yazma yapma
     }
     const merged={...(baseSnap||{}),formSnap:newFormSnap};
-    await fbSet('plan_snapshots/'+athlete.id+'/'+weekKey,stripUndefined(merged));
+    await fbUpdate('plan_snapshots/'+athlete.id+'/'+weekKey,stripUndefined(merged));
     return merged;
   }catch(e){console.warn('formSnap anında güncelleme hatası:',e);return null;}
 }
@@ -21861,7 +21902,7 @@ function Gecmis({workouts,athletes,races,onDelete,onBulkDelete,onUpdate}){
                                     setSnapCache(s=>({...s,[cacheKey]:newSnap}));
                                     fbGet(`plan_snapshots/${w.athleteId}/${weekKey}`).then(fresh=>{
                                       const merged={...(fresh||curSnap),rowOverrides:{...((fresh||curSnap).rowOverrides||{}),[w.date]:overrides},lastSavedAt:new Date().toISOString()};
-                                      db&&db.ref(`plan_snapshots/${w.athleteId}/${weekKey}`).set(stripUndefined(merged)).catch(()=>{});
+                                      db&&fbUpdate(`plan_snapshots/${w.athleteId}/${weekKey}`,stripUndefined(merged)).catch(()=>{});
                                     }).catch(()=>{});
                                   }
                                 })
@@ -23202,7 +23243,7 @@ function App(){
           const newOverride={...planSnap.overrideMap};delete newOverride[w.date];
           const updSnap={...planSnap,cancelledDays:newCancelled,overrideMap:newOverride};
           setPlanSnapApp(updSnap);
-          fbSet(`plan_snapshots/${ath?.id}/${planSnap.weekKey}`,updSnap).catch(()=>{});
+          fbUpdate(`plan_snapshots/${ath?.id}/${planSnap.weekKey}`,updSnap).catch(()=>{});
           baseSnapForForm=updSnap;
         }
         // ── Antrenman kaydedilir kaydedilmez CTL/ATL/TSB/ACWR'ı anında hesapla ve
