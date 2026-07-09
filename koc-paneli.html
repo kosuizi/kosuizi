@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.08-1525 --><!DOCTYPE html>
+<!-- Version: v2026.07.09-1145 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.08-1525';
+const APP_VERSION='v2026.07.09-1145';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -6767,6 +6767,23 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
   // TARGET+1–WARN bpm dışarıda → sarı    "Biraz Yüksek/Düşük Nabız"
   // WARN+1–DANGER bpm          → turuncu "Çok Yüksek/Düşük Nabız"
   // DANGER üstü bpm            → kırmızı "Tehlikeli Nabız"
+  // ── Soğuma Trend Tespiti: bpmStart / bpmAvg / bpmEnd → fizyolojik trend rozeti ──
+  // drop = bpmStart − bpmEnd; dropRate = drop / faz süresi (bpm/dk).
+  // Eğri şekli: bpmAvg >> midExpected → J-eğrisi (nabız fazın büyük bölümünde yüksek kaldı).
+  const detectCooldownTrend=(bpmStart,bpmAvg,bpmEnd,durSec)=>{
+    if(bpmStart==null||bpmEnd==null) return null;
+    const drop=bpmStart-bpmEnd;
+    const durMin=durSec>0?durSec/60:null;
+    const dropRate=durMin!=null?drop/durMin:null;
+    let gecDusus=false;
+    if(bpmAvg!=null){const midExp=(bpmStart+bpmEnd)/2;if(bpmAvg-midExp>8)gecDusus=true;}
+    const not=gecDusus?' · Geç Düşüş':'';
+    if(bpmEnd>bpmStart+5)                               return{label:'Soğuma Aksadı',   color:'#ef4444',bg:'#fef2f2',icon:'↑'};
+    if(drop<10)                                         return{label:'Soğuma Yetersiz', color:'#f97316',bg:'#fff7ed',icon:'→'};
+    if(drop>=30||(dropRate!=null&&dropRate>=5)) return{label:'Soğuma Tam'+not,    color:'#16a34a',bg:'#f0fdf4',icon:'↓↓↓'};
+    if(drop>=20||(dropRate!=null&&dropRate>=3)) return{label:'Soğuma İyi'+not,    color:'#22c55e',bg:'#f0fdf4',icon:'↓↓'};
+    return                                              {label:'Soğuma Yavaş'+not, color:'#f59e0b',bg:'#fffbeb',icon:'↓'};
+  };
   // Soğuma/ısınma: zone sapması beklenen fizyolojik durum → tarafsız gri rozet
   const bpmValidation=(row)=>{
     if(!row||row.type==='header'||row._isSprint) return null; // sprint hariç tüm satırlar bpm validasyonuna açık
@@ -6794,7 +6811,13 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     const isCooldown=/soğuma|soguma/i.test(rowLabel);
     const isWarmup=/[iı]sınma|isinma/i.test(rowLabel);
     if(isWarmup  &&bpm<lo_bpm) return{label:'Isınma Nabzı', color:'#64748b',bg:'#f1f5f9',icon:'↑'};
-    if(isCooldown&&bpm<lo_bpm) return{label:'Soğuma Nabzı', color:'#64748b',bg:'#f1f5f9',icon:'↓'};
+    if(isCooldown){
+      // 3-değer trend sistemi öncelikli — bpmStart+bpmEnd girilmişse trend rozeti döndür
+      const trendBadge=detectCooldownTrend(row.bpmStart,row.bpmAvg,row.bpmEnd,rowDurSec(row));
+      if(trendBadge) return trendBadge;
+      // Geriye dönük uyumluluk: tek değer girişi → zone altı nötr gri
+      if(bpm<lo_bpm) return{label:'Soğuma Nabzı',color:'#64748b',bg:'#f1f5f9',icon:'↓'};
+    }
     // ── Toparlanma amaçlı satırlar (dinlenme/yürüyüş): ORTALAMA değil EN DÜŞÜK nabız girilir.
     // Amaç bir sonraki tekrara hazır olacak kadar toparlanmak — somut bir zorlayıcı an var, bu yüzden
     // tek yönlü kontrol: sadece "yeterince düşmedi mi" sorusu var, "çok düşük" diye bir sorun yok.
@@ -6967,6 +6990,12 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     } else if(field==='bpm'){
       // bpm: sıfır veya boş girilirse override kaldır (null → önerilen değere dön)
       upd={bpm:parseInt(rawVal)||null};
+    } else if(field==='bpmStart'||field==='bpmAvg'||field==='bpmEnd'){
+      // Soğuma 3-değer nabız sistemi — sıfır/boş → null (override kaldır)
+      const val=parseInt(rawVal)||null;
+      upd={[field]:val};
+      // bpmAvg aynı zamanda bpm alanıyla senkronize — geriye dönük uyumluluk
+      if(field==='bpmAvg') upd.bpm=val;
     }
     const origFields={};
     if(r._origPaceSec>0)    origFields._origPaceSec=r._origPaceSec;
@@ -7252,7 +7281,9 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
                 })(),
                 (()=>{
                   // Manuel bpm veya aralik ortalamasindan gelen bpm varsa badge goster
-                  const hasBpm=rowOverrides[i]?.bpm!=null||(r._aralikAveraged&&r.bpm!=null);
+                  const isCooldownRow=/soğuma|soguma/i.test(r.label||'');
+                  const hasBpm=rowOverrides[i]?.bpm!=null||(r._aralikAveraged&&r.bpm!=null)||
+                    (isCooldownRow&&(rowOverrides[i]?.bpmStart!=null||rowOverrides[i]?.bpmEnd!=null));
                   if(!hasBpm) return null;
                   const hv=bpmValidation(r);
                   return hv
@@ -7272,10 +7303,37 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
             ),
             // Ortalama Nabız — zone'dan önerilen, manuel override veya aralık ortalaması
             React.createElement('td',{style:{...cell(),
-              color:(rowOverrides[i]?.bpm||(r._aralikAveraged&&r.bpm!=null))?'#000':'#64748b',
-              fontStyle:(rowOverrides[i]?.bpm||(r._aralikAveraged&&r.bpm!=null))?'normal':'italic',
+              color:(rowOverrides[i]?.bpm||rowOverrides[i]?.bpmStart||rowOverrides[i]?.bpmEnd||(r._aralikAveraged&&r.bpm!=null))?'#000':'#64748b',
+              fontStyle:(rowOverrides[i]?.bpm||rowOverrides[i]?.bpmStart||rowOverrides[i]?.bpmEnd||(r._aralikAveraged&&r.bpm!=null))?'normal':'italic',
               fontSize:11}},
               (()=>{
+                const isCooldownRow=/soğuma|soguma/i.test(r.label||'');
+                // ── Soğuma satırı: 3-değer nabız girişi (bpmStart / bpmAvg / bpmEnd) ──
+                if(isCooldownRow&&r.type!=='header'&&!r._isSprint){
+                  const bpmS=rowOverrides[i]?.bpmStart;
+                  const bpmA=rowOverrides[i]?.bpmAvg;
+                  const bpmE=rowOverrides[i]?.bpmEnd;
+                  if(readOnly){
+                    // Sporcu paneli: değerleri salt gösterim
+                    if(bpmS==null&&bpmA==null&&bpmE==null) return React.createElement('span',{style:{color:'#94a3b8',fontSize:9}},'—');
+                    const parts=[];
+                    if(bpmS!=null) parts.push('↑'+bpmS);
+                    if(bpmA!=null) parts.push('~'+bpmA);
+                    if(bpmE!=null) parts.push('↓'+bpmE);
+                    return React.createElement('span',{style:{fontSize:9,fontFamily:'monospace',fontWeight:700}},parts.join(' '));
+                  }
+                  // Koç paneli: 3 küçük düzenlenebilir alan yan yana
+                  const mkField=(field,val,icon,iconColor)=>React.createElement('div',{style:{display:'flex',flexDirection:'column',alignItems:'center',gap:1}},
+                    React.createElement('span',{style:{fontSize:7,color:iconColor,fontWeight:700,lineHeight:1}},icon),
+                    editableCell(i,field,val!=null?val:'—')
+                  );
+                  return React.createElement('div',{style:{display:'flex',gap:4,justifyContent:'center',alignItems:'flex-end'}},
+                    mkField('bpmStart',bpmS,'↑','#94a3b8'),
+                    mkField('bpmAvg',bpmA,'~','#3b82f6'),
+                    mkField('bpmEnd',bpmE,'↓','#10b981')
+                  );
+                }
+                // ── Standart tek-değer nabız (soğuma dışı tüm satırlar) ──
                 const manualBpm=rowOverrides[i]?.bpm;
                 // Aralık ortalamasından gelen bpm (aralikOverrides'dan hesaplanmış)
                 const avgBpm=(r._aralikAveraged&&r.bpm!=null)?r.bpm:null;
