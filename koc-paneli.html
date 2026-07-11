@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.11-1335 --><!DOCTYPE html>
+<!-- Version: v2026.07.11-1459 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.11-1335';
+const APP_VERSION='v2026.07.11-1459';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -3490,7 +3490,19 @@ function SporcuModal({onClose,onSave,initial,races}){
         })
       ),
       React.createElement('div',{className:'flex-gap',style:{marginTop:16}},
-        React.createElement('button',{className:'btn btn-primary',onClick:()=>{if(!f.ad.trim())return alert('Ad alanı zorunlu!');onSave({...f,id:f.id||uid()});}},(initial?'Güncelle':'Sporcu Ekle')),
+        React.createElement('button',{className:'btn btn-primary',onClick:()=>{
+          if(!f.ad.trim())return alert('Ad alanı zorunlu!');
+          // KALİBRASYON SAYAÇ SIFIRLAMA (Temmuz 2026): vLT manuel olarak (bu formdan)
+          // değiştirildiğinde, otomatik/reçete-geri-bildirim kalibrasyon mekanizmalarının
+          // "son kalibrasyon" damgaları artık geçerli değil — manuel değer artık taban
+          // alınmalı, sistem bunu "az önce kalibre edildi" sanıp bekleme süresi (7 gün /
+          // yeni veri şartı) uygulamamalı. Bkz. aynı mantık: yeni vLT ayar çubuğu ve
+          // athlete kartındaki diğer güncelleme yolları.
+          const _vltChanged=String(f.vlt||'')!==String((initial?.vlt)||'');
+          const _payload={...f,id:f.id||uid()};
+          if(_vltChanged){_payload.vltLastCalib=null;_payload.fbLastCalib=null;}
+          onSave(_payload);
+        }},(initial?'Güncelle':'Sporcu Ekle')),
         React.createElement('button',{className:'btn',onClick:onClose},'İptal')
       )
     )
@@ -4892,7 +4904,14 @@ const TUR_ZONE_DIST={
 // Kayıt yoksa güncel profil fallback olarak kullanılır.
 function athleteAtDate(ath,dateStr){
   if(!ath) return ath;
-  const hist=(ath.profileHistory||[]).filter(s=>s.date&&s.lthr).sort((a,b)=>a.date.localeCompare(b.date));
+  // DÜZELTME (Temmuz 2026 — vLT ayar çubuğu): önceden yalnızca s.lthr aranıyordu —
+  // LTHR hiç girilmemiş (yalnızca vLT/pace ile takip edilen) sporcularda hiçbir
+  // snapshot uygun bulunamıyor, athleteAtDate sessizce güncel (canlı) profile
+  // düşüyordu. Bu da "geçmiş antrenmanın pace rozeti o günün vLT'sine göre
+  // değerlendirilsin" düzeltmesini tam olarak bu sporcular için devre dışı
+  // bırakırdı. s.vlt de kabul edilerek kapsam genişletildi — lthr bazlı geçmiş
+  // davranış aynen korunur (OR ile genişletme, daraltma değil).
+  const hist=(ath.profileHistory||[]).filter(s=>s.date&&(s.lthr||s.vlt)).sort((a,b)=>a.date.localeCompare(b.date));
   if(!hist.length) return ath;
   const snap=hist.filter(s=>s.date<=dateStr).slice(-1)[0];
   if(!snap) return ath; // tarihe öncesinde kayıt yok → güncel profil
@@ -6874,8 +6893,17 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
         :{label:'Çok Hızlı',color:'#ef4444',bg:'#fef2f2',icon:'▲▲'};
     }
     // Zone sınırlarını kullan (lo_ms / hi_ms mevcut ise)
+    // KÖK NEDEN DÜZELTMESİ (Temmuz 2026 — vLT ayar çubuğu sonrası "biraz hızlı" etiketi
+    // kayması): Burada ÖNCEDEN canlı `zones` (sporcunun ŞU ANKİ vLT'si) kullanılıyordu.
+    // Bu, TAMAMLANMIŞ bir antrenmanın girilmiş gerçek pace'ini, o antrenmandan SONRA
+    // değişmiş olabilecek bir vLT'ye göre yeniden değerlendiriyordu — yani koç vLT'yi
+    // bugün ayarladığında geçmiş haftalardaki "Biraz Hızlı/Yavaş" rozetleri sessizce
+    // değişebiliyordu. `_mZones` (measureZones prop'undan, athleteAtDate ile o GÜNÜN
+    // profiline göre hesaplanır — bkz. çağrı noktalarındaki aynı not) o günün vLT'sini
+    // kullanır; measureZones sağlanmamışsa (örn. tarih bilgisi olmayan bağlamlarda)
+    // `_mZones=measureZones||zones` ile canlıya düşer, davranış değişmez.
     const zi=row._origZIdx;
-    const pz=zi!=null?zones?.paceZones?.[zi]:null;
+    const pz=zi!=null?_mZones?.paceZones?.[zi]:null;
     if(pz?.lo_ms&&pz?.hi_ms){
       const fastBoundarySec=Math.round(1000/pz.hi_ms); // hızlı sınır (az sn/km)
       const slowBoundarySec=Math.round(1000/pz.lo_ms); // yavaş sınır (çok sn/km)
@@ -13975,6 +14003,58 @@ function DinlenmeNotTA({initialNote,onSave}){
   },'+ not ekle');
 }
 
+// ── vLT Ayar Çubuğu (Temmuz 2026) ────────────────────────────────────────────
+// Koçun antrenman reçetelerindeki pace'leri hafifçe kaydırabilmesi için: sporcunun
+// GÜNCEL vLT'sini (manuel girilmişse doğrudan, yoksa PB/VO2max tahminini) gösterir,
+// ▲/▼ ile ±0.02 m/s adımlarla ayarlanabilir. vLT tüm zone/pace hesaplamalarının tek
+// kaynağı olduğundan (calcZones→adimToRows, bkz. ~satır 5642: pace zIdx'ten CANLI
+// hesaplanır, satırlara baked/sabit yazılmaz) — burada athlete.vlt güncellendiğinde:
+//   • Henüz TAMAMLANMAMIŞ/onaylanmamış reçete satırları otomatik yeni pace'i yansıtır
+//     (hem koç panelinde hem Koşu İzlerim'de — aynı calcZones(athlete) kaynağını okur).
+//   • TAMAMLANMIŞ antrenmanların pace'i ASLA etkilenmez — onlar workouts kaydındaki
+//     gerçek/manuel girilmiş değerlerdir, zones/vLT hesabına hiç girmez.
+// KALİBRASYON SAYAÇ SIFIRLAMA: AthleteEditForm'daki AYNI mantık (~satır 3495) — vLT
+// buradan (veya başka herhangi bir yerden) manuel değiştiğinde vltLastCalib/fbLastCalib
+// sıfırlanır; aksi halde otomatik kalibrasyon mekanizmaları manuel değeri "az önce
+// kalibre edildi" sanıp gereksiz yere bekler ya da üzerine yazmaya çalışır.
+const VLT_BAR_MIN=1.5, VLT_BAR_MAX=7.0, VLT_BAR_STEP=0.02;
+function VltAyarCubugu({athlete,onUpdateAthlete}){
+  if(!athlete||!onUpdateAthlete) return null;
+  const detail=calcVltDetail(athlete);
+  const curVlt=detail.vlt;
+  if(!curVlt||curVlt<=0) return null; // hiçbir kaynaktan (manuel/PB/VO2max) vLT üretilemiyorsa gösterme
+  const adjust=(delta)=>{
+    let newVlt=round2(curVlt+delta);
+    if(newVlt<VLT_BAR_MIN) newVlt=VLT_BAR_MIN;
+    if(newVlt>VLT_BAR_MAX) newVlt=VLT_BAR_MAX;
+    if(newVlt===curVlt) return;
+    onUpdateAthlete({...athlete,vlt:String(newVlt),vltLastCalib:null,fbLastCalib:null});
+  };
+  return React.createElement('div',{
+    className:'flex-gap',
+    style:{alignItems:'center',gap:5,padding:'3px 6px 3px 10px',background:'var(--bg-secondary)',borderRadius:'var(--radius)',border:'1px solid var(--border)'},
+    title:'vLT kaynağı: '+detail.label+' — reçetelerdeki pace\'leri hafifçe kaydırmak için kullanın (tamamlanmış antrenmanları etkilemez)'
+  },
+    React.createElement('span',{style:{fontSize:11,color:'var(--text-secondary)'}},'⚡ vLT'),
+    React.createElement('button',{
+      className:'btn btn-sm',
+      style:{padding:'0px 8px',fontSize:13,lineHeight:1.6},
+      onClick:()=>adjust(-VLT_BAR_STEP),
+      title:'vLT azalt (pace yavaşlar) — '+VLT_BAR_STEP+' m/s'
+    },'▼'),
+    React.createElement('span',{style:{fontSize:13,fontWeight:700,minWidth:56,textAlign:'center'}},
+      curVlt.toFixed(2)+' m/s'
+    ),
+    React.createElement('button',{
+      className:'btn btn-sm',
+      style:{padding:'0px 8px',fontSize:13,lineHeight:1.6},
+      onClick:()=>adjust(VLT_BAR_STEP),
+      title:'vLT artır (pace hızlanır) — +'+VLT_BAR_STEP+' m/s'
+    },'▲'),
+    React.createElement('span',{style:{fontSize:10,color:'var(--text-tertiary)'}},'(≈'+fmtPaceFromMS(curVlt)+' /km · '+detail.label+')')
+  );
+}
+
 function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapInit,onPlanSnapChange,onAthletesRefresh,onSaveWorkout,onUpdateWorkout,onUpdateAthlete}){  const [showLoading,setShowLoading]=useState(false);
   const [selectedPrimary,setSelectedPrimary]=useState(null);
   const [planMode,setPlanModeLocal]=useState('optimize');
@@ -15427,6 +15507,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
             title:'Planı mevcut antrenman ve sporcu verilerine göre yeniden oluştur',
             onClick:handlePlanGuncelle
           },'🔄 Planı Güncelle'),
+          React.createElement(VltAyarCubugu,{athlete,onUpdateAthlete}),
 
           // generatedAt + uyarılar
           planSnap?.lastSavedAt&&React.createElement('span',{style:{fontSize:10,color:'var(--text-tertiary)'}},
@@ -16248,9 +16329,20 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       // curWeekEffective yoksa (plan yok / gelecek hafta) null döner
       const weekEffKm=week.weekOff===0&&displayCurWeekEff?displayCurWeekEff.effKm:0;
       const weekEffDp=week.weekOff===0&&displayCurWeekEff?displayCurWeekEff.effDp:0;
+      // KÖK NEDEN DÜZELTMESİ (Temmuz 2026 — Koç Paneli / Koşu İzlerim "Hedef" uyuşmazlığı):
+      // week.wt.targetKm/targetDp CANLI hesaplanır — sporcunun CTL'si hafta İÇİNDE
+      // antrenman girdikçe değişir, bu da targetKm'yi hafta bitmeden kaydırır (bkz. yukarıdaki
+      // "Dondurma kuralı" notu, ~satır 14404: weekEff.origKm/effKm hafta boyunca sabit kalmalı).
+      // Koşu İzlerim SADECE dondurulmuş planSnap.weekEff.origKm/origDp'yi okur, hiç canlı
+      // hesap yapmaz — bu yüzden koç paneli zamanla "Hedef" olarak Koşu İzlerim'den FARKLI
+      // (ve haftanın ortasında kendi kendine değişen) bir sayı gösterebiliyordu. "Bu Hafta"
+      // için gösterim artık dondurulmuş origKm/origDp'yi esas alır — weekEff henüz yoksa
+      // (çok eski kayıt/ilk yükleme) canlı week.wt değerine düşer.
+      const weekOrigKm=week.weekOff===0&&displayCurWeekEff?.origKm>0?displayCurWeekEff.origKm:week.wt.targetKm;
+      const weekOrigDp=week.weekOff===0&&displayCurWeekEff?.origDp>0?displayCurWeekEff.origDp:week.wt.targetDp;
       const weekShowRevised=week.weekOff===0&&displayCurWeekEff?.isRevised&&week.wt&&(
-        (week.wt.targetKm>0&&weekEffKm<week.wt.targetKm&&(week.wt.targetKm-weekEffKm)/week.wt.targetKm>0.05)||
-        (week.wt.targetDp>0&&weekEffDp<week.wt.targetDp&&(week.wt.targetDp-weekEffDp)/week.wt.targetDp>0.10)||
+        (weekOrigKm>0&&weekEffKm<weekOrigKm&&(weekOrigKm-weekEffKm)/weekOrigKm>0.05)||
+        (weekOrigDp>0&&weekEffDp<weekOrigDp&&(weekOrigDp-weekEffDp)/weekOrigDp>0.10)||
         week.wt.isRaceWeek
       );
       const shareHaftalikRecete=async()=>{
@@ -16281,45 +16373,51 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
             React.createElement('span',{style:{color:'var(--text-secondary)'}},'Hedef:'),
             weekShowRevised
               ?React.createElement('span',null,
-                React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',fontWeight:400,marginRight:4}},week.wt.targetKm+' km'),
+                React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',fontWeight:400,marginRight:4}},weekOrigKm+' km'),
                 React.createElement('span',{style:{fontWeight:700,color:'var(--warn)'}},weekEffKm+' km')
               )
               // Gelecek hafta + ramp aktifse projeksiyon hedefini göster
               :(week.weekOff===1&&rampModeOn&&displayCurWeekEff?.isRevised&&(()=>{
                   const _p1=round1((displayCurWeekEff.effKm||0)*(1+rampRatePct/100));
-                  const _showP1=_p1>0&&_p1<week.wt.targetKm*0.99;
+                  const _showP1=_p1>0&&_p1<weekOrigKm*0.99;
                   return _showP1
                     ?React.createElement('span',null,
-                      React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',fontWeight:400,marginRight:4}},week.wt.targetKm+' km'),
+                      React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',fontWeight:400,marginRight:4}},weekOrigKm+' km'),
                       React.createElement('span',{style:{fontWeight:700,color:'var(--success)'}},_p1+' km')
                     )
-                    :React.createElement('span',{style:{fontWeight:600}},week.wt.targetKm+' km');
+                    :React.createElement('span',{style:{fontWeight:600}},weekOrigKm+' km');
                 })())
-              ||React.createElement('span',{style:{fontWeight:600}},week.wt.targetKm+' km'),
-            week.wt.targetDp>0&&(weekShowRevised
+              ||React.createElement('span',{style:{fontWeight:600}},weekOrigKm+' km'),
+            weekOrigDp>0&&(weekShowRevised
               ?React.createElement('span',null,
-                React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',fontWeight:400,marginRight:4}},'D+ '+week.wt.targetDp+'m'),
+                React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',fontWeight:400,marginRight:4}},'D+ '+weekOrigDp+'m'),
                 React.createElement('span',{style:{fontWeight:700,color:'var(--warn)'}},'D+ '+weekEffDp+'m')
               )
-              :React.createElement('span',{style:{fontWeight:600}},'D+ '+week.wt.targetDp+'m')),
+              :React.createElement('span',{style:{fontWeight:600}},'D+ '+weekOrigDp+'m')),
             (()=>{
               // Haftanın uzunu — bu kartta GÖRÜNEN hedeften (revize/rampa projeksiyonu
               // dahil) pay alır, ham orijinal hedeften değil — yukarıdaki "Hedef:" rozeti
               // ile aynı mantık. Orijinal farklıysa üstü çizili gösterilir.
+              // DÜZELTME (Temmuz 2026 — sporcu haftanın uzununu net bilmeli): "Hedef:"
+              // rozetiyle aynı sebepten (bkz. yukarıdaki weekOrigKm notu), week.wt.targetKm
+              // CANLI hesaplandığından "orijinal" referans olarak kullanılırsa Uzun hedefi de
+              // hafta içinde CTL değiştikçe kayardı. Artık dondurulmuş weekOrigKm/weekOrigDp
+              // esas alınıyor — sporcu haftanın başında gördüğü Uzun mesafeyi hafta boyunca
+              // (revize/rampa dışında) aynı görür.
               // DÜZELTME (06.07.2026 sohbeti): isRecovery artık gizlemiyor — bkz.
               // tablodaki aynı düzeltme notu (~satır 15665). Sadece isRaceWeek/
               // Yarış Sonrası gizli kalıyor.
               if(week.wt.isRaceWeek||week.wt.phase==='Yarış Sonrası')return null;
-              let _dKm=week.wt.targetKm, _dDp=week.wt.targetDp;
+              let _dKm=weekOrigKm, _dDp=weekOrigDp;
               if(weekShowRevised){
                 _dKm=weekEffKm;
-                if(week.wt.targetDp>0)_dDp=weekEffDp;
+                if(weekOrigDp>0)_dDp=weekEffDp;
               } else if(week.weekOff===1&&rampModeOn&&displayCurWeekEff?.isRevised){
                 const _p1=round1((displayCurWeekEff.effKm||0)*(1+rampRatePct/100));
-                if(_p1>0&&_p1<week.wt.targetKm*0.99)_dKm=_p1;
+                if(_p1>0&&_p1<weekOrigKm*0.99)_dKm=_p1;
               }
               const _uzunHedefHafta=estimateUzunKosuHedefi(_dKm,_dDp,week.wt.phase,effectiveDisiplin(athlete,plan.primary),_uzunZonesHafta,_uzunBandHafta,plan.primary?.mesafe);
-              const _uzunHedefHaftaOrijinal=estimateUzunKosuHedefi(week.wt.targetKm,week.wt.targetDp,week.wt.phase,effectiveDisiplin(athlete,plan.primary),_uzunZonesHafta,null,plan.primary?.mesafe);
+              const _uzunHedefHaftaOrijinal=estimateUzunKosuHedefi(weekOrigKm,weekOrigDp,week.wt.phase,effectiveDisiplin(athlete,plan.primary),_uzunZonesHafta,null,plan.primary?.mesafe);
               const _haftalikDegisti=_uzunHedefHaftaOrijinal.km!==_uzunHedefHafta.km;
               const _haftalikDpDegisti=_uzunHedefHaftaOrijinal.dp>0&&_uzunHedefHaftaOrijinal.dp!==_uzunHedefHafta.dp;
               return _uzunHedefHafta.km>0&&React.createElement('span',{
@@ -21987,6 +22085,9 @@ function Gecmis({workouts,athletes,races,onDelete,onBulkDelete,onUpdate}){
                               : ath&&React.createElement(ReceteTablosu,{
                                   yapilar:injectRowsFromTpl(kosuYapilarAl(planDay),resolveEffectiveTip(planDay.tip,planDay.yapi_notu,planDay.baslik),planDay.yapi_notu,planDay.sure_dk,calcZones(ath),ath.disiplin),
                                   zones:calcZones(ath),
+                                  // Bkz. haftalık plan kartındaki aynı not — "Biraz Hızlı/Yavaş" rozeti
+                                  // bu antrenmanın tarihindeki vLT'ye göre değerlendirilsin, bugünkü vLT'ye göre değil.
+                                  measureZones:calcZones(athleteAtDate(ath,w.date)),
                                   isYuruyus:planDay.isYuruyus,
                                   tip:resolveEffectiveTip(planDay.tip,planDay.yapi_notu,planDay.baslik),
                                   savedOverrides:(snapCache[cacheKey]?.rowOverrides||{})[w.date],
@@ -24394,6 +24495,9 @@ function SporcuPlanView(){
         ?React.createElement(ReceteTablosu,{
             yapilar:filteredYapilar,
             zones,tip:_displayTip,readOnly:true,
+            // Bkz. koç panelindeki aynı not — "Biraz Hızlı/Yavaş" rozeti bu günün
+            // tarihindeki vLT'ye göre değerlendirilsin, bugünkü (görüntüleme anındaki) vLT'ye göre değil.
+            measureZones:calcZones(athleteAtDate(athlete,info.date)),
             savedOverrides:(planSnap?.rowOverrides||{})[info.date],
             savedCuePatches:(planSnap?.overrideMap?.[info.date]?._cuePatch)||{},
             actualOrtNabiz:split.kosuActuals.find(w=>parseFloat(w.ort_nabiz)>0)?.ort_nabiz||null
@@ -24965,6 +25069,9 @@ function SporcuPlanView(){
                               :React.createElement(ReceteTablosu,{
                                   yapilar:injectRowsFromTpl(kosuYapilarAl(planDayH),resolveEffectiveTip(planDayH.tip,planDayH.yapi_notu,planDayH.baslik),planDayH.yapi_notu,planDayH.sure_dk,zones,athlete.disiplin),
                                   zones,
+                                  // Bkz. aynı not diğer ReceteTablosu çağrılarında — bu geçmiş antrenmanın
+                                  // pace rozeti o günün vLT'sine göre değerlendirilsin.
+                                  measureZones:calcZones(athleteAtDate(athlete,w.date)),
                                   isYuruyus:planDayH.isYuruyus,
                                   tip:resolveEffectiveTip(planDayH.tip,planDayH.yapi_notu,planDayH.baslik),
                                   savedOverrides:(snapCacheH[weekKey]?.rowOverrides||{})[w.date],
