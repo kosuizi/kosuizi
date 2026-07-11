@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.11-2036 --><!DOCTYPE html>
+<!-- Version: v2026.07.11-2101 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.11-2036';
+const APP_VERSION='v2026.07.11-2101';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -16405,6 +16405,16 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         (weekOrigDp>0&&weekEffDp<weekOrigDp&&(weekOrigDp-weekEffDp)/weekOrigDp>0.10)||
         week.wt.isRaceWeek
       );
+      // DÜZELTME (Temmuz 2026 — "Kalan" hesabı yanlış kaynaktan besleniyordu):
+      // "Kalan", "Hedef:" rozetinde GÖRÜNEN sayıdan (revize/rampa projeksiyonu dahil)
+      // hesaplanmalı — "📋 Önerilen" (reçete satır toplamı) FARKLI bir sayıdır ve
+      // revizyonu yansıtmaz. hedefGosterilenKm, "Hedef:" rozetiyle AYNI mantığı kullanır
+      // (tek doğruluk kaynağı) — böylece ekranda görünen Hedef ile Kalan hesabı tutarlı olur.
+      const _rampProjKm=week.weekOff===1&&rampModeOn&&displayCurWeekEff?.isRevised
+        ?round1((displayCurWeekEff.effKm||0)*(1+rampRatePct/100))
+        :0;
+      const _showRampProj=_rampProjKm>0&&_rampProjKm<weekOrigKm*0.99;
+      const hedefGosterilenKm=weekShowRevised?weekEffKm:(_showRampProj?_rampProjKm:weekOrigKm);
       const shareHaftalikRecete=async()=>{
         const el=haftalikReceteRef.current;
         if(!el)return;
@@ -16505,11 +16515,25 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
             },'📋 Önerilen: '+haftaOneriKm+' km'+(haftaOneriDp>0?' / D+'+haftaOneriDp+'m':'')),
             week.wkActualKm>0&&React.createElement('span',{style:{color:'var(--success)'}},'Gerçek: '+week.wkActualKm+' km'+(week.wkActualDp>0?' / D+'+week.wkActualDp+'m':'')),
             (()=>{
-              const _kalanKm=round1(haftaOneriKm-week.wkActualKm);
-              return haftaOneriKm>0&&_kalanKm>0&&React.createElement('span',{
-                style:{color:'var(--warn)'},
-                title:'Önerilen ('+haftaOneriKm+'km) − Gerçek ('+week.wkActualKm+'km)'
-              },'⏳ Kalan: '+_kalanKm+' km');
+              const _kalanKm=round1(hedefGosterilenKm-week.wkActualKm);
+              if(!(hedefGosterilenKm>0&&_kalanKm>0))return null;
+              // ±%15 tolerans penceresi — dosyada haftalık km hedefi için zaten kullanılan
+              // aynı antrenman bilimi ilkesi (bkz. ~satır 11014 kmToleransAlt/Ust): haftalık
+              // hacim ±%10–15 aralığında esnetilebilir kabul edilir. Kalan antrenmanlar için
+              // de aynı esneklik aralığı, sporcunun tam 8.3km değil, bu bant içinde bir
+              // mesafe koşmasının da hedefe uygun sayılacağını gösteren bir rehberdir.
+              const _kalanAlt=round1(_kalanKm*0.85);
+              const _kalanUst=round1(_kalanKm*1.15);
+              return React.createElement(React.Fragment,null,
+                React.createElement('span',{
+                  style:{color:'var(--warn)'},
+                  title:'Hedef ('+hedefGosterilenKm+'km) − Gerçek ('+week.wkActualKm+'km)'
+                },'⏳ Kalan: '+_kalanKm+' km'),
+                React.createElement('span',{
+                  style:{color:'var(--text-secondary)',fontSize:11},
+                  title:'Kalan antrenmanlar için ±%15 esneklik penceresi — haftalık hacim toleransıyla aynı ilke'
+                },'🎯 '+_kalanAlt+'–'+_kalanUst+' km')
+              );
             })()
           ),
           antrenmanGunleri.length>0&&React.createElement('button',{
