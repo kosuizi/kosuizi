@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.10-1336 --><!DOCTYPE html>
+<!-- Version: v2026.07.11-1245 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.10-1336';
+const APP_VERSION='v2026.07.11-1245';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -14022,10 +14022,22 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       prevRampAthleteIdRef.current=athlete.id;
     }
     fbGet(`plan_snapshots/${athlete.id}/${prevWeekKey}`).then(prev=>{
+      if(rampDeepSearchTokenRef.current!==_rampToken) return prev; // sporcu bu sırada değişti — geç dönen prevWeekSnap'i yazma
       if(prev?.weekEff?.isRevised) setPrevWeekSnap(prev);
       return prev;
     }).catch(()=>null).then(prev=>{
       fbGet(`plan_snapshots/${athlete.id}/${weekKey}`).then(stored=>{
+        // KÖK NEDEN DÜZELTMESİ (Temmuz 2026 — sporcular arası veri sızıntısı):
+        // Koç hızlı sporcu değiştirdiğinde, önceki sporcunun bu zincirdeki fbGet'i
+        // GEÇ dönebiliyordu. Token kontrolü olmadan setPlanSnap(snap) burada önceki
+        // sporcunun (örn. Göksel Çelik) overrideMap'ini — dolayısıyla Pazar önerisini —
+        // ekranda o an gösterilen YENİ sporcuya (örn. Erhan Kaya) uyguluyordu, çünkü
+        // overrideMap yalnızca tarihe göre eşleşiyor, sporcu kimliği hiç kontrol
+        // edilmiyordu. "Programı Güncelle" bunu geçici düzeltiyordu çünkü o akış
+        // senkron/direkt setPlanSnap çağırıp doğru sporcuyla üretilmiş taze snapshot'ı
+        // yazıyordu. Aşağıdaki token kontrolü, rampa derin-arama döngüsünde zaten
+        // kullanılan aynı deseni bu ana snapshot fetch zincirine de uygular.
+        if(rampDeepSearchTokenRef.current!==_rampToken) return;
         const snap=stored||null;
         snapFetchOkRef.current=true;
         if(snap){
@@ -14067,16 +14079,19 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         }
         setSnapReady(true);
       }).catch(()=>{
+        if(rampDeepSearchTokenRef.current!==_rampToken) return;
         snapFetchOkRef.current=false;
         setSnapReady(true);
       });
     });
     
     // Geçmiş 10 hafta frozen targets + weekEff (revize hedefler) yükle
+    // (aynı staleness token — sporcu bu sırada değiştiyse geç dönen sonuçlar yazılmaz)
     (async()=>{
       const frozen={};
       const effMap={};
       for(let w=-10;w<0;w++){
+        if(rampDeepSearchTokenRef.current!==_rampToken) return;
         const wk=getWeekKey(w);
         try{
           const snap=await fbGet(`plan_snapshots/${athlete.id}/${wk}`);
@@ -14085,6 +14100,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
           if(snap?.weekEff) effMap[wk]=snap.weekEff;
         }catch(e){}
       }
+      if(rampDeepSearchTokenRef.current!==_rampToken) return;
       setFrozenTargets(frozen);
       setPastWeekEffs(effMap);
     })();
