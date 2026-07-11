@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.11-1459 --><!DOCTYPE html>
+<!-- Version: v2026.07.11-1533 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.11-1459';
+const APP_VERSION='v2026.07.11-1533';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -2094,6 +2094,29 @@ async function fbSet(key,val){
 // alanlara (başka bir yazıcının az önce eklediği alanlar dahil) DOKUNMAZ. Bu, yarışı
 // DB seviyesinde kökten çözer — çağıran taraf hangi alanların "yeni" olduğunu bilmek
 // zorunda değildir, sadece elindeki (belki bayat) kopyayı gönderir, DB eksik alanları korur.
+// Firebase'in .update() ile desteklediği "çoklu-yol" (multi-location) anahtarları —
+// örn. {'rowOverrides/2026-07-14': {...}} — SADECE o alt-yolu değiştirir, kardeş
+// tarihlere veya diğer üst-seviye alanlara dokunmaz. localStorage yedek/ayna kopyası
+// düz obje olduğundan bu eğik-çizgili anahtarları elle iç içe (nested) yerleştirmemiz
+// gerekiyor — aksi halde localStorage'da 'rowOverrides/2026-07-14' diye DÜZ bir anahtar
+// oluşur ve sonraki okumalar (cur.rowOverrides[date] bekleyen kod) bunu hiç bulamaz.
+function _setNestedPath(obj,path,value){
+  const parts=path.split('/');
+  let cur=obj;
+  for(let i=0;i<parts.length-1;i++){
+    if(typeof cur[parts[i]]!=='object'||cur[parts[i]]===null) cur[parts[i]]={};
+    cur=cur[parts[i]];
+  }
+  cur[parts[parts.length-1]]=value;
+}
+function _mergeCleanIntoLocal(cur,clean){
+  const out={...cur};
+  for(const k of Object.keys(clean)){
+    if(k.includes('/')) _setNestedPath(out,k,clean[k]);
+    else out[k]=clean[k];
+  }
+  return out;
+}
 async function fbUpdate(key,val){
   if(_sessionLocked){
     console.warn('[Oturum Kilidi] Bu sekme artık aktif oturum değil, yazma engellendi:',key);
@@ -2102,18 +2125,18 @@ async function fbUpdate(key,val){
   const clean=stripUndefined(val);
   if(!db&&!initFirebase()){
     const cur=lsGet(key)||{};
-    lsSet(key,{...cur,...clean});
+    lsSet(key,_mergeCleanIntoLocal(cur,clean));
     return;
   }
   try{
     if(_authReady) await _authReady; // Auth bitmeden yazma yapma
     await db.ref(key).update(clean);
     const cur=lsGet(key)||{};
-    lsSet(key,{...cur,...clean});
+    lsSet(key,_mergeCleanIntoLocal(cur,clean));
   }catch(e){
     console.warn('fbUpdate error',key,e);
     const cur=lsGet(key)||{};
-    lsSet(key,{...cur,...clean});
+    lsSet(key,_mergeCleanIntoLocal(cur,clean));
     if(key.includes('plan_snapshots')){
       console.error('PLAN KAYIT HATASI (update):',e.message,e.code);
     }
@@ -14925,6 +14948,23 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
   const handleManuelAta=(dateStr,tpl)=>{
     const now=new Date();
     const curSnap=planSnapRef.current;
+    // KORUMA (Temmuz 2026 — gerçek satır verisi kaybı): Ata her zaman o günün eski
+    // satır-bazlı override'larını (rowOverrides — koçun tek tek girdiği gerçek mesafe/
+    // pace/nabız) SİLER (bkz. birkaç satır aşağıda: delete newRowOverrides[dateStr]).
+    // Bu, henüz antrenman yapılmamış/gelecek bir günü yeniden atarken doğru davranış
+    // (eski satır yapısı yeni şablonla uyuşmaz). Ancak o gün için zaten TAMAMLANMIŞ bir
+    // antrenman kaydı (workouts) VE girilmiş satır override'ları varsa, Ata'yı tekrar
+    // kullanmak koçun az önce tek tek girdiği gerçekleşen değerleri sessizce siler —
+    // tablo geriye, o zone'un hesaplanan hedef pace'ine/ortalama nabız tahminine döner
+    // (tüm tekrarlar aynı görünür, çünkü artık gerçek değil şablon değeri gösterilir).
+    // Bu yüzden bu spesifik kombinasyonda (gerçek kayıt + mevcut satır düzenlemesi)
+    // açık onay istenir; onaylanmazsa atama iptal edilir, hiçbir şey değişmez.
+    const _hasActualForDate=(workouts||[]).some(w=>w.athleteId===athlete.id&&w.date===dateStr);
+    const _hasRowOvForDate=!!(curSnap?.rowOverrides?.[dateStr]&&Object.keys(curSnap.rowOverrides[dateStr]).length>0);
+    if(_hasActualForDate&&_hasRowOvForDate){
+      const _confirmMsg=dateStr+' için tamamlanmış bir antrenman kaydı ve satır bazlı düzenlemeler (mesafe/pace/nabız) var.\n\nYeni bir antrenman atamak bu düzenlemeleri SİLECEK ve tabloyu şablon hedef değerlerine döndürecektir.\n\nDevam edilsin mi?';
+      if(!confirm(_confirmMsg)) return;
+    }
     // ── Dinlenme: sistemdeki standart dinlenme temsiliyle BİREBİR aynı şekilde kaydet ──
     // Aşağıdaki genel şablon akışı (sure_dk||50 fallback'i, tip'e göre yükHedef çarpanı vb.)
     // dinlenme için uygun değil: sure_dk:0 falsy olduğundan ||50 devreye girip 50 dk gibi
@@ -16667,9 +16707,20 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                       const newRowOverrides={...(curSnap.rowOverrides||{}),[day.date]:cleanOverrides};
                       const newOverrideMap={...(curSnap.overrideMap||{})};
                       if(newOverrideMap[day.date]) newOverrideMap[day.date]={...newOverrideMap[day.date],_editedAt:new Date().toISOString()};
-                      const newSnap={...curSnap,rowOverrides:newRowOverrides,overrideMap:newOverrideMap,lastSavedAt:new Date().toISOString()};
+                      const _lastSavedAt=new Date().toISOString();
+                      const newSnap={...curSnap,rowOverrides:newRowOverrides,overrideMap:newOverrideMap,lastSavedAt:_lastSavedAt};
                       setPlanSnap(newSnap);
-                      fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
+                      // KÖK NEDEN DÜZELTMESİ (Temmuz 2026 — satır girişlerinin sessizce kaybolması):
+                      // Önceden TÜM snapshot (newSnap) tek seferde yazılıyordu — rowOverrides
+                      // BAŞKA bir tarih için de aynı anda/yakın zamanda (bu satırdaki veya başka
+                      // bir effect'teki) bayat bir kopya üzerinden yazılırsa, hangisi SONRA
+                      // tamamlanırsa o kazanıp diğerinin az önce kaydettiği satırı sessizce silerdi.
+                      // Çözüm: Firebase'in çoklu-yol (multi-location) update'i ile YALNIZCA bu
+                      // günün rowOverrides alt-yoluna yaz — kardeş tarihlere veya başka herhangi
+                      // bir üst-seviye alana (weekEff, rampModeOn, formSnap vb.) asla dokunmaz.
+                      const _multiUpdate={['rowOverrides/'+day.date]:cleanOverrides,lastSavedAt:_lastSavedAt};
+                      if(newOverrideMap[day.date]) _multiUpdate['overrideMap/'+day.date+'/_editedAt']=newOverrideMap[day.date]._editedAt;
+                      fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,_multiUpdate).catch(()=>{});
                       if(_zd&&onUpdateWorkout){const mw=workouts.find(w=>w.date===day.date&&w.athleteId===athlete?.id&&(w.spor||'kosu')==='kosu');if(mw)onUpdateWorkout(mw.id,{_rowZoneDist:_zd});}
                     },
                     onSaveDetay:(label, text, rowUpdate, rowLabel)=>{
@@ -17094,9 +17145,14 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     const newRowOverrides={...(curSnap.rowOverrides||{}),[day.date]:cleanOverrides};
                     const newOverrideMap={...(curSnap.overrideMap||{})};
                     if(newOverrideMap[day.date]) newOverrideMap[day.date]={...newOverrideMap[day.date],_editedAt:new Date().toISOString()};
-                    const newSnap={...curSnap,rowOverrides:newRowOverrides,overrideMap:newOverrideMap,lastSavedAt:new Date().toISOString()};
+                    const _lastSavedAt=new Date().toISOString();
+                    const newSnap={...curSnap,rowOverrides:newRowOverrides,overrideMap:newOverrideMap,lastSavedAt:_lastSavedAt};
                     setPlanSnap(newSnap);
-                    fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
+                    // Bkz. yukarıdaki "Haftalık Reçete" panelindeki aynı not — sadece bu günün
+                    // rowOverrides alt-yoluna yaz, kayıp güncelleme (lost update) yarışını önler.
+                    const _multiUpdate={['rowOverrides/'+day.date]:cleanOverrides,lastSavedAt:_lastSavedAt};
+                    if(newOverrideMap[day.date]) _multiUpdate['overrideMap/'+day.date+'/_editedAt']=newOverrideMap[day.date]._editedAt;
+                    fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,_multiUpdate).catch(()=>{});
                     if(_zd&&onUpdateWorkout){const mw=workouts.find(w=>w.date===day.date&&w.athleteId===athlete?.id&&(w.spor||'kosu')==='kosu');if(mw)onUpdateWorkout(mw.id,{_rowZoneDist:_zd});}
                   },
                   onSaveDetay:(label, text, rowUpdate, rowLabel)=>{
@@ -22095,12 +22151,13 @@ function Gecmis({workouts,athletes,races,onDelete,onBulkDelete,onUpdate}){
                                   onSaveOverrides:(overrides)=>{
                                     const curSnap=snapCache[cacheKey]||{};
                                     const newRowOverrides={...(curSnap.rowOverrides||{}),[w.date]:overrides};
-                                    const newSnap={...curSnap,rowOverrides:newRowOverrides,lastSavedAt:new Date().toISOString()};
+                                    const _lastSavedAt=new Date().toISOString();
+                                    const newSnap={...curSnap,rowOverrides:newRowOverrides,lastSavedAt:_lastSavedAt};
                                     setSnapCache(s=>({...s,[cacheKey]:newSnap}));
-                                    fbGet(`plan_snapshots/${w.athleteId}/${weekKey}`).then(fresh=>{
-                                      const merged={...(fresh||curSnap),rowOverrides:{...((fresh||curSnap).rowOverrides||{}),[w.date]:overrides},lastSavedAt:new Date().toISOString()};
-                                      db&&fbUpdate(`plan_snapshots/${w.athleteId}/${weekKey}`,stripUndefined(merged)).catch(()=>{});
-                                    }).catch(()=>{});
+                                    // Bkz. haftalık plan panelindeki aynı not — sadece bu günün rowOverrides
+                                    // alt-yoluna yazan çoklu-yol update, kayıp güncelleme yarışını Firebase
+                                    // tarafında kökten önler; artık yazmadan önce ayrı bir fbGet gerekmiyor.
+                                    db&&fbUpdate(`plan_snapshots/${w.athleteId}/${weekKey}`,{['rowOverrides/'+w.date]:overrides,lastSavedAt:_lastSavedAt}).catch(()=>{});
                                   }
                                 })
                           )
