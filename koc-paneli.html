@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.11-1933 --><!DOCTYPE html>
+<!-- Version: v2026.07.11-2004 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.11-1933';
+const APP_VERSION='v2026.07.11-2004';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -6985,11 +6985,23 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     if(!r||r.type==='header') return;
     const val=parseInt(rawVal)||0;
     let upd={};
+    let _detaySync=null; // {baslik,text} — mesafe elle değişince fazın "X dk" metnini ters yönde senkronize etmek için
     if(field==='mesafe'){
       const paceSec=(r.pm||0)*60+(r.ps||0);
       if(paceSec>0&&val>0){
         const newSec=Math.round(val/1000*paceSec);
         upd={mesafe:val,...secToHMS(newSec)};
+        // KOÇ İSTEĞİ (Temmuz 2026): mesafe elle değiştirildiğinde, bu satırın ait olduğu
+        // fazın ("1. Yarı" gibi) açıklama metnindeki baştaki "X dk" ifadesi de TERS YÖNDE
+        // senkronize edilsin. Dakika HER ZAMAN tam sayıya yuvarlanır (Math.round) — kesirli
+        // dakika metinde asla görünmez.
+        const _yapiBaslik=r._srcBaslik||r.label;
+        const _yapi=_yapiBaslik?(yapilar||[]).find(y=>y.baslik===_yapiBaslik):null;
+        if(_yapi?.detay){
+          const _yeniDk=Math.round(newSec/60);
+          const _yeniText=_yapi.detay.replace(/^(\d+(?:[.,]\d+)?)\s*dk/i,String(_yeniDk)+' dk');
+          if(_yeniText!==_yapi.detay) _detaySync={baslik:_yapiBaslik,text:_yeniText};
+        }
       } else {
         upd={mesafe:val};
       }
@@ -7036,7 +7048,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     const newOverrides={...rowOverrides,[rowIdx]:{...(rowOverrides[rowIdx]||{}), ...origFields, ...upd}};
     setRowOverrides(newOverrides);
     setEditCell(null);
-    if(onSaveOverrides){const __zd=computeZoneDistFromRows(baseRows,newOverrides,_mZones,aralikOverrides);onSaveOverrides({...newOverrides,__aralik:aralikOverrides,...(__zd?{__zoneDist:__zd}:{})});}
+    if(onSaveOverrides){const __zd=computeZoneDistFromRows(baseRows,newOverrides,_mZones,aralikOverrides);onSaveOverrides({...newOverrides,__aralik:aralikOverrides,...(__zd?{__zoneDist:__zd}:{})},_detaySync);}
   };
 
   // Aralıklar editörü için per-rep cell güncelleme
@@ -16709,13 +16721,31 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     savedOverrides:(planSnap?.rowOverrides||{})[day.date],
                     savedCuePatches:(planSnap?.overrideMap?.[day.date]?._cuePatch)||{},
                     actualOrtNabiz:split.kosuActuals.find(w=>parseFloat(w.ort_nabiz)>0)?.ort_nabiz||null,
-                    onSaveOverrides:(overrides)=>{
+                    onSaveOverrides: async (overrides, detaySync)=>{
                       const {__zoneDist:_zd,...cleanOverrides}=overrides;
                       const curSnap=planSnapRef.current||{};
                       const newRowOverrides={...(curSnap.rowOverrides||{}),[day.date]:cleanOverrides};
-                      const newOverrideMap={...(curSnap.overrideMap||{})};
-                      if(newOverrideMap[day.date]) newOverrideMap[day.date]={...newOverrideMap[day.date],_editedAt:new Date().toISOString()};
                       const _lastSavedAt=new Date().toISOString();
+                      const _multiUpdate={['rowOverrides/'+day.date]:cleanOverrides,lastSavedAt:_lastSavedAt};
+                      const newOverrideMap={...(curSnap.overrideMap||{})};
+                      let _newEntryForLocal=newOverrideMap[day.date];
+                      if(detaySync&&newOverrideMap[day.date]){
+                        // KOÇ İSTEĞİ (Temmuz 2026): mesafe elle değiştirilince ters yönde
+                        // senkronize edilen "X dk" metnini kalıcı hale getir. yapilar dizisini
+                        // TAZE çekip (bkz. onSaveDetay'daki aynı gerekçe — dizi bütünlüğü ve
+                        // art arda düzenleme yarışı için) TEK PARÇA geri yazıyoruz.
+                        const _freshOv=await fbGet(`plan_snapshots/${athlete.id}/${weekKey}/overrideMap/${day.date}`).catch(()=>null);
+                        const _baseOv=_freshOv||newOverrideMap[day.date];
+                        const _baseYapilar=_baseOv?.yapilar||[];
+                        const _newYapilar=_baseYapilar.map(y=>y.baslik===detaySync.baslik?{...y,detay:detaySync.text}:y);
+                        _newEntryForLocal={..._baseOv,yapilar:_newYapilar,_editedAt:_lastSavedAt};
+                        newOverrideMap[day.date]=_newEntryForLocal;
+                        _multiUpdate['overrideMap/'+day.date]=stripUndefined(_newEntryForLocal);
+                      }else if(newOverrideMap[day.date]){
+                        _newEntryForLocal={...newOverrideMap[day.date],_editedAt:_lastSavedAt};
+                        newOverrideMap[day.date]=_newEntryForLocal;
+                        _multiUpdate['overrideMap/'+day.date+'/_editedAt']=_lastSavedAt;
+                      }
                       const newSnap={...curSnap,rowOverrides:newRowOverrides,overrideMap:newOverrideMap,lastSavedAt:_lastSavedAt};
                       setPlanSnap(newSnap);
                       // KÖK NEDEN DÜZELTMESİ (Temmuz 2026 — satır girişlerinin sessizce kaybolması):
@@ -16726,8 +16756,6 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                       // Çözüm: Firebase'in çoklu-yol (multi-location) update'i ile YALNIZCA bu
                       // günün rowOverrides alt-yoluna yaz — kardeş tarihlere veya başka herhangi
                       // bir üst-seviye alana (weekEff, rampModeOn, formSnap vb.) asla dokunmaz.
-                      const _multiUpdate={['rowOverrides/'+day.date]:cleanOverrides,lastSavedAt:_lastSavedAt};
-                      if(newOverrideMap[day.date]) _multiUpdate['overrideMap/'+day.date+'/_editedAt']=newOverrideMap[day.date]._editedAt;
                       fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,_multiUpdate).catch(()=>{});
                       if(_zd&&onUpdateWorkout){const mw=workouts.find(w=>w.date===day.date&&w.athleteId===athlete?.id&&(w.spor||'kosu')==='kosu');if(mw)onUpdateWorkout(mw.id,{_rowZoneDist:_zd});}
                     },
@@ -17168,19 +17196,30 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   savedOverrides:(planSnap?.rowOverrides||{})[day.date],
                   savedCuePatches:(planSnap?.overrideMap?.[day.date]?._cuePatch)||{},
                   actualOrtNabiz:day.actual?.find(w=>(w.spor||'kosu')==='kosu'&&parseFloat(w.ort_nabiz)>0)?.ort_nabiz||null,
-                  onSaveOverrides:(overrides)=>{
+                  onSaveOverrides: async (overrides, detaySync)=>{
                     const {__zoneDist:_zd,...cleanOverrides}=overrides;
                     const curSnap=planSnapRef.current||{};
                     const newRowOverrides={...(curSnap.rowOverrides||{}),[day.date]:cleanOverrides};
-                    const newOverrideMap={...(curSnap.overrideMap||{})};
-                    if(newOverrideMap[day.date]) newOverrideMap[day.date]={...newOverrideMap[day.date],_editedAt:new Date().toISOString()};
                     const _lastSavedAt=new Date().toISOString();
+                    const _multiUpdate={['rowOverrides/'+day.date]:cleanOverrides,lastSavedAt:_lastSavedAt};
+                    const newOverrideMap={...(curSnap.overrideMap||{})};
+                    if(detaySync&&newOverrideMap[day.date]){
+                      // Bkz. yukarıdaki "Haftalık Reçete" panelindeki aynı not — mesafe→dakika
+                      // ters senkronu taze veri üzerine tek parça yazıyoruz.
+                      const _freshOv=await fbGet(`plan_snapshots/${athlete.id}/${weekKey}/overrideMap/${day.date}`).catch(()=>null);
+                      const _baseOv=_freshOv||newOverrideMap[day.date];
+                      const _baseYapilar=_baseOv?.yapilar||[];
+                      const _newYapilar=_baseYapilar.map(y=>y.baslik===detaySync.baslik?{...y,detay:detaySync.text}:y);
+                      newOverrideMap[day.date]={..._baseOv,yapilar:_newYapilar,_editedAt:_lastSavedAt};
+                      _multiUpdate['overrideMap/'+day.date]=stripUndefined(newOverrideMap[day.date]);
+                    }else if(newOverrideMap[day.date]){
+                      newOverrideMap[day.date]={...newOverrideMap[day.date],_editedAt:_lastSavedAt};
+                      _multiUpdate['overrideMap/'+day.date+'/_editedAt']=_lastSavedAt;
+                    }
                     const newSnap={...curSnap,rowOverrides:newRowOverrides,overrideMap:newOverrideMap,lastSavedAt:_lastSavedAt};
                     setPlanSnap(newSnap);
                     // Bkz. yukarıdaki "Haftalık Reçete" panelindeki aynı not — sadece bu günün
                     // rowOverrides alt-yoluna yaz, kayıp güncelleme (lost update) yarışını önler.
-                    const _multiUpdate={['rowOverrides/'+day.date]:cleanOverrides,lastSavedAt:_lastSavedAt};
-                    if(newOverrideMap[day.date]) _multiUpdate['overrideMap/'+day.date+'/_editedAt']=newOverrideMap[day.date]._editedAt;
                     fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,_multiUpdate).catch(()=>{});
                     if(_zd&&onUpdateWorkout){const mw=workouts.find(w=>w.date===day.date&&w.athleteId===athlete?.id&&(w.spor||'kosu')==='kosu');if(mw)onUpdateWorkout(mw.id,{_rowZoneDist:_zd});}
                   },
@@ -22187,16 +22226,30 @@ function Gecmis({workouts,athletes,races,onDelete,onBulkDelete,onUpdate}){
                                   tip:resolveEffectiveTip(planDay.tip,planDay.yapi_notu,planDay.baslik),
                                   savedOverrides:(snapCache[cacheKey]?.rowOverrides||{})[w.date],
                                   actualOrtNabiz:parseFloat(w.ort_nabiz)>0?w.ort_nabiz:null,
-                                  onSaveOverrides:(overrides)=>{
+                                  onSaveOverrides: async (overrides, detaySync)=>{
                                     const curSnap=snapCache[cacheKey]||{};
                                     const newRowOverrides={...(curSnap.rowOverrides||{}),[w.date]:overrides};
                                     const _lastSavedAt=new Date().toISOString();
-                                    const newSnap={...curSnap,rowOverrides:newRowOverrides,lastSavedAt:_lastSavedAt};
+                                    const _multiUpdate={['rowOverrides/'+w.date]:overrides,lastSavedAt:_lastSavedAt};
+                                    let newOverrideMapEntry=curSnap.overrideMap?.[w.date];
+                                    if(detaySync&&newOverrideMapEntry){
+                                      // Bkz. haftalık plan panelindeki aynı not — mesafe→dakika ters
+                                      // senkronu taze veri üzerine tek parça yazıyoruz.
+                                      const _freshOv=await fbGet(`plan_snapshots/${w.athleteId}/${weekKey}/overrideMap/${w.date}`).catch(()=>null);
+                                      const _baseOv=_freshOv||newOverrideMapEntry;
+                                      const _baseYapilar=_baseOv?.yapilar||[];
+                                      const _newYapilar=_baseYapilar.map(y=>y.baslik===detaySync.baslik?{...y,detay:detaySync.text}:y);
+                                      newOverrideMapEntry={..._baseOv,yapilar:_newYapilar,_editedAt:_lastSavedAt};
+                                      _multiUpdate['overrideMap/'+w.date]=stripUndefined(newOverrideMapEntry);
+                                    }
+                                    const newSnap={...curSnap,rowOverrides:newRowOverrides,
+                                      ...(newOverrideMapEntry?{overrideMap:{...(curSnap.overrideMap||{}),[w.date]:newOverrideMapEntry}}:{}),
+                                      lastSavedAt:_lastSavedAt};
                                     setSnapCache(s=>({...s,[cacheKey]:newSnap}));
                                     // Bkz. haftalık plan panelindeki aynı not — sadece bu günün rowOverrides
                                     // alt-yoluna yazan çoklu-yol update, kayıp güncelleme yarışını Firebase
                                     // tarafında kökten önler; artık yazmadan önce ayrı bir fbGet gerekmiyor.
-                                    db&&fbUpdate(`plan_snapshots/${w.athleteId}/${weekKey}`,{['rowOverrides/'+w.date]:overrides,lastSavedAt:_lastSavedAt}).catch(()=>{});
+                                    db&&fbUpdate(`plan_snapshots/${w.athleteId}/${weekKey}`,_multiUpdate).catch(()=>{});
                                   }
                                 })
                           )
