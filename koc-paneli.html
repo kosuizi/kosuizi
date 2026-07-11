@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.10-1314 --><!DOCTYPE html>
+<!-- Version: v2026.07.10-1336 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.10-1314';
+const APP_VERSION='v2026.07.10-1336';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -14001,8 +14001,11 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
 
   // 1. Snapshot yükle — sporcu değişince önce sıfırla
   const prevRampAthleteIdRef=useRef(athlete?.id);
+  const rampDeepSearchTokenRef=useRef(0);
   useEffect(()=>{
     if(!athlete){setSnapReady(true);return;}
+    rampDeepSearchTokenRef.current+=1;
+    const _rampToken=rampDeepSearchTokenRef.current;
     setPlanSnap(null);
     setPrevWeekSnap(null);
     setFrozenTargets({});
@@ -14038,6 +14041,30 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         else if(prev?.rampModeOn!==undefined) setRampModeOn(!!prev.rampModeOn);
         if(snap?.rampRatePct!==undefined) setRampRatePct(Math.min(20,Math.max(10,parseInt(snap.rampRatePct)||15)));
         else if(prev?.rampRatePct!==undefined) setRampRatePct(Math.min(20,Math.max(10,parseInt(prev.rampRatePct)||15)));
+        // KÖK NEDEN DÜZELTMESİ #4 (Temmuz 2026 — tekrar eden rampa kapanması):
+        // Yukarıdaki miras zinciri yalnızca TEK hafta (prevWeekKey) geriye bakıyordu.
+        // Koç ara bir haftada panele hiç girmemişse (ör. dinlenme/tapering haftası ya
+        // da o hafta panel hiç açılmadıysa) o haftaya ait snapshot hiç oluşmaz ve
+        // rampModeOn alanı içermez — zincir bu noktada KOPAR: rampa sessizce kapanır,
+        // ve bir sonraki hafta da (artık miras alacak yakın bir kaynak kalmadığı için)
+        // kapalı başlar — "düzeltiliyor ama bir süre sonra tekrar kapanıyor" şikayetinin
+        // kök nedeni budur. Çözüm: tek hafta yetmezse, rampModeOn içeren bir snapshot
+        // bulana kadar (en fazla 8 hafta daha) geriye taramaya devam et.
+        if(snap?.rampModeOn===undefined&&prev?.rampModeOn===undefined){
+          (async()=>{
+            for(let w=-2;w>=-9;w--){
+              if(rampDeepSearchTokenRef.current!==_rampToken) return; // athlete/hafta bu sırada değişti
+              let older=null;
+              try{older=await fbGet(`plan_snapshots/${athlete.id}/${getWeekKey(w)}`);}catch(e){}
+              if(older?.rampModeOn!==undefined){
+                if(rampDeepSearchTokenRef.current!==_rampToken) return;
+                setRampModeOn(!!older.rampModeOn);
+                if(older.rampRatePct!==undefined) setRampRatePct(Math.min(20,Math.max(10,parseInt(older.rampRatePct)||15)));
+                return;
+              }
+            }
+          })();
+        }
         setSnapReady(true);
       }).catch(()=>{
         snapFetchOkRef.current=false;
