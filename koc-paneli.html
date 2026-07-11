@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.11-1608 --><!DOCTYPE html>
+<!-- Version: v2026.07.11-1933 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.11-1608';
+const APP_VERSION='v2026.07.11-1933';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -16731,9 +16731,24 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                       fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,_multiUpdate).catch(()=>{});
                       if(_zd&&onUpdateWorkout){const mw=workouts.find(w=>w.date===day.date&&w.athleteId===athlete?.id&&(w.spor||'kosu')==='kosu');if(mw)onUpdateWorkout(mw.id,{_rowZoneDist:_zd});}
                     },
-                    onSaveDetay:(label, text, rowUpdate, rowLabel)=>{
+                    onSaveDetay: async (label, text, rowUpdate, rowLabel)=>{
+                      const _lastSavedAt=new Date().toISOString();
+                      // KÖK NEDEN DÜZELTMESİ v3 (Temmuz 2026): v2'deki "sadece değişen fazın
+                      // index'ine yaz" yaklaşımı YENİ bir soruna yol açmış olabilir — Firebase
+                      // Realtime Database, bir DİZİYE (yapilar) tek bir index üzerinden çoklu-yol
+                      // update ile yazıldığında diziyi sayısal-anahtarlı bir OBJE'ye çevirebilir;
+                      // bu da sonraki yüklemede yapilar.map()/.find() gibi dizi metodlarının
+                      // beklenmedik davranmasına ve günün sessizce şablondan yeniden üretilen
+                      // (orijinal "20 dk" metnini içeren) haline düşmesine yol açabiliyordu.
+                      // Çözüm: dizi index'ine YAZMAK yerine, yazmadan HEMEN ÖNCE bu günün mevcut
+                      // kaydını Firebase'den TAZE çekiyoruz (yerel state'in güncel olup olmadığına
+                      // güvenmek yerine) ve TÜM yapilar dizisini tek, düzgün bir JS array olarak
+                      // geri yazıyoruz. Bu hem dizi bütünlüğünü korur hem de aynı günün farklı
+                      // fazlarını (veya bir detay+mesafe düzenlemesini) art arda yaparken oluşan
+                      // yarış durumunu, her zaman en taze sunucu verisi üzerine inşa ederek önler.
+                      const _freshOv=await fbGet(`plan_snapshots/${athlete.id}/${weekKey}/overrideMap/${day.date}`).catch(()=>null);
                       const curSnap=planSnapRef.current||{};
-                      const curOv=curSnap.overrideMap?.[day.date];
+                      const curOv=_freshOv||curSnap.overrideMap?.[day.date];
                       const baseYapilar=curOv?.yapilar||day.yapilar||[];
                       // Alt-satır düzenlemesi tespiti: rowLabel farklıysa bu, bir üst yapının
                       // (ör. "🏃 Yürü-Koş Tekrarları") alt-satırıdır (ör. "🚶 Yürüyüş").
@@ -16744,14 +16759,13 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                       // y.detay güncellenmezse GAP yeniden hesaplanamaz → pace değişmez.
                       const isSubRowEdit=!!(rowLabel&&rowLabel!==label);
                       let newYapilar;
-                      let _changedIdx=-1; // hangi yapı (faz) değişti — dar yazım için
                       if(isSubRowEdit){
                         newYapilar=baseYapilar;
                         // D+ bloğu özel: text "Hedef D+:" içeriyorsa y.detay'ı da güncelle
                         if((text||'').includes('Hedef D+:')){
                           let dpHit=false;
-                          const dpUpdated=baseYapilar.map((y,i)=>{
-                            if(y.baslik===label&&(y.detay||'').includes('Hedef D+')){dpHit=true;_changedIdx=i;return{...y,detay:text};}
+                          const dpUpdated=baseYapilar.map(y=>{
+                            if(y.baslik===label&&(y.detay||'').includes('Hedef D+')){dpHit=true;return{...y,detay:text};}
                             return y;
                           });
                           if(dpHit) newYapilar=dpUpdated;
@@ -16759,8 +16773,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                       }else{
                         const lblNorm=String(label||'').trim().toLocaleLowerCase('tr');
                         let hit=false;
-                        newYapilar=baseYapilar.map((y,i)=>{
-                          if(y.baslik===label){hit=true;_changedIdx=i;return{...y,detay:text};}
+                        newYapilar=baseYapilar.map(y=>{
+                          if(y.baslik===label){hit=true;return{...y,detay:text};}
                           return y;
                         });
                         if(!hit){
@@ -16768,7 +16782,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                             if(hit) return;
                             if(String(y.baslik||'').trim().toLocaleLowerCase('tr')===lblNorm){
                               newYapilar[i]={...y,detay:text};
-                              hit=true;_changedIdx=i;
+                              hit=true;
                             }
                           });
                         }
@@ -16777,7 +16791,6 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                       // _cuePatch: row label bazlı kalıcı düzenleme kaydı
                       const patchKey=rowLabel||label;
                       const newCuePatch={...(curOv?._cuePatch||{}),[patchKey]:text};
-                      const _lastSavedAt=new Date().toISOString();
                       const newEntry={...entry,yapilar:newYapilar,_cuePatch:newCuePatch,_editedAt:_lastSavedAt};
                       const newOverrideMap={...(curSnap.overrideMap||{})};
                       newOverrideMap[day.date]=newEntry;
@@ -16791,27 +16804,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                       }
                       const newSnap={...curSnap,overrideMap:newOverrideMap,rowOverrides:newRowOverrides,lastSavedAt:_lastSavedAt};
                       setPlanSnap(newSnap);
-                      // KÖK NEDEN DÜZELTMESİ v2 (Temmuz 2026 — aynı günün farklı fazlarını art
-                      // arda düzenlerken bir öncekinin sessizce kaybolması): v1 düzeltmesi
-                      // overrideMap/{tarih}'in TAMAMINI (yapilar dizisinin TÜMÜ dahil) tek
-                      // blok olarak yazıyordu. Aynı günün "1. Yarı" ve "2. Yarı" gibi FARKLI
-                      // fazlarını art arda düzenlemek iki ayrı yazma tetikler; her ikisi de
-                      // TÜM yapilar dizisini kendi (o anki) kopyasıyla değiştirir — ağ gecikmesi
-                      // nedeniyle sıraları ters dönerse (ikincisi ağa birincisinden ÖNCE ulaşırsa),
-                      // birincinin yazması ikincinin değişikliğini SİLER. Çözüm: yalnızca
-                      // DEĞİŞEN fazın kendi dizindeki alt-yoluna (yapilar/{idx}) ve yalnızca o
-                      // fazın _cuePatch anahtarına yazan DAHA DAR bir çoklu-yol update — böylece
-                      // aynı günün iki farklı fazına yazan işlemler birbirini asla ezemez.
-                      // (overrideMap/{tarih} hiç yoksa — ilk kez düzenleniyorsa — üst seviye
-                      // alanlar henüz Firebase'de olmadığından istisnaen TÜM entry yazılır.)
-                      const _multiUpdate={lastSavedAt:_lastSavedAt};
-                      if(!curOv){
-                        _multiUpdate['overrideMap/'+day.date]=stripUndefined(newEntry);
-                      }else{
-                        if(_changedIdx>=0) _multiUpdate['overrideMap/'+day.date+'/yapilar/'+_changedIdx]=stripUndefined(newYapilar[_changedIdx]);
-                        _multiUpdate['overrideMap/'+day.date+'/_cuePatch/'+patchKey]=text;
-                        _multiUpdate['overrideMap/'+day.date+'/_editedAt']=_lastSavedAt;
-                      }
+                      const _multiUpdate={['overrideMap/'+day.date]:stripUndefined(newEntry),lastSavedAt:_lastSavedAt};
                       if(rowUpdate) _multiUpdate['rowOverrides/'+day.date+'/'+rowUpdate.rowIdx]=stripUndefined(_rowIdxUpdate);
                       fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,_multiUpdate).catch(()=>{});
                     }
@@ -17191,9 +17184,13 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,_multiUpdate).catch(()=>{});
                     if(_zd&&onUpdateWorkout){const mw=workouts.find(w=>w.date===day.date&&w.athleteId===athlete?.id&&(w.spor||'kosu')==='kosu');if(mw)onUpdateWorkout(mw.id,{_rowZoneDist:_zd});}
                   },
-                  onSaveDetay:(label, text, rowUpdate, rowLabel)=>{
+                  onSaveDetay: async (label, text, rowUpdate, rowLabel)=>{
+                  const _lastSavedAt=new Date().toISOString();
+                  // Bkz. haftalık plan panelindeki aynı not (v3) — dizi index'ine yazmak yerine
+                  // taze çekip tüm diziyi tek parça geri yazan sağlam yöntem.
+                  const _freshOv=await fbGet(`plan_snapshots/${athlete.id}/${weekKey}/overrideMap/${day.date}`).catch(()=>null);
                   const curSnap=planSnapRef.current||{};
-                  const curOv=curSnap.overrideMap?.[day.date];
+                  const curOv=_freshOv||curSnap.overrideMap?.[day.date];
                   const baseYapilar=curOv?.yapilar||day.yapilar||[];
                   // Alt-satır düzenlemesi tespiti: rowLabel farklıysa bu, bir üst yapının
                   // (ör. "🏃 Yürü-Koş Tekrarları") alt-satırıdır (ör. "🚶 Yürüyüş").
@@ -17204,14 +17201,13 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   // y.detay güncellenmezse GAP yeniden hesaplanamaz → pace değişmez.
                   const isSubRowEdit=!!(rowLabel&&rowLabel!==label);
                   let newYapilar;
-                  let _changedIdx=-1; // hangi yapı (faz) değişti — dar yazım için
                   if(isSubRowEdit){
                     newYapilar=baseYapilar;
                     // D+ bloğu özel: text "Hedef D+:" içeriyorsa y.detay'ı da güncelle
                     if((text||'').includes('Hedef D+:')){
                       let dpHit=false;
-                      const dpUpdated=baseYapilar.map((y,i)=>{
-                        if(y.baslik===label&&(y.detay||'').includes('Hedef D+')){dpHit=true;_changedIdx=i;return{...y,detay:text};}
+                      const dpUpdated=baseYapilar.map(y=>{
+                        if(y.baslik===label&&(y.detay||'').includes('Hedef D+')){dpHit=true;return{...y,detay:text};}
                         return y;
                       });
                       if(dpHit) newYapilar=dpUpdated;
@@ -17219,8 +17215,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   }else{
                     const lblNorm=String(label||'').trim().toLocaleLowerCase('tr');
                     let hit=false;
-                    newYapilar=baseYapilar.map((y,i)=>{
-                      if(y.baslik===label){hit=true;_changedIdx=i;return{...y,detay:text};}
+                    newYapilar=baseYapilar.map(y=>{
+                      if(y.baslik===label){hit=true;return{...y,detay:text};}
                       return y;
                     });
                     if(!hit){
@@ -17228,7 +17224,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                         if(hit) return;
                         if(String(y.baslik||'').trim().toLocaleLowerCase('tr')===lblNorm){
                           newYapilar[i]={...y,detay:text};
-                          hit=true;_changedIdx=i;
+                          hit=true;
                         }
                       });
                     }
@@ -17237,7 +17233,6 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   // _cuePatch: row label bazlı kalıcı düzenleme kaydı
                   const patchKey=rowLabel||label;
                   const newCuePatch={...(curOv?._cuePatch||{}),[patchKey]:text};
-                  const _lastSavedAt=new Date().toISOString();
                   const newEntry={...entry,yapilar:newYapilar,_cuePatch:newCuePatch,_editedAt:_lastSavedAt};
                   const newOverrideMap={...(curSnap.overrideMap||{})};
                   newOverrideMap[day.date]=newEntry;
@@ -17251,15 +17246,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   }
                   const newSnap={...curSnap,overrideMap:newOverrideMap,rowOverrides:newRowOverrides,lastSavedAt:_lastSavedAt};
                   setPlanSnap(newSnap);
-                  // Bkz. haftalık plan panelindeki aynı not (v2) — dar, faz-index bazlı yazım.
-                  const _multiUpdate={lastSavedAt:_lastSavedAt};
-                  if(!curOv){
-                    _multiUpdate['overrideMap/'+day.date]=stripUndefined(newEntry);
-                  }else{
-                    if(_changedIdx>=0) _multiUpdate['overrideMap/'+day.date+'/yapilar/'+_changedIdx]=stripUndefined(newYapilar[_changedIdx]);
-                    _multiUpdate['overrideMap/'+day.date+'/_cuePatch/'+patchKey]=text;
-                    _multiUpdate['overrideMap/'+day.date+'/_editedAt']=_lastSavedAt;
-                  }
+                  const _multiUpdate={['overrideMap/'+day.date]:stripUndefined(newEntry),lastSavedAt:_lastSavedAt};
                   if(rowUpdate) _multiUpdate['rowOverrides/'+day.date+'/'+rowUpdate.rowIdx]=stripUndefined(_rowIdxUpdate);
                   fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,_multiUpdate).catch(()=>{});
                   }
