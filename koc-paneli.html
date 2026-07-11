@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.11-1245 --><!DOCTYPE html>
+<!-- Version: v2026.07.11-1335 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.11-1245';
+const APP_VERSION='v2026.07.11-1335';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -13524,6 +13524,12 @@ function ManuelAtamaModal(props){
     ),
     e('div',{className:'flex-gap'},
       e('button',{className:'btn btn-primary',onClick:handleAta,disabled:!preview},'Bu Antrenman Atasin'),
+      e('button',{
+        className:'btn',
+        style:{background:'var(--bg-tertiary)',color:'var(--text-secondary)'},
+        title:'Bu günü sistemdeki standart dinlenme temsiliyle işaretler (sure/yük sıfırlanır, koşu değil)',
+        onClick:function(){onSave(date,{tip:'dinlenme'});}
+      },'😴 Dinlenme Olarak İşaretle'),
       e('button',{className:'btn',onClick:onClose},'Iptal')
     )
   );
@@ -14839,6 +14845,45 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
   const handleManuelAta=(dateStr,tpl)=>{
     const now=new Date();
     const curSnap=planSnapRef.current;
+    // ── Dinlenme: sistemdeki standart dinlenme temsiliyle BİREBİR aynı şekilde kaydet ──
+    // Aşağıdaki genel şablon akışı (sure_dk||50 fallback'i, tip'e göre yükHedef çarpanı vb.)
+    // dinlenme için uygun değil: sure_dk:0 falsy olduğundan ||50 devreye girip 50 dk gibi
+    // görünürdü, yükHedef de 'dinlenme' çarpan tablosunda tanımlı olmadığından varsayılan
+    // (1.1) çarpanla sıfırdan büyük hesaplanırdı. Bu dal, panelin başka yerlerinde kullanılan
+    // kanonik dinlenme şekliyle (örn. {tip:'dinlenme',baslik:'Dinlenme',sure_dk:0,yukHedef:0,
+    // yapilar:[]} — bkz. ~satır 14268/16268) birebir aynı alanları yazar. manualOverrides'a
+    // da 'dinlenme' olarak yazıldığından, profil koşu günlerinden çıkarılmış bir güne daha
+    // önce yanlışlıkla yapıştırılmış (örn. çapraz-sporcu sızıntısı kaynaklı) bir manuel
+    // antrenman kaydı varsa, bu da doğru içerikle üzerine yazılıp temizlenir.
+    if(tpl.tip==='dinlenme'){
+      const newMapRest={...(curSnap?.overrideMap||{}),[dateStr]:{
+        tip:'dinlenme',baslik:'Dinlenme',sure_dk:0,yukHedef:0,yapi_notu:'',
+        approved:true,isKosuCapraz:false,yapilar:[]
+      }};
+      const newRowOverridesRest={...(curSnap?.rowOverrides||{})};
+      delete newRowOverridesRest[dateStr];
+      const newManualOverridesRest={...(curSnap?.manualOverrides||{}),[dateStr]:{tip:'dinlenme',baslik:'Dinlenme',atAt:now.toISOString()}};
+      const newSnapRest={...(curSnap||{}),weekKey,athId:athlete.id,lastReviewAt:now.toISOString(),
+        lastSavedAt:new Date().toISOString(),
+        cancelledDays:{...(curSnap?.cancelledDays||{})},
+        selectedPrimary:selectedPrimary||null,
+        overrideMap:newMapRest,
+        rowOverrides:newRowOverridesRest,
+        manualOverrides:newManualOverridesRest,
+        ykManualAnchor:curSnap?.ykManualAnchor||null,
+        reviewLog:[...(curSnap?.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} manuel: Dinlenme`}].slice(-10)
+      };
+      setPlanSnap(newSnapRest);
+      setManuelAtaGun(null);
+      setReviewMsg(`${dateStr} — Dinlenme olarak işaretlendi`);
+      if(db||initFirebase()){
+        const _ataSnapRest=stripUndefined(newSnapRest);
+        fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,_ataSnapRest)
+          .then(()=>{ _planSnapsCache[athlete.id]=_ataSnapRest; })
+          .catch(e=>console.error('Ata kayıt hatası (dinlenme):',e));
+      }
+      return;
+    }
     const baslik=tpl.baslik||(tpl.yapi_notu?tpl.yapi_notu.split(' — ')[0]:'')||(TIP_NAMES[tpl.tip]||tpl.tip||'');
     // Yürü-Koş şablonları tplYuruKos'tan gelir ve tip:'kolay' taşır.
     // injectRowsFromTpl'nin YK patcher'ını tetiklemesi için tip'i 'yuru_kos' olarak kaydet.
