@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.11-2202 --><!DOCTYPE html>
+<!-- Version: v2026.07.11-2304 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.11-2202';
+const APP_VERSION='v2026.07.11-2304';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1733,16 +1733,28 @@ function calcTargetTime(race, ath, ctl, acwr, workouts){
   // Trail/ultra yarışlar için: asfalt PB'lerden trail'e geçişte ek yorgunluk
   // ve teknik talep nedeniyle üs büyütülür (Hoffman & Wegelin 2009, ITRA korelasyon).
   const isTrailRace = !!(race.is_trail || dp > 300);
-  const riegelExp=(d)=>{
-    if(!isTrailRace){
-      if(d<=10) return 1.06;
-      if(d<=21) return 1.07;
-      if(d<=42) return 1.08;
-      if(d<=60) return 1.10;
-      if(d<=80) return 1.12;
-      if(d<=100)return 1.15;
-      return 1.17;
-    }
+  // ── Arazi/Trail cezası artık D+/km yoğunluğuna göre KADEMELİ uygulanır ──────
+  // Önceki sürümde "Arazi" etiketi (veya dp>300) tek başına TAM dağ-ultra cezasını
+  // (Riegel üssü + fTrailUltra) tetikliyordu — D+ değeri ne olursa olsun.
+  // Bu, düz "arazi" yarışlarında (ör. Tuz Gölü Ultra 160K: D+13m, dpPerKm≈0.08)
+  // ciddi aşırı tahmine yol açtı (18-19s yerine 31s+).
+  // Kalibrasyon: dpPerKm<=3 → düz kabul edilir, ceza yok (yol formülüne yakın).
+  //              dpPerKm>=20 → tam dağ-ultra cezası (İznik 166K: dpPerKm≈30.8, tavana oturur).
+  //              Arada doğrusal geçiş. is_trail=false + dp>300 (tepeli yol yarışı)
+  //              durumunda da artık orantılı kısmi ceza uygulanır — eskiden bu durum
+  //              da yanlışlıkla tam trail cezası alıyordu.
+  const dpPerKm = km>0 ? dp/km : 0;
+  const trailBlend = isTrailRace ? Math.max(0, Math.min(1, (dpPerKm-3)/(20-3))) : 0;
+  const riegelExpRoad=(d)=>{
+    if(d<=10) return 1.06;
+    if(d<=21) return 1.07;
+    if(d<=42) return 1.08;
+    if(d<=60) return 1.10;
+    if(d<=80) return 1.12;
+    if(d<=100)return 1.15;
+    return 1.17;
+  };
+  const riegelExpTrail=(d)=>{
     // Trail/ultra: asfalt PB → trail dönüşümü için yüksek üs
     // Her kategori +0.04–0.06 artırıldı; gerçek yarış datasından kalibre edildi
     if(d<=10) return 1.10;
@@ -1753,6 +1765,7 @@ function calcTargetTime(race, ath, ctl, acwr, workouts){
     if(d<=100)return 1.30;
     return 1.35;
   };
+  const riegelExp=(d)=> riegelExpRoad(d) + (riegelExpTrail(d)-riegelExpRoad(d))*trailBlend;
   const riegelPred=(pbDist,pbMin)=>pbMin>0?pbMin*Math.pow(km/pbDist,riegelExp(km)):null;
 
   // PB'leri parse et
@@ -1771,7 +1784,17 @@ function calcTargetTime(race, ath, ctl, acwr, workouts){
 
   pbs.forEach(p=>{
     const pred = riegelPred(p.d, p.t);
-    if(pred) sources.push({pred, w:p.w});
+    if(pred){
+      // ── Ekstrapolasyon güvenilirlik azalması ────────────────────────────
+      // Riegel formülü mesafe oranı büyüdükçe güvenilirliğini yitirir (literatürde
+      // ~3-6 kat mesafe farkına kadar kabul edilir). 5K/10K PB'den 160K+ ultraya
+      // ekstrapolasyon (30+ kat fark) fiziksel olarak anlamsız değerler üretiyordu
+      // (ör. 5K'dan 166K tahmini: 37.7 saat). Oran 6'ya kadar tam ağırlık, 15'te
+      // ağırlık sıfıra iner — aradaki kaynaklar (Yarı Maraton/Maraton) kademeli.
+      const distRatio = km/p.d;
+      const ratioDecay = distRatio<=6 ? 1.0 : Math.max(0, 1-(distRatio-6)/9);
+      if(ratioDecay>0) sources.push({pred, w:p.w*ratioDecay});
+    }
   });
   if(vo2Pred) sources.push({pred:vo2Pred, w:0.15});
 
@@ -1822,13 +1845,14 @@ function calcTargetTime(race, ath, ctl, acwr, workouts){
   // Sadece düz bölümlerin tempo cezası — tırmanış/iniş etkisi climbRate/descentRate'ten geliyor
   const fZemin = {1:1.00, 2:1.02, 3:1.05, 4:1.10, 5:1.15}[zemin]||1.00;
 
-  // Trail ultra çarpanı — asfalt PB'lerin trail gerçekliğine dönüşümünde
-  // Riegel üssü ana yükü taşır; bu faktör kalan kalibrasyonu kapatır.
-  // Kaynak: ITRA performans katsayıları + Strava Suffer Score analizi
-  // Yol yarışları (is_trail=false, dp<300) → 1.0 (etkisiz)
-  const fTrailUltra = isTrailRace
-    ? (km>80?1.18:km>60?1.14:km>42?1.10:km>30?1.07:km>21?1.04:1.02)
-    : 1.0;
+  // Trail ultra çarpanı — KALDIRILDI (2026.07.11): Bu çarpan, Riegel üssünün trail/ultra
+  // için zaten yükseltilmiş olduğu (+0.04–0.06, bkz. riegelExpTrail) gerçeğiyle çakışıyordu.
+  // Kod yorumunda da itiraf edildiği gibi bu faktör "Riegel üssünün üstüne kalan kalibrasyonu
+  // kapatmak" için eklenmişti — yani aynı fizyolojik etki (asfalt PB→trail dönüşümü) iki kez
+  // cezalandırılıyordu. Gerçek yarış verisiyle doğrulandı: İznik Ultra 166.39K/D+5132m'de
+  // gerçek sonuç 28:12:13 iken bu çarpanla (+ekstrapolasyon sorunuyla) tahmin 35s4dk çıkıyordu;
+  // kaldırıldığında ~27.7 saate düşüyor (gerçekçi + o günkü fitness'tan bugünkü gelişmeyi yansıtır).
+  const fTrailUltra = 1.0;
 
   const allFactors = fAge*fBmi*fRhr*fLthr*fVo2*fHrv*fSak*fMot*fClim*fGear*fCtl*fAcwr*fZemin*fTrailUltra;
 
