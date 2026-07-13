@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.13-1307 --><!DOCTYPE html>
+<!-- Version: v2026.07.13-1909 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.13-1307';
+const APP_VERSION='v2026.07.13-1909';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -16057,9 +16057,35 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               // devam ediyor çünkü onların ayrı/yok bir "uzun koşu" kavramı var.
               const _dispKmForUzun=showRevised?effKm:(showCascade?cascadeKm:(_showFutProj?_futPrj.projKm:wt.targetKm));
               const _dispDpForUzun=(showRevised&&wt.targetDp>0)?effDp:((showCascade&&wt.targetDp>0)?cascadeDp:(((_showFutProj&&wt.targetDp>0&&_futPrj.projDp>0))?_futPrj.projDp:wt.targetDp));
-              const _uzunHedef=wt.isRaceWeek||wt.phase==='Yarış Sonrası'
+              const _uzunHedefRaw=wt.isRaceWeek||wt.phase==='Yarış Sonrası'
                 ?null
                 :estimateUzunKosuHedefi(_dispKmForUzun,_dispDpForUzun,wt.phase,_uzunDisiplin,_uzunZones,wt.isCurrent?_uzunRealBand:null,plan.primary?.mesafe);
+              // TABAN (13.07.2026 sohbeti — Göksel'in önerisi): revize/rampa mekanizması
+              // haftanın uzunu hedefini, BİR ÖNCEKİ haftada zaten koşulmuş en uzun tekil
+              // mesafenin ALTINA düşürmemeli — o mesafe fiziksel olarak zaten kanıtlanmış,
+              // haftalık toplam km düşse bile makul bir taban oluşturur. Sadece ardışık
+              // hafta (i-1) baz alınır. Dinlenme/Taper/Yarış/Yarış Sonrası haftalarında
+              // taban uygulanmaz — bunlar kasıtlı olarak azaltılmış haftalardır, gerileme
+              // değil. Band tavanı (bandCapKm) hâlâ üstünde geçerlidir — kanıtlanmış
+              // mesafe bu güvenlik sınırını aşıyorsa taban oraya kadar uygulanır.
+              const _prevWt=weekTargets[i-1]||null;
+              const _prevWeekLongestKm=(_prevWt&&!wt.isRecovery&&wt.phase!=='Taper'&&!wt.isRaceWeek&&wt.phase!=='Yarış Sonrası')
+                ?(()=>{
+                    const _pwWks=athWks.filter(w=>{
+                      const d=new Date(w.date+'T12:00:00');
+                      return d>=_prevWt.weekStart&&d<=_prevWt.weekEnd&&(w.spor||'kosu')==='kosu';
+                    });
+                    return _pwWks.length?Math.max(..._pwWks.map(w=>parseFloat(w.mesafe)||0)):0;
+                  })()
+                :0;
+              const _uzunHedef=(_uzunHedefRaw&&_prevWeekLongestKm>_uzunHedefRaw.km)
+                ?{
+                    ..._uzunHedefRaw,
+                    km:round1(_uzunHedefRaw.bandCapKm>0?Math.min(_prevWeekLongestKm,_uzunHedefRaw.bandCapKm):_prevWeekLongestKm),
+                    capped:_uzunHedefRaw.bandCapKm>0&&_prevWeekLongestKm>_uzunHedefRaw.bandCapKm,
+                    flooredByPrevWeek:true
+                  }
+                :_uzunHedefRaw;
               // Orijinal (revize mekanizmalarından bağımsız) uzun koşu hedefi —
               // tablo haftalık km için "üstü çizili orijinal → revize" gösterdiği gibi
               // uzun koşu için de farkı göstermek için kullanılır.
@@ -16166,9 +16192,11 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     style:{fontSize:9,fontWeight:400,marginTop:1,whiteSpace:'nowrap'},
                     title:_uzunHedef.capped
                       ?'Band tavanına sınırlandı (~'+_uzunHedef.bandCapKm+'km) — haftalık km hedefinin %'+Math.round(_uzunHedef.pay*100)+" payı bu sınırı aşıyordu"
-                      :(_uzunHedefOrijinal&&_uzunHedefOrijinal.km!==_uzunHedef.km
-                        ?'Orijinal hedef: ~'+_uzunHedefOrijinal.km+'km — revizyon/cascade sonrası: ~'+_uzunHedef.km+'km'
-                        :'Haftanın uzunu hedefi — haftalık km hedefinin %'+Math.round(_uzunHedef.pay*100)+"'i ("+wt.phase+")")
+                      :_uzunHedef.flooredByPrevWeek
+                        ?'Önceki hafta zaten ~'+_prevWeekLongestKm+'km koşuldu — hedef bunun altına düşürülmedi'
+                        :(_uzunHedefOrijinal&&_uzunHedefOrijinal.km!==_uzunHedef.km
+                          ?'Orijinal hedef: ~'+_uzunHedefOrijinal.km+'km — revizyon/cascade sonrası: ~'+_uzunHedef.km+'km'
+                          :'Haftanın uzunu hedefi — haftalık km hedefinin %'+Math.round(_uzunHedef.pay*100)+"'i ("+wt.phase+")")
                   },
                     '🏃 ',
                     _uzunHedefOrijinal&&_uzunHedefOrijinal.km!==_uzunHedef.km&&React.createElement('span',{
@@ -16177,8 +16205,10 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     React.createElement('span',{
                       style:{color:_uzunHedef.capped
                         ?'var(--warn)'
-                        :(_uzunHedefOrijinal&&_uzunHedefOrijinal.km!==_uzunHedef.km?'var(--warn)':'var(--text-tertiary)')}
-                    },'~'+_uzunHedef.km+'km'+(_uzunHedef.capped?' ⚡':''))
+                        :(_uzunHedef.flooredByPrevWeek
+                          ?'var(--info)'
+                          :(_uzunHedefOrijinal&&_uzunHedefOrijinal.km!==_uzunHedef.km?'var(--warn)':'var(--text-tertiary)'))}
+                    },'~'+_uzunHedef.km+'km'+(_uzunHedef.capped?' ⚡':(_uzunHedef.flooredByPrevWeek?' ⬆️':'')))
                   )
                 ),
                 React.createElement('td',{style:{padding:'6px 8px',fontFamily:'monospace',textAlign:'center',color:act.km>0?'var(--success)':'var(--text-tertiary)'}},act.km||'—'),
@@ -16537,15 +16567,42 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                 const _p1=round1((displayCurWeekEff.effKm||0)*(1+rampRatePct/100));
                 if(_p1>0&&_p1<weekOrigKm*0.99)_dKm=_p1;
               }
-              const _uzunHedefHafta=estimateUzunKosuHedefi(_dKm,_dDp,week.wt.phase,effectiveDisiplin(athlete,plan.primary),_uzunZonesHafta,_uzunBandHafta,plan.primary?.mesafe);
+              const _uzunHedefHaftaRaw=estimateUzunKosuHedefi(_dKm,_dDp,week.wt.phase,effectiveDisiplin(athlete,plan.primary),_uzunZonesHafta,_uzunBandHafta,plan.primary?.mesafe);
+              // TABAN (13.07.2026 sohbeti — Göksel'in önerisi): ana tablodaki (HaftalikPlanTab
+              // satırları) ile AYNI mantık — bkz. tablodaki "TABAN" notu. Bu kart AYRI bir kod
+              // yolu olduğu için (farklı değişken adları, aynı weekTargets kaynağı) taban orada
+              // uygulansa bile burada ayrıca uygulanması gerekiyordu — aksi halde kart ile tablo
+              // aynı hafta için FARKLI bir "haftanın uzunu" sayısı gösterebilirdi (görsel parite).
+              const _prevWtHafta=weekTargets.find(w=>w.weekIdx===(week.wt.weekIdx-1))||null;
+              const _prevWeekLongestKmHafta=(_prevWtHafta&&!week.wt.isRecovery&&week.wt.phase!=='Taper'&&!week.wt.isRaceWeek&&week.wt.phase!=='Yarış Sonrası')
+                ?(()=>{
+                    const _pwWks=athWks.filter(w=>{
+                      const d=new Date(w.date+'T12:00:00');
+                      return d>=_prevWtHafta.weekStart&&d<=_prevWtHafta.weekEnd&&(w.spor||'kosu')==='kosu';
+                    });
+                    return _pwWks.length?Math.max(..._pwWks.map(w=>parseFloat(w.mesafe)||0)):0;
+                  })()
+                :0;
+              const _uzunHedefHafta=(_uzunHedefHaftaRaw&&_prevWeekLongestKmHafta>_uzunHedefHaftaRaw.km)
+                ?{
+                    ..._uzunHedefHaftaRaw,
+                    km:round1(_uzunHedefHaftaRaw.bandCapKm>0?Math.min(_prevWeekLongestKmHafta,_uzunHedefHaftaRaw.bandCapKm):_prevWeekLongestKmHafta),
+                    capped:_uzunHedefHaftaRaw.bandCapKm>0&&_prevWeekLongestKmHafta>_uzunHedefHaftaRaw.bandCapKm,
+                    flooredByPrevWeek:true
+                  }
+                :_uzunHedefHaftaRaw;
               const _uzunHedefHaftaOrijinal=estimateUzunKosuHedefi(weekOrigKm,weekOrigDp,week.wt.phase,effectiveDisiplin(athlete,plan.primary),_uzunZonesHafta,null,plan.primary?.mesafe);
               const _haftalikDegisti=_uzunHedefHaftaOrijinal.km!==_uzunHedefHafta.km;
               const _haftalikDpDegisti=_uzunHedefHaftaOrijinal.dp>0&&_uzunHedefHaftaOrijinal.dp!==_uzunHedefHafta.dp;
               return _uzunHedefHafta.km>0&&React.createElement('span',{
-                style:{color:_uzunHedefHafta.capped||_haftalikDegisti?'var(--warn)':'var(--text-secondary)'},
+                style:{color:_uzunHedefHafta.capped
+                  ?'var(--warn)'
+                  :(_uzunHedefHafta.flooredByPrevWeek?'var(--info)':(_haftalikDegisti?'var(--warn)':'var(--text-secondary)'))},
                 title:_uzunHedefHafta.capped
                   ?'Band tavanına sınırlandı (~'+_uzunHedefHafta.bandCapKm+'km) — gün üretimi de aynı tavanı uygular'
-                  :(_haftalikDegisti?'Orijinal hedef: ~'+_uzunHedefHaftaOrijinal.km+'km — revizyon sonrası: ~'+_uzunHedefHafta.km+'km':'Haftanın uzunu hedefi — günlük antrenman önerisi bu hedefe göre ölçeklenir')
+                  :_uzunHedefHafta.flooredByPrevWeek
+                    ?'Önceki hafta zaten ~'+_prevWeekLongestKmHafta+'km koşuldu — hedef bunun altına düşürülmedi'
+                    :(_haftalikDegisti?'Orijinal hedef: ~'+_uzunHedefHaftaOrijinal.km+'km — revizyon sonrası: ~'+_uzunHedefHafta.km+'km':'Haftanın uzunu hedefi — günlük antrenman önerisi bu hedefe göre ölçeklenir')
               },
                 '🏃 Uzun: ',
                 _haftalikDegisti&&React.createElement('span',{style:{textDecoration:'line-through',opacity:0.6,marginRight:3}},_uzunHedefHaftaOrijinal.km+'km'),
@@ -16557,7 +16614,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     'D+'+_uzunHedefHafta.dp+'m'
                   )
                   :(_uzunHedefHafta.dp>0?' / D+'+_uzunHedefHafta.dp+'m':''),
-                _uzunHedefHafta.capped?' ⚡':''
+                _uzunHedefHafta.capped?' ⚡':(_uzunHedefHafta.flooredByPrevWeek?' ⬆️':'')
               );
             })(),
             haftaOneriKm>0&&React.createElement('span',{
