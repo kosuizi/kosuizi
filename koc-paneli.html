@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.13-1909 --><!DOCTYPE html>
+<!-- Version: v2026.07.13-1954 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.13-1909';
+const APP_VERSION='v2026.07.13-1954';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -9993,6 +9993,53 @@ function uzunKosuBandMaxKm(band, disiplin, zones, raceKm=0){
 // mantığıyla tutarlı olacak şekilde haftalık D+ hedefinin tamamı tek uzun
 // güne atfedilir (back-to-back günlerinde gerçek dağılım Gün1/Gün2 arasında
 // bölünür — bu yalnızca ileriye dönük bir planlama tahminidir).
+// Rampa/"Herşey Yolunda Giderse" projeksiyonu — TEK PAYLAŞILAN kaynak.
+// Hem curWeekEffective (mevcut haftanın weekEff'inin rampanın altına düşmemesi
+// için taban sağlar — bkz. 13.07.2026 sohbeti, Göksel'in "52.3 yerine 81.6
+// görmek isterdim" talebi) HEM DE HaftalikPlanTab tablosunun gelecek hafta
+// gösterimi AYNI bu fonksiyonu çağırır. Böylece aynı hesabın iki ayrı yerde
+// yazılıp zamanla birbirinden sapması (bu sohbette birkaç kez karşılaşılan
+// hata sınıfı — bkz. weekEff/futureProj ayrı döngü geçmişi) artık mümkün değil.
+// Geçmiş/mevcut/gelecek TEK zincirde işlenir: bir haftanın geçmiş/mevcut/gelecek
+// olması sonucu değiştirmez. Dinlenme haftaları rampayı ne tetikleyebilir ne de
+// tam kapatabilir — ama aktifken diğer haftalar gibi ilerletilir.
+function computeRampProjection(weekTargets, rampModeOn, rampRatePct){
+  const curWt=(weekTargets||[]).find(w=>w.isCurrent);
+  const catchupRate=rampModeOn?1+(rampRatePct/100):1.10;
+  const projWeeks=(weekTargets||[])
+    .filter(w=>!w.isRaceWeek&&w.phase!=='Taper'&&(!curWt||w.phase===curWt.phase))
+    .sort((a,b)=>(a.weekIdx||0)-(b.weekIdx||0));
+  let pKmChain=null;
+  const proj={};
+  for(const w of projWeeks){
+    if(pKmChain===null){
+      if(w.isPast&&!w.isRecovery&&w.targetKm>0&&w.actualKm<w.targetKm*0.98){
+        pKmChain=w.actualKm;
+      }
+      continue;
+    }
+    const maxKm=round1(pKmChain*catchupRate);
+    const goingUp=w.targetKm>pKmChain;
+    const onTrack=!goingUp||maxKm>=w.targetKm;
+    const rampKm=onTrack?w.targetKm:maxKm;
+    if(w.isPast){
+      const blended=Math.max(w.actualKm,rampKm);
+      const canFullyClose=!w.isRecovery;
+      pKmChain=(canFullyClose&&blended>=w.targetKm)?null:blended;
+    } else {
+      const dpRatio=w.targetKm>0&&w.targetDp>0?w.targetDp/w.targetKm:0;
+      if(onTrack){
+        proj[localDateStr(w.weekStart)]={projKm:w.targetKm,projDp:w.targetDp,onTrack:true};
+      } else {
+        const pdp=dpRatio>0?Math.round(rampKm*dpRatio):0;
+        proj[localDateStr(w.weekStart)]={projKm:rampKm,projDp:pdp,onTrack:false};
+      }
+      pKmChain=rampKm;
+    }
+  }
+  return proj;
+}
+
 function estimateUzunKosuHedefi(targetKm, targetDp, phase, disiplin, zones, band, raceKm=0){
   const pay=uzunKosuPayOrani(phase, disiplin);
   let km=round1((targetKm||0)*pay);
@@ -14541,20 +14588,36 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       } else if(cappedEffKm===0){
         effDp=0;
       }
-      const cappedEffDp=cwWt.targetDp>0?Math.min(effDp,cwWt.targetDp):effDp;
+      let cappedEffDp=cwWt.targetDp>0?Math.min(effDp,cwWt.targetDp):effDp;
+      let cappedEffKmFinal=cappedEffKm;
+      // TABAN (13.07.2026 sohbeti — Göksel'in önerisi): weekEff (yukarıdaki
+      // gün-gün tahmin, ÖNCEKİ haftaların performansından habersiz) rampanın
+      // (önceki haftaların gerçek performansını taşıyan) kendi sayısının
+      // ALTINA düşmemeli. Rampa zaten aktifse ve kendi ürettiği sayı
+      // weekEff'ten yüksekse, taban rampanınkine yükseltilir — D+ de aynı
+      // oranla birlikte taşınır ki yoğunluk (m/km) bozulmasın (bkz. yukarıdaki
+      // D+ yoğunluk kontrolü notu, aynı mantık). Bu TEK yerde uygulanır —
+      // hem Firebase'e yazılan hem tabloda gösterilen değer buradan gelir.
+      const rampProj=computeRampProjection(weekTargets,rampModeOn,rampRatePct);
+      const curRampEntry=rampProj[localDateStr(cwWt.weekStart)]||null;
+      if(curRampEntry&&curRampEntry.projKm>cappedEffKmFinal){
+        cappedEffKmFinal=curRampEntry.projKm;
+        if(curRampEntry.projDp>0) cappedEffDp=curRampEntry.projDp;
+      }
       // Revizyon yalnızca hedefin ALTINDA kalındığında gösterilir (Math.abs değil)
-      const kmDown=cwWt.targetKm>0?Math.max(0,cwWt.targetKm-cappedEffKm)/cwWt.targetKm:0;
+      const kmDown=cwWt.targetKm>0?Math.max(0,cwWt.targetKm-cappedEffKmFinal)/cwWt.targetKm:0;
       const dpDown=cwWt.targetDp>0?Math.max(0,cwWt.targetDp-cappedEffDp)/cwWt.targetDp:0;
       const isRevised=kmDown>0.05||dpDown>0.10||cwWt.isRaceWeek;
-      return{origKm:cwWt.targetKm,origDp:cwWt.targetDp,effKm:cappedEffKm,effDp:cappedEffDp,isRevised};
+      return{origKm:cwWt.targetKm,origDp:cwWt.targetDp,effKm:cappedEffKmFinal,effDp:cappedEffDp,isRevised};
     }catch(e){return null;}
-  },[athlete,plan,weekTargets,workouts,races]);
+  },[athlete,plan,weekTargets,workouts,races,rampModeOn,rampRatePct]);
 
   // planSnap'e weekEff yaz — Koşu İzlerim bu alanı okur, kendi hesap yapmaz
   // Dondurma kuralı:
   //   effKm/effDp hafta boyunca sabit kalmalı — antrenman girişi, plan güncellemesi,
   //   koşu günü değişimi hiçbir koşulda revize hedefi değiştirmemeli.
-  //   ANAHTAR: weekKey eşleşiyorsa → dondurulmuş, kesinlikle güncelleme yok.
+  //   ANAHTAR: weekKey eşleşiyorsa → dondurulmuş, aşağı yönlü güncelleme yok
+  //   (yukarı yönlü istisna için aşağıdaki DÜZELTME 2'ye bkz).
   //   weekKey farklıysa (yeni hafta) → ilk kez yaz ve dondur.
   //   (Eski origKm/origDp kontrolü: telafi/backoff nedeniyle targetKm hafta içi değişebilir
   //    ve dondurma kırılıyordu → weekKey tabanlı kontrol bu sorunu köklü çözer.)
@@ -14567,15 +14630,22 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
   // başında 45km, hafta sonunda 23.7km). Artık kilit YALNIZCA weekKey'e bakar — bir kere
   // yazıldıktan sonra o hafta için _v ne olursa olsun bir daha ASLA otomatik değişmez.
   // WEEK_EFF_VERSION alanı sadece bilgi/denetim amacıyla kaydedilmeye devam eder.
+  // DÜZELTME 2 (13.07.2026 sohbeti — Göksel'in "52.3 yerine 81.6" talebi):
+  // "kesinlikle güncelleme yok" kuralı, rampa tabanının (computeRampProjection)
+  // ZATEN dondurulmuş bir haftayı yükseltmesini de engelliyordu — H26 bu
+  // düzeltmeden ÖNCE dondurulmuşse, artık daha yüksek hesaplanan curWeekEffective
+  // hiç yazılmıyordu. Kilit artık YALNIZCA aşağı yönlü değişimi engelliyor:
+  // yeni hesap donmuş değerden KESİNLİKLE DAHA YÜKSEKSE üzerine yazılır (rampa
+  // tabanı veya geçmiş hafta verisi düzeltmesi gibi iyileştirici durumlar için),
+  // daha düşük veya eşitse hiç dokunulmaz — erime riski hâlâ sıfır.
   React.useEffect(()=>{
     if(!curWeekEffective||!athlete||!weekKey)return;
     const snap=planSnapRef.current;
     if(!snap)return;
     const ex=snap.weekEff;
-    // Dondurma koşulu: SADECE aynı hafta (weekKey eşleşiyor) → kesinlikle dokunma.
-    // Versiyon numarası artık kilide dahil değil (yukarıdaki düzeltme notuna bkz).
-    if(ex&&ex._weekKey===weekKey) return;
-    // İlk yazım veya yeni hafta (weekKey değişti) → weekKey damgasıyla dondur
+    // Dondurma koşulu: aynı hafta VE yeni hesap daha yüksek DEĞİLSE dokunma.
+    if(ex&&ex._weekKey===weekKey&&curWeekEffective.effKm<=ex.effKm) return;
+    // İlk yazım, yeni hafta VEYA iyileştirici yukarı düzeltme → yaz/dondur
     const updated={...snap,weekEff:{...curWeekEffective,_v:WEEK_EFF_VERSION,_weekKey:weekKey}};
     
     // NOT: frozenTargets artık otomatik değil, koç "Gelecek Hafta Planı" butonuna bastığında kaydedilir
@@ -15900,75 +15970,14 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               const _uzunRealBand=ctlBand((history&&history[history.length-1]?.ctl)||0);
 
               // ── "Herşey Yolunda Giderse" Projeksiyonu ─────────────────────────
-              // Rampa modu kapalıysa sabit %10, açıksa kullanıcının seçtiği oran.
-              const _curWtForProj=weekTargets.find(w=>w.isCurrent);
+              // DÜZELTME (13.07.2026 sohbeti): bu hesap artık curWeekEffective ile
+              // AYNI paylaşılan computeRampProjection() fonksiyonundan geliyor —
+              // iki ayrı yerde aynı mantığın tekrar yazılıp zamanla birbirinden
+              // sapması (bu sohbette birkaç kez karşılaşılan hata sınıfı) artık
+              // mümkün değil. Detaylı gerekçe/tarihçe için fonksiyonun kendi
+              // yorumuna bkz. (üstte, estimateUzunKosuHedefi'nden hemen önce).
               const _catchupRate=rampModeOn?1+(rampRatePct/100):1.10;
-
-              // DÜZELTME (13.07.2026 sohbeti — hafta geçişinde rampa sıfırlanması):
-              // ESKİ MANTIK: geçmiş temel (_simKm) ve gelecek projeksiyon (futureProj)
-              // AYRI iki döngüde hesaplanıyordu. Geçmiş döngü dinlenme haftalarını
-              // (isRecovery) TAMAMEN atlıyordu — ne rampayı tetikleyebiliyor ne de
-              // ilerletebiliyorlardı. Gelecek döngü ise dinlenme haftasını diğer
-              // haftalar gibi işleyip rampayı o haftanın (düşük ama gerçek) hedefine
-              // sıfırlıyordu. Sonuç: bir dinlenme haftası "mevcut/gelecek" iken
-              // rampaya bu sıfırlamayı/artışı sağlıyordu, ama aynı hafta bir sonraki
-              // haftaya "geçmiş" olarak devrettiği an bu katkı sessizce KAYBOLUYORDU
-              // — geçmiş döngü onu hiç görmüyordu. Rampa, gerçek performansta
-              // hiçbir kötüleşme olmadan, sırf hafta döndüğü için daha düşük bir
-              // noktadan yeniden başlıyormuş gibi görünüyordu (H26/H27/H28 örneği:
-              // 06-13 Temmuz arası, H25 mevcut haftadan geçmişe döner dönmez her
-              // hafta bir öncekinin daha düşük değerini aldı — 81.6→52.3, 97.9→81.6,
-              // tam/115.2→97.9 — hiçbir gün geçmeden, sadece takvim ilerlediği için).
-              // YENİ MANTIK: geçmiş ve gelecek TEK bir zincirde, AYNI geçiş
-              // fonksiyonuyla işlenir — bir haftanın geçmiş/mevcut/gelecek olması
-              // artık zincirin SONUCUNU değiştirmez, yalnızca geçmiş haftalarda ek
-              // olarak gerçekleşen km de hesaba katılır. Dinlenme haftaları hâlâ
-              // YENİ bir açığı TETİKLEYEMEZ ve rampayı TAMAMEN KAPATAMAZ (kendi
-              // hedefi zaten düşük — bunu tutturmak gerçek bir toparlanma kanıtı
-              // değildir) — ama rampa aktifken diğer haftalar gibi işlenir: kendi
-              // (düşük) hedefine sıfırlanır ve zincir DEVAM EDER. Sadece dinlenme
-              // OLMAYAN bir geçmiş hafta gerçekten kendi hedefini tutturursa rampa
-              // tam kapanır (null) — bu da bir sonraki geçmiş haftanın, varsa,
-              // kendi gerçek verisinden TAZE bir açıkla yeniden tetiklenebilmesini
-              // sağlar (eski davranışla birebir aynı — bkz. aşağıdaki DÜZELTME 2).
-              // DÜZELTME 2 (faz sızıntısı, önceki sohbet, hâlâ geçerli): geçmişe
-              // bakış MEVCUT haftayla AYNI faza sınırlandırılır — Gelişme'deki eski
-              // veriler Zirve'nin rampasına hiç karışmaz.
-              const _projWeeks=weekTargets
-                .filter(w=>!w.isRaceWeek&&w.phase!=='Taper'&&(!_curWtForProj||w.phase===_curWtForProj.phase))
-                .sort((a,b)=>(a.weekIdx||0)-(b.weekIdx||0));
-              let _pKmChain=null;
-              const futureProj={};
-              for(const _w of _projWeeks){
-                if(_pKmChain===null){
-                  // Rampa henüz aktif değil: SADECE dinlenme olmayan bir geçmiş
-                  // hafta gerçek bir açık gösterirse (actual < hedefin %98'i) tetiklenir.
-                  if(_w.isPast&&!_w.isRecovery&&_w.targetKm>0&&_w.actualKm<_w.targetKm*0.98){
-                    _pKmChain=_w.actualKm;
-                  }
-                  continue;
-                }
-                // Rampa aktif: bu hafta (geçmiş/mevcut/gelecek, dinlenme dahil)
-                // aynı geçiş mantığıyla işlenir.
-                const _maxKm=round1(_pKmChain*_catchupRate);
-                const _goingUp=_w.targetKm>_pKmChain;
-                const _onTrack=!_goingUp||_maxKm>=_w.targetKm;
-                const _rampKm=_onTrack?_w.targetKm:_maxKm;
-                if(_w.isPast){
-                  const _blended=Math.max(_w.actualKm,_rampKm);
-                  const _canFullyClose=!_w.isRecovery; // dinlenme rampayı asla tam kapatamaz
-                  _pKmChain=(_canFullyClose&&_blended>=_w.targetKm)?null:_blended;
-                } else {
-                  const _dpRatio=_w.targetKm>0&&_w.targetDp>0?_w.targetDp/_w.targetKm:0;
-                  if(_onTrack){
-                    futureProj[localDateStr(_w.weekStart)]={projKm:_w.targetKm,projDp:_w.targetDp,onTrack:true};
-                  } else {
-                    const _pdp=_dpRatio>0?Math.round(_rampKm*_dpRatio):0;
-                    futureProj[localDateStr(_w.weekStart)]={projKm:_rampKm,projDp:_pdp,onTrack:false};
-                  }
-                  _pKmChain=_rampKm;
-                }
-              }
+              const futureProj=computeRampProjection(weekTargets,rampModeOn,rampRatePct);
 
               return weekTargets.map((wt,i)=>{
               const act=weekActuals[i]||{km:0,dp:0};
