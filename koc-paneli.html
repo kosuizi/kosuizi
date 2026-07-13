@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.13-1238 --><!DOCTYPE html>
+<!-- Version: v2026.07.13-1307 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.13-1238';
+const APP_VERSION='v2026.07.13-1307';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -15899,28 +15899,85 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               // diğer haftalar için proxyBandFromWeeklyKm kullanılır (CTL simülasyonu yok).
               const _uzunRealBand=ctlBand((history&&history[history.length-1]?.ctl)||0);
 
-              // ── DÜZELTME (13.07.2026 sohbeti — gelecek hafta hedefi erken düşüşü) ──
-              // ESKİ MANTIK ("Herşey Yolunda Giderse" projeksiyonu): henüz BAŞLAMAMIŞ
-              // (isPast=false, isCurrent=false) haftalar için bile, geçmiş performansa
-              // dayalı bir "rampa" simülasyonu o haftanın TABLODA GÖRÜNEN hedefini
-              // (ve ondan türeyen "haftanın uzunu" reçetesini) sessizce, orijinal
-              // targetKm yerine küçültülmüş bir projeksiyon değeriyle DEĞİŞTİRİYORDU.
-              // Bu simülasyon her render'da güncel geçmiş veriyle YENİDEN hesaplandığı
-              // için, sporcu hedefin altında koştukça HENÜZ BAŞLAMAMIŞ haftaların
-              // hedefi de kendiliğinden ve sürekli küçülüyordu (H26/H27/H28 örneği —
-              // 06-13 Temmuz 2026 arası, hiçbir gün geçmeden hedefler tekrar düştü).
-              // Koçun beklentisi nettir: bir hafta başlamadan önce hedefi ASLA
-              // değişmemeli. "Zirveye yetişilemeyebilir" uyarısı zaten AYRI ve doğru
-              // bir kanaldan (evaluatePeakReachability → yukarıdaki renkli uyarı
-              // kutusu) veriliyor; o fonksiyon tabloyu hiç etkilemez. Bu yüzden
-              // tablodaki/uzun koşudaki projeksiyonla hedef DEĞİŞTİRME tamamen
-              // kaldırıldı — henüz gelmemiş bir hafta her zaman KENDİ orijinal
-              // targetKm/targetDp'sini gösterir, ta ki o hafta gerçekten mevcut
-              // hafta olana kadar (o noktada isCurEff/curWeekEffective devreye girer).
+              // ── "Herşey Yolunda Giderse" Projeksiyonu ─────────────────────────
+              // Rampa modu kapalıysa sabit %10, açıksa kullanıcının seçtiği oran.
+              const _curWtForProj=weekTargets.find(w=>w.isCurrent);
+              const _catchupRate=rampModeOn?1+(rampRatePct/100):1.10;
+
+              // DÜZELTME (13.07.2026 sohbeti — hafta geçişinde rampa sıfırlanması):
+              // ESKİ MANTIK: geçmiş temel (_simKm) ve gelecek projeksiyon (futureProj)
+              // AYRI iki döngüde hesaplanıyordu. Geçmiş döngü dinlenme haftalarını
+              // (isRecovery) TAMAMEN atlıyordu — ne rampayı tetikleyebiliyor ne de
+              // ilerletebiliyorlardı. Gelecek döngü ise dinlenme haftasını diğer
+              // haftalar gibi işleyip rampayı o haftanın (düşük ama gerçek) hedefine
+              // sıfırlıyordu. Sonuç: bir dinlenme haftası "mevcut/gelecek" iken
+              // rampaya bu sıfırlamayı/artışı sağlıyordu, ama aynı hafta bir sonraki
+              // haftaya "geçmiş" olarak devrettiği an bu katkı sessizce KAYBOLUYORDU
+              // — geçmiş döngü onu hiç görmüyordu. Rampa, gerçek performansta
+              // hiçbir kötüleşme olmadan, sırf hafta döndüğü için daha düşük bir
+              // noktadan yeniden başlıyormuş gibi görünüyordu (H26/H27/H28 örneği:
+              // 06-13 Temmuz arası, H25 mevcut haftadan geçmişe döner dönmez her
+              // hafta bir öncekinin daha düşük değerini aldı — 81.6→52.3, 97.9→81.6,
+              // tam/115.2→97.9 — hiçbir gün geçmeden, sadece takvim ilerlediği için).
+              // YENİ MANTIK: geçmiş ve gelecek TEK bir zincirde, AYNI geçiş
+              // fonksiyonuyla işlenir — bir haftanın geçmiş/mevcut/gelecek olması
+              // artık zincirin SONUCUNU değiştirmez, yalnızca geçmiş haftalarda ek
+              // olarak gerçekleşen km de hesaba katılır. Dinlenme haftaları hâlâ
+              // YENİ bir açığı TETİKLEYEMEZ ve rampayı TAMAMEN KAPATAMAZ (kendi
+              // hedefi zaten düşük — bunu tutturmak gerçek bir toparlanma kanıtı
+              // değildir) — ama rampa aktifken diğer haftalar gibi işlenir: kendi
+              // (düşük) hedefine sıfırlanır ve zincir DEVAM EDER. Sadece dinlenme
+              // OLMAYAN bir geçmiş hafta gerçekten kendi hedefini tutturursa rampa
+              // tam kapanır (null) — bu da bir sonraki geçmiş haftanın, varsa,
+              // kendi gerçek verisinden TAZE bir açıkla yeniden tetiklenebilmesini
+              // sağlar (eski davranışla birebir aynı — bkz. aşağıdaki DÜZELTME 2).
+              // DÜZELTME 2 (faz sızıntısı, önceki sohbet, hâlâ geçerli): geçmişe
+              // bakış MEVCUT haftayla AYNI faza sınırlandırılır — Gelişme'deki eski
+              // veriler Zirve'nin rampasına hiç karışmaz.
+              const _projWeeks=weekTargets
+                .filter(w=>!w.isRaceWeek&&w.phase!=='Taper'&&(!_curWtForProj||w.phase===_curWtForProj.phase))
+                .sort((a,b)=>(a.weekIdx||0)-(b.weekIdx||0));
+              let _pKmChain=null;
+              const futureProj={};
+              for(const _w of _projWeeks){
+                if(_pKmChain===null){
+                  // Rampa henüz aktif değil: SADECE dinlenme olmayan bir geçmiş
+                  // hafta gerçek bir açık gösterirse (actual < hedefin %98'i) tetiklenir.
+                  if(_w.isPast&&!_w.isRecovery&&_w.targetKm>0&&_w.actualKm<_w.targetKm*0.98){
+                    _pKmChain=_w.actualKm;
+                  }
+                  continue;
+                }
+                // Rampa aktif: bu hafta (geçmiş/mevcut/gelecek, dinlenme dahil)
+                // aynı geçiş mantığıyla işlenir.
+                const _maxKm=round1(_pKmChain*_catchupRate);
+                const _goingUp=_w.targetKm>_pKmChain;
+                const _onTrack=!_goingUp||_maxKm>=_w.targetKm;
+                const _rampKm=_onTrack?_w.targetKm:_maxKm;
+                if(_w.isPast){
+                  const _blended=Math.max(_w.actualKm,_rampKm);
+                  const _canFullyClose=!_w.isRecovery; // dinlenme rampayı asla tam kapatamaz
+                  _pKmChain=(_canFullyClose&&_blended>=_w.targetKm)?null:_blended;
+                } else {
+                  const _dpRatio=_w.targetKm>0&&_w.targetDp>0?_w.targetDp/_w.targetKm:0;
+                  if(_onTrack){
+                    futureProj[localDateStr(_w.weekStart)]={projKm:_w.targetKm,projDp:_w.targetDp,onTrack:true};
+                  } else {
+                    const _pdp=_dpRatio>0?Math.round(_rampKm*_dpRatio):0;
+                    futureProj[localDateStr(_w.weekStart)]={projKm:_rampKm,projDp:_pdp,onTrack:false};
+                  }
+                  _pKmChain=_rampKm;
+                }
+              }
 
               return weekTargets.map((wt,i)=>{
               const act=weekActuals[i]||{km:0,dp:0};
               const wtWeekKey=localDateStr(wt.weekStart);
+              // Gelecek hafta projeksiyonu (rampa aktifse ve bu hafta henüz
+              // başlamamışsa, ramp yakalayamıyorsa gösterilir)
+              const _isFuture=!wt.isPast&&!wt.isCurrent;
+              const _futPrj=_isFuture?futureProj[wtWeekKey]:null;
+              const _showFutProj=!!_futPrj&&!_futPrj.onTrack;
               // Mevcut hafta: curWeekEffective (yoğunluk düzeltmeli versiyonu — ayrı hesap gereksiz)
               const isCurEff=wt.isCurrent&&displayCurWeekEff;
               // Geçmiş hafta: Firebase'de kayıtlı weekEff (o hafta mevcut haftayken yazıldı)
@@ -15998,8 +16055,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               // Yani dinlenme haftasında GERÇEKTEN bir uzun koşu var, sadece kısa —
               // bunu gizlemek yanıltıcıydı. isRaceWeek/Yarış Sonrası gizli kalmaya
               // devam ediyor çünkü onların ayrı/yok bir "uzun koşu" kavramı var.
-              const _dispKmForUzun=showRevised?effKm:(showCascade?cascadeKm:wt.targetKm);
-              const _dispDpForUzun=(showRevised&&wt.targetDp>0)?effDp:((showCascade&&wt.targetDp>0)?cascadeDp:wt.targetDp);
+              const _dispKmForUzun=showRevised?effKm:(showCascade?cascadeKm:(_showFutProj?_futPrj.projKm:wt.targetKm));
+              const _dispDpForUzun=(showRevised&&wt.targetDp>0)?effDp:((showCascade&&wt.targetDp>0)?cascadeDp:(((_showFutProj&&wt.targetDp>0&&_futPrj.projDp>0))?_futPrj.projDp:wt.targetDp));
               const _uzunHedef=wt.isRaceWeek||wt.phase==='Yarış Sonrası'
                 ?null
                 :estimateUzunKosuHedefi(_dispKmForUzun,_dispDpForUzun,wt.phase,_uzunDisiplin,_uzunZones,wt.isCurrent?_uzunRealBand:null,plan.primary?.mesafe);
@@ -16099,6 +16156,11 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                         React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',fontWeight:400,marginRight:4}},wt.targetKm),
                         React.createElement('span',{style:{color:'var(--warn)'}},cascadeKm)
                       )
+                    :_showFutProj
+                      ?React.createElement('span',{title:'Rampa projeksiyonu: %'+Math.round((_catchupRate-1)*100)+'/hafta artış -> '+_futPrj.projKm+' km (orijinal: '+wt.targetKm+' km)'},
+                        React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',fontWeight:400,marginRight:4}},wt.targetKm),
+                        React.createElement('span',{style:{color:'var(--info)',fontWeight:700}},_futPrj.projKm)
+                      )
                     :wt.targetKm,
                   _uzunHedef&&_uzunHedef.km>0&&React.createElement('div',{
                     style:{fontSize:9,fontWeight:400,marginTop:1,whiteSpace:'nowrap'},
@@ -16133,6 +16195,11 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                       ?React.createElement('span',null,
                         React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',fontWeight:400,marginRight:4}},wt.targetDp),
                         React.createElement('span',{style:{color:'var(--warn)'}},cascadeDp)
+                      )
+                    :_showFutProj&&wt.targetDp>0&&_futPrj.projDp>0
+                      ?React.createElement('span',{title:'Rampa projeksiyonu D+: '+_futPrj.projDp+'m (orijinal: '+wt.targetDp+'m)'},
+                        React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',fontWeight:400,marginRight:4}},wt.targetDp),
+                        React.createElement('span',{style:{color:'var(--info)',fontWeight:700}},_futPrj.projDp)
                       )
                     :(wt.targetDp>0?wt.targetDp:'—'),
                   _uzunHedef&&_uzunHedef.dp>0&&React.createElement('div',{
