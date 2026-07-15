@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.15-2136 --><!DOCTYPE html>
+<!-- Version: v2026.07.15-2215 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.15-2136';
+const APP_VERSION='v2026.07.15-2215';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -3868,7 +3868,17 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
             if(sigs.level==='forceLow') sorunlar.push('⚠ Aerobik zorunlu (zone dengesi bozuk — kaliteli bloke)');
             if(sigs.level==='preferLow') sorunlar.push(sigs.planPreferLow?'💡 Aerobik tercih (planlı dinlenme haftası)':'💡 Aerobik tercih (hafif zone uyarısı)');
             if(planWeekReal?._isNoRace&&planWeekReal?._maxKaliteli===0) sorunlar.push('📊 Düşük hacim ('+(planWeekReal._avg4km??'?')+'km/hafta ort.) — kaliteli antrenman bu hafta engellendi (<15km eşiği)');
-            if(_canHillSprint&&_raceDp<=300) sorunlar.push('🏔 Hill sprint / düz yarış uyumsuzluğu (D+≤300m)');
+            // DÜZELTME (Temmuz 2026 — Göksel'in tespitiyle): eski koşul
+            // (_canHillSprint&&_raceDp<=300) matematiksel olarak yarış varken ASLA
+            // anlamlı şekilde tetiklenemiyordu — _canHillSprint zaten primary varken
+            // _raceDp>300 demek, aynı anda _raceDp<=300 olamaz. Fiilen sadece
+            // "yarış yok + disiplin=trail" durumunda tetikleniyordu ki bu kodun kendi
+            // yorumuna göre (bkz. recommendWorkout ~satır 11622) zaten NORMAL/beklenen
+            // davranış, bir uyumsuzluk değil. Aynı tabloda isTrail sütunu (satır ~4027)
+            // zaten DOĞRU bir versiyonunu kullanıyor: yarışın kendisi "Arazi" etiketli
+            // ama D+ çok düşükse (<300m) bu gerçek bir uyumsuzluk/etiketleme hatasıdır.
+            // Sorun listesi artık aynı, tutarlı mantığa hizalandı.
+            if(primary&&primary.is_trail&&_raceDp<300) sorunlar.push('🏔 Yarış "Arazi" (trail) etiketli ama D+ çok düşük ('+_raceDp+'m <300m) — hill sprint önceliği bu yarış için anlamlı olmayabilir, yarış etiketini/disiplini kontrol edin.');
             if(sigs.düşükYükIstisnası){
               sorunlar.push('⚡ Düşük yük istisnası aktif — zone kısıtı devre dışı (ACWR<0.65, TSB>10, sak<4, HRV dengeli)');
             } else if(acwr!==null&&acwr<0.65&&tsb>10){
@@ -3927,7 +3937,7 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
   const sort=(k)=>{if(sortKey===k)setSortAsc(a=>!a);else{setSortKey(k);setSortAsc(false);}};
 
   const filtered=rows
-    .filter(r=>filtre==='hepsi'||(filtre==='sorunlu'&&r.sorunSayisi>0)||(filtre==='uyari'&&r.sigLevel!=='normal'))
+    .filter(r=>filtre==='hepsi'||(filtre==='sorunlu'&&r.sorunSayisi>0&&!r.hata)||(filtre==='uyari'&&r.sigLevel!=='normal')||(filtre==='hata'&&r.hata))
     .sort((a,b)=>{
       let av=a[sortKey],bv=b[sortKey];
       if(av===null||av===undefined)av=sortAsc?Infinity:-Infinity;
@@ -3937,10 +3947,17 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
       return sortAsc?(av<bv?-1:av>bv?1:0):(av>bv?-1:av<bv?1:0);
     });
 
-  const TH=({k,ch,st={}})=>React.createElement('th',{onClick:()=>sort(k),style:{padding:'5px 7px',textAlign:'left',borderBottom:'2px solid var(--border)',whiteSpace:'nowrap',fontSize:10,color:'var(--text-secondary)',cursor:'pointer',background:sortKey===k?'var(--bg-secondary)':'transparent',...st}},ch+(sortKey===k?(sortAsc?' ↑':' ↓'):''));
-  const TD=({ch,st={}})=>React.createElement('td',{style:{padding:'4px 7px',...st}},ch);
+  const TH=({k,ch,st={}})=>React.createElement('th',{onClick:()=>sort(k),style:{padding:'4px 5px',textAlign:'left',borderBottom:'2px solid var(--border)',whiteSpace:'nowrap',fontSize:10,color:'var(--text-secondary)',cursor:'pointer',background:sortKey===k?'var(--bg-secondary)':'transparent',...st}},ch+(sortKey===k?(sortAsc?' ↑':' ↓'):''));
+  const TD=({ch,st={}})=>React.createElement('td',{style:{padding:'3px 5px',...st}},ch);
 
-  const sorunluN=rows.filter(r=>r.sorunSayisi>0).length;
+  // DÜZELTME (Temmuz 2026 — Göksel'in talebiyle): "🔴 Hesap hatası" durumu artık
+  // "⚠ sorunlu" sayısının İÇİNDE gizli kalmıyor. Önceden hata satırları sorunSayisi:99
+  // aldığı için sorunluN'e karışıyordu — bir antrenman/sinyal sorunuyla bir kod/veri
+  // hatası aynı sayıda toplanıyordu, koç ikisini ayırt edemiyordu. Artık ayrı sayılıyor
+  // ve sorunluN'den çıkarılıyor (sorunluN artık SADECE gerçek antrenman-sinyali
+  // sorunlarını yansıtır).
+  const hataN=rows.filter(r=>r.hata).length;
+  const sorunluN=rows.filter(r=>r.sorunSayisi>0&&!r.hata).length;
   const uyariN=rows.filter(r=>r.sigLevel!=='normal').length;
 
   return React.createElement('div',{style:{padding:16}},
@@ -3949,9 +3966,10 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
         loading?'⏳ Hesaplanıyor...':'🔍 Analizi Çalıştır'),
       rows.length>0&&React.createElement(React.Fragment,null,
         React.createElement('span',{style:{fontSize:11,color:'var(--text-secondary)'}},
-          rows.length+' sporcu · ⚠ '+sorunluN+' sorunlu · 🔔 '+uyariN+' sinyal uyarısı'),
+          rows.length+' sporcu · ⚠ '+sorunluN+' sorunlu · 🔔 '+uyariN+' sinyal uyarısı'+(hataN>0?' · 🔴 '+hataN+' hesap hatası':'')),
         React.createElement('div',{style:{display:'flex',gap:4}},
-          [{k:'hepsi',l:'Hepsi'},{k:'sorunlu',l:'⚠ Sorunlu ('+sorunluN+')'},{k:'uyari',l:'🔔 Sinyal ('+uyariN+')'}].map(({k,l})=>
+          [{k:'hepsi',l:'Hepsi'},{k:'sorunlu',l:'⚠ Sorunlu ('+sorunluN+')'},{k:'uyari',l:'🔔 Sinyal ('+uyariN+')'},
+            ...(hataN>0?[{k:'hata',l:'🔴 Hesap Hatası ('+hataN+')'}]:[])].map(({k,l})=>
             React.createElement('button',{key:k,className:'btn btn-sm'+(filtre===k?' btn-primary':''),onClick:()=>setFiltre(k)},l)
           )
         )
@@ -3960,8 +3978,8 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
     hata&&React.createElement('div',{style:{color:'var(--danger)',marginBottom:10,fontSize:12}},hata),
     !rows.length&&!loading&&React.createElement('div',{style:{padding:40,textAlign:'center',color:'var(--text-tertiary)',fontSize:13}},
       '"Analizi Çalıştır" butonuna basarak tüm aktif sporcuların plan sinyal durumunu görün.'),
-    filtered.length>0&&React.createElement('div',{style:{overflowX:'auto',borderRadius:8,border:'1px solid var(--border)'}},
-      React.createElement('table',{style:{width:'100%',fontSize:11,borderCollapse:'collapse'}},
+    filtered.length>0&&React.createElement('div',{style:{borderRadius:8,border:'1px solid var(--border)'}},
+      React.createElement('table',{style:{width:'100%',fontSize:10,borderCollapse:'collapse',tableLayout:'auto'}},
         React.createElement('thead',null,
           React.createElement('tr',{style:{background:'var(--bg-secondary)'}},
             React.createElement(TH,{k:'ad',ch:'Sporcu'}),
@@ -3978,10 +3996,10 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
             React.createElement(TH,{k:'highPct',ch:'Z3-4%',st:{textAlign:'right'}}),
             React.createElement(TH,{k:'anaPct',ch:'Z5%',st:{textAlign:'right'}}),
             React.createElement(TH,{k:'sigLevel',ch:'Sinyal'}),
-            React.createElement(TH,{k:'düşükYükIstisnası',ch:'DYİ?'}),
-            React.createElement(TH,{k:'kaliteliYapildi',ch:'Kal.?'}),
-            React.createElement(TH,{k:'mechAclOvl',ch:'ACL?'}),
-            React.createElement(TH,{k:'mechKardioDanger',ch:'MechK?'}),
+            React.createElement(TH,{k:'düşükYükIstisnası',ch:'Düşük Yük İstisnası',st:{whiteSpace:'normal',maxWidth:80}}),
+            React.createElement(TH,{k:'kaliteliYapildi',ch:'Kaliteli Yapıldı (Bu Hafta)',st:{whiteSpace:'normal',maxWidth:90}}),
+            React.createElement(TH,{k:'mechAclOvl',ch:'Mekanik Overload (ACL Riski)',st:{whiteSpace:'normal',maxWidth:90}}),
+            React.createElement(TH,{k:'mechKardioDanger',ch:'Mekanik/Kardiyo Dengesi',st:{whiteSpace:'normal',maxWidth:90}}),
             React.createElement(TH,{k:'mechKardioRatio',ch:'M/K',st:{textAlign:'right'}}),
             React.createElement(TH,{k:'primaryAd',ch:'Yarış'}),
             React.createElement(TH,{k:'daysToRace',ch:'Gün',st:{textAlign:'right'}}),
@@ -4007,13 +4025,13 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
             React.createElement(TD,{ch:r.lowPct===null?'-':r.lowPct+'%',st:{textAlign:'right',color:r.lowPct===null?'var(--text-tertiary)':r.lowPct<55?'var(--danger)':r.lowPct<70?'var(--warn)':'var(--success)'}}),
             React.createElement(TD,{ch:r.highPct===null?'-':r.highPct+'%',st:{textAlign:'right',color:r.highPct===null?'var(--text-tertiary)':r.highPct>35?'var(--danger)':r.highPct>25?'var(--warn)':'inherit'}}),
             React.createElement(TD,{ch:r.anaPct===null?'-':r.anaPct+'%',st:{textAlign:'right',color:r.anaPct===null?'var(--text-tertiary)':r.anaPct>20?'var(--danger)':r.anaPct>12?'var(--warn)':'inherit'}}),
-            React.createElement(TD,{ch:SIG_TR[r.sigLevel]||r.sigLevel,st:{fontWeight:r.sigLevel!=='normal'?600:400,color:{forceEasy:'var(--danger)',forceLow:'var(--warn)',preferLow:'#ca8a04',forceQuality:'var(--success)',normal:'var(--text-tertiary)'}[r.sigLevel]||'inherit',whiteSpace:'nowrap'}}),
+            React.createElement(TD,{ch:SIG_TR[r.sigLevel]||r.sigLevel,st:{fontWeight:r.sigLevel!=='normal'?600:400,color:{forceEasy:'var(--danger)',forceLow:'var(--warn)',preferLow:'#ca8a04',forceQuality:'var(--success)',normal:'var(--text-tertiary)'}[r.sigLevel]||'inherit',maxWidth:95}}),
             React.createElement(TD,{ch:r.düşükYükIstisnası?'✓':'—',st:{textAlign:'center',color:r.düşükYükIstisnası?'var(--success)':'var(--text-tertiary)'}}),
             React.createElement(TD,{ch:r.kaliteliYapildi?'✓':'—',st:{textAlign:'center',color:r.kaliteliYapildi?'var(--success)':'var(--text-tertiary)'}}),
             React.createElement(TD,{ch:r.mechAclOvl?'⚠':'—',st:{textAlign:'center',color:r.mechAclOvl?'var(--danger)':'var(--text-tertiary)'}}),
             React.createElement(TD,{ch:r.mechKardioDanger?'❌':r.mechKardioWarn?'⚠':'—',st:{textAlign:'center',color:r.mechKardioDanger?'var(--danger)':r.mechKardioWarn?'var(--warn)':'var(--text-tertiary)'}}),
             React.createElement(TD,{ch:r.mechKardioRatio===null?'-':r.mechKardioRatio,st:{textAlign:'right',fontFamily:'monospace',color:r.mechKardioDanger?'var(--danger)':r.mechKardioWarn?'var(--warn)':'inherit'}}),
-            React.createElement(TD,{ch:r.primaryAd==='-'?'-':r.primaryAd+(r.primaryMesafe?' '+r.primaryMesafe+'K':''),st:{maxWidth:140,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}),
+            React.createElement(TD,{ch:r.primaryAd==='-'?'-':r.primaryAd+(r.primaryMesafe?' '+r.primaryMesafe+'K':''),st:{maxWidth:100,whiteSpace:'normal'}}),
             React.createElement(TD,{ch:r.daysToRace===null?'-':r.daysToRace+'g',st:{textAlign:'right',fontFamily:'monospace',color:r.daysToRace!==null&&r.daysToRace<=7?'var(--danger)':r.daysToRace!==null&&r.daysToRace<=21?'var(--warn)':'inherit'}}),
             React.createElement(TD,{ch:r._raceDp>0?r._raceDp+'m':'-',st:{textAlign:'right',fontFamily:'monospace',color:r._raceDp>0&&r._raceDp<300&&r.primaryIsTrail?'var(--warn)':'inherit'}}),
             React.createElement(TD,{ch:r.primaryIsTrail&&r._raceDp<300?'⚠ düz trail yarış':r.isTrail&&!r.primaryAd||r.primaryAd==='-'?'evet (disiplin)':r.isTrail?'evet':'hayır',st:{color:r.primaryIsTrail&&r._raceDp<300?'var(--warn)':r.isTrail&&(r.primaryAd==='-'||!r.primaryAd)?'var(--text-tertiary)':'inherit'}}),
@@ -4021,10 +4039,32 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
             React.createElement(TD,{ch:r.disiplin+(r.antrenmanAmaci&&r.antrenmanAmaci!=='-'?' / '+r.antrenmanAmaci:'')}),
             React.createElement(TD,{ch:r.sorunlar.length
               ?r.sorunlar.map((s,i)=>React.createElement('div',{key:i,style:{fontSize:10,lineHeight:'1.5',color:'var(--text-secondary)'}},s))
-              :React.createElement('span',{style:{color:'var(--text-tertiary)',fontSize:10}},'—'),st:{minWidth:260}})
+              :React.createElement('span',{style:{color:'var(--text-tertiary)',fontSize:10}},'—'),st:{maxWidth:220}})
           ))
         )
       )
+    ),
+    // Sütun/sinyal açıklamaları — tablonun hemen altında, koç için referans.
+    filtered.length>0&&React.createElement('div',{style:{
+      marginTop:12,padding:'12px 14px',background:'var(--bg-secondary)',
+      borderRadius:8,fontSize:11,lineHeight:1.6,color:'var(--text-secondary)'
+    }},
+      React.createElement('div',{style:{fontWeight:700,marginBottom:8,color:'var(--text-primary)'}},'ℹ️ Sütun ve Sinyal Açıklamaları'),
+      [
+        ['Sinyal (sigLevel)','Tek bir öncelik sırasına indirgenmiş genel durum — sadece biri aktif olur: '+
+          '❌ Sadece kolay (forceEasy): önerilen tür zorla kolay/aerobiğe çevrilir, süre de kısaltılır — en sert müdahale. '+
+          '⚠ Aerobik zorunlu (forceLow): sadece önerilen tür "yoğun" listesindeyse (interval, eşik, tempo, yokuş, piramit, on-off, cruise, yarış temposu, hill sprint, tırmanış) aerobiğe çevrilir, orta süre. '+
+          '💡 Aerobik tercih (preferLow): aynı değiştirme ama yumuşak baskı — süre daha uzun tutulur, cezalandırma yok. '+
+          '✅ Kalite fırsatı (forceQuality): sporcu dinlenmiş + anaerobik stimulus düşükse kaliteli antrenman fırsatı açılır. Öncelik: forceEasy > forceLow > preferLow > forceQuality > normal.'],
+        ['Düşük Yük İstisnası','ACWR<0.65 + TSB>+10 (kronik yük açığı) + sakatlık<4 + HRV dengeli/bilinmiyor → sporcu yeterince yüklenmiyor demektir, zone kaynaklı kısıtlar (forceLow/preferLow) kaldırılır.'],
+        ['Kaliteli Yapıldı (Bu Hafta)','Bu hafta (pazartesiden bugüne) en az bir yoğun/kaliteli antrenman yapılmış mı — bilgi amaçlı, ayrıca kalite fırsatı (forceQuality) kararına girdi olur.'],
+        ['Mekanik Overload (ACL Riski)','Mekanik ATL, mekanik CTL\'nin %30+ üzerinde — ani darbe/yük artışı, sakatlık riski sinyali. Tetiklenirse forceEasy devreye girer.'],
+        ['Mekanik/Kardiyo Dengesi','Mekanik kondisyon, kardiyo (CTL) kondisyonunun çok gerisinde mi (oran<0.35 → ❌ tehlikeli, <0.6 → ⚠ uyarı). Kardiyo ileri ama kas-iskelet sistemi hazır değilse sakatlık riski — ❌ tetiklenirse forceLow devreye girer.'],
+        ['🏔 Yarış/Disiplin Uyumsuzluğu','Yarış "Arazi" (trail) etiketli ama D+ çok düşük (<300m) — muhtemel bir etiketleme hatası veya bu yarış için hill sprint önceliğinin anlamlı olmadığı bir durum.'],
+      ].map(([baslik,aciklama],i)=>React.createElement('div',{key:i,style:{marginBottom:6}},
+        React.createElement('span',{style:{fontWeight:600,color:'var(--text-primary)'}},baslik+': '),
+        aciklama
+      ))
     )
   );
 }
