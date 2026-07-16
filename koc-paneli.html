@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.16-1001 --><!DOCTYPE html>
+<!-- Version: v2026.07.16-1028 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.16-1001';
+const APP_VERSION='v2026.07.16-1028';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -3841,6 +3841,12 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
             const daysToRace=primary?Math.ceil((new Date(primary.tarih+'T12:00:00')-today)/864e5):null;
             const zoneDist=calcPeriodZoneDist(athWks,ath,4);
             const zoneDist2=calcPeriodZoneDist(athWks,ath,2);
+            // EKLENDİ (Temmuz 2026 — 2 hafta üst üste kriteri): aynı 4-haftalık pencere,
+            // 7 gün önceki tarihe ankrajlanmış hâliyle de hesaplanır — evaluateSignals
+            // bunu forceLow/preferLow'un zone-kaynaklı tetikleyicilerinde kalıcılık
+            // kontrolü için kullanır.
+            const _anchorPrevWeek=new Date(today);_anchorPrevWeek.setDate(_anchorPrevWeek.getDate()-7);
+            const zoneDistPrevWeek=calcPeriodZoneDist(athWks,ath,4,_anchorPrevWeek);
             const lowPct=zoneDist?.lowPct??null;
             const highPct=zoneDist?.highPct??null;
             const anaPct=zoneDist?.anaPct??null;
@@ -3859,7 +3865,7 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
               ifOverloaded:false,mechOverload:false,
               mechAclOverload:mechAtl>(mechCtl||1)*1.3,
               powerOverload:false,wkSessions:0,mechKardioDanger:false,
-              zoneDist4w:zoneDist,zoneDist2w:zoneDist2,kaliteliYapildi:false,
+              zoneDist4w:zoneDist,zoneDist2w:zoneDist2,zoneDist4wPrevWeek:zoneDistPrevWeek,kaliteliYapildi:false,
               planWeek:planWeekReal,prevWeek:prevWeekReal,
               hrv:ath.hrv_durum||'',
             });
@@ -3893,8 +3899,15 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
               if(ath.hrv_durum==='düşük') blokNeden.push('HRV düşük');
               sorunlar.push('⚡ Düşük yük istisnası bloke'+(blokNeden.length?' ('+blokNeden.join(', ')+')':', neden bilinmiyor'));
             }
-            if(lowPct!==null&&lowPct<55) sorunlar.push('📉 Z1-2 kritik az ('+lowPct+'%) — kolay koşu hacmi artırılmalı');
-            if(highPct!==null&&highPct>35) sorunlar.push('📈 Z3-4 çok fazla ('+highPct+'%) — tempo/eşik yük azaltılmalı');
+            // DÜZELTME (Temmuz 2026 — Göksel'in tespitiyle): forceLow zaten AYNI
+            // eşik ihlalini (lowPct<55 / highPct>35) zoneReasons üzerinden daha ayrıntılı
+            // biçimde bildiriyor (bkz. yukarıdaki '⚠ Aerobik zorunlu' satırı) — bu yüzden
+            // sigLevel==='forceLow' iken bu iki satır bilgiyi BİREBİR tekrar ediyordu.
+            // Artık sadece forceLow AKTİF DEĞİLKEN çalışıyor (örn. forceEasy başka bir
+            // sebepten — ACWR/anaerobik birikim — aktifken, bu durumda gerçekten YENİ/
+            // tekrar etmeyen bilgi verirler).
+            if(sigs.level!=='forceLow'&&lowPct!==null&&lowPct<55) sorunlar.push('📉 Z1-2 kritik az ('+lowPct+'%) — kolay koşu hacmi artırılmalı');
+            if(sigs.level!=='forceLow'&&highPct!==null&&highPct>35) sorunlar.push('📈 Z3-4 çok fazla ('+highPct+'%) — tempo/eşik yük azaltılmalı');
             const band=ctlBand(ctl);
             const mechKardioRatio=ctl>5?((last?.mechCtl||0)*MECH_SCALE/ctl):null;
             const mechKardioDanger=mechKardioRatio!==null&&mechKardioRatio<0.35;
@@ -5254,9 +5267,17 @@ function calcWorkoutZoneDist(w,athlete){
 }
 
 // N haftalık bölge dağılımı toplamı
-function calcPeriodZoneDist(workouts,athlete,weeks=4){
-  const cutoff=new Date();cutoff.setDate(cutoff.getDate()-weeks*7);
-  const wks=workouts.filter(w=>new Date(w.date+'T12:00:00')>=cutoff);
+function calcPeriodZoneDist(workouts,athlete,weeks=4,anchorDate=null){
+  // EKLENDİ (Temmuz 2026 — "2 hafta üst üste" kalıcılık kriteri için): anchorDate
+  // verilirse pencere "bugün"e değil, o tarihe ankrajlanır (üst sınır da eklendi —
+  // aksi halde anchorDate'ten SONRAKİ antrenmanlar da pencereye sızardı ve "1 hafta
+  // önceki pencere" fiilen bugünküyle aynı çıkardı).
+  const end=anchorDate?new Date(anchorDate):new Date();
+  const cutoff=new Date(end);cutoff.setDate(cutoff.getDate()-weeks*7);
+  const wks=workouts.filter(w=>{
+    const d=new Date(w.date+'T12:00:00');
+    return d>=cutoff&&d<=end;
+  });
   let low=0,high=0,ana=0,total=0,preciseMin=0;
   wks.forEach(w=>{
     const d=calcWorkoutZoneDist(w,athlete);
@@ -5277,6 +5298,7 @@ function calcPeriodZoneDist(workouts,athlete,weeks=4){
     confidencePct:Math.round(preciseMin/total*100),
   };
 }
+
 
 // Dağılım durumu — Seiler 80/20 modeli referans
 function zoneDist_status(dist, dist2w){
@@ -10815,7 +10837,7 @@ function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, ram
 //   zoneReasons : string[] — plan değişikliği açıklamaları (warnings'e eklenir)
 // ═══════════════════════════════════════════════════════════════════════════════
 function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload,
-  powerOverload,wkSessions,mechKardioDanger,zoneDist4w,zoneDist2w,kaliteliYapildi,
+  powerOverload,wkSessions,mechKardioDanger,zoneDist4w,zoneDist2w,zoneDist4wPrevWeek,kaliteliYapildi,
   planWeek,prevWeek,aerEffDecline=false,hrv=''}){
 
   // Kronik birikim kararları (forceEasy/forceLow/preferLow): 4 haftalık pencere
@@ -10824,6 +10846,19 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
   const highPct=z.highPct??null;
   const lowPct=z.lowPct??null;
   const hasZone=zoneDist4w!=null&&lowPct!=null;
+
+  // EKLENDİ (Temmuz 2026 — "2 hafta üst üste" kalıcılık kriteri, Göksel'in kararıyla):
+  // zone-dağılımı kaynaklı forceLow tetikleyicileri artık TEK haftalık anlık görüntüyle
+  // değil, iki ardışık 4-haftalık pencerede de aynı eşik ihlali görülürse tetiklenir.
+  // Amaç: tek bir haftanın gürültüsünü/geçici sapmasını "kronik" bir örüntüden ayırmak.
+  // zoneDist4wPrevWeek, aynı calcPeriodZoneDist(...,4,anchorDate) çağrısının 7 gün önceki
+  // hâlidir (çağıran taraf hesaplar). Önceki pencere verisi yoksa (yeni sporcu/kısa geçmiş)
+  // kalıcılık DOĞRULANAMAZ — bu durumda tetiklenmez (agresif değil, temkinli varsayılan).
+  const zPrev=zoneDist4wPrevWeek||null;
+  const hasZonePrev=zPrev!=null&&zPrev.lowPct!=null;
+  const lowPctPrev=zPrev?.lowPct??null;
+  const highPctPrev=zPrev?.highPct??null;
+  const anaPctPrev=zPrev?.anaPct??null;
 
   // Akut kalite fırsatı kararı (forceQuality): 2 haftalık pencere
   // 4w havuzunda ana düşük görünse bile son 2 haftada yüksek yoğunluk varsa
@@ -10932,52 +10967,54 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
     if(mechKardioDanger){ forceLow=true; }
 
     if(hasZone&&zone4wPartial){
-      // Aerobik taban kritik eşiğin altı
-      if(lowPct<55){
+      // Aerobik taban kritik eşiğin altı — 2 hafta üst üste şart
+      if(lowPct<55&&hasZonePrev&&lowPctPrev<55){
         forceLow=true;
-        zoneReasons.push('Aerobik taban kritik düzeyde yetersiz (%'+lowPct+' < %55) — yalnızca aerobik çalışma.');
+        zoneReasons.push('Aerobik taban 2 hafta üst üste kritik düzeyde yetersiz (bu hafta %'+lowPct+', geçen hafta %'+lowPctPrev+' — ikisi de <%55) — yalnızca aerobik çalışma.');
       }
-      // Kronik eşik/tempo fazlalığı
-      if(highPct>35){
+      // Kronik eşik/tempo fazlalığı — 2 hafta üst üste şart
+      if(highPct>35&&hasZonePrev&&highPctPrev>35){
         forceLow=true;
-        zoneReasons.push('Kronik eşik fazlalığı (%'+highPct+' > %35) — tempo/eşik yükü riskli, aerobik öncelikli.');
+        zoneReasons.push('Eşik fazlalığı 2 hafta üst üste kronikleşti (bu hafta %'+highPct+', geçen hafta %'+highPctPrev+' — ikisi de >%35) — tempo/eşik yükü riskli, aerobik öncelikli.');
       }
       // Aşağıdaki 3 tetikleyici ince ayarlı sınır/gri-bölge kombinasyonları —
-      // ölçüm gürültüsüne daha duyarlı, bu yüzden tam güven (%70+) şart.
+      // ölçüm gürültüsüne daha duyarlı, bu yüzden tam güven (%70+) VE 2 hafta üst üste şart.
       if(zone4wFull){
         // Anaerobik birikim + yük artışı birlikte
-        if(anaPct>15&&acwr>1.05){
+        if(anaPct>15&&acwr>1.05&&hasZonePrev&&anaPctPrev>15){
           forceLow=true;
-          zoneReasons.push('Anaerobik birikim (%'+anaPct+') + yük artışı (ACWR '+acwr.toFixed(2)+') — yoğun antrenman aerobiğe indirildi.');
+          zoneReasons.push('Anaerobik birikim 2 hafta üst üste (%'+anaPct+', geçen hafta %'+anaPctPrev+') + yük artışı (ACWR '+acwr.toFixed(2)+') — yoğun antrenman aerobiğe indirildi.');
         }
         // Düşük taban + yüksek ana birlikte (çift sorun)
-        if(lowPct>=55&&lowPct<70&&anaPct>12){
+        if(lowPct>=55&&lowPct<70&&anaPct>12&&hasZonePrev&&lowPctPrev>=55&&lowPctPrev<70&&anaPctPrev>12){
           forceLow=true;
-          zoneReasons.push('Düşük aerobik taban (%'+lowPct+') + yüksek anaerobik yük (%'+anaPct+') — aerobik öncelikli.');
+          zoneReasons.push('Düşük aerobik taban + yüksek anaerobik yük 2 hafta üst üste (taban %'+lowPct+', anaerobik %'+anaPct+') — aerobik öncelikli.');
         }
         // Gri bölge tuzağı: yüksek eşik + yetersiz taban
-        if(highPct>25&&highPct<=35&&lowPct<70){
+        if(highPct>25&&highPct<=35&&lowPct<70&&hasZonePrev&&highPctPrev>25&&highPctPrev<=35&&lowPctPrev<70){
           forceLow=true;
-          zoneReasons.push('Gri bölge tuzağı: eşik yükü yüksek (%'+highPct+') + aerobik taban yetersiz (%'+lowPct+') — aerobik öncelikli.');
+          zoneReasons.push('Gri bölge tuzağı 2 hafta üst üste (eşik %'+highPct+', taban %'+lowPct+') — aerobik öncelikli.');
         }
       }
     }
   }
 
   // ── Öncelik 4: preferLow (yumuşak baskı — yoğun engelle, aerobik/kolay geçer) ──
-  if(!forceEasy&&!forceLow&&hasZone&&zone4wFull){
+  // EKLENDİ (Temmuz 2026): forceLow ile tutarlılık için burada da 2 hafta üst üste
+  // şartı arandı — aynı gerekçe, tek haftalık sınır/gri-bölge sapmasını filtrelemek.
+  if(!forceEasy&&!forceLow&&hasZone&&zone4wFull&&hasZonePrev){
     let sarıSayac=0;
-    if(lowPct>=55&&lowPct<70)  sarıSayac++;
-    if(highPct>25&&highPct<=35) sarıSayac++;
-    if(anaPct>12&&anaPct<=15)   sarıSayac++;
+    if(lowPct>=55&&lowPct<70&&lowPctPrev>=55&&lowPctPrev<70)  sarıSayac++;
+    if(highPct>25&&highPct<=35&&highPctPrev>25&&highPctPrev<=35) sarıSayac++;
+    if(anaPct>12&&anaPct<=15&&anaPctPrev>12&&anaPctPrev<=15)   sarıSayac++;
     if(sarıSayac>=1){
       preferLow=true;
       if(lowPct<70&&lowPct>=55)
-        zoneReasons.push('Aerobik taban yetersiz (%'+lowPct+'%) — yoğun antrenman ertelendi, aerobik tercih ediliyor.');
+        zoneReasons.push('Aerobik taban 2 hafta üst üste yetersiz (%'+lowPct+') — yoğun antrenman ertelendi, aerobik tercih ediliyor.');
       else if(highPct>25)
-        zoneReasons.push('Eşik/tempo yükü sınırda (%'+highPct+'%) — yoğun antrenman ertelendi.');
+        zoneReasons.push('Eşik/tempo yükü 2 hafta üst üste sınırda (%'+highPct+') — yoğun antrenman ertelendi.');
       else
-        zoneReasons.push('Anaerobik birikim uyarı eşiğinde (%'+anaPct+'%) — yoğun antrenman ertelendi.');
+        zoneReasons.push('Anaerobik birikim 2 hafta üst üste uyarı eşiğinde (%'+anaPct+') — yoğun antrenman ertelendi.');
     }
   }
 
@@ -11280,6 +11317,12 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   const athAllWorkouts=(allWorkouts||[]).filter(w=>w.athleteId===athlete.id);
   const zoneDist4w=calcPeriodZoneDist(athAllWorkouts,athlete,4);
   const zoneDist2w=calcPeriodZoneDist(athAllWorkouts,athlete,2); // akut pencere — forceQuality için
+  // EKLENDİ (Temmuz 2026 — 2 hafta üst üste kriteri): Tanı panelindeki ile birebir
+  // aynı mekanizma — panel paritesi için burada da hesaplanmalı, yoksa koç panelde
+  // "sorun yok" görür ama sporcunun gerçek önerisi hâlâ tek haftalık anlık veriyle
+  // kısıtlanmaya devam eder.
+  const _anchorPrevWeek=new Date(today);_anchorPrevWeek.setDate(_anchorPrevWeek.getDate()-7);
+  const zoneDist4wPrevWeek=calcPeriodZoneDist(athAllWorkouts,athlete,4,_anchorPrevWeek);
   const zoneStatus=zoneDist4w?zoneDist_status(zoneDist4w,zoneDist2w):null;
   if(zoneStatus){
     zoneStatus.issues.forEach(i=>warnings.push({icon:'📊',text:i.msg}));
@@ -11297,7 +11340,7 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   // ── Birleşik sinyal değerlendirmesi — öncelik hiyerarşisi ────────────────
   const sigs=evaluateSignals({
     acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload,powerOverload,wkSessions,
-    mechKardioDanger,zoneDist4w,zoneDist2w,kaliteliYapildi,
+    mechKardioDanger,zoneDist4w,zoneDist2w,zoneDist4wPrevWeek,kaliteliYapildi,
     planWeek:thisWeekTarget||null,
     prevWeek:prevWeekTarget||null,
     aerEffDecline,hrv  // HRV durumu — düşük/dengesiz ise düşükYükIstisnası devre dışı
@@ -12566,6 +12609,10 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
   // 4 hafta: kronik overload kararları; 2 hafta: akut kalite fırsatı kararı
   const zoneDist4wPlan=calcPeriodZoneDist(athWorkouts,athlete,4);
   const zoneDist2wPlan=calcPeriodZoneDist(athWorkouts,athlete,2);
+  // EKLENDİ (Temmuz 2026 — 2 hafta üst üste kriteri): panel paritesi için Tanı
+  // panelindeki ve recommendWorkout'taki ile birebir aynı mekanizma.
+  const _anchorPrevWeekPlan=new Date(today);_anchorPrevWeekPlan.setDate(_anchorPrevWeekPlan.getDate()-7);
+  const zoneDist4wPrevWeekPlan=calcPeriodZoneDist(athWorkouts,athlete,4,_anchorPrevWeekPlan);
 
   for(let weekOff=0;weekOff<2;weekOff++){
     const {start}=getWeekBounds(weekOff);
@@ -12917,6 +12964,7 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
           mechKardioDanger:mechKardioD,
           zoneDist4w:zoneDist4wPlan,
           zoneDist2w:zoneDist2wPlan,
+          zoneDist4wPrevWeek:zoneDist4wPrevWeekPlan,
           kaliteliYapildi:kaliteliVarMi,
           planWeek:wt||null,
           prevWeek:prevWt||null,
