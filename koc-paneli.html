@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.16-1049 --><!DOCTYPE html>
+<!-- Version: v2026.07.16-1224 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.16-1049';
+const APP_VERSION='v2026.07.16-1224';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -10512,6 +10512,92 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary, history=[], fr
   return weeks;
 }
 
+// ── İDEAL HAZIRLIK — Performanstan/CTL'den Bağımsız Referans Eğrisi ─────────
+// (15.07.2026 sohbeti) Yalnızca GÖRSEL bir referans içindir: sporcunun CTL'sine
+// göre ölçeklenen bandKmMod, frozenTargets, effKm/cascade/backoff/telafi gibi
+// GERÇEKLEŞEN antrenmana duyarlı hiçbir mekanizmadan geçmez — yarış mesafesi,
+// D+ ve periyodizasyon fazına göre saf/sabit "ideal" haftalık hedefi üretir.
+// calcWeeklyTargetsCore'u hiçbir şekilde değiştirmez/çağırmaz; tamamen ayrı,
+// yan etkisiz bir hesaplamadır. Mevcut hedef/rozet/revizyon mekanizması bu
+// fonksiyondan etkilenmez.
+function calcIdealWeeklyTargets(primary, athlete){
+  if(!primary) return [];
+  const raceDate=new Date(primary.tarih+'T12:00:00');
+  const prepWeeks=parseInt(primary.prep_weeks)||16;
+  const km=parseFloat(primary.mesafe)||0;
+  const dp=parseFloat(primary.d_plus)||0;
+  const disiplin=effectiveDisiplin(athlete,primary);
+  const isTrail=disiplin!=='yol';
+
+  const taperW=getAthRaceOverride(athlete,primary.id).taper_w||parseInt(primary.taper_w)||(km>42?3:km>21?2:1);
+  const peakW=getAthRaceOverride(athlete,primary.id).peak_w||parseInt(primary.peak_w)||(km>42?4:km>21?3:2);
+  const buildW=prepWeeks-taperW-peakW;
+
+  const siklikStr=athlete?.dinlenme_siklik||'3x1';
+  const [siklikBlok,siklikDin]=(siklikStr.split('x').map(Number));
+
+  const out=[];
+  for(let w=0;w<prepWeeks+1;w++){
+    const weekStart=new Date(raceDate);
+    weekStart.setDate(raceDate.getDate()-(prepWeeks-w)*7);
+    const dow=weekStart.getDay();
+    const diffToMon=dow===0?-6:1-dow;
+    weekStart.setDate(weekStart.getDate()+diffToMon);
+    weekStart.setHours(0,0,0,0);
+    const weekEnd=new Date(weekStart);weekEnd.setDate(weekStart.getDate()+6);weekEnd.setHours(23,59,59,999);
+
+    const isRaceWeek=w===prepWeeks;
+    let phase;
+    if(isRaceWeek||w>=prepWeeks-taperW)phase='Taper';
+    else if(w>=prepWeeks-taperW-peakW)phase='Zirve';
+    else if(w>=buildW*0.5)phase='Gelişme';
+    else phase='Temel';
+
+    const isRecovery=(()=>{
+      if(phase==='Taper')return false;
+      const posInBlock=(w%siklikBlok);
+      return posInBlock>=(siklikBlok-siklikDin);
+    })();
+
+    let kmPct;
+    if(isRaceWeek){
+      kmPct=0.20;
+    } else if(phase==='Taper'){
+      const taperIdx=w-buildW-peakW;
+      // NOT: ideal eğri, gerçek zirve verisine göre "peakMissed" düzeltmesi
+      // İÇERMEZ — bu tamamen performanstan bağımsız kalmalı.
+      kmPct=(taperIdx===0?0.75:taperIdx===1?0.55:0.35);
+    } else if(phase==='Zirve'){
+      kmPct=isRecovery?0.70:0.90+0.05*(w-buildW-peakW+1);
+      if(kmPct>1.0)kmPct=1.0;
+    } else if(phase==='Gelişme'){
+      const prog=Math.min(1,(w-Math.floor(buildW*0.5)+1)/Math.ceil(buildW*0.5));
+      kmPct=isRecovery?prog*0.55:0.55+prog*0.35;
+    } else {
+      const prog=Math.min(1,(w+1)/Math.floor(buildW*0.5));
+      kmPct=isRecovery?prog*0.45:0.35+prog*0.30;
+    }
+
+    // bandKmMod SABİT 1.00 — CTL/kondisyon bandından bağımsız saf formül
+    const baseKmRaw=km<=5?km*6.0:km<=10?km*5.0:km<=21?km*3.5:km<=42?km*2.0:km<=60?km*1.6:km<=80?km*1.2:km<=120?km*1.0:km*0.80;
+    const baseKm=round1(baseKmRaw);
+    const minKmHafta=baseKm*0.25;
+    let targetKm=round1(Math.max(minKmHafta,baseKm*kmPct));
+    const baseDp=isTrail?dp*0.70:dp*0.25;
+    let targetDp=Math.round(baseDp*kmPct*(isRecovery?0.5:1));
+
+    if(isRaceWeek){
+      const acikKm=round1(baseKm*0.15);
+      const acikDp=Math.round(baseDp*0.15);
+      targetKm=round1(km+acikKm);
+      targetDp=Math.round(dp+acikDp);
+    }
+
+    out.push({weekStart,weekEnd,phase,isRecovery,isRaceWeek,targetKm,targetDp});
+  }
+  return out;
+}
+
 // ── Zirve Hafta Ulaşılabilirlik Değerlendirmesi (Bağlam-Duyarlı) ─────────────
 // Sporcunun bulunduğu faza göre farklı değerlendirmeler üretir:
 //   - Yarış haftası: Başarı mesajı, yarış günü bilgileri
@@ -16128,9 +16214,17 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               const _catchupRate=rampModeOn?1+(rampRatePct/100):1.10;
               const futureProj=computeRampProjection(weekTargets,rampModeOn,rampRatePct);
 
+              // ── İdeal Hazırlık — salt görsel referans (15.07.2026 sohbeti) ──────
+              // CTL/gerçekleşen antrenmandan bağımsız, saf yarış formülüne göre
+              // hesaplanan hedef; mevcut hedef/revizyon zincirini etkilemez.
+              const _idealTargets=calcIdealWeeklyTargets(plan.primary,athlete);
+              const _idealByWeekKey={};
+              _idealTargets.forEach(iw=>{_idealByWeekKey[localDateStr(iw.weekStart)]=iw;});
+
               return weekTargets.map((wt,i)=>{
               const act=weekActuals[i]||{km:0,dp:0};
               const wtWeekKey=localDateStr(wt.weekStart);
+              const _idealWk=_idealByWeekKey[wtWeekKey]||null;
               // Gelecek hafta projeksiyonu (rampa aktifse ve bu hafta henüz
               // başlamamışsa, ramp yakalayamıyorsa gösterilir)
               const _isFuture=!wt.isPast&&!wt.isCurrent;
@@ -16367,7 +16461,11 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                           ?'var(--info)'
                           :(_uzunHedefOrijinal&&_uzunHedefOrijinal.km!==_uzunHedef.km?'var(--warn)':'var(--text-tertiary)'))}
                     },'~'+_uzunHedef.km+'km'+(_uzunHedef.capped?' ⚡':(_uzunHedef.flooredByPrevWeek?' ⬆️':'')))
-                  )
+                  ),
+                  _idealWk&&_idealWk.targetKm>0&&React.createElement('div',{
+                    style:{fontSize:9,fontWeight:400,marginTop:1,whiteSpace:'nowrap',color:'#a78bfa'},
+                    title:'İdeal Hazırlık — CTL/gerçekleşen antrenmandan bağımsız, saf yarış formülüne göre hedef ('+wt.phase+(_idealWk.isRecovery?', Dinlenme':'')+')'
+                  },'🎯 İdeal: '+_idealWk.targetKm+'km')
                 ),
                 React.createElement('td',{style:{padding:'6px 8px',fontFamily:'monospace',textAlign:'center',color:act.km>0?'var(--success)':'var(--text-tertiary)'}},act.km||'—'),
                 React.createElement('td',{style:{padding:'6px 8px',fontFamily:'monospace',textAlign:'center',color:diffKm>=0?'var(--success)':'var(--danger)'}},
@@ -16403,7 +16501,11 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     React.createElement('span',{
                       style:{color:_uzunHedefOrijinal&&_uzunHedefOrijinal.dp>0&&_uzunHedefOrijinal.dp!==_uzunHedef.dp?'var(--warn)':'var(--text-tertiary)'}
                     },'~'+_uzunHedef.dp+'m')
-                  )
+                  ),
+                  _idealWk&&_idealWk.targetDp>0&&React.createElement('div',{
+                    style:{fontSize:9,fontWeight:400,marginTop:1,whiteSpace:'nowrap',color:'#a78bfa'},
+                    title:'İdeal Hazırlık — CTL/gerçekleşen antrenmandan bağımsız, saf yarış formülüne göre hedef ('+wt.phase+(_idealWk.isRecovery?', Dinlenme':'')+')'
+                  },'🎯 İdeal: '+_idealWk.targetDp+'m')
                 ),
                 React.createElement('td',{style:{padding:'6px 8px',fontFamily:'monospace',textAlign:'center',color:act.dp>0?'var(--success)':'var(--text-tertiary)'}},act.dp||'—'),
                 React.createElement('td',{style:{padding:'6px 8px',fontFamily:'monospace',textAlign:'center',color:diffDp>=0?'var(--success)':'var(--danger)'}},
