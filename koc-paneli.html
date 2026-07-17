@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.16-1551 --><!DOCTYPE html>
+<!-- Version: v2026.07.17-1134 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.16-1551';
+const APP_VERSION='v2026.07.17-1134';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -3588,6 +3588,7 @@ const BUGUN_TIP_RENK={
   tirmanis:    {bg:'#fff7ed',border:'#fdba74',text:'#c2410c',emoji:'⛰️'},
   capraz:      {bg:'#eff6ff',border:'#93c5fd',text:'#1d4ed8',emoji:'🔵'},
   yaris:       {bg:'#fff7ed',border:'#fdba74',text:'#c2410c',emoji:'🏁'},
+  bekleniyor:  {bg:'#fffbeb',border:'#f59e0b',text:'#92400e',emoji:'⏳'},
 };
 function getBugunRenk(tip){return BUGUN_TIP_RENK[tip]||{bg:'#f8fafc',border:'#cbd5e1',text:'#475569',emoji:'🏃'};}
 
@@ -3631,11 +3632,52 @@ function BugunTab({athletes,workouts,onSelChange,onTabChange}){
 
   const todayActualAll=workouts.filter(w=>w.date===todayStr);
 
+  // KÖK NEDEN DÜZELTMESİ (Temmuz 2026 — "Bugün ve Yarın" eklenen antrenmanı göstermiyor):
+  // plan_snapshots.overrideMap yalnızca koç o sporcu için "Planı Güncelle"yi bastığında
+  // (handlePlanGuncelle) yazılır. Koç sporcu kartından kosu_gunleri/capraz_gunleri
+  // değiştirdiğinde (SporcuModal→handleUpdateAthlete) overrideMap'e HİÇBİR ŞEY yazılmaz —
+  // yalnızca ath2 profili güncellenir. Üstelik generatePlanSnapshot antrenman-dışı günlere
+  // hiç giriş üretmez (bkz. HaftalikPlanTab'daki "Bugün için açık kayıt garantisi" yorumu).
+  // Sonuç: sporcu kartından YENİ eklenen bir antrenman günü, o sporcu için plan yeniden
+  // üretilene kadar overrideMap'te YOK demektir — BugunTab bunu ham okuyup sessizce
+  // "dinleniyor" sanıyordu (dayPlan=null → withRest). Kaldırılan bir gün de aynı şekilde
+  // eski/bayat bir antrenman girişini overrideMap'te bırakabilir. Çözüm: HaftalikPlanTab'ın
+  // "_isStillOk" / SporcuPlanView'ın "_ovStillOk" ile AYNI desende, ham overrideMap yerine
+  // sporcunun GÜNCEL kosu_gunleri/capraz_gunleri profiliyle karşılaştırılmış sonucu kullan.
+  const isOvUyumlu=(ov,dayShort,ath)=>{
+    if(!ov) return false;
+    const t=ov.tip;
+    const kosuG=ath.kosu_gunleri||[];
+    const caprazG=ath.capraz_gunleri||[];
+    const isProfilAntrenmanGunu=kosuG.includes(dayShort)||caprazG.includes(dayShort);
+    if(t==='yaris'||t==='serbest') return true; // profilden bağımsız, her zaman geçerli
+    // DİKKAT: dinlenme kaydı yalnızca gün profile göre HÂLÂ antrenman günü DEĞİLSE
+    // güncel sayılır. Aksi halde (gün az önce kosu_gunleri'ne EKLENDİ ama önceki
+    // "Planı Güncelle" o günü dinlenme yazmıştı) bayat dinlenme kaydı yanlışlıkla
+    // geçerli sayılır ve tam da bu fonksiyonun düzelttiği "eklenen antrenman
+    // görünmüyor" hatası geri döner.
+    if(t==='dinlenme') return !isProfilAntrenmanGunu;
+    if(t==='capraz') return caprazG.includes(dayShort);
+    return kosuG.includes(dayShort);
+  };
+  const todayShortG=DAYS_SHORT[today.getDay()];
+  const tomorrowShortG=DAYS_SHORT[tomorrow.getDay()];
+  // Profile göre antrenman günü olduğu halde overrideMap'te (henüz) kayıt yoksa/bayatsa
+  // sessizce dinlenmeye düşme — "plan henüz güncellenmedi" olarak antrenman grubunda göster,
+  // koç 🔄 Yenile'ye değil, o sporcu için Planı Güncelle'ye yönlendirilsin.
+  const buildBekleyenPlan=(ath,dayShort)=>{
+    const isTraining=(ath.kosu_gunleri||[]).includes(dayShort)||(ath.capraz_gunleri||[]).includes(dayShort);
+    if(!isTraining) return null;
+    return{tip:'bekleniyor',baslik:'⏳ Plan bekleniyor',sure_dk:0,yukHedef:0,approved:false,_planBayat:true};
+  };
+
   const athData=athletes.map(ath=>{
     const snap=snaps[ath.id];
     const snapTmr=tomorrowWeekKey!==weekKey?(snaps[ath.id+'_tomorrow']||snap):snap;
-    const dayPlan=snap?.overrideMap?.[todayStr]||null;
-    const tomorrowPlan=snapTmr?.overrideMap?.[tomorrowStr]||null;
+    const dayPlanRaw=snap?.overrideMap?.[todayStr]||null;
+    const tomorrowPlanRaw=snapTmr?.overrideMap?.[tomorrowStr]||null;
+    const dayPlan=isOvUyumlu(dayPlanRaw,todayShortG,ath)?dayPlanRaw:buildBekleyenPlan(ath,todayShortG);
+    const tomorrowPlan=isOvUyumlu(tomorrowPlanRaw,tomorrowShortG,ath)?tomorrowPlanRaw:buildBekleyenPlan(ath,tomorrowShortG);
     const todayActual=todayActualAll.filter(w=>w.athleteId===ath.id);
     const todayApproved=dayPlan?.approved===true;
     const tomorrowApproved=tomorrowPlan?.approved===true;
@@ -3682,7 +3724,7 @@ function BugunTab({athletes,workouts,onSelChange,onTabChange}){
       style:{background:cardBg,border:`1.5px solid ${cardBorder}`,borderRadius:'var(--radius-lg)',
         padding:'12px 14px',display:'flex',gap:12,alignItems:'flex-start',
         cursor:isDinlenme?'default':'pointer',transition:'.15s',opacity:(isDinlenme&&!hasActual)?.65:1},
-      onClick:isDinlenme?undefined:()=>{onSelChange(ath.id);onTabChange('ekle');}
+      onClick:isDinlenme?undefined:()=>{onSelChange(ath.id);onTabChange(dayPlan?._planBayat?'plan':'ekle');}
     },
       // Avatar
       React.createElement('div',{
@@ -3700,7 +3742,8 @@ function BugunTab({athletes,workouts,onSelChange,onTabChange}){
         React.createElement('div',{style:{display:'flex',alignItems:'center',gap:6,marginBottom:4,flexWrap:'wrap'}},
           React.createElement('span',{style:{fontWeight:600,fontSize:14}},(ath.ad||'')+' '+(ath.soyad||'')),
           hasActual&&React.createElement('span',{className:'badge badge-good'},'✓ Tamamlandı'),
-          !hasActual&&!isDinlenme&&React.createElement('span',{className:'badge badge-gray'},'Bekliyor'),
+          !hasActual&&!isDinlenme&&dayPlan?._planBayat&&React.createElement('span',{className:'badge badge-warn'},'⚠️ Planı Güncelle gerekli'),
+          !hasActual&&!isDinlenme&&!dayPlan?._planBayat&&React.createElement('span',{className:'badge badge-gray'},'Bekliyor'),
           isDinlenme&&!hasActual&&React.createElement('span',{className:'badge badge-gray'},'😴 Dinlenme'),
           iletimBadge&&React.createElement('span',{className:'badge '+iletimBadge.cls},iletimBadge.label),
         ),
@@ -3747,8 +3790,11 @@ function BugunTab({athletes,workouts,onSelChange,onTabChange}){
             fmtDur(toSec(w.sure_sa||0,w.sure_dk||0,w.sure_sn||0))),
           w.rpe&&React.createElement('span',null,'RPE '+w.rpe)
         )),
-        // Plan yoksa uyarı
-        !isDinlenme&&!hasSnap&&React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:2}},
+        // Plan yoksa/bayatsa uyarı — profil (koşu günleri) değişti ama bu sporcu için
+        // henüz "Planı Güncelle" çalıştırılmadı; koşu izlerimde kesinleşmiş antrenman yok.
+        !isDinlenme&&dayPlan?._planBayat&&React.createElement('div',{style:{fontSize:11,color:'var(--warn)',marginTop:2}},
+          'Koşu günleri değişti — bu sporcu için Planı Güncelle çalıştırılmalı'),
+        !isDinlenme&&!hasSnap&&!dayPlan?._planBayat&&React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:2}},
           'Plan henüz oluşturulmamış')
       )
     );
