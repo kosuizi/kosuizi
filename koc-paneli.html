@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.17-1134 --><!DOCTYPE html>
+<!-- Version: v2026.07.17-1154 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.17-1134';
+const APP_VERSION='v2026.07.17-1154';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -3593,6 +3593,11 @@ const BUGUN_TIP_RENK={
 function getBugunRenk(tip){return BUGUN_TIP_RENK[tip]||{bg:'#f8fafc',border:'#cbd5e1',text:'#475569',emoji:'🏃'};}
 
 function BugunTab({athletes,workouts,onSelChange,onTabChange}){
+  // Pasif işaretli sporcular Liderlik/seçim listelerinde olduğu gibi burada da
+  // gizlenir (kodun geneldeki yerleşik deseni: athletes.filter(a=>!a.pasif) —
+  // bkz. SporcularTab lider listesi ~satır 3872, dropdown'lar vb.). Öncesinde
+  // BugunTab bu filtreyi uygulamıyordu, pasif sporcular da listede görünüyordu.
+  const aktifAthletes=(athletes||[]).filter(a=>!a.pasif);
   const [snaps,setSnaps]=useState({});
   const [loading,setLoading]=useState(true);
   const [refreshKey,setRefreshKey]=useState(0);
@@ -3613,11 +3618,11 @@ function BugunTab({athletes,workouts,onSelChange,onTabChange}){
   const gunKelime=viewDay==='today'?'Bugün':'Yarın';
 
   useEffect(()=>{
-    if(!athletes.length){setLoading(false);return;}
+    if(!aktifAthletes.length){setLoading(false);return;}
     setLoading(true);
     const fetchAll=async()=>{
       const result={};
-      await Promise.all(athletes.map(async ath=>{
+      await Promise.all(aktifAthletes.map(async ath=>{
         try{const snap=await fbGet(`plan_snapshots/${ath.id}/${weekKey}`);if(snap)result[ath.id]=snap;}catch(e){}
         // Yarın farklı bir haftadaysa ek snap al
         if(tomorrowWeekKey!==weekKey){
@@ -3628,7 +3633,7 @@ function BugunTab({athletes,workouts,onSelChange,onTabChange}){
       setSnaps(result);setLoading(false);
     };
     fetchAll();
-  },[athletes.length,weekKey,refreshKey]);
+  },[aktifAthletes.length,weekKey,refreshKey]);
 
   const todayActualAll=workouts.filter(w=>w.date===todayStr);
 
@@ -3671,7 +3676,7 @@ function BugunTab({athletes,workouts,onSelChange,onTabChange}){
     return{tip:'bekleniyor',baslik:'⏳ Plan bekleniyor',sure_dk:0,yukHedef:0,approved:false,_planBayat:true};
   };
 
-  const athData=athletes.map(ath=>{
+  const athData=aktifAthletes.map(ath=>{
     const snap=snaps[ath.id];
     const snapTmr=tomorrowWeekKey!==weekKey?(snaps[ath.id+'_tomorrow']||snap):snap;
     const dayPlanRaw=snap?.overrideMap?.[todayStr]||null;
@@ -3801,7 +3806,7 @@ function BugunTab({athletes,workouts,onSelChange,onTabChange}){
   };
 
   if(loading)return React.createElement('div',{className:'empty'},'⏳ Plan verileri yükleniyor…');
-  if(!athletes.length)return React.createElement('div',{className:'empty'},'Henüz sporcu eklenmemiş.');
+  if(!aktifAthletes.length)return React.createElement('div',{className:'empty'},'Henüz sporcu eklenmemiş.');
 
   return React.createElement('div',null,
     // Header kartı
@@ -15155,12 +15160,25 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         }
         // 3. Gelecekte: SADECE tick (approved=true) işaretliyse koru
         //    Antrenman günleri: profil uyumlu olmalı
-        //    Dinlenme günleri: onaylı ise her zaman koru (profil günü olsa da)
+        //    Dinlenme günleri: profil hâlâ dinlenmeyse HER ZAMAN koru; profil artık o günü
+        //    antrenman günü yapmışsa SADECE koç bilinçli seçtiyse (manualOverrides'ta kaydı
+        //    varsa — "Ata"/"İptal Et" gibi eylemler) koru. KÖK NEDEN (Temmuz 2026 — "Planı
+        //    Güncelle" basılsa da eklenen antrenman günü hâlâ dinlenme görünüyordu): otomatik
+        //    temizlik adımı (aşağıda ~15260 ve ~15273 civarı, "Son temizlik" ve "Bugün için
+        //    açık kayıt garantisi" blokları) profilde olmayan günlere approved:true ile
+        //    approved:true ile dinlenme yazıyor — bu, koçun BİLİNÇLİ seçtiği manuel dinlenmeyle
+        //    (o da approved:true) AYNI görünüyordu. Sonuç: koç kosu_gunleri'ne bugünü/bir günü
+        //    EKLEYİP Planı Güncelle'yi bassa bile, bu blok eski otomatik-dinlenme kaydını
+        //    "onaylı" diye taze üretilen antrenman girişinin ÜZERİNE geri yazıyordu. Ayırt
+        //    edici imza: gerçekten koç iradesiyle yazılan dinlenme her zaman manualOverrides'a
+        //    da düşer (bkz. handleManuelAta/handleIptalEt); otomatik temizlik asla dokunmaz.
         //    Serbest Koşu: spontane/hedefsiz bir tür — koç onayı şartı aranmaksızın
         //    her zaman korunur, taze öneriyle (örn. Kolay Koşu) asla değiştirilmez.
         if(ov?.tip==='serbest'&&ds>=todayStr){
           protectedDates.add(ds);
-        } else if(ov?.approved===true&&ds>=todayStr&&(ov?.tip==='dinlenme'||isProfilUyumlu(ds))){
+        } else if(ov?.approved===true&&ds>=todayStr&&ov?.tip==='dinlenme'&&(!isProfilUyumlu(ds)||!!curSnap?.manualOverrides?.[ds])){
+          protectedDates.add(ds);
+        } else if(ov?.approved===true&&ds>=todayStr&&ov?.tip!=='dinlenme'&&isProfilUyumlu(ds)){
           protectedDates.add(ds);
         }
       });
