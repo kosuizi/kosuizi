@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.18-1722 --><!DOCTYPE html>
+<!-- Version: v2026.07.18-2350 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.18-1722';
+const APP_VERSION='v2026.07.18-2350';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -973,18 +973,37 @@ function calibrateVlt(workouts, ath){
     const durSec=toSec(w.sure_sa,w.sure_dk,w.sure_sn);
     const hr=parseFloat(w.ort_nabiz);
     const hrMax=parseFloat(w.maks_nabiz)||0;
-    const dp=parseFloat(w.irtifa)||0;
     const rawPaceMS=km*1000/durSec; // m/s ham pace
 
-    // D+ varsa GAP düzeltmesi — Minetti/Strava faktörü
+    // ── GAP düzeltmesi ────────────────────────────────────────────────────
+    // Öncelik: aşama bazlı gerçek D+ verisi (_rowGapData — koç panelinde satır
+    // satır girilmiş, bkz. computeGapDataFromRows) varsa ve antrenmanın en az
+    // %40'ını kapsıyorsa ONU kullan; kapsanmayan kısım düz (ham pace) kabul
+    // edilir. Bu, "tüm mesafeye TEK düz eğim" varsayımından çok daha isabetlidir
+    // çünkü yapısal antrenmanların hangi bölümü gerçekten tırmanış bilinir.
+    // Aşama verisi yoksa/yetersizse eski yönteme (w.irtifa, tüm mesafeye tek
+    // düz eğim) düş. Her iki yol da AYNI calcGAP formülünü kullanır — daha
+    // önce burada ayrı, yinelenmiş bir Minetti formülü vardı (kök neden:
+    // formül tekilleştirmesi, davranış değişmez, sadece tek kaynağa indirgendi).
     let gapPaceMS=rawPaceMS;
     let gapApplied=false;
-    if(dp>0&&km>0){
-      const gradeP=Math.min(40,(dp/(km*1000))*100);
-      if(gradeP>=2){
-        const gapFactor=1+(0.033*gradeP+0.00055*gradeP*gradeP)/100*100;
-        gapPaceMS=rawPaceMS*gapFactor; // düz eşdeğer pace (daha hızlı)
-        gapApplied=true;
+    let gapSource=null;
+    const rgd=w._rowGapData;
+    if(rgd&&rgd.avgGapSpeedMS>0&&durSec>0&&rgd.coveredSec>=durSec*0.4){
+      const coveredSec=Math.min(rgd.coveredSec,durSec);
+      const uncoveredSec=Math.max(0,durSec-coveredSec);
+      gapPaceMS=(coveredSec*rgd.avgGapSpeedMS+uncoveredSec*rawPaceMS)/durSec;
+      gapApplied=true;
+      gapSource='rows';
+    }else{
+      const dp=parseFloat(w.irtifa)||0;
+      if(dp>0&&km>0){
+        const gap=calcGAP(dp,km,durSec/60);
+        if(gap){
+          gapPaceMS=rawPaceMS*gap.factor; // düz eşdeğer pace (daha hızlı)
+          gapApplied=true;
+          gapSource='whole';
+        }
       }
     }
 
@@ -995,7 +1014,7 @@ function calibrateVlt(workouts, ath){
     // Yüksek değişkenlik: >30bpm → ağırlık 0.3
     const weight=hrVariability<=15?1.0:hrVariability<=30?0.6:0.3;
 
-    return{pace:gapPaceMS,hr,date:w.date,weight,gapApplied,hrVariability};
+    return{pace:gapPaceMS,hr,date:w.date,weight,gapApplied,gapSource,hrVariability};
   }).filter(p=>p.pace>1&&p.pace<8);
 
   if(points.length<3)return{error:'Geçerli pace-HR çifti yeterli değil.',count:points.length};
@@ -1141,8 +1160,18 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         if((pm>0)||(ps>0)){
           const enteredSec=(pm||0)*60+(ps||0);
           const origPace=row._origPaceSec;
+          // GAP düzeltmesi: paceValidation ile BİREBİR aynı mantık (bkz. ReceteTablosu →
+          // paceValidation). Satıra gerçek D+ girilmişse ve hedefte D+ öngörülmemişse
+          // (_isGapRow değilse), kıyaslama ham girilen pace yerine GAP-düzeltmeli (düz
+          // eşdeğer) pace ile yapılır. Mesafe burada _origMesafe'den gelir — bu fonksiyon
+          // yalnızca persist edilmiş rowOverrides'ı okur, baseRows'a erişemez.
+          let cmpSec=enteredSec;
+          if(row.dp>0&&row._origMesafe>0&&!row._isGapRow){
+            const gap=calcGAP(row.dp,row._origMesafe/1000,0);
+            if(gap) cmpSec=Math.round(enteredSec/gap.factor);
+          }
           if(enteredSec>0&&origPace>0){
-            const diff=enteredSec-origPace;
+            const diff=cmpSec-origPace;
             const tol=row._isGapRow?50:25;
             paceDiff=diff; paceTol=tol; // ham sapma + kullanılan tolerans — hassas yakınlık skoru (bkz. paceClosenessScore) için saklanır
             if(diff<-tol)      paceDir='fast';
@@ -5238,6 +5267,45 @@ function computeZoneDistFromRows(baseRows,rowOverrides,zones,aralikOv){
   };
 }
 
+// Aşama bazlı gerçek D+ (yükseklik kazanımı) verisinden GAP-düzeltmeli ortalama
+// hız hesabı — bkz. koç panelindeki "D+ (m)" satır girişi (yalnızca koç görünümü).
+// Her satır kendi mesafe+pace+D+ üçlüsüyle calcGAP formülüyle düzeltilir (Minetti/
+// Strava), süreye göre ağırlıklandırılıp tek bir "kapsanan" hız değerine indirgenir.
+// Bu, tüm antrenmana TEK düz eğim varsayan eski yönteme (bkz. calibrateVlt →
+// w.irtifa) göre çok daha isabetlidir çünkü yapısal bir antrenmanın hangi
+// bölümlerinin gerçekten tırmanış içerdiği satır bazında bilinir.
+function computeGapDataFromRows(baseRows,rowOverrides){
+  if(!baseRows||!baseRows.length) return null;
+  let coveredSec=0,weightedSpeedSum=0,totalDp=0;
+  baseRows.forEach((r,i)=>{
+    const row=rowOverrides[i]?{...r,...rowOverrides[i]}:r;
+    if(row.type==='header') return;
+    const dp=parseFloat(row.dp)||0;
+    if(dp<=0) return; // bu satır için D+ girilmemiş
+    const mesafe=row.mesafe||0;
+    const durSec=(row.h||0)*3600+(row.m||0)*60+(row.s||0);
+    if(mesafe<=0||durSec<=0) return;
+    const repeatCount=row.repeatCount||1;
+    const effDurSec=durSec*repeatCount;
+    const effMesafe=mesafe*repeatCount;
+    const effDp=dp*repeatCount;
+    const gap=calcGAP(effDp,effMesafe/1000,effDurSec/60);
+    if(!gap) return; // %0.5 altı eğim → düzeltme anlamsız (calcGAP null döner)
+    const rawSpeedMS=effMesafe/effDurSec;
+    const gapSpeedMS=rawSpeedMS*gap.factor; // gerçek (yavaş) hız → düz eşdeğer hız
+    coveredSec+=effDurSec;
+    weightedSpeedSum+=effDurSec*gapSpeedMS;
+    totalDp+=effDp;
+  });
+  if(coveredSec<30) return null; // anlamlı kapsama yok
+  return{
+    avgGapSpeedMS:weightedSpeedSum/coveredSec,
+    coveredSec:Math.round(coveredSec),
+    totalDp:Math.round(totalDp),
+    _fromRows:true
+  };
+}
+
 // Tek antrenman için bölge dağılımı — tamamen nabız bazlı
 // TUR_ZONE_DIST artık kullanılmıyor; tür etiketi değil fizyolojik veri esas.
 // Öncelik: _rowZoneDist (aşama bazlı bpm) → ort_nabiz+maks_nabiz → hariç tut
@@ -7083,6 +7151,21 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     if((pm==null||pm===0)&&(ps==null||ps===0)) return null;
     const enteredSec=(pm||0)*60+(ps||0);
     if(enteredSec<=0) return null;
+    // ── GAP düzeltmesi ──────────────────────────────────────────────────────
+    // Satıra gerçek D+ girilmişse, hedefle kıyaslanan pace GİRİLEN HAM pace değil,
+    // GAP-düzeltmeli (düz eşdeğer) pace olmalı — 5:45 koşulmuş ama D+ ile GAP 5:20
+    // hesaplanmışsa "biraz hızlı/yavaş" kıyaslaması 5:20 üzerinden yapılır.
+    // _isGapRow İSTİSNASI: bu satırın hedefi zaten PLANLANAN "Hedef D+:" değerine göre
+    // yavaşlatılmış (bkz. _adimGapPs/calcGAPAvgPaceSec, satır ~5904). O durumda ham
+    // girilen pace zaten hedefle AYNI temelde (ikisi de tırmanışlı); girilen pace'i de
+    // düzeltirsek düz-eşdeğer actual'ı tırmanışlı hedefe karşı kıyaslamış oluruz — bu
+    // sistematik olarak yanlış "hızlı" sinyaline yol açar. Bu yüzden yalnızca hedefte
+    // D+ ÖNGÖRÜLMEMİŞ satırlarda (sürpriz/gerçekleşen tırmanış) düzeltme uygulanır.
+    let cmpSec=enteredSec;
+    if(row.dp>0&&row.mesafe>0&&!row._isGapRow){
+      const gap=calcGAP(row.dp,row.mesafe/1000,0);
+      if(gap) cmpSec=Math.round(enteredSec/gap.factor);
+    }
     // ── OP-YK1: Yürü-Koş yürüyüş (toparlanma) satırları ──────────────────────
     // Sabit hedef pace (10:00/km) etrafında sabit toleransla değerlendir — koşu zone
     // genişliği (Z1 sınırları) kullanılmaz, çünkü yürüyüş pace bandı koşu zone'undan
@@ -7090,7 +7173,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     if(row.type==='walk'){
       const origPace=row._origPaceSec;
       if(!origPace||origPace<=0) return null;
-      const diff=enteredSec-origPace; // pozitif = yavaş, negatif = hızlı
+      const diff=cmpSec-origPace; // pozitif = yavaş, negatif = hızlı
       const absDiff=Math.abs(diff);
       if(absDiff<=25) return{label:'Hedef Bölge',color:'#22c55e',bg:'#f0fdf4',icon:'✓'};
       if(absDiff<=50) return diff>0
@@ -7115,25 +7198,25 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     if(pz?.lo_ms&&pz?.hi_ms){
       const fastBoundarySec=Math.round(1000/pz.hi_ms); // hızlı sınır (az sn/km)
       const slowBoundarySec=Math.round(1000/pz.lo_ms); // yavaş sınır (çok sn/km)
-      if(enteredSec>=fastBoundarySec&&enteredSec<=slowBoundarySec)
+      if(cmpSec>=fastBoundarySec&&cmpSec<=slowBoundarySec)
         return{label:'Hedef Bölge',color:'#22c55e',bg:'#f0fdf4',icon:'✓'};
       // Tolerans: zone genişliğinin %50'si — dar zonelarda (Z3–Z4) ~10–12 sn, geniş zonelarda (Z1) ~30 sn
       // GAP satırlarında 2 kat — irtifa/zemin etkisi pace'i daha çok saptırır
       const zoneWidth=slowBoundarySec-fastBoundarySec;
       const tol=Math.round(zoneWidth*(row._isGapRow?1.0:0.5));
-      if(enteredSec<fastBoundarySec){
-        const over=fastBoundarySec-enteredSec;
+      if(cmpSec<fastBoundarySec){
+        const over=fastBoundarySec-cmpSec;
         if(over<=tol) return{label:'Biraz Hızlı',color:'#f59e0b',bg:'#fffbeb',icon:'▲'};
         return{label:'Çok Hızlı',color:'#ef4444',bg:'#fef2f2',icon:'▲▲'};
       }
-      const under=enteredSec-slowBoundarySec;
+      const under=cmpSec-slowBoundarySec;
       if(under<=tol) return{label:'Biraz Yavaş',color:'#f59e0b',bg:'#fffbeb',icon:'▼'};
       return{label:'Çok Yavaş',color:'#ef4444',bg:'#fef2f2',icon:'▼▼'};
     }
     // Fallback: paceZone yoksa _origPaceSec bazlı eski mantık
     const origPace=row._origPaceSec;
     if(!origPace||origPace<=0) return null;
-    const diff=enteredSec-origPace;
+    const diff=cmpSec-origPace;
     const absDiff=Math.abs(diff);
     const tol1=row._isGapRow?50:25;
     if(absDiff<=tol1) return{label:'Hedef Bölge',color:'#22c55e',bg:'#f0fdf4',icon:'✓'};
@@ -7161,7 +7244,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
       }
     }
     setRowOverrides(newRowOv);
-    if(onSaveOverrides){const __zd=computeZoneDistFromRows(baseRows,newRowOv,_mZones,aralikOverrides);onSaveOverrides({...newRowOv,__aralik:aralikOverrides,...(__zd?{__zoneDist:__zd}:{})});}
+    if(onSaveOverrides){const __zd=computeZoneDistFromRows(baseRows,newRowOv,_mZones,aralikOverrides);const __gd=computeGapDataFromRows(baseRows,newRowOv);onSaveOverrides({...newRowOv,__aralik:aralikOverrides,...(__zd?{__zoneDist:__zd}:{}),...(__gd?{__gapData:__gd}:{})});}
   };
 
   // Hücre güncelleme: mesafe, pm veya ps değişince diğerlerini hesapla
@@ -7218,12 +7301,24 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
       upd={[field]:val};
       // bpmAvg aynı zamanda bpm alanıyla senkronize — geriye dönük uyumluluk
       if(field==='bpmAvg') upd.bpm=val;
+    } else if(field==='dp'){
+      // D+: satırın gerçekleşen yükseklik kazanımı (m) — sıfır/boş → override kaldır
+      upd={dp:parseInt(rawVal)||null};
     }
     const origFields={};
     if(r._origPaceSec>0)    origFields._origPaceSec=r._origPaceSec;
     if(r._origZIdx!=null)   origFields._origZIdx=r._origZIdx;
     if(r.label)             origFields.label=r.label;
     if(r.type)              origFields.type=r.type;
+    // Mesafe donmalı — GAP kıyaslaması (calcGAP) bu satırın kendi mesafesini gerektirir;
+    // extractFeedbackSignals yalnızca rowOverrides'ı okur, baseRows'a erişemez, dolayısıyla
+    // mesafe burada snapshot'lanmazsa aşama bazlı GAP karşılaştırması orada hiç mümkün olmaz.
+    if(r.mesafe>0)           origFields._origMesafe=r.mesafe;
+    // KÖK NEDEN DÜZELTMESİ: _isGapRow zaten extractFeedbackSignals içinde okunuyordu
+    // (bkz. satır ~1165 tol=row._isGapRow?50:25) ama hiçbir zaman persist edilmiyordu —
+    // yani haftalık toplu geri bildirimde planlı tırmanış satırları için geniş tolerans
+    // asla devreye girmiyordu (her zaman undefined→25sn). Şimdi donduruluyor.
+    if(r._isGapRow)          origFields._isGapRow=true;
     // Nabız bölge SINIRLARI da donsun — sadece hangi bölge (_origZIdx) değil, o anki LTHR'a göre
     // hesaplanmış bpm aralığı da kaydedilir. Yoksa LTHR sonradan değişirse "aynı bölge" farklı
     // bpm sınırlarına denk gelir ve geçmiş satırın nabız değerlendirmesi yine kayar.
@@ -7233,7 +7328,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     const newOverrides={...rowOverrides,[rowIdx]:{...(rowOverrides[rowIdx]||{}), ...origFields, ...upd}};
     setRowOverrides(newOverrides);
     setEditCell(null);
-    if(onSaveOverrides){const __zd=computeZoneDistFromRows(baseRows,newOverrides,_mZones,aralikOverrides);onSaveOverrides({...newOverrides,__aralik:aralikOverrides,...(__zd?{__zoneDist:__zd}:{})},_detaySync);}
+    if(onSaveOverrides){const __zd=computeZoneDistFromRows(baseRows,newOverrides,_mZones,aralikOverrides);const __gd=computeGapDataFromRows(baseRows,newOverrides);onSaveOverrides({...newOverrides,__aralik:aralikOverrides,...(__zd?{__zoneDist:__zd}:{}),...(__gd?{__gapData:__gd}:{})},_detaySync);}
   };
 
   // Aralıklar editörü için per-rep cell güncelleme
@@ -7300,7 +7395,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
         ...upd
       };
       // Firebase'e yaz: rowOverrides + __aralik birleşimi
-      if(onSaveOverrides){const __zd=computeZoneDistFromRows(baseRows,rowOverrides,_mZones,next);onSaveOverrides({...rowOverrides,__aralik:next,...(__zd?{__zoneDist:__zd}:{})});}
+      if(onSaveOverrides){const __zd=computeZoneDistFromRows(baseRows,rowOverrides,_mZones,next);const __gd=computeGapDataFromRows(baseRows,rowOverrides);onSaveOverrides({...rowOverrides,__aralik:next,...(__zd?{__zoneDist:__zd}:{}),...(__gd?{__gapData:__gd}:{})});}
       return next;
     });
   };
@@ -7328,13 +7423,26 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
   };
 
   // Toplam hesapla (header hariç, repeatCount ile çarp)
-  let totSn=0, totMesafe=0, totWeightedPace=0, paceWeight=0;
+  let totSn=0, totMesafe=0, totWeightedPace=0, paceWeight=0, totDp=0;
+  let gapCoveredSec=0, gapWeightedSpeedSum=0; // TOPLAM satırındaki GAP hesabı için (bkz. computeGapDataFromRows/calibrateVlt ile aynı mantık)
   rows.forEach(r=>{
     if(r.type==='header') return;
     const rep=r.repeatCount||1;
     const sn=(r.h*3600+r.m*60+r.s)*rep;
     const mesafe=(r.mesafe||0)*rep;
     totSn+=sn; totMesafe+=mesafe;
+    if(r.dp>0){
+      const effDp=r.dp*rep;
+      totDp+=effDp;
+      if(mesafe>0&&sn>0){
+        const gap=calcGAP(effDp,mesafe/1000,sn/60);
+        if(gap){
+          const rawSpeedMS=mesafe/sn;
+          gapCoveredSec+=sn;
+          gapWeightedSpeedSum+=sn*rawSpeedMS*gap.factor;
+        }
+      }
+    }
     if(mesafe>0&&r.pm!=null){
       const pSec=r.pm*60+(r.ps||0);
       totWeightedPace+=pSec*(mesafe/1000);
@@ -7342,6 +7450,16 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     }
   });
   const avgPaceSec=paceWeight>0?Math.round(totWeightedPace/paceWeight):0;
+  // Kapsanmayan (D+ girilmemiş) süre ham ortalama hızla doldurulur — calibrateVlt'e
+  // giden _rowGapData ile BİREBİR aynı harmanlama, coach'a "kalibrasyona giden değer
+  // bu" şeffaflığı sağlar.
+  const totalGapPaceSec=(()=>{
+    if(gapCoveredSec<=0||totSn<=0||totMesafe<=0) return null;
+    const rawAvgSpeedMS=totMesafe/totSn;
+    const uncoveredSec=Math.max(0,totSn-gapCoveredSec);
+    const blendedSpeedMS=(gapWeightedSpeedSum+uncoveredSec*rawAvgSpeedMS)/totSn;
+    return blendedSpeedMS>0?Math.round(1000/blendedSpeedMS):null;
+  })();
   const tot=secToHMS(totSn);
   // Yürüyüş dönüşümü — avgPaceSec hesaplandıktan sonra
   // 'serbest' her zaman hariç: hedefsiz/spontane antrenman, etiketi asla otomatik
@@ -7352,6 +7470,16 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
   }
 
   const cell=(val,bold=false)=>({padding:'5px 4px',textAlign:'center',fontFamily:'monospace',fontSize:11,fontWeight:700,color:'#000'});
+
+  // "D+ (m)" sütunu — aşama bazlı GERÇEK yükseklik kazanımı girişi. Sadece koç
+  // panelinde gösterilir (readOnly=false); Koşu İzlerim/SporcuPlanView her zaman
+  // readOnly:true ile çağırır, dolayısıyla bu sütun ve hesaplanan GAP değeri
+  // sporcu tarafında hiç render edilmez (bkz. bpm sütunuyla aynı ayrım deseni).
+  const _cols=readOnly
+    ?['Aşama','Hedef','Sa','Dk','Sn','Mesafe (m)','Pace dk','Pace sn','RPE','Nabız']
+    :['Aşama','Hedef','Sa','Dk','Sn','Mesafe (m)','Pace dk','Pace sn','RPE','Nabız','D+ (m)'];
+  const _colWidths=readOnly?[120,32,32,32,64,40,40,40,46]:[120,32,32,32,64,40,40,40,46,50];
+  const colSpanN=_cols.length;
 
   const hasPaceRows=rows.some(r=>r.type!=='header'&&(r.pm>0||r.ps>0));
   const fmtPs=(s)=>{const t=Math.max(0,Math.round(s));return Math.floor(t/60)+':'+String(t%60).padStart(2,'0');};
@@ -7368,11 +7496,11 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
       // Başlık
       React.createElement('thead',null,
         React.createElement('tr',{style:{background:'#0f172a'}},
-          ['Aşama','Hedef','Sa','Dk','Sn','Mesafe (m)','Pace dk','Pace sn','RPE','Nabız'].map((h,i)=>
+          _cols.map((h,i)=>
             React.createElement('th',{key:i,style:{
               padding:'5px 4px',textAlign:i===0?'left':'center',
               fontWeight:600,fontSize:10,color:'#94a3b8',
-              width:i===0?'auto':[120,32,32,32,64,40,40,40,46][i-1]
+              width:i===0?'auto':_colWidths[i-1]
             }},h)
           )
         )
@@ -7391,7 +7519,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
             const restRow=(rows[i+2]&&(rows[i+2].type==='rest'||rows[i+2].type==='walk'))?rows[i+2]:null;
             return React.createElement(React.Fragment,{key:'h'+i},
               React.createElement('tr',{style:{background:r.color}},
-                React.createElement('td',{colSpan:10,style:{padding:'4px 8px',fontWeight:700,fontSize:11,color:r.textColor,letterSpacing:'.3px',display:'flex',alignItems:'center',gap:6}},
+                React.createElement('td',{colSpan:colSpanN,style:{padding:'4px 8px',fontWeight:700,fontSize:11,color:r.textColor,letterSpacing:'.3px',display:'flex',alignItems:'center',gap:6}},
                   readOnly?repeatLabel:React.createElement(React.Fragment,null,
                     repeatLabel.split(/\d+/).shift(),
                     editingRepeat===i
@@ -7424,7 +7552,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
               ),
               // Genişletilmiş aralık editörü
               isAralikOpen&&runRow&&React.createElement('tr',{style:{background:'#0f172a'}},
-                React.createElement('td',{colSpan:10,style:{padding:'10px 8px'}},
+                React.createElement('td',{colSpan:colSpanN,style:{padding:'10px 8px'}},
                   React.createElement(AralikEditor,{
                     headerIdx:i,
                     repCount:effCount,
@@ -7587,6 +7715,35 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
                   bpmHint&&React.createElement('span',{style:{fontSize:9,fontWeight:600,color:isRecoveryRow?'#10b981':isShortRow?'#7c3aed':'#3b82f6',lineHeight:1.3,marginTop:1}},isRecoveryRow?'▼min':isShortRow?'▲tepe':'~ort.')
                 );
               })()
+            ),
+            // D+ (m) — aşama bazlı GERÇEK yükseklik kazanımı girişi + hesaplanan GAP pace.
+            // Sadece koç panelinde (readOnly=false) render edilir — Koşu İzlerim'de bu
+            // sütun hiç oluşturulmaz (bkz. _cols/colSpanN tanımındaki not).
+            !readOnly&&React.createElement('td',{style:{
+              ...cell(),
+              color:rowOverrides[i]?.dp!=null?'#000':'#64748b',
+              fontStyle:rowOverrides[i]?.dp!=null?'normal':'italic',
+              fontSize:11}},
+              (()=>{
+                const dpVal=rowOverrides[i]?.dp;
+                const distM=r.mesafe||0;
+                const paceSec=(r.pm||0)*60+(r.ps||0);
+                let gapNote=null;
+                if(dpVal>0&&distM>0&&paceSec>0){
+                  // calcGAP: düz eşdeğer→gerçek pace faktörü üretir (gapToActualPace ile aynı
+                  // yön). Burada TERSİ lazım: gerçek (girilen) pace → düz eşdeğer, bu yüzden
+                  // çarpmak yerine faktöre BÖLÜYORUZ.
+                  const gap=calcGAP(dpVal,distM/1000,0);
+                  if(gap){
+                    const gapPaceSec=Math.round(paceSec/gap.factor);
+                    gapNote='GAP '+fmtPs(gapPaceSec)+'/km';
+                  }
+                }
+                return React.createElement('div',{style:{display:'flex',flexDirection:'column',alignItems:'center',gap:0}},
+                  editableCell(i,'dp',dpVal!=null?dpVal:0),
+                  gapNote&&React.createElement('span',{style:{fontSize:9,fontWeight:600,color:'#8b5cf6',lineHeight:1.3,marginTop:1}},gapNote)
+                );
+              })()
             )
           )
           );
@@ -7604,6 +7761,12 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
           React.createElement('td',{style:{...cell(),color:'#94a3b8'}},'—'),
           React.createElement('td',{style:{...cell(),color:actualOrtNabiz?'#fbbf24':'#94a3b8',fontWeight:actualOrtNabiz?700:400,fontSize:actualOrtNabiz?12:undefined}},
             actualOrtNabiz?actualOrtNabiz+' bpm':'—'
+          ),
+          !readOnly&&React.createElement('td',{style:{...cell(true),color:'#fbbf24',fontSize:12}},
+            React.createElement('div',{style:{display:'flex',flexDirection:'column',alignItems:'center',gap:0}},
+              totDp>0?totDp+' m':'—',
+              totalGapPaceSec&&React.createElement('span',{style:{fontSize:9,fontWeight:600,color:'#c4b5fd',lineHeight:1.3,marginTop:1}},'GAP '+fmtPs(totalGapPaceSec)+'/km')
+            )
           )
         )
       )
@@ -17335,7 +17498,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     savedCuePatches:(planSnap?.overrideMap?.[day.date]?._cuePatch)||{},
                     actualOrtNabiz:split.kosuActuals.find(w=>parseFloat(w.ort_nabiz)>0)?.ort_nabiz||null,
                     onSaveOverrides: async (overrides, detaySync)=>{
-                      const {__zoneDist:_zd,...cleanOverrides}=overrides;
+                      const {__zoneDist:_zd,__gapData:_gd,...cleanOverrides}=overrides;
                       const curSnap=planSnapRef.current||{};
                       const newRowOverrides={...(curSnap.rowOverrides||{}),[day.date]:cleanOverrides};
                       const _lastSavedAt=new Date().toISOString();
@@ -17370,7 +17533,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                       // günün rowOverrides alt-yoluna yaz — kardeş tarihlere veya başka herhangi
                       // bir üst-seviye alana (weekEff, rampModeOn, formSnap vb.) asla dokunmaz.
                       fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,_multiUpdate).catch(()=>{});
-                      if(_zd&&onUpdateWorkout){const mw=workouts.find(w=>w.date===day.date&&w.athleteId===athlete?.id&&(w.spor||'kosu')==='kosu');if(mw)onUpdateWorkout(mw.id,{_rowZoneDist:_zd});}
+                      if((_zd||_gd)&&onUpdateWorkout){const mw=workouts.find(w=>w.date===day.date&&w.athleteId===athlete?.id&&(w.spor||'kosu')==='kosu');if(mw)onUpdateWorkout(mw.id,{...(_zd?{_rowZoneDist:_zd}:{}),...(_gd?{_rowGapData:_gd}:{})});}
                     },
                     onSaveDetay: async (label, text, rowUpdate, rowLabel)=>{
                       const _lastSavedAt=new Date().toISOString();
@@ -17835,7 +17998,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     savedCuePatches:(planSnap?.overrideMap?.[day.date]?._cuePatch)||{},
                     actualOrtNabiz:day.actual?.find(w=>(w.spor||'kosu')==='kosu'&&parseFloat(w.ort_nabiz)>0)?.ort_nabiz||null,
                     onSaveOverrides: async (overrides, detaySync)=>{
-                    const {__zoneDist:_zd,...cleanOverrides}=overrides;
+                    const {__zoneDist:_zd,__gapData:_gd,...cleanOverrides}=overrides;
                     const curSnap=planSnapRef.current||{};
                     const newRowOverrides={...(curSnap.rowOverrides||{}),[day.date]:cleanOverrides};
                     const _lastSavedAt=new Date().toISOString();
@@ -17859,7 +18022,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     // Bkz. yukarıdaki "Haftalık Reçete" panelindeki aynı not — sadece bu günün
                     // rowOverrides alt-yoluna yaz, kayıp güncelleme (lost update) yarışını önler.
                     fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,_multiUpdate).catch(()=>{});
-                    if(_zd&&onUpdateWorkout){const mw=workouts.find(w=>w.date===day.date&&w.athleteId===athlete?.id&&(w.spor||'kosu')==='kosu');if(mw)onUpdateWorkout(mw.id,{_rowZoneDist:_zd});}
+                    if((_zd||_gd)&&onUpdateWorkout){const mw=workouts.find(w=>w.date===day.date&&w.athleteId===athlete?.id&&(w.spor||'kosu')==='kosu');if(mw)onUpdateWorkout(mw.id,{...(_zd?{_rowZoneDist:_zd}:{}),...(_gd?{_rowGapData:_gd}:{})});}
                   },
                   onSaveDetay: async (label, text, rowUpdate, rowLabel)=>{
                   const _lastSavedAt=new Date().toISOString();
@@ -22873,10 +23036,18 @@ function Gecmis({workouts,athletes,races,onDelete,onBulkDelete,onUpdate}){
                                   savedOverrides:(snapCache[cacheKey]?.rowOverrides||{})[w.date],
                                   actualOrtNabiz:parseFloat(w.ort_nabiz)>0?w.ort_nabiz:null,
                                   onSaveOverrides: async (overrides, detaySync)=>{
+                                    // KÖK NEDEN DÜZELTMESİ (panel paritesi — D+/GAP özelliği eklenirken
+                                    // fark edildi): bu çağrı yeri, haftalık plan panelindeki iki eşdeğerinin
+                                    // aksine __zoneDist/__gapData'yı hiç ayıklamıyor, ne rowOverrides'a temiz
+                                    // yazıyor ne de workout kaydına (_rowZoneDist/_rowGapData) yansıtıyordu.
+                                    // Sonuç: Geçmiş sekmesinden girilen aşama bazlı bpm/D+ verisi Firebase'de
+                                    // ham __zoneDist/__gapData blob'u olarak rowOverrides içine gömülüyor,
+                                    // koç panelindeki gibi workout kaydına asla ulaşmıyordu.
+                                    const {__zoneDist:_zd,__gapData:_gd,...cleanOverrides}=overrides;
                                     const curSnap=snapCache[cacheKey]||{};
-                                    const newRowOverrides={...(curSnap.rowOverrides||{}),[w.date]:overrides};
+                                    const newRowOverrides={...(curSnap.rowOverrides||{}),[w.date]:cleanOverrides};
                                     const _lastSavedAt=new Date().toISOString();
-                                    const _multiUpdate={['rowOverrides/'+w.date]:overrides,lastSavedAt:_lastSavedAt};
+                                    const _multiUpdate={['rowOverrides/'+w.date]:cleanOverrides,lastSavedAt:_lastSavedAt};
                                     let newOverrideMapEntry=curSnap.overrideMap?.[w.date];
                                     if(detaySync&&newOverrideMapEntry){
                                       // Bkz. haftalık plan panelindeki aynı not — mesafe→dakika ters
@@ -22896,6 +23067,7 @@ function Gecmis({workouts,athletes,races,onDelete,onBulkDelete,onUpdate}){
                                     // alt-yoluna yazan çoklu-yol update, kayıp güncelleme yarışını Firebase
                                     // tarafında kökten önler; artık yazmadan önce ayrı bir fbGet gerekmiyor.
                                     db&&fbUpdate(`plan_snapshots/${w.athleteId}/${weekKey}`,_multiUpdate).catch(()=>{});
+                                    if((_zd||_gd)&&onUpdate) onUpdate(w.id,{...(_zd?{_rowZoneDist:_zd}:{}),...(_gd?{_rowGapData:_gd}:{})});
                                   }
                                 });
                             })()
