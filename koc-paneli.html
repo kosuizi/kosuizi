@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.18-2350 --><!DOCTYPE html>
+<!-- Version: v2026.07.19-2233 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.18-2350';
+const APP_VERSION='v2026.07.19-2233';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -7135,6 +7135,18 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
   // fastBoundarySec = 1000/hi_ms → zone'un en hızlı izin verilen pace'i (az sn/km)
   // slowBoundarySec = 1000/lo_ms → zone'un en yavaş izin verilen pace'i (çok sn/km)
   // Zone içindeyse → yeşil | sınır dışı ≤tol → sarı | daha fazlası → kırmızı
+  // GAP-düzeltmeli karşılaştırma pace'i — paceValidation VE satır rengi (liveRowColor)
+  // TARAFINDAN ORTAK kullanılır, tek kaynak. Satıra gerçek D+ girilmişse (ve hedefte D+
+  // öngörülmemişse — _isGapRow hariç, bkz. altındaki not) ham girilen pace yerine
+  // GAP-düzeltmeli (düz eşdeğer) pace döner.
+  const gapAdjustedPaceSec=(row,rawSec)=>{
+    if(row.dp>0&&row.mesafe>0&&!row._isGapRow){
+      const gap=calcGAP(row.dp,row.mesafe/1000,0);
+      if(gap) return Math.round(rawSec/gap.factor);
+    }
+    return rawSec;
+  };
+
   const paceValidation=(row)=>{
     // NOT: row.rpe kontrolü Yürü-Koş için istisna edildi — bu antrenman tipinde koşu/yürüyüş
     // satırları hem RPE hem hedef pace taşıyor (ikili rehberlik); önceden rpe alanı dolu
@@ -7151,21 +7163,12 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     if((pm==null||pm===0)&&(ps==null||ps===0)) return null;
     const enteredSec=(pm||0)*60+(ps||0);
     if(enteredSec<=0) return null;
-    // ── GAP düzeltmesi ──────────────────────────────────────────────────────
-    // Satıra gerçek D+ girilmişse, hedefle kıyaslanan pace GİRİLEN HAM pace değil,
-    // GAP-düzeltmeli (düz eşdeğer) pace olmalı — 5:45 koşulmuş ama D+ ile GAP 5:20
-    // hesaplanmışsa "biraz hızlı/yavaş" kıyaslaması 5:20 üzerinden yapılır.
-    // _isGapRow İSTİSNASI: bu satırın hedefi zaten PLANLANAN "Hedef D+:" değerine göre
-    // yavaşlatılmış (bkz. _adimGapPs/calcGAPAvgPaceSec, satır ~5904). O durumda ham
-    // girilen pace zaten hedefle AYNI temelde (ikisi de tırmanışlı); girilen pace'i de
-    // düzeltirsek düz-eşdeğer actual'ı tırmanışlı hedefe karşı kıyaslamış oluruz — bu
-    // sistematik olarak yanlış "hızlı" sinyaline yol açar. Bu yüzden yalnızca hedefte
-    // D+ ÖNGÖRÜLMEMİŞ satırlarda (sürpriz/gerçekleşen tırmanış) düzeltme uygulanır.
-    let cmpSec=enteredSec;
-    if(row.dp>0&&row.mesafe>0&&!row._isGapRow){
-      const gap=calcGAP(row.dp,row.mesafe/1000,0);
-      if(gap) cmpSec=Math.round(enteredSec/gap.factor);
-    }
+    // GAP düzeltmesi (bkz. gapAdjustedPaceSec) — 5:45 koşulmuş ama D+ ile GAP 5:20
+    // hesaplanmışsa "biraz hızlı/yavaş" kıyaslaması 5:20 üzerinden yapılır. _isGapRow
+    // İSTİSNASI: bu satırın hedefi zaten PLANLANAN "Hedef D+:" değerine göre yavaşlatılmış
+    // (bkz. _adimGapPs/calcGAPAvgPaceSec, satır ~5904) — o durumda ham girilen pace zaten
+    // hedefle AYNI temelde (ikisi de tırmanışlı), tekrar düzeltmek sistematik hata yaratır.
+    const cmpSec=gapAdjustedPaceSec(row,enteredSec);
     // ── OP-YK1: Yürü-Koş yürüyüş (toparlanma) satırları ──────────────────────
     // Sabit hedef pace (10:00/km) etrafında sabit toleransla değerlendir — koşu zone
     // genişliği (Z1 sınırları) kullanılmaz, çünkü yürüyüş pace bandı koşu zone'undan
@@ -7226,6 +7229,27 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     return diff>0
       ?{label:'Çok Yavaş',color:'#ef4444',bg:'#fef2f2',icon:'▼▼'}
       :{label:'Çok Hızlı',color:'#ef4444',bg:'#fef2f2',icon:'▲▲'};
+  };
+
+  // ── Satır rengi: GİRİLEN (GAP-düzeltmeli) pace'in düştüğü zon ──────────────
+  // Plan oluşturma anında satır rengi PLANLANAN pace'e göre belirlenir (bkz. mkRow/
+  // raceZoneFromPace — template generation, satır ~5930). Koç gerçek pace'i (ve varsa
+  // D+'yi) girdiğinde, satırın rengi artık GERÇEKLEŞEN (GAP-düzeltmeli) pace'in düştüğü
+  // zona göre güncellenir — paceValidation rozetiyle AYNI kaynak (gapAdjustedPaceSec),
+  // tek ve tutarlı bir "gerçekleşen durum" sinyali. Giriş yoksa PLANLANAN renk (r.color)
+  // aynen korunur (bkz. çağrı noktasındaki ||r.color fallback'i).
+  const liveRowColor=(row)=>{
+    if(!row||row.type==='header'||row.type==='walk'||row._isSprint) return null;
+    if(tip==='yaris'||tip==='serbest') return null; // sabit hedefi olmayan türler
+    if(/[iı]sınma|isinma|soğuma|soguma/i.test(row.label||'')) return null; // geçiş fazı
+    const pm=row.pm, ps=row.ps;
+    if((pm==null||pm===0)&&(ps==null||ps===0)) return null; // giriş yok → planlanan renk kalır
+    const enteredSec=(pm||0)*60+(ps||0);
+    if(enteredSec<=0) return null;
+    const cmpSec=gapAdjustedPaceSec(row,enteredSec);
+    const zi=raceZoneFromPace(cmpSec,_mZones||zones);
+    const c=ZONE_COLORS_INLINE[zi];
+    return c?{color:c,textColor:ZONE_TEXT_COLOR[zi]||null}:null;
   };
 
   // ── OP-9: Tekrar sayısı değiştirme ──
@@ -7570,8 +7594,9 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
           }
           const _showRange=paceTol>0&&!r.rpe&&!r._isSprint&&(r.pm>0||r.ps>0);
           const _rangeTxt=_showRange?(fmtPs(Math.max(120,(r.pm||0)*60+(r.ps||0)-paceTol))+' – '+fmtPs((r.pm||0)*60+(r.ps||0)+paceTol)):null;
+          const _liveColor=liveRowColor(r);
           return React.createElement(React.Fragment,{key:i},
-          React.createElement('tr',{style:{background:r.color,borderBottom:'1px solid rgba(0,0,0,.08)'}},
+          React.createElement('tr',{style:{background:_liveColor?.color||r.color,borderBottom:'1px solid rgba(0,0,0,.08)'}},
             React.createElement('td',{style:{padding:'5px 6px',fontWeight:700,fontSize:11,color:'#000',display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:6}},
               React.createElement('div',{style:{flex:1,minWidth:0}},
               r.label,
