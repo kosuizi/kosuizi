@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.19-2320 --><!DOCTYPE html>
+<!-- Version: v2026.07.20-0059 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.19-2320';
+const APP_VERSION='v2026.07.20-0059';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -14765,6 +14765,12 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
   // değiştirirdi (kök neden buydu).
   const [frozenTargets,setFrozenTargets]=useState({});
   const [pastWeekEffs,setPastWeekEffs]=useState({}); // geçmiş hafta revize hedefleri (weekEff)
+  // ── Ham Veri (Debug) — sporcular arası veri sızıntısı teşhisi için ──────────
+  // Koç Firebase konsoluna erişemiyorsa, bu sporcunun bu haftaki plan_snapshots
+  // kaydını UYGULAMA İÇİNDEN, taze bir fbGet ile (hiçbir cache kullanmadan)
+  // okuyup ekrana JSON olarak basar — kopyala/yapıştır ile paylaşılabilir.
+  const [debugRaw,setDebugRaw]=useState(null);
+  const [debugLoading,setDebugLoading]=useState(false);
 
 
   // 1. Snapshot yükle — sporcu değişince önce sıfırla
@@ -17131,6 +17137,29 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       const hedefGosterilenKm=week.weekOff===0
         ?(weekEffKm>0?weekEffKm:weekOrigKm)
         :(_showRampProj?_rampProjKm:weekOrigKm);
+      // KRİTİK TEŞHİS ARACI: sporcular arası veri sızıntısı şüphesinde, bu sporcunun
+      // bu haftaki plan_snapshots kaydını HİÇBİR CACHE (planSnap state, _planSnapsCache,
+      // snapCache) KULLANMADAN, doğrudan taze bir fbGet ile okur. Ekranda gösterilen
+      // state (planSnap) ile Firebase'deki GERÇEK kayıt arasında fark var mı — bunu
+      // ayırt etmek için bilerek state'i değil, Firebase'i baz alıyoruz.
+      const debugFetchSnap=async()=>{
+        setDebugLoading(true);
+        setDebugRaw(null);
+        try{
+          const raw=await fbGet(`plan_snapshots/${athlete.id}/${weekKey}`);
+          setDebugRaw(JSON.stringify({
+            _sorguYolu:`plan_snapshots/${athlete.id}/${weekKey}`,
+            _sporcuAdi:athlete.isim||athlete.name||'(bilinmiyor)',
+            _sporcuId:athlete.id,
+            _weekKey:weekKey,
+            _cekilmeZamani:new Date().toISOString(),
+            kayit:raw||null
+          },null,2));
+        }catch(e){
+          setDebugRaw('HATA: '+(e?.message||String(e)));
+        }
+        setDebugLoading(false);
+      };
       const shareHaftalikRecete=async()=>{
         const el=haftalikReceteRef.current;
         if(!el)return;
@@ -17283,7 +17312,45 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
             className:'btn btn-sm',
             style:{background:'var(--info)',color:'#fff',border:'none',fontSize:11},
             onClick:shareHaftalikRecete
-          },'📤 Haftalık Reçete')
+          },'📤 Haftalık Reçete'),
+          React.createElement('button',{
+            className:'btn btn-sm',
+            style:{background:'#7c3aed',color:'#fff',border:'none',fontSize:11},
+            title:'Bu sporcunun bu haftaki plan_snapshots kaydını Firebase\'den taze çekip ham JSON olarak gösterir — sporcular arası veri sızıntısı şüphesinde teşhis için',
+            onClick:debugFetchSnap,
+            disabled:debugLoading
+          },debugLoading?'⏳ Çekiliyor...':'🔍 Ham Veri')
+        )
+      ),
+      debugRaw&&React.createElement('div',{style:{
+        position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,.75)',
+        zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:16
+      }},
+        React.createElement('div',{style:{background:'#0f172a',borderRadius:8,padding:16,maxWidth:'90vw',maxHeight:'85vh',display:'flex',flexDirection:'column',gap:8,border:'1px solid #334155'}},
+          React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8}},
+            React.createElement('span',{style:{color:'#fff',fontWeight:700,fontSize:13}},'🔍 Ham Veri — '+(athlete.isim||athlete.name||'')),
+            React.createElement('div',{style:{display:'flex',gap:6}},
+              React.createElement('button',{
+                className:'btn btn-sm',
+                style:{background:'#22c55e',color:'#fff',border:'none',fontSize:11},
+                onClick:async()=>{
+                  try{ await navigator.clipboard.writeText(debugRaw); alert('Kopyalandı!'); }
+                  catch(e){ alert('Kopyalanamadı — metni elle seçip kopyalayın.'); }
+                }
+              },'📋 Kopyala'),
+              React.createElement('button',{
+                className:'btn btn-sm',
+                style:{background:'#475569',color:'#fff',border:'none',fontSize:11},
+                onClick:()=>setDebugRaw(null)
+              },'✕ Kapat')
+            )
+          ),
+          React.createElement('textarea',{
+            readOnly:true,
+            value:debugRaw,
+            style:{width:'100%',minWidth:'60vw',height:'60vh',background:'#020617',color:'#e2e8f0',fontFamily:'monospace',fontSize:11,border:'1px solid #334155',borderRadius:6,padding:8},
+            onFocus:(e)=>e.target.select()
+          })
         )
       ),
       // ── Revize hedef → orijinal hedefe kaç hafta ─────────────────────────
