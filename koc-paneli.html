@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.20-2042 --><!DOCTYPE html>
+<!-- Version: v2026.07.20-2058 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.20-2042';
+const APP_VERSION='v2026.07.20-2058';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -14117,6 +14117,11 @@ function ManuelAtamaModal(props){
   var raceKm=props.raceKm||0;
   var _tur=useState('kolay'),tur=_tur[0],setTur=_tur[1];
   var _prev=useState(null),preview=_prev[0],setPreview=_prev[1];
+  // Güvenlik kilidi: preview'ın HANGİ sporcu için üretildiğini ayrıca takip eder —
+  // bkz. handleAta içindeki kontrol. Yukarıdaki bağımlılık düzeltmesi bu durumu zaten
+  // önlemeli, ama bu ikinci bir kilit: hiçbir koşulda başka bir sporcunun zonlarıyla
+  // üretilmiş bir önizleme "Ata" ile kaydedilemez.
+  var _pAid=useState(null),previewAthleteId=_pAid[0],setPreviewAthleteId=_pAid[1];
   var _yapi=useState(''),yapiNotu=_yapi[0],setYapiNotu=_yapi[1];
   var zones=calcZones(athlete);
   var last=(history||[]).slice(-1)[0];
@@ -14160,20 +14165,36 @@ function ManuelAtamaModal(props){
         if(yn0){try{tpl=tplFromYapiNotu(tur,yn0,band,dk,zones,dis,phase,ctl,recentLongRuns,athlete);}catch(e2){}}
       }
       setPreview(tpl);
+      setPreviewAthleteId(athlete?.id||null);
       setYapiNotu(tpl&&tpl.yapi_notu?tpl.yapi_notu:'');
     }catch(e){setPreview(null);}
-  },[tur,phase,phaseStep,band]);
+  // KÖK NEDEN DÜZELTMESİ (20.07.2026 — çapraz-sporcu sızıntısı): zones/athlete/dis/ctl/
+  // raceKm/recentLongRuns bağımlılık listesinde YOKTU. Koç bu pencereyi açık bırakıp
+  // (kapatmadan) başka bir sporcuya geçtiğinde — bileşen yeniden mount olmuyor, sadece
+  // athlete prop'u güncelleniyor — bu effect yeniden ÇALIŞMIYOR, önizleme (preview/tpl)
+  // ESKİ sporcunun zonlarıyla donmuş kalıyordu. "Ata"ya basınca kayıt DOĞRU sporcunun
+  // Firebase yoluna gidiyor ama İÇERİK eski sporcunun zon/pace değerleriyle yazılıyordu —
+  // gözlemlenen "başka sporcunun antrenmanı bende görünüyor" hatasının tam kaynağı budur.
+  },[tur,phase,phaseStep,band,zones,athlete,dis,ctl,raceKm,recentLongRuns]);
 
   // yapiNotu seçilince şablonu yeniden üret
   useEffect(function(){
     if(!yapiNotu) return;
     var dk=preview&&preview.sure_dk||50;
     var tplYeni=tplFromYapiNotu(tur,yapiNotu,band,dk,zones,dis,phase,ctl,recentLongRuns,athlete);
-    if(tplYeni) setPreview(tplYeni);
-  },[yapiNotu]);
+    if(tplYeni){ setPreview(tplYeni); setPreviewAthleteId(athlete?.id||null); }
+  // Aynı kök neden düzeltmesi burada da geçerli — bkz. yukarıdaki not.
+  },[yapiNotu,zones,athlete,dis,ctl,phase,recentLongRuns]);
   var gunLabel=new Date(date+'T12:00:00').toLocaleDateString('tr-TR',{weekday:'long',day:'2-digit',month:'long'});
   var handleAta=function(){
     if(!preview)return;
+    // GÜVENLİK KİLİDİ (20.07.2026 — çapraz-sporcu sızıntısı): önizleme başka bir
+    // sporcu için üretilmişse (ör. bu pencere açıkken sporcu değişmiş olabilir),
+    // kaydı KESİNLİKLE engelle — sessizce yanlış sporcuya yazmak yerine koçu uyar.
+    if(previewAthleteId&&athlete?.id&&previewAthleteId!==athlete.id){
+      alert('Önizleme başka bir sporcu için üretilmiş görünüyor. Güvenlik nedeniyle kayıt engellendi — lütfen pencereyi kapatıp yeniden açın.');
+      return;
+    }
     var tplWithSure=Object.assign({},preview);
     var final=yapiNotu&&yapiNotlari.length>0?Object.assign({},tplWithSure,{yapi_notu:yapiNotu}):tplWithSure;
     onSave(date,final);
