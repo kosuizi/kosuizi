@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.20-2058 --><!DOCTYPE html>
+<!-- Version: v2026.07.20-2307 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.20-2058';
+const APP_VERSION='v2026.07.20-2307';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -731,6 +731,22 @@ function pbToMin(pbStr){
 
 
 // Yarış hazırlık skoru (0-100) — CTL, ACWR, sakatlık, faz
+// ── ACWR Faz Bandı — TEK PAYLAŞILAN kaynak (20.07.2026 sohbeti) ────────────
+// Her faz için beklenen ACWR aralığı: peak=ideal merkez, lowZero/highZero=
+// 0 puana düşen sınırlar. Hem raceReadinessScore (yarış hazırlık skoru) hem
+// de computeRampVsIdealDecision (Rampa-vs-İdeal karar motoru) bu AYNI tabloyu
+// kullanır — iki yerde ayrı tanımlanıp zamanla sapması önlenir.
+function acwrFazBand(phase){
+  const cfg={
+    'Temel':        {peak:0.95, lowZero:0.50, highZero:1.30, aciklama:'Temel fazda düşük ama stabil yük beklenir'},
+    'Gelişme':      {peak:1.10, lowZero:0.60, highZero:1.50, aciklama:'Gelişme fazında progressif yük artışı beklenir'},
+    'Zirve':        {peak:1.20, lowZero:0.70, highZero:1.60, aciklama:'Zirve fazında yüksek ama kontrollü yük beklenir'},
+    'Taper':        {peak:0.70, lowZero:0.30, highZero:1.05, aciklama:'Taper fazında kasıtlı yük düşüşü beklenir'},
+    'Yarış Sonrası':{peak:0.50, lowZero:0.10, highZero:0.90, aciklama:'Yarış sonrası toparlanma — düşük yük normal'},
+  };
+  return cfg[phase]||cfg['Gelişme'];
+}
+
 function raceReadinessScore(ctl,acwr,phase,sakatlık,hrv_durum,daysLeft,race,athlete,workouts){
   if(!acwr||!athlete)return null;
   // ── 6 BAĞIMSIZ FAKTÖR — SAF TOPLAÇI SİSTEM (max=100) ────────────────────
@@ -778,14 +794,10 @@ function raceReadinessScore(ctl,acwr,phase,sakatlık,hrv_durum,daysLeft,race,ath
   // ── 2. Yük Dengesi ACWR (0-22) ──────────────────────────────────────────
   // Her faz için beklenen ACWR aralığı farklı — faz bazlı üçgen fonksiyon
   // peak: ideal ACWR merkezi | low/high: 0 puana düşen sınırlar
-  const acwrFazConfig={
-    'Temel':        {peak:0.95, lowZero:0.50, highZero:1.30, aciklama:'Temel fazda düşük ama stabil yük beklenir'},
-    'Gelişme':      {peak:1.10, lowZero:0.60, highZero:1.50, aciklama:'Gelişme fazında progressif yük artışı beklenir'},
-    'Zirve':        {peak:1.20, lowZero:0.70, highZero:1.60, aciklama:'Zirve fazında yüksek ama kontrollü yük beklenir'},
-    'Taper':        {peak:0.70, lowZero:0.30, highZero:1.05, aciklama:'Taper fazında kasıtlı yük düşüşü beklenir'},
-    'Yarış Sonrası':{peak:0.50, lowZero:0.10, highZero:0.90, aciklama:'Yarış sonrası toparlanma — düşük yük normal'},
-  };
-  const fazCfg=acwrFazConfig[racePhase]||acwrFazConfig['Gelişme'];
+  // TEK PAYLAŞILAN kaynak: acwrFazBand() — Rampa-vs-İdeal karar motoru (20.07.2026
+  // sohbeti) da AYNI bu tabloyu kullanır; iki ayrı yerde tanımlanıp zamanla
+  // birbirinden sapması (bu dosyada birkaç kez karşılaşılan hata sınıfı) önlenir.
+  const fazCfg=acwrFazBand(racePhase);
   // Üçgen fonksiyon: peak'te 22, lowZero ve highZero'da 0
   let acwrPuan;
   if(acwr<=fazCfg.peak){
@@ -10360,11 +10372,22 @@ function computeRampProjection(weekTargets, rampModeOn, rampRatePct){
     .filter(w=>!w.isRaceWeek&&w.phase!=='Taper'&&(!curWt||w.phase===curWt.phase))
     .sort((a,b)=>(a.weekIdx||0)-(b.weekIdx||0));
   let pKmChain=null;
+  // chainOriginKm/chainSteps (20.07.2026 sohbeti): zincirin başladığı gerçek km
+  // ve o noktadan bu haftaya kadar kaç kez bileşik (compounding) katsayı
+  // uygulandığı — Rampa-vs-İdeal karar motorunun "bu hedefe inmek için hangi
+  // rampa oranı gerekir?" sorusunu geriye çözebilmesi için dışa aktarılır.
+  // onTrack olan haftalarda da hesaplanır (öyle olmasa bile "eğer bileşik
+  // devam etseydi" senaryosunu çözebilmek için), sonrasında sıfırlanır çünkü
+  // gerçekleşen değer o haftanın kendi hedefine sabitlenmiş olur.
+  let chainOriginKm=null;
+  let chainSteps=0;
   const proj={};
   for(const w of projWeeks){
     if(pKmChain===null){
       if(w.isPast&&!w.isRecovery&&w.targetKm>0&&w.actualKm<w.targetKm*0.98){
         pKmChain=w.actualKm;
+        chainOriginKm=w.actualKm;
+        chainSteps=0;
       }
       continue;
     }
@@ -10372,19 +10395,26 @@ function computeRampProjection(weekTargets, rampModeOn, rampRatePct){
     const goingUp=w.targetKm>pKmChain;
     const onTrack=!goingUp||maxKm>=w.targetKm;
     const rampKm=onTrack?w.targetKm:maxKm;
+    chainSteps++;
     if(w.isPast){
       const blended=Math.max(w.actualKm,rampKm);
       const canFullyClose=!w.isRecovery;
-      pKmChain=(canFullyClose&&blended>=w.targetKm)?null:blended;
+      if(canFullyClose&&blended>=w.targetKm){
+        pKmChain=null;chainOriginKm=null;chainSteps=0;
+      } else {
+        pKmChain=blended;
+        if(onTrack){chainOriginKm=blended;chainSteps=0;}
+      }
     } else {
       const dpRatio=w.targetKm>0&&w.targetDp>0?w.targetDp/w.targetKm:0;
       if(onTrack){
-        proj[localDateStr(w.weekStart)]={projKm:w.targetKm,projDp:w.targetDp,onTrack:true};
+        proj[localDateStr(w.weekStart)]={projKm:w.targetKm,projDp:w.targetDp,onTrack:true,chainOriginKm,chainSteps};
       } else {
         const pdp=dpRatio>0?Math.round(rampKm*dpRatio):0;
-        proj[localDateStr(w.weekStart)]={projKm:rampKm,projDp:pdp,onTrack:false};
+        proj[localDateStr(w.weekStart)]={projKm:rampKm,projDp:pdp,onTrack:false,chainOriginKm,chainSteps};
       }
       pKmChain=rampKm;
+      if(onTrack){chainOriginKm=rampKm;chainSteps=0;}
     }
   }
   return proj;
@@ -10841,6 +10871,68 @@ function calcIdealWeeklyTargets(primary, athlete){
     out.push({weekStart,weekEnd,phase,isRecovery,isRaceWeek,targetKm,targetDp});
   }
   return out;
+}
+
+// ── Rampa-vs-İdeal Karar Motoru (20.07.2026 sohbeti) ────────────────────────
+// Hedef (CTL/banda göre gerçek periyotlama) İdeal'i (salt yarış formülü,
+// CTL'den bağımsız) belirgin şekilde aşan haftalarda, bu farkın "kanıtlanmış
+// kapasite artışı" mı yoksa "sürdürülemez bir yüklenme" mi olduğuna dair
+// mevcut sinyallerden (ACWR, sakatlık, HRV, plan tutarlılığı) bir öneri
+// üretir. SADECE danışma niteliğindedir — rampayı otomatik değiştirmez,
+// nihai karar koça aittir (bkz. koç koruma tiki felsefesi).
+//
+// Kullanılan aynı ACWR bandı raceReadinessScore ile PAYLAŞILIR (acwrFazBand).
+// Sayısal rampa önerisi, computeRampProjection'ın dışa aktardığı
+// chainOriginKm/chainSteps üzerinden GERİYE ÇÖZÜLEREK hesaplanır:
+//   origin × (1+r)^steps = hedefKm  →  r = (hedefKm/origin)^(1/steps) − 1
+// Bu, ekranda GERÇEKTEN gösterilen zincirle aynı matematiği kullandığından
+// (bağımsız bir tahmin değil), öneri her zaman tutarlıdır.
+function computeRampVsIdealDecision({phase,acwr,sakatlik,hrvDurum,hrv7Low,tutarlilikPct,chainOriginKm,chainSteps,idealKm,currentRampRatePct}){
+  const band=acwrFazBand(phase);
+  const acwrHigh=acwr!=null&&acwr>0&&acwr>(band.highZero-0.1);
+  const acwrIdealYakin=acwr!=null&&acwr>0&&acwr>=(band.peak-0.15)&&acwr<=(band.peak+0.15);
+  const injHigh=sakatlik>=5;
+  const injMed=sakatlik>=3&&sakatlik<5;
+  const hrvBad=hrvDurum==='düşük'||hrv7Low;
+  const hrvMed=hrvDurum==='dengesiz';
+  const tutarsiz=tutarlilikPct!=null&&tutarlilikPct<60;
+  const acwrOrta=acwr!=null&&acwr>0&&!acwrIdealYakin&&!acwrHigh;
+
+  const redFlags=[injHigh,acwrHigh,hrvBad].filter(Boolean).length;
+  const yellowFlags=[injMed,hrvMed,tutarsiz,acwrOrta].filter(Boolean).length;
+
+  let level,title;
+  if(redFlags>0){ level='kirmizi'; title="İdeal'e yaklaşın"; }
+  else if(yellowFlags>0){ level='sari'; title='Dikkatli ilerleyin'; }
+  else { level='yesil'; title='CTL bandına güvenilebilir'; }
+
+  // Sayısal rampa önerisi — sadece sarı/kırmızıda, ve zincir bilgisi
+  // (origin+steps) mevcutsa (bkz. computeRampProjection). Kırmızıda İdeal'e,
+  // sarıda İdeal ile mevcut projeksiyon arasında bir orta noktaya çözülür.
+  let suggestedRampRatePct=null;
+  if((level==='kirmizi'||level==='sari')&&chainOriginKm>0&&chainSteps>0&&idealKm>0&&currentRampRatePct!=null){
+    const currentProjKm=chainOriginKm*Math.pow(1+currentRampRatePct/100,chainSteps);
+    const solveTargetKm=level==='kirmizi'?idealKm:round1((idealKm+currentProjKm)/2);
+    const r=(Math.pow(solveTargetKm/chainOriginKm,1/chainSteps)-1)*100;
+    if(isFinite(r)&&r>0&&r<currentRampRatePct-0.5){
+      suggestedRampRatePct=Math.round(r*10)/10;
+    }
+  }
+
+  const reasons=[];
+  if(injHigh)reasons.push('sakatlık '+sakatlik+'/10 (yüksek)');
+  else if(injMed)reasons.push('sakatlık '+sakatlik+'/10 (orta)');
+  if(acwrHigh)reasons.push('ACWR '+acwr.toFixed(2)+' (faz için aşırı yüksek)');
+  else if(acwrOrta)reasons.push('ACWR '+acwr.toFixed(2)+' (ideal aralığın dışında)');
+  if(hrvBad)reasons.push('HRV '+(hrvDurum==='düşük'?'düşük':'7g ort. düşük'));
+  else if(hrvMed)reasons.push('HRV dengesiz');
+  if(tutarsiz)reasons.push('plan tutarlılığı düşük (%'+tutarlilikPct+')');
+
+  const message=reasons.length
+    ?reasons.join(', ')+'.'
+    :'Tüm sinyaller olumlu — mevcut CTL bandına dayalı hedefle devam edilebilir.';
+
+  return {level,title,message,suggestedRampRatePct};
 }
 
 // ── Zirve Hafta Ulaşılabilirlik Değerlendirmesi (Bağlam-Duyarlı) ─────────────
@@ -16610,6 +16702,24 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               const _idealByWeekKey={};
               _idealTargets.forEach(iw=>{_idealByWeekKey[localDateStr(iw.weekStart)]=iw;});
 
+              // ── Rampa-vs-İdeal Karar Motoru — paylaşılan sinyaller (20.07.2026) ──
+              // Hedef, İdeal'i belirgin aştığında (bkz. aşağıdaki _decGapPct eşiği)
+              // bu sinyallerden bir yeşil/sarı/kırmızı karar üretilir. Sinyaller bir
+              // kez hesaplanır, her satırda tekrar hesaplanmaz.
+              const _decLast=(history&&history.length>0)?history[history.length-1]:null;
+              const _decAcwr=_decLast?.acwr??null;
+              const _decHrvDurum=athlete?.hrv_durum||'';
+              const _decHrv7=parseSayi(athlete?.hrv_7gun);
+              const _decHrv7Esik=hrv7Esik(athlete);
+              const _decHrv7Low=_decHrv7>0&&_decHrv7<_decHrv7Esik;
+              const _decSakatlik=parseInt(athlete?.sakatlık)||1;
+              const _decPastRows=weekTargets
+                .map((w,idx)=>({w,idx}))
+                .filter(o=>o.w.isPast&&o.w.targetKm>0&&!o.w.isRaceWeek&&o.w.phase!=='Yarış Sonrası');
+              const _decTutarlilikPct=_decPastRows.length
+                ?Math.round(100*_decPastRows.reduce((s,o)=>s+Math.min(1.1,(weekActuals[o.idx]?.km||0)/o.w.targetKm),0)/_decPastRows.length)
+                :null;
+
               return weekTargets.map((wt,i)=>{
               const act=weekActuals[i]||{km:0,dp:0};
               const wtWeekKey=localDateStr(wt.weekStart);
@@ -16698,6 +16808,27 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               // devam ediyor çünkü onların ayrı/yok bir "uzun koşu" kavramı var.
               const _dispKmForUzun=showRevised?effKm:(showCascade?cascadeKm:(_showFutProj?_futPrj.projKm:wt.targetKm));
               const _dispDpForUzun=(showRevised&&wt.targetDp>0)?effDp:((showCascade&&wt.targetDp>0)?cascadeDp:(((_showFutProj&&wt.targetDp>0&&_futPrj.projDp>0))?_futPrj.projDp:wt.targetDp));
+
+              // ── Rampa-vs-İdeal Karar Rozeti (20.07.2026 sohbeti) ──────────────
+              // Sadece yükleme fazlarında (Zirve/Gelişme), geçmiş olmayan ve
+              // Hedef'in İdeal'i belirgin (%8+) aştığı haftalarda gösterilir.
+              // Taper/Yarış/Yarış Sonrası/Dinlenme haftalarında anlamsız —
+              // bunlar zaten kasıtlı düşürülmüş haftalar.
+              const _decGapPct=(_idealWk&&_idealWk.targetKm>0)
+                ?Math.round((_dispKmForUzun-_idealWk.targetKm)/_idealWk.targetKm*100)
+                :0;
+              const _decEligible=!wt.isPast&&!wt.isRecovery&&!wt.isRaceWeek&&
+                (wt.phase==='Zirve'||wt.phase==='Gelişme')&&_decGapPct>=8;
+              const _decFutPrj=futureProj[wtWeekKey]||null;
+              const _decCurrentRatePct=rampModeOn?rampRatePct:10;
+              const _decision=_decEligible
+                ?computeRampVsIdealDecision({
+                    phase:wt.phase,acwr:_decAcwr,sakatlik:_decSakatlik,
+                    hrvDurum:_decHrvDurum,hrv7Low:_decHrv7Low,tutarlilikPct:_decTutarlilikPct,
+                    chainOriginKm:_decFutPrj?.chainOriginKm??null,chainSteps:_decFutPrj?.chainSteps??0,
+                    idealKm:_idealWk.targetKm,currentRampRatePct:_decCurrentRatePct
+                  })
+                :null;
               const _uzunHedefRaw=wt.isRaceWeek||wt.phase==='Yarış Sonrası'
                 ?null
                 :estimateUzunKosuHedefi(_dispKmForUzun,_dispDpForUzun,wt.phase,_uzunDisiplin,_uzunZones,wt.isCurrent?_uzunRealBand:null,plan.primary?.mesafe);
@@ -16854,7 +16985,16 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   _idealWk&&_idealWk.targetKm>0&&React.createElement('div',{
                     style:{fontSize:9,fontWeight:400,marginTop:1,whiteSpace:'nowrap',color:'#a78bfa'},
                     title:'İdeal Hazırlık — CTL/gerçekleşen antrenmandan bağımsız, saf yarış formülüne göre hedef ('+wt.phase+(_idealWk.isRecovery?', Dinlenme':'')+')'
-                  },'🎯 İdeal: '+_idealWk.targetKm+'km')
+                  },'🎯 İdeal: '+_idealWk.targetKm+'km'),
+                  _decision&&React.createElement('div',{
+                    style:{fontSize:9,fontWeight:600,marginTop:1,whiteSpace:'nowrap',
+                      color:_decision.level==='kirmizi'?'var(--danger)':_decision.level==='sari'?'var(--warn)':'var(--success)'},
+                    title:'Hedef, İdeal\'i %'+_decGapPct+' aşıyor. '+_decision.message+
+                      (_decision.suggestedRampRatePct!=null?' Önerilen rampa: %'+_decCurrentRatePct+' → %'+_decision.suggestedRampRatePct+'.':'')
+                  },
+                    (_decision.level==='kirmizi'?'🔴 ':_decision.level==='sari'?'🟡 ':'🟢 ')+_decision.title+
+                    (_decision.suggestedRampRatePct!=null?' (%'+_decCurrentRatePct+'→%'+_decision.suggestedRampRatePct+')':'')
+                  )
                 ),
                 React.createElement('td',{style:{padding:'6px 8px',fontFamily:'monospace',textAlign:'center',color:act.km>0?'var(--success)':'var(--text-tertiary)'}},act.km||'—'),
                 React.createElement('td',{style:{padding:'6px 8px',fontFamily:'monospace',textAlign:'center',color:diffKm>=0?'var(--success)':'var(--danger)'}},
