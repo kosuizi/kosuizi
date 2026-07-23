@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.23-1306 --><!DOCTYPE html>
+<!-- Version: v2026.07.23-1353 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.23-1306';
+const APP_VERSION='v2026.07.23-1353';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -938,157 +938,11 @@ function pbToVlt(pbStr, distKm){
   return round2(paceMS * LTHR_RATIO);
 }
 
-// ── vLT Otomatik Kalibrasyon (Antrenman Verilerinden) ─────────────────────────
-// Metodoloji: Tüm koşu antrenmanlarında GAP-düzeltmeli pace–HR regresyonu
-// Yapısal antrenmanlarda yüksek nabız değişkenliği → ağırlık düşürülür
-// D+ verisi varsa Minetti/Strava GAP faktörü ile düz eşdeğer pace hesaplanır
-// Referans: Conconi 1982, Carter 1999, Minetti 2002
-
-function calibrateVlt(workouts, ath){
-  const lthr=parseSayi(ath?.lthr)||0;
-  const mhr=parseSayi(ath?.mhr)||0;
-  const rhr=parseSayi(ath?.rhr)||0;
-  if(!mhr||!rhr)return{error:'MHR ve RHR bilgisi gereklidir.'};
-
-  // Eşik nabız — LTHR varsa onu kullan, yoksa %85 MHR
-  const thresholdHR=lthr>0?lthr:Math.round(mhr*0.85);
-
-  // Tüm koşu antrenmanlarını filtrele — tek kriter: koşu sporu
-  const eligible=workouts.filter(w=>{
-    const km=parseFloat(w.mesafe)||0;
-    const hr=parseFloat(w.ort_nabiz)||0;
-    const durSec=toSec(w.sure_sa,w.sure_dk,w.sure_sn);
-    const spor=w.spor||'kosu';
-
-    // Koşu olmalı
-    if(spor!=='kosu') return false;
-    // Minimum mesafe ve süre
-    if(km<3) return false;
-    if(durSec<900) return false; // en az 15dk
-    // Nabız aerobik bölgede (100–185 bpm)
-    if(hr<100||hr>185) return false;
-    // Pace makul aralıkta (2–12 dk/km)
-    const paceMinKm=km>0?(durSec/60)/km:0;
-    if(paceMinKm<2.0||paceMinKm>12.0) return false;
-
-    return true;
-  });
-
-  if(eligible.length<3)return{
-    error:`Yeterli veri yok. ${eligible.length} uygun koşu antrenmanı bulundu (en az 3 gerekli). Mesafe, süre ve ortalama nabız bilgisi girilen koşular kullanılır.`,
-    count:eligible.length
-  };
-
-  // Her antrenman için GAP-düzeltmeli pace (m/s), HR ve ağırlık hesapla
-  const points=eligible.map(w=>{
-    const km=parseFloat(w.mesafe);
-    const durSec=toSec(w.sure_sa,w.sure_dk,w.sure_sn);
-    const hr=parseFloat(w.ort_nabiz);
-    const hrMax=parseFloat(w.maks_nabiz)||0;
-    const rawPaceMS=km*1000/durSec; // m/s ham pace
-
-    // ── GAP düzeltmesi ────────────────────────────────────────────────────
-    // Öncelik: aşama bazlı gerçek D+ verisi (_rowGapData — koç panelinde satır
-    // satır girilmiş, bkz. computeGapDataFromRows) varsa ve antrenmanın en az
-    // %40'ını kapsıyorsa ONU kullan; kapsanmayan kısım düz (ham pace) kabul
-    // edilir. Bu, "tüm mesafeye TEK düz eğim" varsayımından çok daha isabetlidir
-    // çünkü yapısal antrenmanların hangi bölümü gerçekten tırmanış bilinir.
-    // Aşama verisi yoksa/yetersizse eski yönteme (w.irtifa, tüm mesafeye tek
-    // düz eğim) düş. Her iki yol da AYNI calcGAP formülünü kullanır — daha
-    // önce burada ayrı, yinelenmiş bir Minetti formülü vardı (kök neden:
-    // formül tekilleştirmesi, davranış değişmez, sadece tek kaynağa indirgendi).
-    let gapPaceMS=rawPaceMS;
-    let gapApplied=false;
-    let gapSource=null;
-    const rgd=w._rowGapData;
-    if(rgd&&rgd.avgGapSpeedMS>0&&durSec>0&&rgd.coveredSec>=durSec*0.4){
-      const coveredSec=Math.min(rgd.coveredSec,durSec);
-      const uncoveredSec=Math.max(0,durSec-coveredSec);
-      gapPaceMS=(coveredSec*rgd.avgGapSpeedMS+uncoveredSec*rawPaceMS)/durSec;
-      gapApplied=true;
-      gapSource='rows';
-    }else{
-      const dp=parseFloat(w.irtifa)||0;
-      if(dp>0&&km>0){
-        const gap=calcGAP(dp,km,durSec/60);
-        if(gap){
-          gapPaceMS=rawPaceMS*gap.factor; // düz eşdeğer pace (daha hızlı)
-          gapApplied=true;
-          gapSource='whole';
-        }
-      }
-    }
-
-    // Nabız değişkenliği — maks-ort farkı büyükse interval/yapısal (ağırlık düşür)
-    const hrVariability=hrMax>0&&hr>0?(hrMax-hr):0;
-    // Sabit tempo: fark <15bpm → ağırlık 1.0
-    // Orta değişkenlik: 15–30bpm → ağırlık 0.6
-    // Yüksek değişkenlik: >30bpm → ağırlık 0.3
-    const weight=hrVariability<=15?1.0:hrVariability<=30?0.6:0.3;
-
-    return{pace:gapPaceMS,hr,date:w.date,weight,gapApplied,gapSource,hrVariability};
-  }).filter(p=>p.pace>1&&p.pace<8);
-
-  if(points.length<3)return{error:'Geçerli pace-HR çifti yeterli değil.',count:points.length};
-
-  // Ağırlıklı doğrusal regresyon: HR = a + b*pace
-  const sw=points.reduce((s,p)=>s+p.weight,0);
-  const swx=points.reduce((s,p)=>s+p.weight*p.pace,0);
-  const swy=points.reduce((s,p)=>s+p.weight*p.hr,0);
-  const swxy=points.reduce((s,p)=>s+p.weight*p.pace*p.hr,0);
-  const swx2=points.reduce((s,p)=>s+p.weight*p.pace*p.pace,0);
-  const b=(sw*swxy-swx*swy)/(sw*swx2-swx*swx);
-  const a=swy/sw-b*(swx/sw);
-
-  // R² güven skoru (ağırlıklı)
-  const yMean=swy/sw;
-  const ssTot=points.reduce((s,p)=>s+p.weight*(p.hr-yMean)**2,0);
-  const ssRes=points.reduce((s,p)=>s+p.weight*(p.hr-(a+b*p.pace))**2,0);
-  const r2=ssTot>0?Math.max(0,1-ssRes/ssTot):0;
-
-  if(b<=0)return{error:'Pace-HR ilişkisi ters çıktı. Farklı hızlarda koşuları olan daha fazla veri gerekiyor.',count:points.length};
-
-  // vLT = (thresholdHR - a) / b
-  const vlt=(thresholdHR-a)/b;
-
-  if(vlt<1.5||vlt>7)return{
-    error:`Hesaplanan vLT (${round2(vlt)} m/s) makul aralık dışında. Veri kalitesi yetersiz.`,
-    count:points.length,r2:round2(r2)
-  };
-
-  // Son 30 gün verisiyle ayrı hesap
-  const recent=points.filter(p=>(new Date()-new Date(p.date+'T12:00:00'))<30*864e5);
-  let vltRecent=null;
-  if(recent.length>=3){
-    const rsw=recent.reduce((s,p)=>s+p.weight,0);
-    const rswx=recent.reduce((s,p)=>s+p.weight*p.pace,0);
-    const rswy=recent.reduce((s,p)=>s+p.weight*p.hr,0);
-    const rswxy=recent.reduce((s,p)=>s+p.weight*p.pace*p.hr,0);
-    const rswx2=recent.reduce((s,p)=>s+p.weight*p.pace*p.pace,0);
-    const rb=(rsw*rswxy-rswx*rswy)/(rsw*rswx2-rswx*rswx);
-    const ra=rswy/rsw-rb*(rswx/rsw);
-    if(rb>0){const v=(thresholdHR-ra)/rb;if(v>1.5&&v<7)vltRecent=round2(v);}
-  }
-
-  const gapCount=points.filter(p=>p.gapApplied).length;
-  const highVarCount=points.filter(p=>p.hrVariability>15).length;
-
-  return{
-    vlt:round2(vlt),
-    vltRecent,
-    r2:round2(r2),
-    count:points.length,
-    recentCount:recent.length,
-    thresholdHR,
-    points,
-    gapCount, // GAP düzeltmesi uygulanan antrenman sayısı
-    highVarCount, // Yüksek nabız değişkenliği olan (yapısal) antrenman sayısı
-    confidence:r2>=0.7?'Yüksek':r2>=0.5?'Orta':'Düşük',
-    confidenceCls:r2>=0.7?'good':r2>=0.5?'warn':'danger',
-  };
-}
-
 // ── Kademeli vLT Güncellemesi ────────────────────────────────────────────────
+// NOT (Temmuz 2026): vLT Otomatik Kalibrasyonu mekanizması (eski calibrateVlt
+// hesaplama fonksiyonu + koç panelindeki "Hesapla" kartı) tamamen kaldırıldı —
+// yön sinyalleri güvenilmez bulundu (bkz. sürüm notları). Bu fonksiyon artık
+// yalnızca Reçete Geri Bildirim Kalibrasyonu tarafından kullanılıyor.
 // Antrenman bilimi temelli oransal + tavanlı yaklaşım
 // - Küçük farklarda doğal hızda, büyük farklarda korumalı ilerleme
 // - Her iki yönde simetrik (iyileşme ve gerileme)
@@ -3588,14 +3442,14 @@ function SporcuModal({onClose,onSave,initial,races}){
         React.createElement('button',{className:'btn btn-primary',onClick:()=>{
           if(!f.ad.trim())return alert('Ad alanı zorunlu!');
           // KALİBRASYON SAYAÇ SIFIRLAMA (Temmuz 2026): vLT manuel olarak (bu formdan)
-          // değiştirildiğinde, otomatik/reçete-geri-bildirim kalibrasyon mekanizmalarının
-          // "son kalibrasyon" damgaları artık geçerli değil — manuel değer artık taban
-          // alınmalı, sistem bunu "az önce kalibre edildi" sanıp bekleme süresi (7 gün /
-          // yeni veri şartı) uygulamamalı. Bkz. aynı mantık: yeni vLT ayar çubuğu ve
-          // athlete kartındaki diğer güncelleme yolları.
+          // değiştirildiğinde, Reçete Geri Bildirim Kalibrasyonu'nun "son kalibrasyon"
+          // damgası artık geçerli değil — manuel değer artık taban alınmalı, sistem
+          // bunu "az önce kalibre edildi" sanıp yeni veri şartını yanlış uygulamamalı.
+          // Bkz. aynı mantık: yeni vLT ayar çubuğu ve athlete kartındaki diğer
+          // güncelleme yolları.
           const _vltChanged=String(f.vlt||'')!==String((initial?.vlt)||'');
           const _payload={...f,id:f.id||uid()};
-          if(_vltChanged){_payload.vltLastCalib=null;_payload.fbLastCalib=null;}
+          if(_vltChanged){_payload.fbLastCalib=null;}
           onSave(_payload);
         }},(initial?'Güncelle':'Sporcu Ekle')),
         React.createElement('button',{className:'btn',onClick:onClose},'İptal')
@@ -14829,10 +14683,10 @@ function DinlenmeNotTA({initialNote,onSave}){
 //     (hem koç panelinde hem Koşu İzlerim'de — aynı calcZones(athlete) kaynağını okur).
 //   • TAMAMLANMIŞ antrenmanların pace'i ASLA etkilenmez — onlar workouts kaydındaki
 //     gerçek/manuel girilmiş değerlerdir, zones/vLT hesabına hiç girmez.
-// KALİBRASYON SAYAÇ SIFIRLAMA: AthleteEditForm'daki AYNI mantık (~satır 3495) — vLT
-// buradan (veya başka herhangi bir yerden) manuel değiştiğinde vltLastCalib/fbLastCalib
-// sıfırlanır; aksi halde otomatik kalibrasyon mekanizmaları manuel değeri "az önce
-// kalibre edildi" sanıp gereksiz yere bekler ya da üzerine yazmaya çalışır.
+// KALİBRASYON SAYAÇ SIFIRLAMA: AthleteEditForm'daki AYNI mantık (~satır 3450) — vLT
+// buradan (veya başka herhangi bir yerden) manuel değiştiğinde fbLastCalib sıfırlanır;
+// aksi halde Reçete Geri Bildirim Kalibrasyonu manuel değeri "az önce kalibre edildi"
+// sanıp yeni veri şartını yanlış uygular.
 const VLT_BAR_MIN=1.5, VLT_BAR_MAX=7.0, VLT_BAR_STEP=0.02;
 function VltAyarCubugu({athlete,onUpdateAthlete}){
   if(!athlete||!onUpdateAthlete) return null;
@@ -14844,7 +14698,7 @@ function VltAyarCubugu({athlete,onUpdateAthlete}){
     if(newVlt<VLT_BAR_MIN) newVlt=VLT_BAR_MIN;
     if(newVlt>VLT_BAR_MAX) newVlt=VLT_BAR_MAX;
     if(newVlt===curVlt) return;
-    onUpdateAthlete({...athlete,vlt:String(newVlt),vltLastCalib:null,fbLastCalib:null});
+    onUpdateAthlete({...athlete,vlt:String(newVlt),fbLastCalib:null});
   };
   return React.createElement('div',{
     className:'flex-gap',
@@ -18478,10 +18332,6 @@ const ZONE_COLORS={Z1:'#34d399',Z2:'#6ee7b7',Z3:'#f97316',Z4:'#fbbf24',Z5a:'#991
 
 
 function BolgeTab({athlete,workouts,onUpdateAthlete}){
-  const [calib,setCalib]=useState(null);
-  const [calibDone,setCalibDone]=useState(false);
-  const [appliedMode,setAppliedMode]=useState(null); // 'gradual' | 'full'
-  const [selectedSource,setSelectedSource]=useState('recent'); // 'recent' | 'alltime'
   // ── Reçete Geri Bildirim Kalibrasyonu ──
   const [fbScanLoading,setFbScanLoading]=useState(false);
   const [fbAnalysis,setFbAnalysis]=useState(null);
@@ -18557,7 +18407,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
 
   // Mekanizma 2 artık yalnızca vLT önerisi uygular — LTHR bu akıştan kaldırıldı.
   // Adım büyüklüğü artık sabit değil: ortalama gün puanından türetilen güvene (vlt.confidence) orantılı.
-  // fbLastCalib: Reçete mekanizmasına özgü kalibrasyon tarihi — vltLastCalib (Otomatik) ile ayrı tutuluyor.
+  // fbLastCalib: Reçete Geri Bildirim Kalibrasyonu'na özgü kalibrasyon tarihi.
   const applyFbCalib=()=>{
     if(!fbAnalysis?.vltAction||!athlete.vlt) return;
     const grad=gradualVltUpdate(athlete.vlt,
@@ -18570,25 +18420,6 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       onUpdateAthlete({...athlete,vlt:String(grad.newVlt),fbLastCalib:new Date().toISOString()});
       setFbApplied('vlt');
     }
-  };
-
-  const runCalib=()=>{
-    const result=calibrateVlt(workouts||[],athlete);
-    setCalib(result);setCalibDone(false);setAppliedMode(null);
-    // Varsayılan kaynak: Son 30 gün varsa onu, yoksa tüm zaman
-    setSelectedSource(result&&result.vltRecent?'recent':'alltime');
-  };
-
-  const applyCalib=(targetVlt,mode)=>{
-    if(mode==='gradual'){
-      const grad=gradualVltUpdate(athlete.vlt,targetVlt,calib?.r2);
-      if(grad){
-        onUpdateAthlete({...athlete,vlt:String(grad.newVlt),vltLastCalib:new Date().toISOString()});
-      }
-    } else {
-      onUpdateAthlete({...athlete,vlt:String(targetVlt),vltLastCalib:new Date().toISOString()});
-    }
-    setCalibDone(true);setAppliedMode(mode);
   };
 
   if(!athlete)return React.createElement('div',{className:'empty'},'Sporcu seçilmedi.');
@@ -18625,148 +18456,9 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
     )
   );
 
-  const lastCalibDate=athlete.vltLastCalib?new Date(athlete.vltLastCalib):null;
-  const daysSinceCalib=lastCalibDate?Math.floor((new Date()-lastCalibDate)/(1000*60*60*24)):null;
-  const calibTooRecent=daysSinceCalib!==null&&daysSinceCalib<7;
 
   return React.createElement('div',null,
 
-    // vLT Kalibrasyon Kartı
-    React.createElement('div',{className:'card',style:{marginBottom:12}},
-      React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}},
-        React.createElement('div',null,
-          React.createElement('div',{className:'card-title',style:{margin:0}},'vLT Otomatik Kalibrasyonu'),
-          lastCalibDate&&React.createElement('div',{style:{fontSize:11,color:calibTooRecent?'var(--warn)':'var(--text-tertiary)',marginTop:2}},
-            calibTooRecent
-              ?'⚠️ Son kalibrasyondan bu yana '+daysSinceCalib+' gün geçti — 7 gün beklenmesi önerilir'
-              :'Son kalibrasyon: '+daysSinceCalib+' gün önce'
-          )
-        ),
-        React.createElement('button',{
-          className:'btn btn-sm '+(calibTooRecent?'':'btn-primary'),
-          style:calibTooRecent?{background:'var(--warn-bg)',color:'var(--warn)',border:'1px solid var(--warn)'}:{},
-          onClick:runCalib,
-          title:calibTooRecent?'Son kalibrasyondan bu yana '+daysSinceCalib+' gün geçti. 7 gün beklenmesi önerilir.':''
-        },'Hesapla')
-      ),
-      React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:8}},
-        'Tüm koşu antrenmanlarındaki GAP-düzeltmeli pace–nabız ilişkisinden vLT hesaplanır. ',
-        'Mesafe, süre ve ortalama nabız bilgisi olan koşular kullanılır. D+ verisi varsa eğim düzeltmesi uygulanır.'
-      ),
-      calib&&React.createElement('div',null,
-        calib.error
-          ?React.createElement('div',{className:'alert alert-warn',style:{fontSize:12}},calib.error)
-          :React.createElement('div',null,
-            // Sonuç özeti
-            React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(130px,1fr))',gap:8,marginBottom:10}},
-              React.createElement('div',{className:'metric',style:{padding:'8px 12px'}},
-                React.createElement('div',{className:'metric-label'},'Tüm Zaman vLT'),
-                React.createElement('div',{style:{fontSize:18,fontWeight:700,fontFamily:'monospace'}},calib.vlt+' m/s'),
-                React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},fmtPaceFromMS(calib.vlt)+' /km')
-              ),
-              calib.vltRecent&&React.createElement('div',{className:'metric',style:{padding:'8px 12px'}},
-                React.createElement('div',{className:'metric-label'},'Son 30 Gün vLT'),
-                React.createElement('div',{style:{fontSize:18,fontWeight:700,fontFamily:'monospace',color:'var(--info)'}},calib.vltRecent+' m/s'),
-                React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},fmtPaceFromMS(calib.vltRecent)+' /km')
-              ),
-              React.createElement('div',{className:'metric',style:{padding:'8px 12px'}},
-                React.createElement('div',{className:'metric-label'},'Güven (R²)'),
-                React.createElement('div',{className:'metric-val '+calib.confidenceCls,style:{fontSize:16}},calib.r2),
-                React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},calib.confidence+' · '+calib.count+' koşu'+(calib.gapCount>0?' · '+calib.gapCount+' GAP':''))
-              ),
-              React.createElement('div',{className:'metric',style:{padding:'8px 12px'}},
-                React.createElement('div',{className:'metric-label'},'Eşik HR Referansı'),
-                React.createElement('div',{style:{fontSize:16,fontWeight:600}},calib.thresholdHR+' bpm'),
-                React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},athlete.lthr?'LTHR':'%85 MHR tahmini')
-              )
-            ),
-            calib.highVarCount>0&&React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:8}},
-              '⚖ '+calib.highVarCount+' yapısal antrenman (interval/tempo) düşük ağırlıkla dahil edildi.'
-            ),
-            // Kaynak seçici — Son 30 gün vs Tüm zaman
-            calib.vltRecent&&athlete.vlt&&React.createElement('div',{style:{display:'flex',gap:6,marginBottom:8}},
-              React.createElement('button',{
-                className:'btn btn-sm '+(selectedSource==='recent'?'btn-primary':''),
-                style:{flex:1,fontSize:11},
-                onClick:()=>setSelectedSource('recent')
-              },'Son 30 Gün ('+calib.vltRecent+' m/s)'),
-              React.createElement('button',{
-                className:'btn btn-sm '+(selectedSource==='alltime'?'btn-primary':''),
-                style:{flex:1,fontSize:11},
-                onClick:()=>setSelectedSource('alltime')
-              },'Tüm Zaman ('+calib.vlt+' m/s)')
-            ),
-            // Hedef vLT (seçili kaynağa göre)
-            (()=>{
-              const targetVlt=(selectedSource==='recent'&&calib.vltRecent)?calib.vltRecent:calib.vlt;
-              const grad=athlete.vlt?gradualVltUpdate(athlete.vlt,targetVlt,calib.r2):null;
-              return React.createElement('div',null,
-                // Mevcut vs hedef özeti
-                athlete.vlt&&React.createElement('div',{className:'alert alert-info',style:{fontSize:12,marginBottom:8}},
-                  React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap'}},
-                    React.createElement('div',null,
-                      'Mevcut: ',React.createElement('strong',null,athlete.vlt+' m/s ('+fmtPaceFromMS(parseSayi(athlete.vlt))+')'),
-                      ' → Hedef: ',React.createElement('strong',null,targetVlt+' m/s ('+fmtPaceFromMS(targetVlt)+')')
-                    ),
-                    React.createElement('span',{
-                      className:'badge '+(Math.abs(targetVlt-parseSayi(athlete.vlt))>0.1?'warn':'good'),
-                      style:{fontSize:11}
-                    },(targetVlt>parseSayi(athlete.vlt)?'+':'')+round2(targetVlt-parseSayi(athlete.vlt))+' m/s')
-                  )
-                ),
-                // Kademeli ön izleme — adım, döngü, hedef pace
-                grad&&athlete.vlt&&!calibDone&&React.createElement('div',{style:{
-                  background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:6,padding:10,marginBottom:8,fontSize:12
-                }},
-                  React.createElement('div',{style:{fontWeight:600,marginBottom:6,color:'var(--info)'}},
-                    '📊 Kademeli Adım Ön İzlemesi'
-                  ),
-                  React.createElement('div',{style:{
-                    display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,fontFamily:'monospace',marginBottom:6,flexWrap:'wrap'
-                  }},
-                    React.createElement('span',null,athlete.vlt+' → ',
-                      React.createElement('strong',{style:{color:'var(--success)'}},grad.newVlt+' m/s'),
-                      ' → ',React.createElement('span',{style:{color:'var(--text-tertiary)'}},targetVlt)
-                    ),
-                    React.createElement('span',{style:{fontSize:11,color:'var(--text-secondary)'}},
-                      '('+fmtPaceFromMS(parseSayi(athlete.vlt))+' → ',
-                      React.createElement('strong',{style:{color:'var(--success)'}},fmtPaceFromMS(grad.newVlt)),
-                      ' → '+fmtPaceFromMS(targetVlt)+')'
-                    )
-                  ),
-                  React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)'}},
-                    'Adım: ',React.createElement('strong',null,(grad.stepSec>0?'+':'')+grad.stepSec+' sn/km'),
-                    ' · Yön: '+(grad.direction==='iyileşme'?'⬆️ İyileşme':grad.direction==='gerileme'?'⬇️ Gerileme':'•'),
-                    grad.cyclesToTarget>1?' · ~'+grad.cyclesToTarget+' kalibrasyon sonra hedefe':''
-                  ),
-                  React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:4,fontStyle:'italic'}},
-                    grad.reason
-                  )
-                ),
-                // Uygulama butonları
-                calibDone
-                  ?React.createElement('div',{className:'alert alert-info',style:{fontSize:12}},
-                    '✓ vLT güncellendi ('+(appliedMode==='gradual'?'kademeli':'tam uygulama')+'). Bölgeler yeniden hesaplandı.'
-                  )
-                  :React.createElement('div',{className:'flex-gap',style:{flexWrap:'wrap'}},
-                    grad&&athlete.vlt&&React.createElement('button',{
-                      className:'btn btn-primary btn-sm',
-                      style:{flex:'1 1 auto',minWidth:160},
-                      onClick:()=>applyCalib(targetVlt,'gradual'),
-                      title:'Antrenman bilimi temelli, oransal + tavanlı kademeli güncelleme (önerilen)'
-                    },'Kademeli Uygula → '+grad.newVlt+' m/s'),
-                    React.createElement('button',{
-                      className:'btn btn-sm',
-                      style:{flex:'1 1 auto',minWidth:140},
-                      onClick:()=>applyCalib(targetVlt,'full'),
-                      title:'Hedef vLT değerini doğrudan uygula (büyük farklarda dikkat)'
-                    },'Tam Uygula → '+targetVlt+' m/s')
-                  )
-              );
-            })()
-          )
-      )
-    ),
     // ── Reçete Geri Bildirim Kalibrasyonu Kartı ──────────────────────────────
     React.createElement('div',{className:'card',style:{marginBottom:12}},
       React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}},
