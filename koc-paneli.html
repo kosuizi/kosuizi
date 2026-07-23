@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.22-1851 --><!DOCTYPE html>
+<!-- Version: v2026.07.23-1306 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.22-1851';
+const APP_VERSION='v2026.07.23-1306';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -17324,6 +17324,13 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       const hedefGosterilenKm=week.weekOff===0
         ?(weekEffKm>0?weekEffKm:weekOrigKm)
         :(_showRampProj?_rampProjKm:weekOrigKm);
+      // "Kalan" (Hedef − Gerçek) hesabında D+ için de Hedef rozetiyle AYNI kaynak
+      // kullanılmalı — hedefGosterilenKm ile birebir aynı mantık (revize varsa o,
+      // yoksa orijinal); ramp projeksiyonunun D+ karşılığı olmadığından o dal için
+      // weekOrigDp esas alınır.
+      const hedefGosterilenDp=week.weekOff===0
+        ?(weekEffDp>0?weekEffDp:weekOrigDp)
+        :weekOrigDp;
       // KRİTİK TEŞHİS ARACI: sporcular arası veri sızıntısı şüphesinde, bu sporcunun
       // bu haftaki plan_snapshots kaydını HİÇBİR CACHE (planSnap state, _planSnapsCache,
       // snapCache) KULLANMADAN, doğrudan taze bir fbGet ile okur. Ekranda gösterilen
@@ -17475,25 +17482,44 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
             },'📋 Önerilen: '+haftaOneriKm+' km'+(haftaOneriDp>0?' / D+'+haftaOneriDp+'m':'')),
             week.wkActualKm>0&&React.createElement('span',{style:{color:'var(--success)'}},'Gerçek: '+week.wkActualKm+' km'+(week.wkActualDp>0?' / D+'+week.wkActualDp+'m':'')),
             (()=>{
-              const _kalanKm=round1(hedefGosterilenKm-haftaOneriKm);
+              // GÜNCELLEME (23.07.2026 — Göksel'in isteği): "Kalan" artık Hedef ile
+              // Önerilen/Reçete toplamı arasındaki fark DEĞİL, Hedef ile sporcunun bu
+              // hafta FİİLEN koştuğu mesafe (Gerçek) arasındaki farktır — "sporcu ne
+              // kadar daha koşmalı" göstergesi. Eski "Hedef − Önerilen" göstergesi
+              // aşağıda "Programlanmayan" adıyla ayrıca korunuyor (bkz. ikinci IIFE).
+              const _kalanKm=round1(hedefGosterilenKm-week.wkActualKm);
+              const _kalanDp=hedefGosterilenDp>0?Math.round(hedefGosterilenDp-(week.wkActualDp||0)):0;
               if(!(hedefGosterilenKm>0&&_kalanKm>0))return null;
               // ±%15 tolerans penceresi — dosyada haftalık km hedefi için zaten kullanılan
               // aynı antrenman bilimi ilkesi (bkz. ~satır 11014 kmToleransAlt/Ust): haftalık
-              // hacim ±%10–15 aralığında esnetilebilir kabul edilir. Reçeteye eklenecek
-              // kalan mesafe için de aynı esneklik aralığı, tam _kalanKm değil bu bant
-              // içinde bir mesafenin de hedefe uygun sayılacağını gösteren bir rehberdir.
+              // hacim ±%10–15 aralığında esnetilebilir kabul edilir. Kalan mesafe (ve D+)
+              // için de aynı esneklik aralığı, tam _kalanKm/_kalanDp değil bu bant içinde
+              // bir değerin de hedefe uygun sayılacağını gösteren bir rehberdir.
               const _kalanAlt=round1(_kalanKm*0.85);
               const _kalanUst=round1(_kalanKm*1.15);
+              const _kalanDpAlt=_kalanDp>0?Math.round(_kalanDp*0.85):0;
+              const _kalanDpUst=_kalanDp>0?Math.round(_kalanDp*1.15):0;
               return React.createElement(React.Fragment,null,
                 React.createElement('span',{
                   style:{color:'var(--warn)'},
-                  title:'Hedef ('+hedefGosterilenKm+'km) − Önerilen/Reçete toplamı ('+haftaOneriKm+'km) — sporcunun sayfasında görünen reçete satırlarının toplam mesafesi'
-                },'⏳ Kalan: '+_kalanKm+' km'),
+                  title:'Hedef ('+hedefGosterilenKm+'km) − Gerçek ('+week.wkActualKm+'km) — sporcunun bu hafta fiilen koştuğu mesafeye göre kalan hedef'
+                },'⏳ Kalan: '+_kalanKm+' km'+(_kalanDp>0?' / D+'+_kalanDp+'m':'')),
                 React.createElement('span',{
                   style:{color:'var(--text-secondary)',fontSize:11},
                   title:'Kalan antrenmanlar için ±%15 esneklik penceresi — haftalık hacim toleransıyla aynı ilke'
-                },'🎯 '+_kalanAlt+'–'+_kalanUst+' km')
+                },'🎯 '+_kalanAlt+'–'+_kalanUst+' km'+(_kalanDp>0?' / D+'+_kalanDpAlt+'–'+_kalanDpUst+'m':''))
               );
+            })(),
+            (()=>{
+              // Eski "Kalan" göstergesi (Hedef − Önerilen/Reçete toplamı) — artık
+              // "Programlanmayan" adıyla gösteriliyor: reçetede henüz satır olarak
+              // planlanmamış kısmı ifade eder (bkz. yukarıdaki güncelleme notu).
+              const _planlanmayanKm=round1(hedefGosterilenKm-haftaOneriKm);
+              if(!(hedefGosterilenKm>0&&_planlanmayanKm>0))return null;
+              return React.createElement('span',{
+                style:{color:'var(--warn)'},
+                title:'Hedef ('+hedefGosterilenKm+'km) − Önerilen/Reçete toplamı ('+haftaOneriKm+'km) — sporcunun sayfasında görünen reçete satırlarının toplam mesafesi (henüz programa dahil edilmemiş kısım)'
+              },'📌 Programlanmayan: '+_planlanmayanKm+' km');
             })()
           ),
           antrenmanGunleri.length>0&&React.createElement('button',{
