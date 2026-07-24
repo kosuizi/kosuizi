@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.24-2143 --><!DOCTYPE html>
+<!-- Version: v2026.07.24-2227 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.24-2143';
+const APP_VERSION='v2026.07.24-2227';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -6802,7 +6802,18 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     // DEĞİLDİR — render anında son çare olarak yok sayılır (backend temizliği ne olursa
     // olsun, kullanıcıya asla yanlış sporcunun/antrenmanın değerleri gösterilmez).
     const _ovForRow=rowOverrides[i];
-    const _ovStale=!!(_ovForRow&&_ovForRow._origZIdx!=null&&r._origZIdx!=null&&_ovForRow._origZIdx!==r._origZIdx);
+    // GÜÇLENDİRME (24.07.2026 — tek parmak izi yetersiz kaldı): _origZIdx TEK BAŞINA
+    // güvenilir değilmiş — iki FARKLI antrenmanın aynı bölgeye (ör. ikisi de Z2) denk
+    // gelen satırları varsa, yabancı override yanlışlıkla "eşleşti" sayılıp uygulanmaya
+    // devam ediyordu (gözlemlenen örnek: Progressive'in 25dk'lık Z2 bloğu, Yürü-Koş'un
+    // kısa tekrar bacağıyla aynı zIdx'e sahip çıktı). İkinci bağımsız parmak izi olarak
+    // _origPaceSec (hedef pace, saniye) de eklendi — iki farklı şablonun HEM bölgesinin
+    // HEM de saniye hassasiyetinde hedef pace'inin tesadüfen aynı çıkması ihmal edilebilir.
+    // Her iki alan da mevcutsa VE ikisi de eşleşiyorsa güvenilir; herhangi biri uyuşmazsa
+    // (veya karşılaştırılamıyorsa çünkü satırın kendi _origZIdx'i yoksa) override reddedilir.
+    const _zMatch=_ovForRow?._origZIdx==null||r._origZIdx==null||_ovForRow._origZIdx===r._origZIdx;
+    const _pMatch=_ovForRow?._origPaceSec==null||r._origPaceSec==null||_ovForRow._origPaceSec===r._origPaceSec;
+    const _ovStale=!!(_ovForRow&&!(_zMatch&&_pMatch));
     let row=(_ovForRow&&!_ovStale)?{...r,...rowOverrides[i]}:r;
     // OP-9: Header için repeatOverrides varsa uygula
     if(row.type==='header'&&repeatOverrides[i]){
@@ -15398,6 +15409,16 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
 
     const curSnap=planSnapRef.current||{};
     const todayStr=localDateStr(new Date());
+    // GÖZLEMLENEBİLİRLİK KİLİDİ (24.07.2026 — "buton hiçbir şey yapmıyor" şikayeti):
+    // Bu fonksiyonun geri kalanı (~300 satır) hiçbir try/catch İÇİNDE değildi. Aradaki
+    // herhangi bir satır (ör. bozuk/beklenmedik şekilli bir snapshot alanı — bkz. sporcular
+    // arası veri sızıntısı sonrası bazı sporcularda oluşabilen karışık dizi/nesne şekilleri)
+    // hata fırlatırsa, fonksiyon SESSİZCE yarıda kesiliyor; setPlanSnap/fbUpdate hiç
+    // çalışmıyor ve koç için "buton hiçbir şey yapmıyor" izlenimi oluşuyordu — hata sadece
+    // tarayıcı konsolunda görünüyordu (mobilde pratikte görünmez, tespit imkansız). Aşağıdaki
+    // try/catch bunu görünür kılar: bir hata olursa koça açıkça, hatanın kendisiyle birlikte
+    // bildirilir — hiçbir şey sessizce başarısız olmaz.
+    try{
 
     // ── Kritik: taperEdit/peakEdit → freshAthlete'e uygula ──────────────────
     // athlete prop ve Firebase her ikisi de bayat olabilir (async prop/write zinciri).
@@ -15674,6 +15695,10 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     setPlanSnap(newSnap);
     fbUpdate(`plan_snapshots/${freshAthlete.id}/${weekKey}`,stripUndefined(newSnap)).catch(()=>{});
     setReviewMsg('✅ Plan güncellendi');
+    }catch(_bigErr){
+      console.error('handlePlanGuncelle hatası:',_bigErr);
+      alert('⚠️ Planı Güncelle başarısız oldu — hiçbir şey kaydedilmedi, mevcut veri değişmedi.\n\nHata: '+(_bigErr?.message||String(_bigErr))+'\n\nBu mesajı (ve varsa "Ham Veri" çıktısını) paylaşırsanız kök nedeni buluruz.');
+    }
   };
 
   // Bölge değişimi izleyici — vLT/lthr/mhr güncellendiğinde planı otomatik yenile
