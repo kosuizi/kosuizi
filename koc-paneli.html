@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.23-1533 --><!DOCTYPE html>
+<!-- Version: v2026.07.24-1049 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.23-1533';
+const APP_VERSION='v2026.07.24-1049';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -7321,13 +7321,14 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
 
   // Toplam hesapla (header hariç, repeatCount ile çarp)
   let totSn=0, totMesafe=0, totWeightedPace=0, paceWeight=0, totDp=0;
-  let gapCoveredSec=0, gapWeightedSpeedSum=0; // TOPLAM satırındaki GAP hesabı için (bkz. computeGapDataFromRows ile aynı mantık)
+  let gapCoveredSec=0, gapWeightedSpeedSum=0, unGappedMesafe=0; // TOPLAM satırındaki GAP hesabı için (bkz. computeGapDataFromRows ile aynı mantık)
   rows.forEach(r=>{
     if(r.type==='header') return;
     const rep=r.repeatCount||1;
     const sn=(r.h*3600+r.m*60+r.s)*rep;
     const mesafe=(r.mesafe||0)*rep;
     totSn+=sn; totMesafe+=mesafe;
+    let _gappedThisRow=false;
     if(r.dp>0){
       const effDp=r.dp*rep;
       totDp+=effDp;
@@ -7337,9 +7338,16 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
           const rawSpeedMS=mesafe/sn;
           gapCoveredSec+=sn;
           gapWeightedSpeedSum+=sn*rawSpeedMS*gap.factor;
+          _gappedThisRow=true;
         }
       }
     }
+    // GAP uygulanmayan (düz veya %0.5 eşiği altı) satırların GERÇEK mesafesi burada
+    // birikir. Önceki sürümde bu, "uncoveredSec * genel ortalama hız" ile tahmin
+    // ediliyordu — ama genel ortalama, GAP uygulanan yavaş (tırmanışlı) satırı da
+    // içerdiğinden düz satırların hızını yapay olarak yavaşlatıp TOPLAM GAP değerini
+    // şişiriyordu (bkz. Garmin karşılaştırması: 7:16 hatalı vs 6:48 doğru referans).
+    if(!_gappedThisRow) unGappedMesafe+=mesafe;
     if(mesafe>0&&r.pm!=null){
       const pSec=r.pm*60+(r.ps||0);
       totWeightedPace+=pSec*(mesafe/1000);
@@ -7347,13 +7355,12 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     }
   });
   const avgPaceSec=paceWeight>0?Math.round(totWeightedPace/paceWeight):0;
-  // Kapsanmayan (D+ girilmemiş) süre ham ortalama hızla doldurulur — bu satırdaki
-  // TOPLAM pace, coach'a "GAP-düzeltmeli gerçek ortalama bu" şeffaflığını sağlar.
+  // Kapsanmayan (D+ girilmemiş/eşik altı) mesafe OLDUĞU GİBİ (ham, düzeltmesiz)
+  // eklenir — bu satırdaki TOPLAM pace, coach'a "GAP-düzeltmeli gerçek ortalama bu"
+  // şeffaflığını sağlar.
   const totalGapPaceSec=(()=>{
     if(gapCoveredSec<=0||totSn<=0||totMesafe<=0) return null;
-    const rawAvgSpeedMS=totMesafe/totSn;
-    const uncoveredSec=Math.max(0,totSn-gapCoveredSec);
-    const blendedSpeedMS=(gapWeightedSpeedSum+uncoveredSec*rawAvgSpeedMS)/totSn;
+    const blendedSpeedMS=(gapWeightedSpeedSum+unGappedMesafe)/totSn;
     return blendedSpeedMS>0?Math.round(1000/blendedSpeedMS):null;
   })();
   const tot=secToHMS(totSn);
