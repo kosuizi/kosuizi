@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.24-2123 --><!DOCTYPE html>
+<!-- Version: v2026.07.24-2143 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.24-2123';
+const APP_VERSION='v2026.07.24-2143';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -6790,7 +6790,20 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
 
   // Override'ları uygula + OP-9: repeatOverrides'dan tekrar sayılarını güncelle
   const rows=baseRows.map((r,i)=>{
-    let row=rowOverrides[i]?{...r,...rowOverrides[i]}:r;
+    // GÜVENLİK KİLİDİ (24.07.2026 — kalıntı satır-override sızıntısı, 3. savunma katmanı):
+    // rowOverrides İNDEKS bazlı eşleşir. Antrenman türü değişince (ör. Progressive →
+    // Yürü-Koş) backend tarafında rowOverrides temizliğinin atlandığı BİRDEN FAZLA yol
+    // olabildiği görüldü (bkz. handleManuelAta/handlePlanGuncelle/YK cascade notları) —
+    // eski antrenmana ait pace/nabız/ETİKET değerleri yeni satırlara index üzerinden
+    // sızabilir; LABEL aynı görünse bile (ör. her iki şablonda da "Isınma" var) değerler
+    // yanlış olabilir. _origZIdx, satırın hangi antrenman-bölgesine (Z1..Z5) ait olduğunu —
+    // yani satırın GERÇEK KİMLİĞİNİ — taşır ve şablon değişmedikçe değişmez. Kaydedilmiş
+    // override'ın _origZIdx'i güncel satırınkiyle eşleşmiyorsa, bu override bu satıra ait
+    // DEĞİLDİR — render anında son çare olarak yok sayılır (backend temizliği ne olursa
+    // olsun, kullanıcıya asla yanlış sporcunun/antrenmanın değerleri gösterilmez).
+    const _ovForRow=rowOverrides[i];
+    const _ovStale=!!(_ovForRow&&_ovForRow._origZIdx!=null&&r._origZIdx!=null&&_ovForRow._origZIdx!==r._origZIdx);
+    let row=(_ovForRow&&!_ovStale)?{...r,...rowOverrides[i]}:r;
     // OP-9: Header için repeatOverrides varsa uygula
     if(row.type==='header'&&repeatOverrides[i]){
       row={...row,repeatCount:repeatOverrides[i]};
@@ -6799,7 +6812,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     // h/m/s'yi güncel base pace × override mesafeyle yeniden hesapla.
     // Sebep: zone değiştiğinde base row pm/ps güncellenir ama eski override'daki
     // h/m/s eski pace'e göre kalabilir → tutarsız (ör. 1000m + 7dk + 4:15) üçlüsü.
-    if(rowOverrides[i]&&rowOverrides[i].mesafe!=null&&rowOverrides[i].pm==null&&rowOverrides[i].ps==null&&row.type!=='header'){
+    if(_ovForRow&&!_ovStale&&rowOverrides[i].mesafe!=null&&rowOverrides[i].pm==null&&rowOverrides[i].ps==null&&row.type!=='header'){
       const basePaceSec=(r.pm||0)*60+(r.ps||0);
       if(basePaceSec>0&&row.mesafe>0){
         const dur=Math.round(row.mesafe/1000*basePaceSec);
