@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.24-1049 --><!DOCTYPE html>
+<!-- Version: v2026.07.24-2123 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.24-1049';
+const APP_VERSION='v2026.07.24-2123';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -21124,7 +21124,12 @@ async function persistFreshFormSnap(athlete,athleteWorkouts,races,localSnap){
     const last=hist[hist.length-1];
     if(!last) return null;
     const newFormSnap={ctl:last.ctl??null,atl:last.atl??null,tsb:last.tsb??null,acwr:last.acwr??null,date:last.date||null};
-    const baseSnap=localSnap||(await fbGet('plan_snapshots/'+athlete.id+'/'+weekKey))||null;
+    // GÜVENLİK KİLİDİ (24.07.2026 — sporcular arası veri sızıntısı, 2. savunma katmanı):
+    // localSnap çağıran taraftan (ör. Ekle paneli) gelir ve BAŞKA bir sporcuya ait olabilir
+    // (bkz. AntrenmanEkle onSave'deki kök neden notu). athId eşleşmiyorsa localSnap'e asla
+    // güvenme — güvenli fbGet yedeğine düş, hedef sporcunun GERÇEK kendi kaydını al.
+    const trustedLocalSnap=(localSnap&&localSnap.athId&&localSnap.athId!==athlete.id)?null:localSnap;
+    const baseSnap=trustedLocalSnap||(await fbGet('plan_snapshots/'+athlete.id+'/'+weekKey))||null;
     const ex=baseSnap?.formSnap;
     if(ex&&ex.ctl===newFormSnap.ctl&&ex.atl===newFormSnap.atl&&ex.tsb===newFormSnap.tsb&&ex.acwr===newFormSnap.acwr&&ex.date===newFormSnap.date){
       return baseSnap; // değişiklik yok — gereksiz yazma yapma
@@ -24419,9 +24424,25 @@ function App(){
         const mergedHedef=mergeRecoveryHedef(rec.hedefISO,rec.saatler,workouts,w.athleteId);
         const updatedWorkouts=[...workouts,{...w,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:mergedHedef}];
         setWorkouts(updatedWorkouts);
+        // KÖK NEDEN DÜZELTMESİ (24.07.2026 — sporcular arası veri sızıntısı, "Ekle" paneli):
+        // App-seviyesi planSnap yalnızca "Plan" sekmesi EN SON HANGİ sporcu için açıldıysa
+        // ona aittir; Ekle panelinin kendi sporcu seçicisinden (selId) başka bir sporcu
+        // seçilince selId değişir ama Plan sekmesi mount olmadığı için planSnap YENİLENMEZ.
+        // Eski kontrol yalnızca "selId===w.athleteId" bakıyordu — bu, planSnap'in GERÇEKTEN
+        // bu sporcuya ait olduğunu KANITLAMIYOR. Sonuç: koç önce başka bir sporcunun (ör.
+        // Hilal) Plan sekmesini açık bırakıp buraya geldiğinde ve burada farklı bir sporcu
+        // (ör. Arzu) seçip antrenman kaydettiğinde, Hilal'e ait TÜM plan içeriği (overrideMap/
+        // rowOverrides/manualOverrides/athleteProfile/vb.) persistFreshFormSnap üzerinden
+        // Arzu'nun Firebase yoluna yazılıyordu (gözlemlenen "başka sporcunun antrenmanı
+        // bende görünüyor" hatasının kökü). Düzeltme: planSnap'in içindeki athId alanı
+        // (handleManuelAta/handlePlanGuncelle tarafından snapshot'a gömülür) ile w.athleteId
+        // eşleşmiyorsa planSnap GÜVENİLMEZ sayılır — bu durumda persistFreshFormSnap kendi
+        // güvenli fbGet yedeğine düşer ve hedef sporcunun GERÇEK kendi kaydını kullanır.
+        const planSnapBelongsToThisAth=!!(planSnap&&planSnap.athId===w.athleteId);
+        let baseSnapForForm=(selId===w.athleteId&&planSnapBelongsToThisAth)?planSnap:null;
         // O gün otomatik iptal edildiyse cancelledDays'ten çıkar — plan kilidine dokunma
-        let baseSnapForForm=(selId===w.athleteId)?planSnap:null;
-        if(planSnap?.cancelledDays?.[w.date]){
+        // (aynı sızıntı riski burada da geçerli — sahiplik doğrulanmadan yazılmaz)
+        if(planSnapBelongsToThisAth&&planSnap?.cancelledDays?.[w.date]){
           const newCancelled={...planSnap.cancelledDays};delete newCancelled[w.date];
           const newOverride={...planSnap.overrideMap};delete newOverride[w.date];
           const updSnap={...planSnap,cancelledDays:newCancelled,overrideMap:newOverride};
