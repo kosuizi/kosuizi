@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.26-0953 --><!DOCTYPE html>
+<!-- Version: v2026.07.27-0019 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.26-0953';
+const APP_VERSION='v2026.07.27-0019';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -14780,6 +14780,17 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
   const [reviewMsg,setReviewMsg]=useState(null);
   const weekKey=getWeekKey(0);
   const prevWeekKey=getWeekKey(-1);
+  // Rampa-vs-İdeal karar rozetinin sayısal önerisi (bkz. ~satır 16770 civarı,
+  // computeRampVsIdealDecision) SADECE gelecek haftalar için hesaplanabiliyor —
+  // bir hafta "mevcut" olduğunda zincir (chainOriginKm/chainSteps) genellikle
+  // sıfırlanmış oluyor ve öneri kayboluyor (26.07.2026 sohbeti, Göksel'in
+  // "%20→%19.4 gelecek hafta da görünsün" talebi). Çözüm: bu haftanın önerisi
+  // henüz GELECEK haftayken bir kez "donuk" (frozen) olarak o haftanın kendi
+  // plan_snapshot'ına yazılır; hafta döndüğünde (mevcut olduğunda) canlı hesap
+  // boşsa bu donuk değer okunup gösterilir (bkz. frozenDecisionWriteRef kullanımı
+  // ve _frozenNextDecision, ~satır 16785 civarı).
+  const nextWeekKeyForFreeze=getWeekKey(1);
+  const frozenDecisionWriteRef=useRef({});
   const [prevWeekSnap,setPrevWeekSnap]=useState(null);
   const WEEK_EFF_VERSION=3; // weekEff hesaplama-mantığı bilgi damgası (v3: no-race effectiveTargetKm fix).
   // NOT (13.07.2026): artık dondurma kilidinin bir parçası DEĞİL — sadece hangi mantıkla
@@ -16781,6 +16792,33 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     idealKm:_idealWk.targetKm,currentRampRatePct:_decCurrentRatePct
                   })
                 :null;
+              // ── Rampa önerisini "gelecek hafta"yken dondurup Firebase'e yaz ──────
+              // (bkz. ~satır 14783 civarındaki açıklama). Sadece bu satır TAM OLARAK
+              // bir sonraki hafta ise ve sayısal bir öneri varsa; imza değişmediyse
+              // tekrar yazmaz (gereksiz Firebase çağrısını önler).
+              if(wtWeekKey===nextWeekKeyForFreeze&&_decision&&_decision.suggestedRampRatePct!=null&&athlete?.id){
+                const _freezeSig=_decision.level+'|'+_decision.suggestedRampRatePct+'|'+_decCurrentRatePct;
+                if(frozenDecisionWriteRef.current[wtWeekKey]!==_freezeSig){
+                  frozenDecisionWriteRef.current[wtWeekKey]=_freezeSig;
+                  fbUpdate(`plan_snapshots/${athlete.id}/${wtWeekKey}`,{
+                    frozenDecision:stripUndefined({
+                      level:_decision.level,title:_decision.title,message:_decision.message,
+                      suggestedRampRatePct:_decision.suggestedRampRatePct,
+                      currentRampRatePct:_decCurrentRatePct,
+                      decGapPct:_decGapPct,
+                      ts:new Date().toISOString()
+                    })
+                  }).catch(()=>{});
+                }
+              }
+              // ── Mevcut haftada canlı öneri yoksa, geçen hafta (bu hafta henüz
+              // "gelecek hafta"yken) dondurulmuş öneriye geri düş ──────────────────
+              const _frozenNextDecision=wt.isCurrent?(planSnap?.frozenDecision||null):null;
+              const _dispSuggestedRampRatePct=_decision?.suggestedRampRatePct
+                ??(_frozenNextDecision?.suggestedRampRatePct??null);
+              const _dispRampRateForLabel=(_decision?.suggestedRampRatePct!=null)
+                ?_decCurrentRatePct
+                :(_frozenNextDecision?.currentRampRatePct??_decCurrentRatePct);
               const _uzunHedefRaw=wt.isRaceWeek||wt.phase==='Yarış Sonrası'
                 ?null
                 :estimateUzunKosuHedefi(_dispKmForUzun,_dispDpForUzun,wt.phase,_uzunDisiplin,_uzunZones,wt.isCurrent?_uzunRealBand:null,plan.primary?.mesafe);
@@ -16942,10 +16980,10 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     style:{fontSize:9,fontWeight:600,marginTop:1,whiteSpace:'nowrap',
                       color:_decision.level==='kirmizi'?'var(--danger)':_decision.level==='sari'?'var(--warn)':'var(--success)'},
                     title:'Hedef, İdeal\'i %'+_decGapPct+' aşıyor. '+_decision.message+
-                      (_decision.suggestedRampRatePct!=null?' Önerilen rampa: %'+_decCurrentRatePct+' → %'+_decision.suggestedRampRatePct+'.':'')
+                      (_dispSuggestedRampRatePct!=null?' Önerilen rampa: %'+_dispRampRateForLabel+' → %'+_dispSuggestedRampRatePct+'.'+(_frozenNextDecision&&_decision.suggestedRampRatePct==null?' (geçen hafta hesaplanmıştı)':''):'')
                   },
                     (_decision.level==='kirmizi'?'🔴 ':_decision.level==='sari'?'🟡 ':'🟢 ')+_decision.title+
-                    (_decision.suggestedRampRatePct!=null?' (%'+_decCurrentRatePct+'→%'+_decision.suggestedRampRatePct+')':'')
+                    (_dispSuggestedRampRatePct!=null?' (%'+_dispRampRateForLabel+'→%'+_dispSuggestedRampRatePct+')':'')
                   )
                 ),
                 React.createElement('td',{style:{padding:'6px 8px',fontFamily:'monospace',textAlign:'center',color:act.km>0?'var(--success)':'var(--text-tertiary)'}},act.km||'—'),
