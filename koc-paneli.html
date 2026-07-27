@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.27-1946 --><!DOCTYPE html>
+<!-- Version: v2026.07.27-2117 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.27-1946';
+const APP_VERSION='v2026.07.27-2117';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -368,19 +368,33 @@ function calcMetrics(w,ath){
   const hrTSS=calcHrTSS(durSec,avgHR,ath?.lthr);
   // Güç bazlı TSS (pTSS) — FTP ve NP varsa
   const pTSS=(np&&ftp>0&&durSec>0)?round1((durSec/3600)*(IF_v**2)*100):null;
-  const yukObj=calcObjLoad(durSec,avgHR,ath?.lthr,ath?.rhr,ath?.mhr,ath?.cinsiyet,w.mesafe,w.irtifa,w.zemin_zorluk);
+  const yukObjTek=calcObjLoad(durSec,avgHR,ath?.lthr,ath?.rhr,ath?.mhr,ath?.cinsiyet,w.mesafe,w.irtifa,w.zemin_zorluk);
+
+  // DÜZELTME (2026.07.27 — Göksel'in "manuel segment nabzı bu mekanizmayı etkiliyor
+  // mu" sorusuna yanıt; döngüyü kapatma): Sporcu her aşama için ayrı nabız girmişse
+  // (w._rowZoneDist — eskiden sadece calcRecovery ve zone% raporlamasında
+  // kullanılıyordu, actualLoad'da HİÇ kullanılmıyordu), artık TEK bir blended
+  // ortalama yerine HER BANT (low/high/ana) için AYRI hrTSS/TRIMP hesaplanıp
+  // toplanıyor. Gerekçe: hrTSS formülü karesel (IF²) olduğundan, karışık yoğunluklu
+  // bir antrenmanı tek ortalama nabızla özetlemek antrenman stresini SİSTEMATİK
+  // OLARAK OLDUĞUNDAN DÜŞÜK gösterir (Jensen eşitsizliği). Bu, Plan tarafında daha
+  // önce eklenen segment-bazlı türetmeyle (calcYukFromYapilar) aynı mantığın Gerçek
+  // tarafına uygulanmış hali — döngü artık tam kapalı.
+  const yukObjSegment=w._rowZoneDist?calcYukFromZoneDist(w._rowZoneDist,ath):null;
+
   // Excel X: RPE × süre(dk) — Subjektif yük
   const yukSubj=rpe>0?round1(rpe*durMin):0;
-  const yukFinal=yukObj>0?yukObj:yukSubj;
+  const yukFinal=yukObjSegment!=null?yukObjSegment:(yukObjTek>0?yukObjTek:yukSubj);
   const mechLoad=calcMechLoad(w.mesafe,w.irtifa,w.zemin_zorluk);
 
-  // Excel Y: Temel Yük — hrTSS > TRIMP > HR-based
-  const temelYuk=hrTSS>0?round1(hrTSS):(trimp>0?round1(trimp):yukFinal);
+  // Excel Y: Temel Yük — segment-bazlı > hrTSS > TRIMP > HR-based
+  const temelYuk=yukObjSegment!=null?yukObjSegment:(hrTSS>0?round1(hrTSS):(trimp>0?round1(trimp):yukFinal));
 
   return{
     durSec,durMin,trimp,hrTSS,yukObj:yukFinal,yukSubj,mechLoad,
     IF:IF_v,np,pTSS,temelYuk,
-    hrEstimated,estAvgHR:hrEstimated?avgHR:null
+    hrEstimated,estAvgHR:hrEstimated?avgHR:null,
+    _yukYontem:yukObjSegment!=null?'segment_bazli':(yukObjTek>0?'hr_tekil':'subjektif')
   };
 }
 
@@ -1584,6 +1598,35 @@ const TUR_ZONE_BEKLENTI={
   acici:{zone:'Z2',pos:0.7},        teknik:{zone:'Z2',pos:0.8},
   depar:{zone:'Z1',pos:0.8},        back_to_back:{zone:'Z2',pos:0.7},
 };
+// ── GERÇEK TARAF İÇİN SEGMENT-BAZLI YÜK (2026.07.27 — döngüyü kapatma) ──
+// calcYukFromYapilar PLAN tarafını segment-hassas yaptı; bu fonksiyon aynı
+// mantığı GERÇEK tarafa (calcMetrics) uyguluyor. w._rowZoneDist zaten var olan,
+// coach'un girdiği aşama-bazlı gerçek nabızlardan türetilmiş bir yapı (bkz.
+// computeZoneDistFromRows, ~satır 5200) — ama şimdiye dek SADECE calcRecovery ve
+// zone% raporlamasında kullanılıyordu, actualLoad'da hiç kullanılmıyordu.
+// low/high/ana yalnızca 3 geniş bant (Z1-2/Z3-4/Z5a-c) olduğundan calcYukFromYapilar
+// kadar (7 zon) hassas değil, ama YİNE DE tek-blended-ortalamadan çok daha isabetli:
+// hrTSS karesel (IF²) olduğundan karışık yoğunluğu tek ortalamayla özetlemek yükü
+// sistematik olarak düşük gösterir (Jensen eşitsizliği) — bant bazlı toplama bunu düzeltir.
+function calcYukFromZoneDist(rzd,athlete){
+  if(!rzd||!rzd.totalMin||rzd.totalMin<=0) return null;
+  const zones=calcZones(athlete);
+  const hz=zones?.hrZones;
+  if(!hz||!hz.length) return null;
+  const rhr=parseSayi(athlete?.rhr)||0, mhr=parseSayi(athlete?.mhr)||0, lthr=parseSayi(athlete?.lthr)||0;
+  const cinsiyet=athlete?.cinsiyet;
+  const find=id=>hz.find(h=>h.id===id);
+  const z1=find('Z1'),z2=find('Z2'),z3=find('Z3'),z4=find('Z4'),z5a=find('Z5a'),z5c=find('Z5c');
+  const mid=(a,b)=>(a!=null&&b!=null)?Math.round((a+b)/2):null;
+  // Bant temsili bpm: low=Z1-Z2 birleşik orta, high=Z3-Z4 birleşik orta, ana=Z5a-Z5c birleşik orta
+  const lowBpm=mid(z1?.lo_bpm,z2?.hi_bpm), highBpm=mid(z3?.lo_bpm,z4?.hi_bpm), anaBpm=mid(z5a?.lo_bpm,z5c?.hi_bpm);
+  const yukForBand=(durMin,bpm)=>{
+    if(!durMin||durMin<=0||bpm==null) return 0;
+    return lthr>0?calcHrTSS(durMin*60,bpm,lthr):calcTRIMP(durMin,bpm,rhr,mhr,cinsiyet);
+  };
+  const yuk=yukForBand(rzd.lowMin,lowBpm)+yukForBand(rzd.highMin,highBpm)+yukForBand(rzd.anaMin,anaBpm);
+  return yuk>0?round1(yuk):null;
+}
 // ── TAM OTOMATİK SEGMENT BAZLI TÜRETME (2026.07.27 — Göksel'in isteği üzerine) ──
 // Yukarıdaki "baskın zon + zon içi konum" yaklaşımı (TUR_ZONE_BEKLENTI) sadece
 // TEK bir tür için yapılan ilk yaklaşımdı ve interval/piramit gibi çok-fazlı
