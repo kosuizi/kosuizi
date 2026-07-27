@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.27-0952 --><!DOCTYPE html>
+<!-- Version: v2026.07.27-1023 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.27-0952';
+const APP_VERSION='v2026.07.27-1023';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -2429,6 +2429,23 @@ const ANTRENMAN_TURLERI=[
   {v:'yaris',   l:'Yarış', spor:'tum'},
 ];
 
+// ── TEK KAYNAK: Kaliteli antrenman taksonomisi (2026.07.27 konsolidasyonu) ──
+// Önceden bu liste 7 farklı yerde ayrı ayrı tanımlıydı (bazıları 13, bazıları
+// 7, bazıları 15 eleman içeriyordu) — bu da "kaliteli" sayılan tip setinin
+// kod yoluna göre değişmesine yol açıyordu (örn. <15km hacim bloğu bir yerde
+// doğru uygulanırken, progressive tipi başka bir kod yolunda kaliteli
+// sayılmadığı için hacim kotasına dahil edilmiyordu).
+// Karar (Göksel onayı): progressive → kaliteli SAYILIR (tempo/yoğunluk işi
+// görüyor). strides → kaliteli SAYILMAZ (kısa aktivasyon, kota tüketmemeli).
+const KALITELI_TIPLERI=['interval','esik','esik_sureli','tempo','tempo_sureli',
+  'yokus_kisa','yokus_uzun','piramit','kesintisiz_piramit','on_off','cruise',
+  'yaris_tempo','hill_sprint','progressive'];
+// "Yoğun türler" — HRV/sakatlık indirimi ve forceEasy/forceLow bloklarında
+// kullanılır. Kaliteli taksonomisi + tirmanis (uzun tırmanış fiziksel olarak
+// yoğun ama antrenman amacı bakımından "kaliteli" değil, aerobik taban sayılır
+// — bkz. TUR_ENERJI_KAT/TUR_AMAC_KAT).
+const YOGUN_TURLER=[...KALITELI_TIPLERI,'tirmanis'];
+
 // Spora göre filtrelenmiş tür listesi döndür
 function getTurlerForSpor(spor){
   if(!spor||spor==='kosu'){
@@ -3861,7 +3878,7 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
             const mechAclOvl=mechAtl>(mechCtl||1)*1.3;
             const weekStart=new Date(today); weekStart.setDate(today.getDate()-today.getDay()+1);
             const weekStartStr=localDateStr(weekStart);
-            const kaliteliTipler=['interval','esik','esik_sureli','tempo','tempo_sureli','yokus_kisa','yokus_uzun','piramit','kesintisiz_piramit','on_off','cruise','yaris_tempo','hill_sprint'];
+            const kaliteliTipler=KALITELI_TIPLERI;
             const kaliteliYapildi=athWks.some(w=>w.date>=weekStartStr&&kaliteliTipler.includes(w.tur||w.spor));
             return{
               id:ath.id,
@@ -11635,7 +11652,7 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   if(powerOverload) yMod=Math.min(yMod,0.88);
   if(mechAclOverload) yMod=Math.min(yMod,0.82); // akut mekanik aşırı yük → belirgin düşüş
 
-  const kaliteliYapildi=(workoutsThisWeek||[]).some(w=>['interval','esik','esik_sureli','tempo','tempo_sureli','yokus_kisa','yokus_uzun'].includes(w.tur));
+  const kaliteliYapildi=(workoutsThisWeek||[]).some(w=>KALITELI_TIPLERI.includes(w.tur));
   const uzunYapildi=(workoutsThisWeek||[]).some(w=>['uzun','tirmanis'].includes(w.tur));
 
   const athAllWorkouts=(allWorkouts||[]).filter(w=>w.athleteId===athlete.id);
@@ -11773,9 +11790,7 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   // yMod ile süreyi güncelle — planDay kendi yMod'unu kullandı, biz güncel sinyallerle yeniden uygularız
   tpl={...tpl, sure_dk:Math.round((tpl.sure_dk||45)*yMod)};
 
-  // Tüm yoğun antrenman türleri
-  const YOGUN_TURLER=['interval','esik','esik_sureli','tempo','tempo_sureli','yokus_kisa','yokus_uzun',
-    'piramit','kesintisiz_piramit','on_off','cruise','yaris_tempo','hill_sprint','tirmanis'];
+  // Tüm yoğun antrenman türleri (tek kaynak — bkz. üstteki global YOGUN_TURLER tanımı)
 
   // ── Toparlanma süresi kontrolü ───────────────────────────────────────────
   // O günün sabahı 06:00'da recovery_hedef'e hâlâ 24+ saat kalıyorsa süre kısalt
@@ -12259,8 +12274,8 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
   const mechCtlPlan=simState.mechCtl||0;
   const mechAclPlan=simState.mechAtl||simState.atl||0;
   const mechKardioImbalancePlan=simState.ctl>5?((mechCtlPlan*MECH_SCALE)/(simState.ctl||1))<0.35:false;
-  const YOGUN_TURLER_PLAN=['interval','esik','esik_sureli','tempo','tempo_sureli','yokus_kisa','yokus_uzun',
-    'piramit','kesintisiz_piramit','on_off','cruise','yaris_tempo','hill_sprint','tirmanis'];
+  const YOGUN_TURLER_PLAN=YOGUN_TURLER; // DÜZELTME: eskiden 'progressive' bu listede yoktu →
+  // HRV düşük/dengesiz olduğunda progressive antrenmanlar indirilmiyordu (satır ~12756/12773)
 
   // HRV'ye göre yaptırım flag'leri
   const hrvDusuk=hrv==='düşük';   // yMod=0.70, kaliteli → kolay
@@ -12678,7 +12693,10 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
           kosuTpl=daysToRace<=7?tplAcici(Math.round(25*yMod),phase):tplStrides(band,Math.round(35*yMod),zones,phase);
         }
       } else if(phase==='Zirve'){
-        if(wkStats.kaliteliYok&&(tsb> -10||isSimulatedFuture)&&(acwr<1.2||isSimulatedFuture)){
+        // DÜZELTME (2026.07.27): iskelet (haftaIskeleti) bu günü 'aerobik'/'kolay' kilitlediyse
+        // (örn. Zirve fazının max kaliteli kotası zaten doldu), bu varsayılan dal onu görmezden
+        // gelip yine de kaliteli şablon seçiyordu. iskeleteGoreAerobik kontrolü eklendi.
+        if(!iskeleteGoreAerobik&&wkStats.kaliteliYok&&(tsb> -10||isSimulatedFuture)&&(acwr<1.2||isSimulatedFuture)){
           const zirveSeq=[
             ()=>isTrail&&band>=3?tplYokusUzun(band,zones,phase,phaseStep):tplInterval(band,phase,zones,phaseStep),
             ()=>tplPiramit(band,zones,phase,phaseStep),
@@ -12695,7 +12713,8 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
           kosuTpl=tplEsik(band,Math.round(55*yMod),zones,phase,phaseStep);
         }
       } else if(phase==='Gelişme'){
-        if(wkStats.kaliteliYok&&(tsb> -10||isSimulatedFuture)&&(acwr<1.2||isSimulatedFuture)){
+        // DÜZELTME (2026.07.27): bkz. Zirve dalındaki aynı not — iskeleteGoreAerobik eklendi.
+        if(!iskeleteGoreAerobik&&wkStats.kaliteliYok&&(tsb> -10||isSimulatedFuture)&&(acwr<1.2||isSimulatedFuture)){
           const gelismeSeq=[
             ()=>isTrail&&band>=3?tplYokusKisa(band,zones,phase,phaseStep):tplInterval(band,phase,zones,phaseStep),
             ()=>tplPiramit(band,zones,phase,phaseStep),
@@ -12714,7 +12733,12 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
         }
       } else {
         // Temel faz
-        if(wkStats.kaliteliYok&&(tsb> -10||isSimulatedFuture)){
+        // DÜZELTME (2026.07.27 — Göksel bildirimi): Yarışsız/düşük hacimli (<15km) sporcuda
+        // haftaIskeleti bu günü 'aerobik' kilitliyordu (_maxKaliteli===0), ama bu varsayılan
+        // dal iskeleti hiç kontrol etmeden wkStats.kaliteliYok'a bakıp temelSeq'in ilk elemanı
+        // olan tplProgressive'i seçiyordu → "Progressive · S1" önerisi <15km bloğuna rağmen
+        // çıkıyordu. iskeleteGoreAerobik kontrolü eklendi.
+        if(!iskeleteGoreAerobik&&wkStats.kaliteliYok&&(tsb> -10||isSimulatedFuture)){
           const temelSeq=amacKaliteliSeq||[
             ()=>tplProgressive(band,Math.round(50*yMod),zones,phase,phaseStep),
             ()=>tplTempo(band,Math.round(45*yMod),zones,phase,phaseStep),
@@ -13057,8 +13081,7 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
           return;
         }
         const yapilan=gercekler.map(w=>w.tur||w.spor||'aerobik');
-        const kaliteliYapildi=yapilan.some(t=>['interval','esik','esik_sureli','tempo','tempo_sureli','yokus_kisa','yokus_uzun',
-          'piramit','kesintisiz_piramit','on_off','cruise','yaris_tempo','hill_sprint'].includes(t));
+        const kaliteliYapildi=yapilan.some(t=>KALITELI_TIPLERI.includes(t));
         const uzunYapildi=yapilan.some(t=>['uzun','tirmanis'].includes(t));
         if(uzunYapildi) haftaIskeleti[g.ds]='uzun';
         else if(kaliteliYapildi) haftaIskeleti[g.ds]='kaliteli';
@@ -13245,8 +13268,7 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       // Gelecek ve bugün (antrenman yapılmamış) günleri için evaluateSignals'ı uygula.
       // isPast veya gerçek antrenman kaydı olan günlere dokunma.
       if(!isPast&&!(isToday&&actual.length>0)&&planned.tip!=='dinlenme'&&planned.tip!=='yaris'){
-        const YOGUN_L=['interval','esik','esik_sureli','tempo','tempo_sureli','yokus_kisa','yokus_uzun',
-          'piramit','kesintisiz_piramit','on_off','cruise','yaris_tempo','hill_sprint','tirmanis','progressive'];
+        const YOGUN_L=YOGUN_TURLER;
         const mechKardioD=simState.ctl>5?((simState.mechCtl||0)*MECH_SCALE/(simState.ctl||1))<0.35:false;
         const mechAclOvl=(simState.mechAtl||0)>(simState.mechCtl||1)*1.3;
         // Bu haftada kaliteli antrenman yapıldı mı (wkStats güncel)
@@ -13429,8 +13451,7 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
           const t = w.tur || w.spor || 'aerobik';
           if(t === 'dinlenme') return;
           wkStats.count++;
-          const isKaliteli=['interval','esik','esik_sureli','tempo','tempo_sureli','yokus_kisa','yokus_uzun','piramit',
-            'kesintisiz_piramit','on_off','cruise','yaris_tempo','hill_sprint'].includes(t);
+          const isKaliteli=KALITELI_TIPLERI.includes(t);
           if(isKaliteli){
             wkStats.kaliteliYok=false;
             wkStats.kaliteliSayisi=(wkStats.kaliteliSayisi||0)+1;
@@ -13448,7 +13469,7 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
         const t = planned.tip;
         if(t !== 'dinlenme'){
           wkStats.count++;
-          const isKaliteli=['interval','esik','esik_sureli','tempo','tempo_sureli','yokus_kisa','yokus_uzun','piramit','kesintisiz_piramit','on_off','cruise','yaris_tempo','hill_sprint','progressive','strides'].includes(t);
+          const isKaliteli=KALITELI_TIPLERI.includes(t);
           if(isKaliteli){
             wkStats.kaliteliYok=false;
             wkStats.kaliteliSayisi=(wkStats.kaliteliSayisi||0)+1;
@@ -13476,15 +13497,11 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       sonYogunGunGlobal=isYogunTip;
       // Kaliteli antrenman simülasyon yükünü yumuşat
       const rawLoad=isPast?(actualLoad||0):(planned.yukHedef||0);
-      // DÜZELTME (2026.07.09): Liste sadece 4 tipi kapsıyordu (interval/esik/yokus_kisa/yokus_uzun).
-      // Taksonomi zamanla genişledikçe (tempo, esik_sureli, piramit, kesintisiz_piramit, on_off,
-      // cruise, yaris_tempo, hill_sprint) bu liste güncellenmemişti — o tipler simFactor=1.0 ile
-      // (yumuşatılmadan) simülasyona giriyordu. YUKKAT (aşağıda) ve yukarıdaki wkStats.isKaliteli
-      // (isPast dalı, ~satır 12847) ile aynı 13 tiplik kaliteli taksonomisiyle eşitlendi.
-      const KALITELI_TIPLER_SIM=['interval','esik','esik_sureli','tempo','tempo_sureli','yokus_kisa','yokus_uzun',
-        'piramit','kesintisiz_piramit','on_off','cruise','yaris_tempo','hill_sprint'];
-      const hasKaliteliActual=isPast&&actual.some(w=>KALITELI_TIPLER_SIM.includes(w.tur||w.spor));
-      const isKaliteliTip=hasKaliteliActual||KALITELI_TIPLER_SIM.includes(effectiveTip);
+      // DÜZELTME (2026.07.09): Liste sadece 4 tipi kapsıyordu, sonra 13 tipe genişletildi
+      // ama 'progressive' yine unutulmuştu (tekrar eden kayma). 2026.07.27 itibariyle
+      // tek kaynak KALITELI_TIPLERI'ye bağlandı — bir daha kaymasın.
+      const hasKaliteliActual=isPast&&actual.some(w=>KALITELI_TIPLERI.includes(w.tur||w.spor));
+      const isKaliteliTip=hasKaliteliActual||KALITELI_TIPLERI.includes(effectiveTip);
       const simFactor=isTestDay?0.4:isKaliteliTip?0.75:1.0;
       const loadForSim=Math.round(rawLoad*simFactor);
       simAtl=loadForSim*λ_atl+simAtl*(1-λ_atl);
