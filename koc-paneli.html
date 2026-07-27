@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.27-1600 --><!DOCTYPE html>
+<!-- Version: v2026.07.27-1946 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.27-1600';
+const APP_VERSION='v2026.07.27-1946';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1584,8 +1584,80 @@ const TUR_ZONE_BEKLENTI={
   acici:{zone:'Z2',pos:0.7},        teknik:{zone:'Z2',pos:0.8},
   depar:{zone:'Z1',pos:0.8},        back_to_back:{zone:'Z2',pos:0.7},
 };
-function calcBeklenenYuk(tur,durMin,athlete,mesafe,irtifa,zemin_zorluk){
+// ── TAM OTOMATİK SEGMENT BAZLI TÜRETME (2026.07.27 — Göksel'in isteği üzerine) ──
+// Yukarıdaki "baskın zon + zon içi konum" yaklaşımı (TUR_ZONE_BEKLENTI) sadece
+// TEK bir tür için yapılan ilk yaklaşımdı ve interval/piramit gibi çok-fazlı
+// (ısınma+iş+dinlenme karışık) tiplerde kabaydı. Bunun yerine: TÜM şablon
+// fonksiyonları (tplAerobik, tplInterval, tplProgressive, ... — bkz. _R yardımcı
+// nesnesi ~satır 5749) 'yapilar' çıktısında ORTAK bir iç satır şeması kullanıyor:
+// her _rows elemanı {label, sure_sn, zIdx, tekrar?, din_sn?, dinZIdx?} taşıyor.
+// Bu, TEK bir yürüyücü fonksiyonun 20+ şablonun TÜMÜNDE (ısınma dahil, dinlenme
+// blokları dahil, tekrar sayıları dahil) gerçek segment sürelerini okuyup doğru
+// beklenen yükü hesaplamasını sağlıyor — tür bazlı tahmin değil, GERÇEK yapı.
+function calcYukFromYapilar(yapilar,athlete){
+  if(!yapilar||!yapilar.length) return null;
+  const zones=calcZones(athlete);
+  const hrZones=zones?.hrZones;
+  if(!hrZones||!hrZones.length) return null; // sporcunun LTHR/RHR/MHR verisi yok
+  const rhr=parseSayi(athlete?.rhr)||0, mhr=parseSayi(athlete?.mhr)||0, lthr=parseSayi(athlete?.lthr)||0;
+  const cinsiyet=athlete?.cinsiyet;
+  const bpmOf=(zIdx)=>{
+    const hz=hrZones[zIdx];
+    return hz?Math.round((hz.lo_bpm+hz.hi_bpm)/2):null; // zon ortası — segment içinde temsili nabız
+  };
+  const yukForSeg=(durSec,zIdx)=>{
+    if(durSec<=0) return 0;
+    const bpm=bpmOf(zIdx);
+    if(bpm==null) return 0;
+    // calcMetrics'in izlediği AYNI öncelik: LTHR varsa hrTSS, yoksa TRIMP (HRR)
+    return lthr>0?calcHrTSS(durSec,bpm,lthr):calcTRIMP(durSec/60,bpm,rhr,mhr,cinsiyet);
+  };
+  let toplamYuk=0,toplamSec=0;
+  yapilar.forEach(sec=>{
+    (sec._rows||[]).forEach(row=>{
+      if(row.zIdx==null||row.sure_sn==null) return;
+      const tekrar=row.tekrar||1;
+      const workSec=row.sure_sn*tekrar;
+      toplamYuk+=yukForSeg(workSec,row.zIdx);
+      toplamSec+=workSec;
+      // Dinlenme/toparlanma araları (interval/piramit tekrarları arası) — genelde
+      // aktif toparlanma (yürüyüş/çok hafif jog, Z1), açıkça belirtilmemişse Z1 varsayılır.
+      if(row.din_sn>0){
+        const dinSec=row.din_sn*tekrar;
+        const dinZIdx=row.dinZIdx??0;
+        toplamYuk+=yukForSeg(dinSec,dinZIdx);
+        toplamSec+=dinSec;
+      }
+    });
+  });
+  return toplamSec>0?{yuk:round1(toplamYuk),sureSec:toplamSec}:null;
+}
+function calcBeklenenYuk(tur,durMin,athlete,mesafe,irtifa,zemin_zorluk,yapilar){
   if(!durMin||durMin<=0) return null;
+  // 1. öncelik: GERÇEK segment yapısından tam otomatik türetme (yapilar varsa)
+  const segResult=yapilar?calcYukFromYapilar(yapilar,athlete):null;
+  if(segResult!=null){
+    // ÖLÇEKLEME: yapilar'ın kendi süresi (şablonun ÜRETİLDİĞİ ana ait, ör. planlı
+    // 50dk) ile hedef süre (genelde GERÇEK koşulan süre, forceEasy/erken bitirme
+    // gibi nedenlerle farklı olabilir) arasında fark varsa, segment oranlarının
+    // korunduğu varsayımıyla orantılı ölçekleniyor — aksi halde "50dk'lık plan"ın
+    // mutlak segment sürelerini "30dk gerçek" ile kıyaslamış oluruz.
+    const hedefSec=durMin*60;
+    const oran=segResult.sureSec>0?(hedefSec/segResult.sureSec):1;
+    let segYuk=segResult.yuk*oran;
+    // Zemin/irtifa modifiyesi segment bazlı hesaba dahil değil (segment başına
+    // zemin bilgisi tutulmuyor) — toplam üzerine tek seferlik uygulanıyor, tıpkı
+    // calcObjLoad'ın normal antrenmanlarda yaptığı gibi.
+    if((mesafe||irtifa)&&zemin_zorluk){
+      const km=parseFloat(mesafe)||0, dp=parseFloat(irtifa)||0, z=parseInt(zemin_zorluk)||1;
+      const t_mod=TERRAIN_MULT[z]||1.0;
+      let grade_mod=1.0;
+      if(km>0&&dp>0){const avg_grade_pct=(dp/km)/10; grade_mod=1+Math.min(avg_grade_pct*0.12,0.28);}
+      segYuk=segYuk*Math.min(t_mod*grade_mod,1.60);
+    }
+    return round1(segYuk);
+  }
+  // 2. öncelik (yapilar yoksa — ör. çapraz/kuvvet günü): tür bazlı baskın-zon tahmini
   const z=calcZones(athlete);
   const zn=TUR_ZONE_BEKLENTI[tur]||{zone:'Z2',pos:0.5};
   const hz=(z.hrZones||[]).find(h=>h.id===zn.zone);
@@ -13668,7 +13740,7 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
         const caprazSure=gercekCaprazSure>0?gercekCaprazSure:(planned.isKosuCapraz?45:0);
         const caprazEkYuk=caprazSure>0?Math.round(caprazSure*(YUKKAT.capraz||0.6)):0;
 
-        const beklenenYuk=calcBeklenenYuk(refTip,refSure,athlete,gercekKosu?.mesafe,gercekKosu?.irtifa,gercekKosu?.zemin_zorluk);
+        const beklenenYuk=calcBeklenenYuk(refTip,refSure,athlete,gercekKosu?.mesafe,gercekKosu?.irtifa,gercekKosu?.zemin_zorluk,planned.yapilar);
         const planKat=YUKKAT[refTip]||1.1;
         const planYukFallback=Math.round(refSure*planKat);
         const planYuk=(beklenenYuk!=null?beklenenYuk:planYukFallback)+caprazEkYuk;
