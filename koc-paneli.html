@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.28-2209 --><!DOCTYPE html>
+<!-- Version: v2026.07.28-2234 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.28-2209';
+const APP_VERSION='v2026.07.28-2234';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -4869,10 +4869,10 @@ function weekLabel(offset){
   return start.toLocaleDateString('tr-TR',{day:'2-digit',month:'short'})+' – '+end.toLocaleDateString('tr-TR',{day:'2-digit',month:'short'});
 }
 
-function calcWeeklyStats(workouts,athletes,weekOffset=0,races=[],allHistory={}){
+function calcWeeklyStats(workouts,athletes,weekOffset=0){
   const {start,end}=getWeekBounds(weekOffset);
   // Pasif (sistemde gizli) sporcular Liderlik hesaplamalarına dahil edilmez
-  const rows=athletes.filter(a=>!a.pasif).map(a=>{
+  return athletes.filter(a=>!a.pasif).map(a=>{
     const wks=workouts.filter(w=>{
       if(w.athleteId!==a.id)return false;
       const d=new Date(w.date+'T12:00:00');
@@ -4908,64 +4908,97 @@ function calcWeeklyStats(workouts,athletes,weekOffset=0,races=[],allHistory={}){
       const k=SPOR_MAP[w.spor||'kosu']?.k||1.0;
       return s+mech*k;
     },0));
-    // Uygunluk (Hedef Uyumu): o haftaki kişisel hedefe (targetKm/targetDp)
-    // göre gerçekleşme oranı — aynı mantık "Plan Tutarlılığı" skorunda da
-    // kullanılıyor (bkz. satır ~919). Hedef yoksa (yarış/geçmiş veri yok) null
-    // döner ve aşağıda nötr (100) kabul edilir — hedefsiz sporcu cezalandırılmaz.
-    // Not: Bu, koddaki ayrı bir özellik olan "Verilen Antrenmanı Yapabilme Puanı"
-    // (pace disiplin skorlaması) ile KARIŞTIRILMAMALI — o farklı bir metriktir.
-    let uygunlukPct=null;
-    try{
-      const athHist=allHistory?.[a.id]||[];
-      const weekTargets=calcWeeklyTargets(a,races||[],workouts||[],false,athHist);
-      const startKey=localDateStr(start);
-      const wt=(weekTargets||[]).find(w2=>localDateStr(w2.weekStart)===startKey);
-      if(wt&&((wt.targetKm||0)>0||(wt.targetDp||0)>0)){
-        // Tavan 1.0 (%100) — hedefi aşmanın ekstra puana çevrilmemesi hem
-        // "%100 üstü görünme" karışıklığını önler hem de aşırı yüklenmeyi
-        // ödüllendirmez (2026.07.28 — Göksel talebi).
-        const kR=wt.targetKm>0?Math.min(1.0,mesafe/wt.targetKm):1;
-        const dR=wt.targetDp>0?Math.min(1.0,irtifa/wt.targetDp):kR;
-        uygunlukPct=round1((kR*0.6+dR*0.4)*100);
-      }
-    }catch(e){/* hedef hesaplanamazsa nötr say, sıralamayı bozma */}
     // Spor dağılımı
     const sporDagilim={};
     wks.forEach(w=>{
       const s=w.spor||'kosu';
       sporDagilim[s]=(sporDagilim[s]||0)+1;
     });
-    return{ath:a,mesafe,mesafeBySpor,irtifa,sureSn,count,sporSkoru,gercekIs,uygunlukPct,sporDagilim,wks};
+    return{ath:a,mesafe,mesafeBySpor,irtifa,sureSn,count,sporSkoru,gercekIs,sporDagilim,wks};
   });
+}
 
-  // Üç bileşen farklı birimlerde (efor: TRIMP/hrTSS puanı, iş: eşdeğer-km,
-  // uygunluk: %) — adil birleştirmek için efor ve işi takımın o haftaki en
-  // yüksek değerine göre 0-100 ölçeğine normalize ediyoruz.
+// O haftaya ait Pace Disiplin puanlarını sporcu başına getirir. AYNI hesaplama
+// motoru kullanılır (extractFeedbackSignals + calcPaceComplianceScore) — Karşılaştır
+// sekmesindeki "Verilen Antrenmanı Yapabilme Puanı" ile birebir aynı mantık,
+// TEK FARKLA: orada seçilebilir dönem (1H/2H/.../Tümü) "bugünden geriye rolling"
+// pencere iken, burada Liderlik'in haftalık gezinmesine (← Önceki/Sonraki →)
+// birebir uysun diye SADECE o takvim haftasının (Pazartesi-Pazar) snapshot'ı
+// taranır (2026.07.28 — Göksel onayı: Hedef Uyumu = Pace Disiplin, hacim/tutarlılık
+// bileşeni şimdilik dahil edilmiyor).
+async function fetchWeekPaceScores(athletes,weekOffset){
+  const weekKey=getWeekKey(weekOffset);
+  const out={};
+  await Promise.all((athletes||[]).map(async a=>{
+    try{
+      const snap=await fbGet('plan_snapshots/'+a.id+'/'+weekKey);
+      if(!snap){out[a.id]=null;return;}
+      const signals=extractFeedbackSignals({[weekKey]:snap},a);
+      const score=calcPaceComplianceScore(signals);
+      out[a.id]=score?score.puan:null;
+    }catch(e){out[a.id]=null;}
+  }));
+  return out;
+}
+
+// calcWeeklyStats'ın ham satırlarını Pace Disiplin puanlarıyla birleştirip
+// nihai Liderlik skorunu (Hedef Uyumu %45 + Efor %25 + Gerçek İş %30) hesaplar
+// ve sıralar. paceScores: {athleteId: puan|null} — fetchWeekPaceScores'tan gelir.
+function finalizeLeaderboard(rows,paceScores){
+  // Efor ve Gerçek İş farklı birimlerde (TRIMP/hrTSS puanı vs eşdeğer-km) —
+  // adil birleştirmek için takımın o haftaki en yüksek değerine göre 0-100
+  // ölçeğine normalize ediyoruz. Hedef Uyumu (Pace Disiplin) zaten 0-100 puan.
   const maxEfor=Math.max(0,...rows.map(r=>r.sporSkoru));
   const maxIs=Math.max(0,...rows.map(r=>r.gercekIs));
   return rows.map(r=>{
     const eforNorm=maxEfor>0?round1(r.sporSkoru/maxEfor*100):0;
     const isNorm=maxIs>0?round1(r.gercekIs/maxIs*100):0;
-    // Nötr (100) sadece hedefi olmayan AMA bu hafta gerçekten antrenman yapan
-    // sporcuya uygulanır — yoksa hiç antrenman yapmamış hedefsiz bir sporcu,
-    // aktif ama düşük tutan bir sporcunun önüne geçebilir.
-    const uygunlukNorm=r.uygunlukPct!=null?r.uygunlukPct:(r.count>0?100:0);
-    // Ağırlıklar (2026.07.28 — Göksel onayı): Uygunluk %45, Gerçek İş %30, Efor %25
+    const raw=paceScores?.[r.ath.id];
+    // Nötr (100) sadece pace verisi olmayan (o hafta pace karşılaştırması
+    // yapılabilecek faz girilmemiş) AMA gerçekten antrenman yapan sporcuya
+    // uygulanır — yoksa hiç antrenman yapmamış biri, aktif ama düşük puanlı
+    // birinin önüne geçebilir.
+    const uygunlukPct=raw!=null?raw:null;
+    const uygunlukNorm=uygunlukPct!=null?uygunlukPct:(r.count>0?100:0);
+    // Ağırlıklar (2026.07.28 — Göksel onayı): Hedef Uyumu %45, Gerçek İş %30, Efor %25
     const finalScore=round1(uygunlukNorm*0.45+eforNorm*0.25+isNorm*0.30);
-    return{...r,eforNorm,isNorm,uygunlukNorm,finalScore};
+    return{...r,eforNorm,isNorm,uygunlukPct,uygunlukNorm,finalScore};
   }).sort((a,b)=>b.finalScore-a.finalScore);
 }
 
-
-function LiderlikTab({athletes,workouts,teamName,teamLogo,races,allHistory}){
+function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
   const [weekOffset,setWeekOffset]=useState(0);
   const [downloading,setDownloading]=useState(false);
   const [sharing,setSharing]=useState(null); // athId being shared
   const cardRef=React.useRef();
   const athCardRefs=React.useRef({});
-  const stats=React.useMemo(()=>calcWeeklyStats(workouts,athletes,weekOffset,races,allHistory),[workouts,athletes,weekOffset,races,allHistory]);
+  const rawStats=React.useMemo(()=>calcWeeklyStats(workouts,athletes,weekOffset),[workouts,athletes,weekOffset]);
+  const rawPrevStats=React.useMemo(()=>calcWeeklyStats(workouts,athletes,weekOffset-1),[workouts,athletes,weekOffset]);
+
+  // Hedef Uyumu = Pace Disiplin puanı (bkz. fetchWeekPaceScores) — plan_snapshots'tan
+  // geldiği için asenkron. Hem bu hafta hem önceki hafta (değişim oku için) getirilir.
+  const [paceScores,setPaceScores]=useState({});
+  const [prevPaceScores,setPrevPaceScores]=useState({});
+  const [paceLoading,setPaceLoading]=useState(true);
+  const athKey=React.useMemo(()=>(athletes||[]).map(a=>a.id).join(','),[athletes]);
+  React.useEffect(()=>{
+    let cancelled=false;
+    setPaceLoading(true);
+    Promise.all([
+      fetchWeekPaceScores(athletes,weekOffset),
+      fetchWeekPaceScores(athletes,weekOffset-1)
+    ]).then(([cur,prev])=>{
+      if(cancelled)return;
+      setPaceScores(cur);
+      setPrevPaceScores(prev);
+      setPaceLoading(false);
+    });
+    return()=>{cancelled=true;};
+  },[athKey,weekOffset]);
+
+  const stats=React.useMemo(()=>finalizeLeaderboard(rawStats,paceScores),[rawStats,paceScores]);
   // Bir önceki haftanın sıralaması — değişim okları için
-  const prevStats=React.useMemo(()=>calcWeeklyStats(workouts,athletes,weekOffset-1,races,allHistory),[workouts,athletes,weekOffset,races,allHistory]);
+  const prevStats=React.useMemo(()=>finalizeLeaderboard(rawPrevStats,prevPaceScores),[rawPrevStats,prevPaceScores]);
   const prevRankMap=React.useMemo(()=>{
     const m={};prevStats.forEach((r,i)=>{m[r.ath.id]=i+1;});return m;
   },[prevStats]);
@@ -5106,6 +5139,7 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races,allHistory}){
       React.createElement('button',{className:'btn btn-sm',onClick:()=>setWeekOffset(o=>o-1)},'← Önceki'),
       React.createElement('span',{style:{fontWeight:600,fontSize:14,minWidth:120,textAlign:'center'}},weekLabel(weekOffset)),
       React.createElement('button',{className:'btn btn-sm',disabled:weekOffset>=0,onClick:()=>setWeekOffset(o=>Math.min(0,o+1))},'Sonraki →'),
+      paceLoading&&React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)'}},'Hedef Uyumu hesaplanıyor…'),
       React.createElement('button',{className:'btn btn-primary btn-sm',style:{marginLeft:'auto'},onClick:downloadImage},
         downloading?'İndiriliyor...':'⬇ İndir'
       ),
@@ -24962,7 +24996,7 @@ function App(){
       tab==='dashboard'&&React.createElement(Dashboard,{workouts:athWks,athlete,history,races,teamLogo,teamName,planSnap}),
       tab==='motivasyon'&&React.createElement(ErrorBoundary,null,React.createElement(MotivasyonTab,{athlete,workouts:athWks,history})),
       tab==='plan'&&React.createElement(HaftalikPlanTab,{athlete,history,races,workouts,testPlanlar,planSnapInit:planSnap,onPlanSnapChange:setPlanSnapApp,onAthletesRefresh:freshList=>setAthletes(freshList),onUpdateAthlete:handleUpdateAthlete,onUpdateWorkout:handleUpdateWorkout,onSaveWorkout:w=>{const ath=athletes.find(a=>a.id===w.athleteId);const m=calcMetrics(w,ath);const rec=calcRecovery(w,ath,m.yukObj);const mergedHedef=mergeRecoveryHedef(rec.hedefISO,rec.saatler,workouts,w.athleteId);setWorkouts(p=>[...p,{...w,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:mergedHedef}]);}}),
-      tab==='lider'&&React.createElement(LiderlikTab,{athletes,workouts,teamName,teamLogo,races,allHistory}),
+      tab==='lider'&&React.createElement(LiderlikTab,{athletes,workouts,teamName,teamLogo,races}),
       tab==='bolge'&&React.createElement(BolgeTab,{athlete,workouts:athWks,onUpdateAthlete:handleUpdateAthlete}),
       tab==="test"&&React.createElement(TestTab,{athlete,history,races,workouts,onUpdateAthlete:handleUpdateAthlete,onSaveWorkout:w=>setWorkouts(p=>[...p,w]),onUpdateWorkout:handleUpdateWorkout,onDeleteWorkout:id=>setWorkouts(p=>p.filter(x=>x.id!==id)),testPlanlar,onSaveTestPlan:p=>setTestPlanlar(prev=>[...prev.filter(x=>!(x.athId===p.athId&&x.testTur===p.testTur)),p]),onDeleteTestPlan:id=>setTestPlanlar(p=>p.filter(x=>x.id!==id))}),
       tab==='yarislar'&&React.createElement(ErrorBoundary,null,React.createElement(YarislarTab,{athlete,races,history,workouts:athWks,raceResults,onAddResult:r=>setRaceResults(p=>[...p,r]),onDeleteResult:id=>setRaceResults(p=>p.filter(x=>x.id!==id))})),
@@ -25712,17 +25746,16 @@ function SporcuPlanView(){
   const athId=new URLSearchParams(window.location.search).get('id');
   const {pcView,zoom:pcZoom,toggle:togglePcView}=usePcView();
 
-  // Tüm sporcuların geçmişi — "Bu Hafta Liderlik" widget'ındaki Uygunluk hesabı
-  // için gerekli (koç panelindeki calcWeeklyStats ile AYNI mantık — panel
-  // paritesi: iki tarafta da aynı sıralama/skor çıkmalı)
-  const allHistory=React.useMemo(()=>{
-    const h={};
-    (allAthletes||[]).forEach(a=>{
-      const wks=(allWorkouts||[]).filter(w=>w.athleteId===a.id).sort((a,b)=>new Date(a.date)-new Date(b.date));
-      h[a.id]=wks.length?buildHistory(wks,a,races):[];
-    });
-    return h;
-  },[allAthletes,allWorkouts,races]);
+  // Bu haftanın Pace Disiplin (Hedef Uyumu) puanları — "Bu Hafta Liderlik"
+  // widget'ı için. Koç panelindeki LiderlikTab ile AYNI fonksiyon
+  // (fetchWeekPaceScores) + AYNI hafta (weekOffset=0) — panel paritesi.
+  const [miniPaceScores,setMiniPaceScores]=useState({});
+  useEffect(()=>{
+    if(!allAthletes||!allAthletes.length)return;
+    let cancelled=false;
+    fetchWeekPaceScores(allAthletes,0).then(sc=>{if(!cancelled)setMiniPaceScores(sc);});
+    return()=>{cancelled=true;};
+  },[allAthletes]);
 
   useEffect(()=>{
     if(!athId){setLoading(false);return;}
@@ -26422,8 +26455,8 @@ function SporcuPlanView(){
         );
 
         // Sağ: Bu haftanın liderlik tablosu (koç panelindeki LiderlikTab ile
-        // AYNI fonksiyon + aynı races/allHistory girdisi — panel paritesi)
-        const stats=calcWeeklyStats(allWorkouts,allAthletes,0,races,allHistory);
+        // AYNI fonksiyonlar — calcWeeklyStats + finalizeLeaderboard — panel paritesi)
+        const stats=finalizeLeaderboard(calcWeeklyStats(allWorkouts,allAthletes,0),miniPaceScores);
         const top=stats.slice(0,10);
         const myRank=stats.findIndex(s=>s.ath.id===athlete.id);
         const liderCard=React.createElement('div',{className:'card',style:{padding:'14px 16px',height:'100%'}},
