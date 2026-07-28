@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.28-1947 --><!DOCTYPE html>
+<!-- Version: v2026.07.28-2037 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.28-1947';
+const APP_VERSION='v2026.07.28-2037';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -4869,10 +4869,10 @@ function weekLabel(offset){
   return start.toLocaleDateString('tr-TR',{day:'2-digit',month:'short'})+' – '+end.toLocaleDateString('tr-TR',{day:'2-digit',month:'short'});
 }
 
-function calcWeeklyStats(workouts,athletes,weekOffset=0){
+function calcWeeklyStats(workouts,athletes,weekOffset=0,races=[],allHistory={}){
   const {start,end}=getWeekBounds(weekOffset);
   // Pasif (sistemde gizli) sporcular Liderlik hesaplamalarına dahil edilmez
-  return athletes.filter(a=>!a.pasif).map(a=>{
+  const rows=athletes.filter(a=>!a.pasif).map(a=>{
     const wks=workouts.filter(w=>{
       if(w.athleteId!==a.id)return false;
       const d=new Date(w.date+'T12:00:00');
@@ -4891,36 +4891,77 @@ function calcWeeklyStats(workouts,athletes,weekOffset=0){
       const s=w.spor||'kosu';
       mesafeBySpor[s]=round1((mesafeBySpor[s]||0)+m);
     });
-    // Skor = Σ (yukObj × spor_katsayisi)
-    // yukObj = hrTSS veya TRIMP (süre+nabız bazlı gerçek antrenman yükü)
-    // Spor katsayısı ile düzeltilerek farklı sporlar adil karşılaştırılır
     const athObj=athletes.find(a2=>a2.id===a.id);
+    // Efor: Σ (yukObj × spor_katsayisi) — kendi kapasitesine göre fizyolojik zorlanma
+    // yukObj = hrTSS veya TRIMP (süre+nabız bazlı gerçek antrenman yükü)
     const sporSkoru=round1(wks.reduce((s,w)=>{
       const m=calcMetrics(w,athObj);
       const yuk=m.yukObj||m.yukSubj||0;
       const k=SPOR_MAP[w.spor||'kosu']?.k||1.0;
       return s+yuk*k;
     },0));
+    // Gerçek İş: Σ (mekanik yük × spor_katsayisi) — nabza/algılanan efora bağlı değil,
+    // sadece mesafe+irtifa+zemin bazlı mutlak iş (bkz. calcMechLoad). "Sakin ama uzun
+    // koşan" sporcunun emeğini efor puanından bağımsız olarak ödüllendirir.
+    const gercekIs=round1(wks.reduce((s,w)=>{
+      const mech=calcMechLoad(w.mesafe,w.irtifa,w.zemin_zorluk);
+      const k=SPOR_MAP[w.spor||'kosu']?.k||1.0;
+      return s+mech*k;
+    },0));
+    // Uygunluk (Verilen Antrenmanı Yapabilme Puanı): o haftaki kişisel hedefe
+    // (targetKm/targetDp) göre gerçekleşme oranı — aynı mantık "Plan Tutarlılığı"
+    // skorunda da kullanılıyor (bkz. satır ~919). Hedef yoksa (yarış/geçmiş veri
+    // yok) null döner ve aşağıda nötr (100) kabul edilir — hedefsiz sporcu
+    // cezalandırılmaz.
+    let uygunlukPct=null;
+    try{
+      const athHist=allHistory?.[a.id]||[];
+      const weekTargets=calcWeeklyTargets(a,races||[],workouts||[],false,athHist);
+      const startKey=localDateStr(start);
+      const wt=(weekTargets||[]).find(w2=>localDateStr(w2.weekStart)===startKey);
+      if(wt&&((wt.targetKm||0)>0||(wt.targetDp||0)>0)){
+        const kR=wt.targetKm>0?Math.min(1.1,mesafe/wt.targetKm):1;
+        const dR=wt.targetDp>0?Math.min(1.1,irtifa/wt.targetDp):kR;
+        uygunlukPct=round1((kR*0.6+dR*0.4)*100);
+      }
+    }catch(e){/* hedef hesaplanamazsa nötr say, sıralamayı bozma */}
     // Spor dağılımı
     const sporDagilim={};
     wks.forEach(w=>{
       const s=w.spor||'kosu';
       sporDagilim[s]=(sporDagilim[s]||0)+1;
     });
-    return{ath:a,mesafe,mesafeBySpor,irtifa,sureSn,count,sporSkoru,sporDagilim,wks};
-  }).sort((a,b)=>b.sporSkoru-a.sporSkoru);
+    return{ath:a,mesafe,mesafeBySpor,irtifa,sureSn,count,sporSkoru,gercekIs,uygunlukPct,sporDagilim,wks};
+  });
+
+  // Üç bileşen farklı birimlerde (efor: TRIMP/hrTSS puanı, iş: eşdeğer-km,
+  // uygunluk: %) — adil birleştirmek için efor ve işi takımın o haftaki en
+  // yüksek değerine göre 0-100 ölçeğine normalize ediyoruz.
+  const maxEfor=Math.max(0,...rows.map(r=>r.sporSkoru));
+  const maxIs=Math.max(0,...rows.map(r=>r.gercekIs));
+  return rows.map(r=>{
+    const eforNorm=maxEfor>0?round1(r.sporSkoru/maxEfor*100):0;
+    const isNorm=maxIs>0?round1(r.gercekIs/maxIs*100):0;
+    // Nötr (100) sadece hedefi olmayan AMA bu hafta gerçekten antrenman yapan
+    // sporcuya uygulanır — yoksa hiç antrenman yapmamış hedefsiz bir sporcu,
+    // aktif ama düşük tutan bir sporcunun önüne geçebilir.
+    const uygunlukNorm=r.uygunlukPct!=null?r.uygunlukPct:(r.count>0?100:0);
+    // Ağırlıklar (2026.07.28 — Göksel onayı): Uygunluk %45, Gerçek İş %30, Efor %25
+    const finalScore=round1(uygunlukNorm*0.45+eforNorm*0.25+isNorm*0.30);
+    return{...r,eforNorm,isNorm,uygunlukNorm,finalScore};
+  }).sort((a,b)=>b.finalScore-a.finalScore);
 }
 
 
-function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
+function LiderlikTab({athletes,workouts,teamName,teamLogo,races,allHistory}){
   const [weekOffset,setWeekOffset]=useState(0);
   const [downloading,setDownloading]=useState(false);
   const [sharing,setSharing]=useState(null); // athId being shared
   const cardRef=React.useRef();
   const athCardRefs=React.useRef({});
-  const stats=React.useMemo(()=>calcWeeklyStats(workouts,athletes,weekOffset),[workouts,athletes,weekOffset]);
+  const stats=React.useMemo(()=>calcWeeklyStats(workouts,athletes,weekOffset,races,allHistory),[workouts,athletes,weekOffset,races,allHistory]);
   // Bir önceki haftanın sıralaması — değişim okları için
-  const prevStats=React.useMemo(()=>calcWeeklyStats(workouts,athletes,weekOffset-1),[workouts,athletes,weekOffset]);
+  const prevStats=React.useMemo(()=>calcWeeklyStats(workouts,athletes,weekOffset-1,races,allHistory),[workouts,athletes,weekOffset,races,allHistory]);
   const prevRankMap=React.useMemo(()=>{
     const m={};prevStats.forEach((r,i)=>{m[r.ath.id]=i+1;});return m;
   },[prevStats]);
@@ -5011,7 +5052,7 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
       if(navigator.share&&navigator.canShare&&navigator.canShare({files:[file]})){
         await navigator.share({
           title:`${row.ath.ad} ${row.ath.soyad||''} — ${weekLabel(weekOffset)}`,
-          text:`${rank+1}. sıra · ${Object.entries(row.mesafeBySpor||{}).map(([sk,sv])=>(SPOR_MAP[sk]?.emoji||'')+sv+'km').join(' ')||'0km'}${row.irtifa>0?' · D+'+row.irtifa+'m':''} · Skor: ${row.sporSkoru}`,
+          text:`${rank+1}. sıra · ${Object.entries(row.mesafeBySpor||{}).map(([sk,sv])=>(SPOR_MAP[sk]?.emoji||'')+sv+'km').join(' ')||'0km'}${row.irtifa>0?' · D+'+row.irtifa+'m':''} · Skor: ${row.finalScore}`,
           files:[file]
         });
       } else {
@@ -5108,7 +5149,7 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
       React.createElement('div',null,
         stats.map((row,i)=>{
           if(row.count===0&&i>=activeCount)return null;
-          const pct=stats[0].sporSkoru>0?Math.round(row.sporSkoru/stats[0].sporSkoru*100):0;
+          const pct=stats[0].finalScore>0?Math.round(row.finalScore/stats[0].finalScore*100):0;
           const sporList=Object.entries(row.sporDagilim).map(([k,v])=>(SPOR_MAP[k]?.emoji||'🏅')+' ×'+v).join(' ');
           return React.createElement('div',{key:row.ath.id,
             ref:el=>{if(el)athCardRefs.current[row.ath.id]=el;},
@@ -5145,6 +5186,13 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
                 sporList||'—'
               ),
               (()=>{
+                const up=row.uygunlukPct;
+                const color=up==null?'#475569':up>=90?'#4ade80':up>=70?'#fbbf24':'#f87171';
+                return React.createElement('div',{style:{fontSize:10,color,fontWeight:600,marginTop:2}},
+                  '🎯 Verilen Antrenmanı Yapabilme: '+(up==null?'—':Math.round(up)+'%')
+                );
+              })(),
+              (()=>{
                 const today=new Date();
                 const todayStr=today.toISOString().split('T')[0];
                 const athRaceIds=(row.ath.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
@@ -5180,14 +5228,13 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
                   React.createElement('div',{style:{fontSize:10,color:'#475569'}},'D+')
                 ),
                 React.createElement('div',{style:{textAlign:'center'}},
-                  React.createElement('div',{style:{fontWeight:700,fontSize:15,color:'#f59e0b'}},row.sporSkoru),
+                  React.createElement('div',{style:{fontWeight:700,fontSize:15,color:'#f59e0b'}},row.finalScore),
                   React.createElement('div',{style:{fontSize:10,color:'#475569'}},'skor'),
                   (()=>{
                     const prevRow=prevStats.find(r=>r.ath.id===row.ath.id);
-                    const prevSkor=prevRow?.sporSkoru||0;
-                    if(prevSkor===0&&row.sporSkoru===0)return null;
-                    const diff=round1(row.sporSkoru-prevSkor);
-                    const pctChange=prevSkor>0?Math.round((row.sporSkoru-prevSkor)/prevSkor*100):null;
+                    const prevSkor=prevRow?.finalScore||0;
+                    if(prevSkor===0&&row.finalScore===0)return null;
+                    const diff=round1(row.finalScore-prevSkor);
                     const color=diff>0?'#34d399':diff<0?'#f87171':'#94a3b8';
                     const arrow=diff>0?'↑':diff<0?'↓':'→';
                     return React.createElement('div',{style:{fontSize:10,color,fontWeight:600,marginTop:2}},
@@ -5197,7 +5244,7 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
                 )
               ),
               // Bar
-              row.sporSkoru>0&&React.createElement('div',{style:{marginTop:5,height:3,background:'rgba(255,255,255,.08)',borderRadius:2,width:120,overflow:'hidden'}},
+              row.finalScore>0&&React.createElement('div',{style:{marginTop:5,height:3,background:'rgba(255,255,255,.08)',borderRadius:2,width:120,overflow:'hidden'}},
                 React.createElement('div',{style:{height:'100%',width:pct+'%',background:i===0?'#fbbf24':i===1?'#94a3b8':i===2?'#b45309':'#3b82f6',borderRadius:2}})
               )
             ),
@@ -5219,7 +5266,7 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
 
       // Alt not
       React.createElement('div',{style:{marginTop:16,paddingTop:12,borderTop:'1px solid rgba(255,255,255,.06)',display:'flex',justifyContent:'space-between',alignItems:'center'}},
-        React.createElement('div',{style:{fontSize:10,color:'#334155'}},'Skor = Antrenman Yükü (hrTSS/TRIMP) × Spor Katsayısı'),
+        React.createElement('div',{style:{fontSize:10,color:'#334155'}},'Skor = Uygunluk %45 + Efor %25 + Gerçek İş %30'),
         React.createElement('div',{style:{fontSize:11,color:'#334155',fontWeight:600}},'kosuizi.app')
       )
     )
@@ -24911,7 +24958,7 @@ function App(){
       tab==='dashboard'&&React.createElement(Dashboard,{workouts:athWks,athlete,history,races,teamLogo,teamName,planSnap}),
       tab==='motivasyon'&&React.createElement(ErrorBoundary,null,React.createElement(MotivasyonTab,{athlete,workouts:athWks,history})),
       tab==='plan'&&React.createElement(HaftalikPlanTab,{athlete,history,races,workouts,testPlanlar,planSnapInit:planSnap,onPlanSnapChange:setPlanSnapApp,onAthletesRefresh:freshList=>setAthletes(freshList),onUpdateAthlete:handleUpdateAthlete,onUpdateWorkout:handleUpdateWorkout,onSaveWorkout:w=>{const ath=athletes.find(a=>a.id===w.athleteId);const m=calcMetrics(w,ath);const rec=calcRecovery(w,ath,m.yukObj);const mergedHedef=mergeRecoveryHedef(rec.hedefISO,rec.saatler,workouts,w.athleteId);setWorkouts(p=>[...p,{...w,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:mergedHedef}]);}}),
-      tab==='lider'&&React.createElement(LiderlikTab,{athletes,workouts,teamName,teamLogo,races}),
+      tab==='lider'&&React.createElement(LiderlikTab,{athletes,workouts,teamName,teamLogo,races,allHistory}),
       tab==='bolge'&&React.createElement(BolgeTab,{athlete,workouts:athWks,onUpdateAthlete:handleUpdateAthlete}),
       tab==="test"&&React.createElement(TestTab,{athlete,history,races,workouts,onUpdateAthlete:handleUpdateAthlete,onSaveWorkout:w=>setWorkouts(p=>[...p,w]),onUpdateWorkout:handleUpdateWorkout,onDeleteWorkout:id=>setWorkouts(p=>p.filter(x=>x.id!==id)),testPlanlar,onSaveTestPlan:p=>setTestPlanlar(prev=>[...prev.filter(x=>!(x.athId===p.athId&&x.testTur===p.testTur)),p]),onDeleteTestPlan:id=>setTestPlanlar(p=>p.filter(x=>x.id!==id))}),
       tab==='yarislar'&&React.createElement(ErrorBoundary,null,React.createElement(YarislarTab,{athlete,races,history,workouts:athWks,raceResults,onAddResult:r=>setRaceResults(p=>[...p,r]),onDeleteResult:id=>setRaceResults(p=>p.filter(x=>x.id!==id))})),
@@ -25661,6 +25708,18 @@ function SporcuPlanView(){
   const athId=new URLSearchParams(window.location.search).get('id');
   const {pcView,zoom:pcZoom,toggle:togglePcView}=usePcView();
 
+  // Tüm sporcuların geçmişi — "Bu Hafta Liderlik" widget'ındaki Uygunluk hesabı
+  // için gerekli (koç panelindeki calcWeeklyStats ile AYNI mantık — panel
+  // paritesi: iki tarafta da aynı sıralama/skor çıkmalı)
+  const allHistory=React.useMemo(()=>{
+    const h={};
+    (allAthletes||[]).forEach(a=>{
+      const wks=(allWorkouts||[]).filter(w=>w.athleteId===a.id).sort((a,b)=>new Date(a.date)-new Date(b.date));
+      h[a.id]=wks.length?buildHistory(wks,a,races):[];
+    });
+    return h;
+  },[allAthletes,allWorkouts,races]);
+
   useEffect(()=>{
     if(!athId){setLoading(false);return;}
     (async()=>{
@@ -26358,8 +26417,9 @@ function SporcuPlanView(){
           )
         );
 
-        // Sağ: Bu haftanın liderlik tablosu
-        const stats=calcWeeklyStats(allWorkouts,allAthletes,0);
+        // Sağ: Bu haftanın liderlik tablosu (koç panelindeki LiderlikTab ile
+        // AYNI fonksiyon + aynı races/allHistory girdisi — panel paritesi)
+        const stats=calcWeeklyStats(allWorkouts,allAthletes,0,races,allHistory);
         const top=stats.slice(0,10);
         const myRank=stats.findIndex(s=>s.ath.id===athlete.id);
         const liderCard=React.createElement('div',{className:'card',style:{padding:'14px 16px',height:'100%'}},
@@ -26376,7 +26436,7 @@ function SporcuPlanView(){
               }},
                 React.createElement('span',{style:{minWidth:18,textAlign:'center',fontSize:i<3?14:11}},medal),
                 React.createElement('span',{style:{flex:1,fontWeight:isMe?700:500,color:isMe?'var(--info)':'var(--text-primary)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},(s.ath.ad||'')+' '+(s.ath.soyad||'').substring(0,1)+'.'),
-                React.createElement('span',{style:{fontSize:10,color:'var(--text-tertiary)',fontWeight:600}},Math.round(s.sporSkoru))
+                React.createElement('span',{style:{fontSize:10,color:'var(--text-tertiary)',fontWeight:600}},Math.round(s.finalScore))
               );
             }),
             myRank>=10&&React.createElement('div',{style:{
@@ -26386,7 +26446,7 @@ function SporcuPlanView(){
             }},
               React.createElement('span',{style:{minWidth:18,textAlign:'center'}},(myRank+1)+'.'),
               React.createElement('span',{style:{flex:1,fontWeight:700,color:'var(--info)'}},'Sen'),
-              React.createElement('span',{style:{fontSize:10,color:'var(--text-tertiary)',fontWeight:600}},Math.round(stats[myRank].sporSkoru))
+              React.createElement('span',{style:{fontSize:10,color:'var(--text-tertiary)',fontWeight:600}},Math.round(stats[myRank].finalScore))
             )
           )
         );
