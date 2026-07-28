@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.27-2117 --><!DOCTYPE html>
+<!-- Version: v2026.07.28-0818 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.27-2117';
+const APP_VERSION='v2026.07.28-0818';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -2305,6 +2305,39 @@ const SPOR_TURLERI=[
   {v:'diger',    l:'Diğer',      k:0.50, emoji:'🚶🏃'},
 ];
 const SPOR_MAP=Object.fromEntries(SPOR_TURLERI.map(s=>[s.v,s]));
+
+// ── SPOR-BAZLI NABIZ OFSETİ (2026.07.27 — Göksel'in "yük yoğunluğu dağılımına
+// koşu-dışı sporları da dahil edelim" kararı) ──────────────────────────────
+// AMAÇ: Bölgeler (Z1-Z5) koşu LTHR'sine göre kalibre. Aynı algılanan efor,
+// modaliteye göre FARKLI bir nabızda gerçekleşir (daha az kas kütlesi devrede,
+// yatay pozisyon, su soğutması vb.) — bu yüzden bisiklet/yüzme gibi sporların
+// nabzını doğrudan koşu bölgelerine sokmak yoğunluğu OLDUĞUNDAN DÜŞÜK gösterir.
+// Ofset = "bu spor dalındaki nabza kaç bpm eklersek koşu-eşdeğeri efor nabzına
+// yaklaşırız" — yani zone'a sokmadan ÖNCE ölçülen nabza eklenir.
+//
+// Kaynaklar ve güven seviyesi (2026.07 itibariyle taranan literatür):
+//  - Yüzme: Koşuya göre maxHR ~7-15bpm düşük. Yakın tarihli elit yüzücü
+//    çalışması (Baldassarre ve ark., 2019, Front Physiol — 12 elit yüzücü,
+//    50/100/200m step-test): 6.7±5.3bpm düşük. Daha eski çalışmalar
+//    (1970'ler) 15bpm'e kadar fark bildiriyor. → +9bpm (orta-iyi güven)
+//  - Bisiklet: Literatür TUTARSIZ. Büyük örneklemli bir çalışma (4043 koşucu,
+//    1026 bisikletçi, ayrı CPET testleri) sadece ~2bpm fark buldu; anekdot
+//    kaynaklar 10-15bpm'e kadar iddia ediyor. Fark, çapraz antrenman
+//    deneyimiyle küçülüyor (deneyimsiz koşucularda daha büyük). Sporcularımız
+//    çoğunlukla "koşucu ama arada bisiklete binen" profilde → +7bpm (orta güven)
+//  - Kürek: Tüm vücut kullanıldığından koşuya yakın olması beklenir; net bir
+//    literatür kaynağı bulunamadı. → +3bpm (düşük güven, tahmini)
+//  - Futbol/Basketbol: Koşu temelli, aralıklı sporlar → +2bpm (düşük güven, tahmini)
+//  - Kuvvet, Yoga, Pilates: DAHİL EDİLMİYOR — nabız burada Valsalva/basınç
+//    refleksi (kuvvet) veya çok düşük yoğunluk (yoga/pilates) nedeniyle aerobik
+//    bölgeyi anlamlı yansıtmıyor, "zone" kavramı fizyolojik olarak uygun değil.
+//  - Diğer: Listeden kaldırıldı (Göksel kararı) — tanımsız aktivite için ofset
+//    uygulanamaz. Yeni bir spor eklenmek istendiğinde kendi katsayısıyla eklenir.
+const SPOR_NABIZ_OFFSET={
+  kosu:0, yuruyus:0,
+  bisiklet:7, yuzme:9, kuerek:3, futbol:2, basketbol:2,
+  // kuvvet, yoga, pilates: kasıtlı olarak yok — calcWorkoutZoneDist bunları hariç tutar
+};
 
 // AC sütunundaki katsayı değerinden spor türü tahmin et
 // En yakın katsayıya sahip spor türünü döndürür
@@ -5406,10 +5439,15 @@ function calcWorkoutZoneDist(w,athlete){
   })();
   if(durMin<5) return null;
   const spor=w.spor||'kosu';
-  if(spor!=='kosu'&&spor!=='yuruyus') return null;
+  // DÜZELTME (2026.07.27 — Göksel kararı): eskiden sadece kosu/yuruyus dahildi.
+  // Artık SPOR_NABIZ_OFFSET'te tanımlı tüm sporlar dahil (kuvvet/yoga/pilates/diğer
+  // kasıtlı olarak tanımsız — bkz. sabitin üzerindeki gerekçe). Ofset, ölçülen nabza
+  // zone'a sokmadan ÖNCE eklenir (modaliteler arası nabız-efor farkını telafi eder).
+  const nabizOfset=SPOR_NABIZ_OFFSET[spor];
+  if(nabizOfset===undefined) return null;
 
-  const avgHR=parseFloat(w.ort_nabiz)||0;
-  const maxHR=parseFloat(w.maks_nabiz)||0;
+  const avgHR=(parseFloat(w.ort_nabiz)||0)+(parseFloat(w.ort_nabiz)>0?nabizOfset:0);
+  const maxHR=(parseFloat(w.maks_nabiz)||0)+(parseFloat(w.maks_nabiz)>0?nabizOfset:0);
 
   // Ort. nabız yoksa dağılıma dahil etme — tahmin yerine gerçek veri zorunlu
   if(avgHR<=0) return null;
@@ -22676,6 +22714,7 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,wor
   const [lastRec,setLastRec]=useState(null);
   const [planOneri,setPlanOneri]=useState(null);
   const [selectedRaceForYaris,setSelectedRaceForYaris]=useState(null);
+  const [showNabizOfsetInfo,setShowNabizOfsetInfo]=useState(false);
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
   const durSec=toSec(form.sure_sa,form.sure_dk,form.sure_sn);
   const selectedAth=athletes.find(a=>a.id===selId)||null;
@@ -22775,9 +22814,12 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,wor
   // Önce o tarihteki yarışları filtrele, yoksa tüm sporcu yarışlarını göster
   const sameDayRaces=useMemo(()=>form.date?athRacesForSel.filter(r=>r.tarih===form.date):[],[athRacesForSel,form.date]);
   const yarisOpts=sameDayRaces.length>0?sameDayRaces:athRacesForSel;
+  // DÜZELTME (2026.07.27 — Göksel isteği): Koşu dışı sporlarda hazır Yapı Notu
+  // seçenekleri (YAPI_NOTLARI[tur]) artık gösterilmiyor — serbest yazım alanı
+  // yeterli. Sadece Yarış ve Koşu için hazır seçenek listesi sürüyor.
   const yapiSecenekleri=form.tur==='yaris'
     ? yarisOpts.map(r=>r.ad+(r.tarih?' ('+fmtDate(r.tarih)+')':'')+(r.mesafe?' – '+r.mesafe+' km':''))
-    : (YAPI_NOTLARI[form.tur]||[]);
+    : (form.spor==='kosu'?(YAPI_NOTLARI[form.tur]||[]):[]);
 
   return React.createElement('div',null,
     React.createElement('div',{className:'card'},
@@ -22789,7 +22831,38 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,wor
         )
       ),
 
-      React.createElement('div',{className:'card-title'},'Antrenman Türü'),
+      React.createElement('div',{className:'card-title',style:{display:'flex',alignItems:'center',gap:8}},
+        'Antrenman Türü',
+        React.createElement('button',{
+          type:'button',
+          onClick:()=>setShowNabizOfsetInfo(v=>!v),
+          style:{fontSize:11,fontWeight:400,color:'var(--info)',background:'none',border:'none',cursor:'pointer',padding:0}
+        },showNabizOfsetInfo?'ℹ️ Nabız ofseti kaynaklarını gizle':'ℹ️ Nabız ofseti kaynakları')
+      ),
+      showNabizOfsetInfo&&React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:'var(--radius)',padding:'10px 12px',marginBottom:10,lineHeight:1.5}},
+        React.createElement('div',{style:{fontWeight:600,color:'var(--text-primary)',marginBottom:6}},
+          'Yük yoğunluğu dağılımı (Z1-2/Z3-4/Z5) — spor bazlı nabız ofseti'),
+        React.createElement('div',{style:{marginBottom:6}},
+          'Bölgeler koşu LTHR\'sine göre kalibre. Aynı efor, modaliteye göre farklı nabızda gerçekleşir — bu yüzden zone\'a sokmadan önce ölçülen nabza aşağıdaki ofset eklenir.'),
+        React.createElement('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:11.5}},
+          React.createElement('tbody',null,
+            [
+              ['🏊 Yüzme','+9 bpm','Orta-iyi güven — elit yüzücü çalışması (Baldassarre ve ark. 2019): 6.7±5.3bpm düşük; eski çalışmalar 15bpm\'e kadar.'],
+              ['🚴 Bisiklet','+7 bpm','Orta güven — literatür tutarsız (2-15bpm arası); deneyimle fark küçülüyor.'],
+              ['🚣 Kürek','+3 bpm','Düşük güven — net kaynak yok, tüm-vücut kullanımına dayalı tahmin.'],
+              ['⚽ Futbol / 🏀 Basketbol','+2 bpm','Düşük güven — koşu temelli olduğundan koşuya yakın varsayıldı.'],
+              ['🚶 Yürüyüş','+0 bpm','Koşuyla aynı hareket örüntüsü, anlamlı fark yok.'],
+              ['💪 Kuvvet, 🧘 Yoga, 🤸 Pilates','Dahil değil','Nabız aerobik bölgeyi anlamlı yansıtmıyor (Valsalva/basınç refleksi ya da çok düşük yoğunluk).'],
+            ].map((row,i)=>React.createElement('tr',{key:i,style:{borderTop:i>0?'1px solid var(--border)':'none'}},
+              React.createElement('td',{style:{padding:'4px 6px 4px 0',whiteSpace:'nowrap',fontWeight:600,color:'var(--text-primary)'}},row[0]),
+              React.createElement('td',{style:{padding:'4px 6px',whiteSpace:'nowrap',color:'var(--warn)'}},row[1]),
+              React.createElement('td',{style:{padding:'4px 0'}},row[2])
+            ))
+          )
+        ),
+        React.createElement('div',{style:{marginTop:6,fontSize:11,fontStyle:'italic'}},
+          'Not: Bunlar literatürden türetilmiş tahmini sabitler, sporcuya özel laboratuvar testi değil. Kodda: SPOR_NABIZ_OFFSET sabiti.')
+      ),
       React.createElement('div',{className:'form-grid'},
         fselAe('Spor',form.spor,v=>{
           set('spor',v);
@@ -22800,7 +22873,10 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,wor
             set('yapi_notu','');
           }
         },SPOR_TURLERI.map(s=>({v:s.v,l:s.emoji+' '+s.l}))),
-        fselAe('Yapısal Tür',form.tur,v=>{
+        // DÜZELTME (2026.07.27 — Göksel isteği): Koşu dışı sporlarda "Yapısal Tür"
+        // seçimi anlamsız (zaten form.tur otomatik spor adına eşleniyor —
+        // autoTurForSpor). Sadece koşu için gösteriliyor.
+        form.spor==='kosu' && fselAe('Yapısal Tür',form.tur,v=>{
           set('tur',v);
           setSelectedRaceForYaris(null);
           // Tür değişince yapi_notu'nu otomatik ilk seçeneğe ayarla
@@ -23506,11 +23582,17 @@ function Gecmis({workouts,athletes,races,onDelete,onBulkDelete,onUpdate}){
         React.createElement('div',{className:'form-grid',style:{marginBottom:8}},
           React.createElement('div',{className:'form-group'},
             React.createElement('label',null,'Spor'),
-            React.createElement('select',{value:editForm.spor||'kosu',onChange:e=>setF('spor',e.target.value)},
+            React.createElement('select',{value:editForm.spor||'kosu',onChange:e=>{
+              const v=e.target.value;
+              setF('spor',v);
+              if(v&&v!=='kosu'){setF('tur',autoTurForSpor(v));setF('yapi_notu','');}
+            }},
               SPOR_TURLERI.map(s=>React.createElement('option',{key:s.v,value:s.v},s.emoji+' '+s.l))
             )
           ),
-          React.createElement('div',{className:'form-group'},
+          // DÜZELTME (2026.07.27 — Göksel isteği): Koşu dışı sporlarda tür seçimi
+          // gösterilmiyor — Yapı Notu zaten serbest metin (aşağıda).
+          (editForm.spor||'kosu')==='kosu' && React.createElement('div',{className:'form-group'},
             React.createElement('label',null,'Antrenman Türü'),
             React.createElement('select',{value:editForm.tur||'',onChange:e=>{setF('tur',e.target.value);setF('yapi_notu','');}},
               ANTRENMAN_TURLERI.map(t=>React.createElement('option',{key:t.v,value:t.v},t.l))
