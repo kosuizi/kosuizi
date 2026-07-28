@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.28-0828 --><!DOCTYPE html>
+<!-- Version: v2026.07.28-1904 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.28-0828';
+const APP_VERSION='v2026.07.28-1904';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -347,27 +347,38 @@ function calcIF(np, ftp, avgHR, lthr){
 function calcMetrics(w,ath){
   const durSec=toSec(w.sure_sa,w.sure_dk,w.sure_sn);
   const durMin=durSec/60;
-  const rpe=parseFloat(w.rpe)||0;
-  // DÜZELTME (2026.07.28 — Göksel: "CTL/ATL/actualLoad da zone dağılımıyla tutarlı
-  // olsun"): SPOR_NABIZ_OFFSET'teki AYNI literatür-bazlı ofset (bkz. sabitin
-  // tanımı ve kaynakları, ~satır 2308) artık burada da uygulanıyor — bisiklet/
-  // yüzme/kürek/futbol/basketbol için ölçülen nabza zone hesabındaki BİREBİR AYNI
-  // düzeltme ekleniyor, hrTSS/TRIMP/calcObjLoad'a o düzeltilmiş nabız giriyor.
-  // Kuvvet/yoga/pilates/diğer (offseti olmayanlar) — zone dağılımında olduğu gibi
-  // nabız aerobik yükü güvenilir yansıtmıyor, AMA orada olduğu gibi "tamamen
-  // dışla" değil: burada dışlarsak RPE girilmemiş bir kuvvet antrenmanı YÜK=0
-  // görünüp CTL/ATL'i olduğundan düşük gösterir (zone dağılımında böyle bir risk
-  // yok, orada sadece bir % dilimi etkileniyordu). Bu yüzden bu 4 tür için nabız
-  // ofsetsiz (düzeltilmemiş, önceki davranışla aynı) kullanılmaya devam ediyor —
-  // yeni bir regresyon yaratmadan, sadece düzeltmesi OLAN sporlara uygulanıyor.
-  const nabizOfset=SPOR_NABIZ_OFFSET[w.spor||'kosu']||0;
-  let avgHR=parseFloat(w.ort_nabiz)||0;
+  const spor=w.spor||'kosu';
+  let rpe=parseFloat(w.rpe)||0;
+
+  // DÜZELTME (2026.07.28 — Göksel onayı, "Kuvvet/Yoga/Pilates için nabız yerine RPE'yi
+  // birincil yöntem yapalım" kararı): SPOR_NABIZ_OFFSET'te tanımsız olan sporlar
+  // (kuvvet, yoga, pilates, diğer) için nabız CTL/ATL yükünde ARTIK HİÇ KULLANILMIYOR
+  // — ofsetli ya da ofsetsiz fark etmez. Gerekçe: session-RPE yöntemi (Foster ve ark.
+  // 2001 — RPE×süre) bu modaliteler için literatürde nabız-bazlı yöntemlerden DAHA
+  // GEÇERLİ kabul edilir; kuvvette nabız Valsalva/basınç refleksine ve hormonal
+  // strese tepki verir, gerçek kassal/mekanik yükü değil. Bu yüzden "nabzı düzelt"
+  // değil "nabza hiç bakma, RPE'ye geç" doğru yaklaşım.
+  const hrGuvenilirSpor=SPOR_NABIZ_OFFSET[spor]!==undefined;
+
+  const nabizOfset=hrGuvenilirSpor?(SPOR_NABIZ_OFFSET[spor]||0):0;
+  let avgHR=hrGuvenilirSpor?(parseFloat(w.ort_nabiz)||0):0;
   if(avgHR>0) avgHR+=nabizOfset;
   let hrEstimated=false;
 
-  if(!avgHR&&rpe>0){
+  if(!avgHR&&rpe>0&&hrGuvenilirSpor){
     const est=estimateHR(rpe,parseSayi(ath?.rhr)||0,parseSayi(ath?.mhr)||0);
     if(est.avgHR){avgHR=est.avgHR+nabizOfset;hrEstimated=true;}
+  }
+
+  // RPE tahmini: HR-güvenilmez sporlarda (kuvvet/yoga/pilates/diğer) RPE de
+  // girilmemişse, yük=0 görünüp CTL/ATL'i olduğundan düşük göstermesin diye türe
+  // göre varsayılan bir orta-efor RPE'si kullanılır — açıkça "tahmini" işaretlenir.
+  // Kaynak yok, sadece tipik seans yoğunluğuna dayalı makul bir varsayım.
+  const RPE_VARSAYILAN={kuvvet:5, pilates:4, yoga:3, diger:5};
+  let rpeEstimated=false;
+  if(!hrGuvenilirSpor&&rpe<=0&&RPE_VARSAYILAN[spor]!=null){
+    rpe=RPE_VARSAYILAN[spor];
+    rpeEstimated=true;
   }
 
   // Güç metrikleri
@@ -377,38 +388,39 @@ function calcMetrics(w,ath){
   const np=ortGuc>0?calcNP(w.ort_guc,w.maks_guc,w.tur):null;
   const IF_v=calcIF(np||0,ftp,avgHR,parseSayi(ath?.lthr)||0);
 
-  // Yük metrikleri
-  const trimp=calcTRIMP(durMin,avgHR,ath?.rhr,ath?.mhr,ath?.cinsiyet);
-  const hrTSS=calcHrTSS(durSec,avgHR,ath?.lthr);
+  // Yük metrikleri — kuvvet/yoga/pilates/diğer için hrTSS/TRIMP/calcObjLoad hiç
+  // hesaplanmıyor bile (avgHR zaten 0, ama niyeti netleştirmek için ayrıca kapalı)
+  const trimp=hrGuvenilirSpor?calcTRIMP(durMin,avgHR,ath?.rhr,ath?.mhr,ath?.cinsiyet):0;
+  const hrTSS=hrGuvenilirSpor?calcHrTSS(durSec,avgHR,ath?.lthr):0;
   // Güç bazlı TSS (pTSS) — FTP ve NP varsa
   const pTSS=(np&&ftp>0&&durSec>0)?round1((durSec/3600)*(IF_v**2)*100):null;
-  const yukObjTek=calcObjLoad(durSec,avgHR,ath?.lthr,ath?.rhr,ath?.mhr,ath?.cinsiyet,w.mesafe,w.irtifa,w.zemin_zorluk);
+  const yukObjTek=hrGuvenilirSpor?calcObjLoad(durSec,avgHR,ath?.lthr,ath?.rhr,ath?.mhr,ath?.cinsiyet,w.mesafe,w.irtifa,w.zemin_zorluk):0;
 
-  // DÜZELTME (2026.07.27 — Göksel'in "manuel segment nabzı bu mekanizmayı etkiliyor
-  // mu" sorusuna yanıt; döngüyü kapatma): Sporcu her aşama için ayrı nabız girmişse
-  // (w._rowZoneDist — eskiden sadece calcRecovery ve zone% raporlamasında
-  // kullanılıyordu, actualLoad'da HİÇ kullanılmıyordu), artık TEK bir blended
-  // ortalama yerine HER BANT (low/high/ana) için AYRI hrTSS/TRIMP hesaplanıp
-  // toplanıyor. Gerekçe: hrTSS formülü karesel (IF²) olduğundan, karışık yoğunluklu
-  // bir antrenmanı tek ortalama nabızla özetlemek antrenman stresini SİSTEMATİK
-  // OLARAK OLDUĞUNDAN DÜŞÜK gösterir (Jensen eşitsizliği). Bu, Plan tarafında daha
-  // önce eklenen segment-bazlı türetmeyle (calcYukFromYapilar) aynı mantığın Gerçek
-  // tarafına uygulanmış hali — döngü artık tam kapalı.
-  const yukObjSegment=w._rowZoneDist?calcYukFromZoneDist(w._rowZoneDist,ath):null;
+  // DÜZELTME (2026.07.27 — döngüyü kapatma): Segment-bazlı gerçek nabız verisi
+  // (_rowZoneDist) sadece HR-güvenilir sporlarda anlamlı.
+  const yukObjSegment=(hrGuvenilirSpor&&w._rowZoneDist)?calcYukFromZoneDist(w._rowZoneDist,ath):null;
 
-  // Excel X: RPE × süre(dk) — Subjektif yük
+  // Excel X: RPE × süre(dk) — Subjektif yük (kuvvet/yoga/pilates/diğer için BİRİNCİL)
   const yukSubj=rpe>0?round1(rpe*durMin):0;
-  const yukFinal=yukObjSegment!=null?yukObjSegment:(yukObjTek>0?yukObjTek:yukSubj);
+  const yukFinal=hrGuvenilirSpor
+    ? (yukObjSegment!=null?yukObjSegment:(yukObjTek>0?yukObjTek:yukSubj))
+    : yukSubj;
   const mechLoad=calcMechLoad(w.mesafe,w.irtifa,w.zemin_zorluk);
 
-  // Excel Y: Temel Yük — segment-bazlı > hrTSS > TRIMP > HR-based
-  const temelYuk=yukObjSegment!=null?yukObjSegment:(hrTSS>0?round1(hrTSS):(trimp>0?round1(trimp):yukFinal));
+  // Excel Y: Temel Yük — segment-bazlı > hrTSS > TRIMP > HR-based (HR-güvenilir
+  // sporlarda); kuvvet/yoga/pilates/diğer'de doğrudan RPE-bazlı yük
+  const temelYuk=hrGuvenilirSpor
+    ? (yukObjSegment!=null?yukObjSegment:(hrTSS>0?round1(hrTSS):(trimp>0?round1(trimp):yukFinal)))
+    : yukFinal;
 
   return{
     durSec,durMin,trimp,hrTSS,yukObj:yukFinal,yukSubj,mechLoad,
     IF:IF_v,np,pTSS,temelYuk,
     hrEstimated,estAvgHR:hrEstimated?avgHR:null,
-    _yukYontem:yukObjSegment!=null?'segment_bazli':(yukObjTek>0?'hr_tekil':'subjektif')
+    rpeEstimated,estRpe:rpeEstimated?rpe:null,
+    _yukYontem:hrGuvenilirSpor
+      ?(yukObjSegment!=null?'segment_bazli':(yukObjTek>0?'hr_tekil':'subjektif'))
+      :(rpeEstimated?'rpe_varsayilan':'rpe_subjektif')
   };
 }
 
@@ -23027,10 +23039,13 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,wor
         m.hrEstimated&&React.createElement('div',{className:'calc-item',style:{color:'var(--warn)'}},
           '~Nabız (RPE→HR): ',React.createElement('span',null,m.estAvgHR+' bpm (tahmini)')
         ),
+        m.rpeEstimated&&React.createElement('div',{className:'calc-item',style:{color:'var(--warn)'}},
+          '~RPE (varsayılan): ',React.createElement('span',null,m.estRpe+' — bu spor türünde nabız yerine RPE kullanılıyor, girilmediği için tipik değer varsayıldı')
+        ),
         m.trimp>0&&React.createElement('div',{className:'calc-item'},(m.hrEstimated?'~':'')+'TRIMP: ',React.createElement('span',null,m.trimp)),
         m.hrTSS>0&&React.createElement('div',{className:'calc-item'},(m.hrEstimated?'~':'')+'hrTSS: ',React.createElement('span',null,m.hrTSS)),
-        React.createElement('div',{className:'calc-item'},'Yük'+(m.hrEstimated?' (tahmini)':'')+': ',React.createElement('span',null,m.yukObj||'—')),
-        !m.hrEstimated&&m.yukSubj>0&&React.createElement('div',{className:'calc-item'},'Yük subj.: ',React.createElement('span',null,m.yukSubj)),
+        React.createElement('div',{className:'calc-item'},'Yük'+((m.hrEstimated||m.rpeEstimated)?' (tahmini)':'')+': ',React.createElement('span',null,m.yukObj||'—')),
+        !m.hrEstimated&&!m.rpeEstimated&&m.yukSubj>0&&React.createElement('div',{className:'calc-item'},'Yük subj.: ',React.createElement('span',null,m.yukSubj)),
         m.IF&&React.createElement('div',{className:'calc-item'},'IF: ',React.createElement('span',null,m.IF))
       );})(),
       React.createElement('div',{className:'flex-gap',style:{marginTop:12}},
@@ -23464,7 +23479,13 @@ function Gecmis({workouts,athletes,races,onDelete,onBulkDelete,onUpdate}){
                       ?React.createElement('span',{style:{color:'var(--warn)',fontSize:11}},'~'+m.estAvgHR)
                       :'—'
                 ),
-                React.createElement('td',null,w.rpe||'—'),
+                React.createElement('td',null,
+                  w.rpe
+                    ?w.rpe
+                    :m.rpeEstimated
+                      ?React.createElement('span',{style:{color:'var(--warn)',fontSize:11}},'~'+m.estRpe)
+                      :'—'
+                ),
                 React.createElement('td',null,
                   w.ort_guc
                     ?React.createElement('span',{style:{fontSize:12}},w.ort_guc+'W'+(w.maks_guc?' / '+w.maks_guc+'W':''))
