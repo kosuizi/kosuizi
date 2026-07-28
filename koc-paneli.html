@@ -1,4 +1,4 @@
-<!-- Version: v2026.07.28-2234 --><!DOCTYPE html>
+<!-- Version: v2026.07.29-0021 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.07.28-2234';
+const APP_VERSION='v2026.07.29-0021';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1190,12 +1190,32 @@ function allocatePercentages(counts,total){
 // Eşit ağırlık tercih edildi çünkü ikisi farklı ama tamamlayıcı bilgi taşıyor —
 // biri diğerine baskın kılınırsa (örn. sadece yakınlık) "hiç tutturamayan ama
 // her seferinde aynı kadar yakın ıskalayan" biri yanıltıcı şekilde yüksek puan alabilir.
+//
+// 2026.07.28 — Göksel talebi: Hedef Nabız (HR bölge) uyumu da puana dahil edildi.
+// Pace ve Nabız AYRI AYRI hesaplanır (biri diğerini etkilemez), sonra ikisi varsa
+// eşit ağırlıklı ortalanır. Bir fazda sadece pace VEYA sadece nabız hedefi
+// girilmiş olabilir (örn. Z2 kolay gün nabızla, interval pace ile takip edilir) —
+// bu durumda mevcut olan tek bileşen puana %100 yansır, eksik olan yok sayılır.
+// hrClosenessScore: pace'teki gibi sürekli bir sn/km farkı yerine, extractFeedbackSignals
+// zaten sapmayı basamaklı bir ağırlığa (hrWeight: 1=uyarı,2=tehlike,4=kritik)
+// indirgediği için yakınlık da bu basamaklara göre kademeli hesaplanır.
+function hrClosenessScore(hrOk,hrWeight){
+  if(hrOk) return 100;
+  if(hrWeight==null) return null;
+  if(hrWeight>=4) return 10;  // kritik sapma
+  if(hrWeight>=2) return 40;  // tehlikeli sapma
+  return 70;                 // uyarı düzeyi sapma
+}
 function calcPaceComplianceScore(signals){
   const paceSignals=(signals||[]).filter(s=>s.paceDir||s.paceOk);
-  const total=paceSignals.length;
-  if(total===0) return null;
+  const hrSignals=(signals||[]).filter(s=>s.hrDir||s.hrOk);
+  const total=paceSignals.length; // geriye dönük uyumluluk: "total" hep pace faz sayısıdır
+  const hrTotal=hrSignals.length;
+  if(total===0&&hrTotal===0) return null;
+
+  // ── Pace bileşeni ──
   let uyum=0,hizli=0,yavas=0,closenessSum=0,closenessN=0;
-  const detay=[];
+  const paceDetayByKey={};
   paceSignals.forEach(s=>{
     let dir;
     if(s.paceOk){ uyum++; dir='uyum'; }
@@ -1203,17 +1223,51 @@ function calcPaceComplianceScore(signals){
     else if(s.paceDir==='slow'){ yavas++; dir='yavas'; }
     const c=paceClosenessScore(s.paceDiff,s.paceTol);
     if(c!=null){closenessSum+=c;closenessN++;}
-    detay.push({date:s.date,label:s.label||null,dir,diffSec:s.paceDiff,tolSec:s.paceTol,closeness:c});
+    paceDetayByKey[s.date+'|'+(s.label||'')]={dir,diffSec:s.paceDiff,tolSec:s.paceTol,closeness:c};
   });
   // uyum+hizli+yavas===total her zaman geçerlidir (her faz tam olarak bu üç
   // kovadan birine düşer) — bu yüzden yüzdeler de tam 100.0'a toplanmalı.
   const[uyumPct,hizliPct,yavasPct]=allocatePercentages([uyum,hizli,yavas],total);
   const yakinlikPuani=closenessN>0?round1(closenessSum/closenessN):null;
-  const puan=yakinlikPuani!=null?Math.round(uyumPct*0.5+yakinlikPuani*0.5):Math.round(uyumPct);
-  // En yeni tarih en üstte — kart bunu "hangi faz ne zaman/nasıl sayıldı" dökümü için kullanır
-  detay.sort((a,b)=>b.date<a.date?-1:b.date>a.date?1:0);
-  return{total,uyum,hizli,yavas,uyumPct,hizliPct,yavasPct,yakinlikPuani,puan,detay};
+  const puanPace=total>0?(yakinlikPuani!=null?Math.round(uyumPct*0.5+yakinlikPuani*0.5):Math.round(uyumPct)):null;
+
+  // ── Hedef Nabız bileşeni ──
+  let hrUyum=0,hrYuksek=0,hrDusuk=0,hrClosenessSum=0,hrClosenessN=0;
+  const hrDetayByKey={};
+  hrSignals.forEach(s=>{
+    let hrDir;
+    if(s.hrOk){ hrUyum++; hrDir='uyum'; }
+    else if(s.hrDir==='high'){ hrYuksek++; hrDir='yuksek'; }
+    else if(s.hrDir==='low'){ hrDusuk++; hrDir='dusuk'; }
+    const c=hrClosenessScore(s.hrOk,s.hrWeight);
+    if(c!=null){hrClosenessSum+=c;hrClosenessN++;}
+    hrDetayByKey[s.date+'|'+(s.label||'')]={hrDir,hrWeight:s.hrWeight,hrCloseness:c};
+  });
+  const[hrUyumPct,hrYuksekPct,hrDusukPct]=allocatePercentages([hrUyum,hrYuksek,hrDusuk],hrTotal);
+  const hrYakinlikPuani=hrClosenessN>0?round1(hrClosenessSum/hrClosenessN):null;
+  const puanNabiz=hrTotal>0?(hrYakinlikPuani!=null?Math.round(hrUyumPct*0.5+hrYakinlikPuani*0.5):Math.round(hrUyumPct)):null;
+
+  // ── Birleşik puan: ikisi de varsa eşit ağırlıklı ortalama, sadece biri varsa o kullanılır ──
+  const puan=(puanPace!=null&&puanNabiz!=null)?Math.round((puanPace+puanNabiz)/2)
+    :(puanPace!=null?puanPace:puanNabiz);
+
+  // Faz dökümü: pace ve nabız verisi aynı fazda birleştirilir (biri eksikse null kalır)
+  const allKeys=new Set([...Object.keys(paceDetayByKey),...Object.keys(hrDetayByKey)]);
+  const bySignal={};
+  [...paceSignals,...hrSignals].forEach(s=>{bySignal[s.date+'|'+(s.label||'')]={date:s.date,label:s.label||null};});
+  const detay=[...allKeys].map(k=>({
+    ...bySignal[k],
+    ...(paceDetayByKey[k]||{dir:null,diffSec:null,tolSec:null,closeness:null}),
+    ...(hrDetayByKey[k]||{hrDir:null,hrWeight:null,hrCloseness:null})
+  })).sort((a,b)=>b.date<a.date?-1:b.date>a.date?1:0);
+
+  return{
+    total,uyum,hizli,yavas,uyumPct,hizliPct,yavasPct,yakinlikPuani,puanPace,
+    hrTotal,hrUyum,hrYuksek,hrDusuk,hrUyumPct,hrYuksekPct,hrDusukPct,hrYakinlikPuani,puanNabiz,
+    puan,detay
+  };
 }
+
 
 function paceComplianceLabel(puan){
   if(puan==null) return{text:'Veri yetersiz',cls:'nötr'};
@@ -1277,7 +1331,7 @@ async function fetchWeeklyPaceComplianceScores(athlete,weeks){
     if(!snap) return; // o hafta hiç plan/geri bildirim yoksa noktayı hiç eklemiyoruz
     const signals=extractFeedbackSignals({[wk]:snap},athlete);
     const score=calcPaceComplianceScore(signals);
-    if(score) out.push({weekKey:wk,puan:score.puan,total:score.total});
+    if(score) out.push({weekKey:wk,puan:score.puan,total:score.total,hrTotal:score.hrTotal});
   });
   return out;
 }
@@ -19559,7 +19613,7 @@ function VerilenAntrenmaniYapabilmePuaniKarti({athlete}){
     e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4,flexWrap:'wrap',gap:8}},
       e('div',null,
         e('div',{className:'card-title',style:{margin:0}},'Verilen Antrenmanı Yapabilme Puanı'),
-        e('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:2}},'Reçetedeki pace hedeflerine ne kadar sadık kalındığının ölçümü.')
+        e('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:2}},'Reçetedeki pace ve Hedef Nabız bölgelerine ne kadar sadık kalındığının ölçümü.')
       ),
       e('div',{style:{display:'flex',alignItems:'center',gap:6}},
         e('div',{style:{display:'flex',gap:3,flexWrap:'wrap'}},
@@ -19567,19 +19621,19 @@ function VerilenAntrenmaniYapabilmePuaniKarti({athlete}){
             e(PeriodBtn,{key:w,w,l})
           )
         ),
-        e(ShareBtn,{elRef:cardRef,filename:'antrenman_disiplin.png',title:'Verilen Antrenmanı Yapabilme Puanı',text:athlete?.ad+' pace uyum disiplini'})
+        e(ShareBtn,{elRef:cardRef,filename:'antrenman_disiplin.png',title:'Verilen Antrenmanı Yapabilme Puanı',text:athlete?.ad+' pace ve nabız uyum disiplini'})
       )
     ),
     loading?e('div',{style:{fontSize:12,color:'var(--text-tertiary)',padding:'14px 0'}},'Hesaplanıyor…'):
     error?e('div',{className:'alert alert-danger',style:{fontSize:12}},error):
-    !score?e('div',{style:{fontSize:12,color:'var(--text-tertiary)',padding:'14px 0'}},'Seçilen dönemde pace girilmiş antrenman fazı bulunamadı.'):
+    !score?e('div',{style:{fontSize:12,color:'var(--text-tertiary)',padding:'14px 0'}},'Seçilen dönemde pace veya Hedef Nabız girilmiş antrenman fazı bulunamadı.'):
     e('div',null,
       e('div',{style:{display:'flex',alignItems:'baseline',gap:10,marginBottom:10,flexWrap:'wrap'}},
         e('div',{style:{fontSize:34,fontWeight:800,color:puanColor,lineHeight:1}},score.puan),
         e('div',{style:{fontSize:13,fontWeight:600,color:'var(--text-secondary)'}},lbl.text),
-        e('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginLeft:'auto'}},score.total+' faz değerlendirildi')
+        e('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginLeft:'auto'}},score.total+' pace, '+score.hrTotal+' nabız fazı')
       ),
-      e('div',{style:{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:10}},
+      score.total>0&&e('div',{style:{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:score.hrTotal>0?8:10}},
         [
           {label:'Uyumlu',pct:score.uyumPct,n:score.uyum,color:'#16a34a'},
           {label:'Hızlı',pct:score.hizliPct,n:score.hizli,color:'#f59e0b'},
@@ -19590,8 +19644,27 @@ function VerilenAntrenmaniYapabilmePuaniKarti({athlete}){
           e('div',{style:{fontSize:10,color:'var(--text-tertiary)'}},x.n+' faz')
         ))
       ),
-      score.yakinlikPuani!=null&&e('div',{style:{fontSize:12,color:'var(--text-secondary)',padding:'7px 11px',background:'var(--info-bg)',borderRadius:'var(--radius)',borderLeft:'3px solid var(--info)'}},
-        'Hedef Bölge yakınlık puanı: ',e('b',null,score.yakinlikPuani+'/100'),' — sadece "hedefte mi" değil, sapmaların büyüklüğü de ölçülür. Genel puan, uyum oranı (%50) ile bu yakınlık puanının (%50) bileşimidir.'
+      score.hrTotal>0&&e('div',{style:{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:10}},
+        [
+          {label:'❤️ Nabızda',pct:score.hrUyumPct,n:score.hrUyum,color:'#16a34a'},
+          {label:'❤️ Yüksek',pct:score.hrYuksekPct,n:score.hrYuksek,color:'#ef4444'},
+          {label:'❤️ Düşük',pct:score.hrDusukPct,n:score.hrDusuk,color:'#3b82f6'},
+        ].map((x,i)=>e('div',{key:i,style:{padding:'8px 10px',borderRadius:'var(--radius)',background:'var(--bg-secondary)',border:'1px solid var(--border)'}},
+          e('div',{style:{fontSize:11,fontWeight:600,color:x.color}},x.label),
+          e('div',{style:{fontSize:18,fontWeight:700}},x.pct+'%'),
+          e('div',{style:{fontSize:10,color:'var(--text-tertiary)'}},x.n+' faz')
+        ))
+      ),
+      (score.yakinlikPuani!=null||score.hrYakinlikPuani!=null)&&e('div',{style:{display:'flex',flexDirection:'column',gap:6,marginBottom:10}},
+        score.yakinlikPuani!=null&&e('div',{style:{fontSize:12,color:'var(--text-secondary)',padding:'7px 11px',background:'var(--info-bg)',borderRadius:'var(--radius)',borderLeft:'3px solid var(--info)'}},
+          'Pace yakınlık puanı: ',e('b',null,score.yakinlikPuani+'/100')
+        ),
+        score.hrYakinlikPuani!=null&&e('div',{style:{fontSize:12,color:'var(--text-secondary)',padding:'7px 11px',background:'var(--info-bg)',borderRadius:'var(--radius)',borderLeft:'3px solid var(--info)'}},
+          'Nabız yakınlık puanı: ',e('b',null,score.hrYakinlikPuani+'/100')
+        ),
+        e('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},
+          'Genel puan: pace ve nabız bileşenleri (her biri uyum oranı %50 + yakınlık puanı %50) ayrı hesaplanıp eşit ağırlıkla ortalanır. Bir fazda sadece biri varsa, sadece o kullanılır.'
+        )
       ),
       score.detay?.length>0&&e('div',{style:{marginTop:10}},
         e('div',{
@@ -19605,6 +19678,11 @@ function VerilenAntrenmaniYapabilmePuaniKarti({athlete}){
               hizli:{text:'Hızlı',color:'#f59e0b',bg:'var(--warn-bg)'},
               yavas:{text:'Yavaş',color:'#3b82f6',bg:'var(--info-bg)'}
             }[d.dir]||{text:'—',color:'var(--text-tertiary)',bg:'var(--bg-secondary)'};
+            const hrMeta={
+              uyum:{text:'❤️ Uyumlu',color:'#16a34a'},
+              yuksek:{text:'❤️ Yüksek',color:'#ef4444'},
+              dusuk:{text:'❤️ Düşük',color:'#3b82f6'}
+            }[d.hrDir]||null;
             const diffTxt=d.diffSec!=null?(d.diffSec>0?'+':'')+d.diffSec+' sn':null;
             return e('div',{key:i,style:{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,padding:'6px 9px',borderRadius:6,background:dirMeta.bg,fontSize:11}},
               e('span',{style:{fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},
@@ -19612,7 +19690,8 @@ function VerilenAntrenmaniYapabilmePuaniKarti({athlete}){
               ),
               e('div',{style:{display:'flex',alignItems:'center',gap:8,flexShrink:0}},
                 diffTxt&&e('span',{style:{color:'var(--text-tertiary)'}},diffTxt+(d.tolSec?' (±'+d.tolSec+')':'')),
-                e('span',{style:{fontWeight:700,color:dirMeta.color}},dirMeta.text)
+                d.dir&&e('span',{style:{fontWeight:700,color:dirMeta.color}},dirMeta.text),
+                hrMeta&&e('span',{style:{fontWeight:700,color:hrMeta.color}},hrMeta.text)
               )
             );
           })
@@ -19654,7 +19733,7 @@ function ChartPaceComplianceTrend({data}){
           tooltip:{callbacks:{
             label:ctx=>{
               const d=data[ctx.dataIndex];
-              return 'Puan: '+d.puan+' ('+d.total+' faz değerlendirildi)';
+              return 'Puan: '+d.puan+' ('+d.total+' pace, '+(d.hrTotal||0)+' nabız fazı)';
             }
           }}
         },
@@ -20935,7 +21014,7 @@ function PaceDisiplinSiralamasiKarti({athletes}){
     e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4,flexWrap:'wrap',gap:8}},
       e('div',null,
         e('div',{className:'card-title',style:{margin:0}},'Verilen Antrenmanı Yapabilme Puanı — Takım Sıralaması'),
-        e('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:2}},'Reçetelenen pace hedeflerine kim ne kadar sadık kalıyor — sıralı liste.')
+        e('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:2}},'Reçetelenen pace ve Hedef Nabız bölgelerine kim ne kadar sadık kalıyor — sıralı liste.')
       ),
       e('div',{style:{display:'flex',gap:3,flexWrap:'wrap'}},
         [{w:1,l:'1H'},{w:2,l:'2H'},{w:4,l:'4H'},{w:8,l:'8H'},{w:12,l:'12H'},{w:'all',l:'Tümü'}].map(({w,l})=>
@@ -20945,12 +21024,12 @@ function PaceDisiplinSiralamasiKarti({athletes}){
     ),
     loading?e('div',{style:{fontSize:12,color:'var(--text-tertiary)',padding:'14px 0'}},'Hesaplanıyor… ('+athletes.length+' sporcu taranıyor)'):
     error?e('div',{className:'alert alert-danger',style:{fontSize:12}},error):
-    (!rows||rows.length===0)?e('div',{style:{fontSize:12,color:'var(--text-tertiary)',padding:'14px 0'}},'Seçilen dönemde pace girilmiş antrenman fazı bulunan sporcu yok.'):
+    (!rows||rows.length===0)?e('div',{style:{fontSize:12,color:'var(--text-tertiary)',padding:'14px 0'}},'Seçilen dönemde pace veya Hedef Nabız girilmiş antrenman fazı bulunan sporcu yok.'):
     e('div',null,
       e('div',{className:'table-wrap'},
         e('table',null,
           e('thead',null,e('tr',null,
-            ['#','Sporcu','Puan','Uyumlu','Hızlı','Yavaş','Yakınlık','Faz'].map(h=>e('th',{key:h},h))
+            ['#','Sporcu','Puan','Uyumlu','Hızlı','Yavaş','Yakınlık','Nabız Uyum','Faz'].map(h=>e('th',{key:h},h))
           )),
           e('tbody',null,
             rows.map((r,i)=>{
@@ -20963,18 +21042,19 @@ function PaceDisiplinSiralamasiKarti({athletes}){
                   e('span',{style:{fontWeight:700,fontSize:15,color:puanColor}},r.score.puan),
                   ' ',e('span',{style:{fontSize:10,color:'var(--text-tertiary)'}},lbl.text)
                 ),
-                e('td',null,r.score.uyumPct+'%'),
-                e('td',null,r.score.hizliPct+'%'),
-                e('td',null,r.score.yavasPct+'%'),
+                e('td',null,r.score.total>0?r.score.uyumPct+'%':'—'),
+                e('td',null,r.score.total>0?r.score.hizliPct+'%':'—'),
+                e('td',null,r.score.total>0?r.score.yavasPct+'%':'—'),
                 e('td',null,r.score.yakinlikPuani!=null?r.score.yakinlikPuani:'—'),
-                e('td',null,r.score.total)
+                e('td',null,r.score.hrTotal>0?r.score.hrUyumPct+'%':'—'),
+                e('td',null,r.score.total+' / '+r.score.hrTotal)
               );
             })
           )
         )
       ),
       noData&&noData.length>0&&e('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:10}},
-        'Veri yetersiz (seçilen dönemde pace girilmemiş): '+noData.map(a=>(a.ad||'')+' '+(a.soyad||'')).join(', ')
+        'Veri yetersiz (seçilen dönemde pace veya nabız girilmemiş): '+noData.map(a=>(a.ad||'')+' '+(a.soyad||'')).join(', ')
       )
     )
   );
