@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.02-2022 --><!DOCTYPE html>
+<!-- Version: v2026.08.02-2109 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.02-2022';
+const APP_VERSION='v2026.08.02-2109';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1600,6 +1600,19 @@ const PACE_ZONES_VLT = [
   {id:'Z5b',lo:1.00, hi:1.05},
   {id:'Z5c',lo:1.05, hi:1.15},
 ];
+
+// ── Haftalık km/D+ hacim toleransı — TEK PAYLAŞILAN KAYNAK (02.08.2026 sohbeti) ──
+// Haftalık hedefin (km ve D+) "tutturuldu" sayılması için alt/üst sınır. Kullanıldığı
+// yerler: (1) günlük öneri motorundaki kmToleransAlt/Ust + dpToleransAlt (kmDeficit/
+// kmFazla/dpDeficit bayrakları ve kalan günlere dağıtım), (2) Yükleme Planı tablosu
+// kmOk/dpOk "tamamlandı" değerlendirmesi, (3) "⏳ Kalan" bandı, (4) Plan sekmesi
+// "🎯 Bu Hafta" ProgressBar rangeLow/rangeHigh. Önceden bu değer yerlere göre farklı
+// sabitlenmişti (örn. Yükleme Planı %90, Plan sekmesi %85) — 02.08.2026'da %85'te
+// eşitlendi, sonra Göksel'in "80%+ tamamlanan bir hafta 'yetersiz' etiketlenmesi çok
+// disiplinli" gözlemiyle %80–%120'ye gevşetildi. Tek kaynaktan okunduğu için bundan
+// sonra tekrar ayrışma riski yok.
+const WEEKLY_VOL_TOL_LOW=0.80;
+const WEEKLY_VOL_TOL_HIGH=1.20;
 
 function calcZones(ath){
   const rhr = parseSayi(ath.rhr)||0;
@@ -12030,10 +12043,10 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
     const idx=weekTargets.findIndex(wt=>wt.isCurrent);
     return idx>0?weekTargets[idx-1]:null;
   })();
-  // ── Haftalık km hedefi — ±%15 tolerans penceresi ─────────────────────────
+  // ── Haftalık km hedefi — paylaşılan tolerans penceresi (bkz. WEEKLY_VOL_TOL_LOW/HIGH) ──
   // Kalan koşu günlerine km'yi dengeli dağıt
-  const kmToleransAlt=targetKm*0.85;
-  const kmToleransUst=targetKm*1.15;
+  const kmToleransAlt=targetKm*WEEKLY_VOL_TOL_LOW;
+  const kmToleransUst=targetKm*WEEKLY_VOL_TOL_HIGH;
   const kmDeficit=targetKm>0&&wkKm<kmToleransAlt&&wkSessions>=2;
   const kmFazla=targetKm>0&&wkKm>kmToleransUst;
   // Kalan koşu günü tahmini (bugün dahil)
@@ -12079,7 +12092,7 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   if(kmDeficit) warnings.push({icon:'📏',text:`Km hedefinin gerisinde (${wkKm}/${targetKm}km, -%${Math.round((1-wkKm/targetKm)*100)}). Süre ayarlandı.`});
   if(kmFazla) warnings.push({icon:'📏',text:`Km hedefini aştı (${wkKm}/${targetKm}km, +%${Math.round((wkKm/targetKm-1)*100)}). Süre kısaltılabilir.`});
   // D+ haftalık hedef takibi — uyarı (override aşağıda)
-  const dpToleransAlt=targetDp*0.85;
+  const dpToleransAlt=targetDp*WEEKLY_VOL_TOL_LOW;
   const dpDeficit=targetDp>50&&wkDp<dpToleransAlt&&wkSessions>=1;
   const kalanKosuGunDp=Math.max(1,wkStats.kalanKosuGun||1);
   const dpKalan=Math.max(0,targetDp-wkDp);
@@ -17408,10 +17421,12 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               const dpPct=wt.targetDp>0?Math.round(act.dp/wt.targetDp*100):null;
 
               // Hedef tamamlanma durumu
-              // 02.08.2026: %90 → %85 (Plan sekmesindeki "🎯 Bu Hafta" ±%15 tolerans
-              // aralığının alt sınırıyla eşitlendi — bkz. ProgressBar rangeLow=hedef*0.85)
-              const kmOk=effKm>0?act.km>=effKm*0.85:true; // %85 yeterli (revize hedef)
-              const dpOk=effDp>0?act.dp>=effDp*0.85:true; // revize D+ hedef
+              // 02.08.2026: %90 → %85 → %80 (bkz. WEEKLY_VOL_TOL_LOW/HIGH tanımı —
+              // Göksel'in "80%+ tamamlanan hafta 'yetersiz' etiketlenmesi çok
+              // disiplinli" gözlemiyle gevşetildi; tüm haftalık hacim toleransı
+              // kullanımları artık aynı paylaşılan sabitten okunuyor).
+              const kmOk=effKm>0?act.km>=effKm*WEEKLY_VOL_TOL_LOW:true;
+              const dpOk=effDp>0?act.dp>=effDp*WEEKLY_VOL_TOL_LOW:true;
               const bothOk=kmOk&&dpOk;
               const noneOk=!kmOk&&!dpOk;
               const hasData=act.km>0||act.dp>0;
@@ -18003,15 +18018,14 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               const _kalanKm=round1(hedefGosterilenKm-week.wkActualKm);
               const _kalanDp=hedefGosterilenDp>0?Math.round(hedefGosterilenDp-(week.wkActualDp||0)):0;
               if(!(hedefGosterilenKm>0&&_kalanKm>0))return null;
-              // ±%15 tolerans penceresi — dosyada haftalık km hedefi için zaten kullanılan
-              // aynı antrenman bilimi ilkesi (bkz. ~satır 11014 kmToleransAlt/Ust): haftalık
-              // hacim ±%10–15 aralığında esnetilebilir kabul edilir. Kalan mesafe (ve D+)
+              // Tolerans penceresi — bkz. WEEKLY_VOL_TOL_LOW/HIGH tanımı: haftalık
+              // hacim ±%20 aralığında esnetilebilir kabul edilir. Kalan mesafe (ve D+)
               // için de aynı esneklik aralığı, tam _kalanKm/_kalanDp değil bu bant içinde
               // bir değerin de hedefe uygun sayılacağını gösteren bir rehberdir.
-              const _kalanAlt=round1(_kalanKm*0.85);
-              const _kalanUst=round1(_kalanKm*1.15);
-              const _kalanDpAlt=_kalanDp>0?Math.round(_kalanDp*0.85):0;
-              const _kalanDpUst=_kalanDp>0?Math.round(_kalanDp*1.15):0;
+              const _kalanAlt=round1(_kalanKm*WEEKLY_VOL_TOL_LOW);
+              const _kalanUst=round1(_kalanKm*WEEKLY_VOL_TOL_HIGH);
+              const _kalanDpAlt=_kalanDp>0?Math.round(_kalanDp*WEEKLY_VOL_TOL_LOW):0;
+              const _kalanDpUst=_kalanDp>0?Math.round(_kalanDp*WEEKLY_VOL_TOL_HIGH):0;
               return React.createElement(React.Fragment,null,
                 React.createElement('span',{
                   style:{color:'var(--warn)'},
@@ -18019,7 +18033,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                 },'⏳ Kalan: '+_kalanKm+' km'+(_kalanDp>0?' / D+'+_kalanDp+'m':'')),
                 React.createElement('span',{
                   style:{color:'var(--text-secondary)',fontSize:11},
-                  title:'Kalan antrenmanlar için ±%15 esneklik penceresi — haftalık hacim toleransıyla aynı ilke'
+                  title:'Kalan antrenmanlar için ±%20 esneklik penceresi — haftalık hacim toleransıyla aynı ilke'
                 },'🎯 '+_kalanAlt+'–'+_kalanUst+' km'+(_kalanDp>0?' / D+'+_kalanDpAlt+'–'+_kalanDpUst+'m':''))
               );
             })(),
@@ -26554,9 +26568,9 @@ function SporcuPlanView(){
         const ProgressBar=({val,max,rangeLow,rangeHigh,color,label,unit=''})=>{
           const pct=max>0?Math.min(110,(val/max)*100):0;
           const isOver=pct>100;
-          // Koç panelindeki ±%15 tolerans aralığı ilkesiyle aynı (bkz. ~satır 11819
-          // kmToleransAlt/Ust) — nokta hedef yerine aralık gösterimi. rangeLow/rangeHigh
-          // verilmişse "alt–üst" olarak gösterilir, verilmezse eski nokta değer kalır.
+          // Koç panelindeki paylaşılan tolerans aralığı ilkesiyle aynı (bkz.
+          // WEEKLY_VOL_TOL_LOW/HIGH tanımı) — nokta hedef yerine aralık gösterimi.
+          // rangeLow/rangeHigh verilmişse "alt–üst" olarak gösterilir, verilmezse eski nokta değer kalır.
           const maxLabel=(rangeLow!=null&&rangeHigh!=null)?(rangeLow+'–'+rangeHigh+unit):(max+unit);
           return React.createElement('div',{style:{marginBottom:9}},
             React.createElement('div',{style:{display:'flex',justifyContent:'space-between',fontSize:10,color:'var(--text-tertiary)',marginBottom:3}},
@@ -26602,12 +26616,12 @@ function SporcuPlanView(){
             React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',marginBottom:6}},'🎯 Bu Hafta'),
 
             targetKm>0
-              ?React.createElement(ProgressBar,{val:actualKm,max:round1(targetKm),rangeLow:round1(targetKm*0.85),rangeHigh:round1(targetKm*1.15),color:'#60a5fa',label:'Mesafe',unit:' km'})
+              ?React.createElement(ProgressBar,{val:actualKm,max:round1(targetKm),rangeLow:round1(targetKm*WEEKLY_VOL_TOL_LOW),rangeHigh:round1(targetKm*WEEKLY_VOL_TOL_HIGH),color:'#60a5fa',label:'Mesafe',unit:' km'})
               :React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',marginBottom:6}},'Mesafe: ',actualKm,' km'),
             // D+ hedefi 100m altındaysa (düz parkur sayılır — bkz. DP_MEANINGFUL_THRESHOLD)
             // Koşu İzlerim'de hiç gösterilmez; ne ProgressBar ne de eski nokta-değer fallback'i.
             targetDp>=100
-              ?React.createElement(ProgressBar,{val:actualDp,max:targetDp,rangeLow:Math.round(targetDp*0.85),rangeHigh:Math.round(targetDp*1.15),color:'#f87171',label:'D+',unit:' m'})
+              ?React.createElement(ProgressBar,{val:actualDp,max:targetDp,rangeLow:Math.round(targetDp*WEEKLY_VOL_TOL_LOW),rangeHigh:Math.round(targetDp*WEEKLY_VOL_TOL_HIGH),color:'#f87171',label:'D+',unit:' m'})
               :null,
 
           )
