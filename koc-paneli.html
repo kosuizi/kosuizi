@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.02-2318 --><!DOCTYPE html>
+<!-- Version: v2026.08.02-2331 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.02-2318';
+const APP_VERSION='v2026.08.02-2331';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -14973,7 +14973,7 @@ function AntrenmanRehberi(){
   );
 }
 
-function AntrenmanlarTab({athlete}){
+function AntrenmanlarTab({athlete,workouts}){
   const [subTab,setSubTab]=useState('rehber');
   const [filterTur,setFilterTur]=useState('');
   const [filterFaz,setFilterFaz]=useState('Gelişme');
@@ -14991,6 +14991,24 @@ function AntrenmanlarTab({athlete}){
 
   // Sadece koşu türleri
   const kosuTurler=ANTRENMAN_TURLERI.filter(t=>t.v&&t.spor==='kosu');
+
+  // "Bu tür son ... gün önce yapıldı" — Şablon Kütüphanesi varyant kartları için
+  // (02.08.2026, Göksel'in isteği). Plan sekmesindeki athWksSon ile aynı fonksiyon
+  // (calcTurSonKullanim), ama burada sporcunun TÜM geçmişi kullanılıyor (haftaya
+  // özel filtre yok — kütüphane genel bir referans görünümü).
+  const athWksSon=React.useMemo(()=>{
+    if(!athlete)return{};
+    return calcTurSonKullanim((workouts||[]).filter(w=>w.athleteId===athlete.id),localDateStr(new Date()));
+  },[workouts,athlete?.id]);
+  // Mor(en eski/en büyük gün) → Mavi → Yeşil → Kırmızı(en yeni/en küçük gün):
+  // görüntülenen varyantlar arasındaki [min,max] aralığı 4 eşit banda bölünür.
+  const GUN_ONCE_BAND_COLORS=['#ef4444','#22c55e','#3b82f6','#7c3aed']; // kırmızı→yeşil→mavi→mor (küçükten büyüğe)
+  const gunOnceColor=(gun,minGun,maxGun)=>{
+    if(maxGun===minGun) return GUN_ONCE_BAND_COLORS[2]; // tüm değerler eşitse nötr (mavi)
+    const frac=(gun-minGun)/(maxGun-minGun); // 0=en küçük, 1=en büyük
+    const idx=Math.min(3,Math.floor(frac*4));
+    return GUN_ONCE_BAND_COLORS[idx];
+  };
 
   // Bir (tur, yapiNotu) ikilisi için şablonu üret
   const buildTpl=(tur,yapiNotu)=>{
@@ -15068,6 +15086,12 @@ function AntrenmanlarTab({athlete}){
     if(showOnlyGaps&&!(r.gapNotlar||r.gapTpl||r.gapMatch))return false;
     return true;
   });
+
+  // Görüntülenen varyantlar arasında (yalnızca en az bir kez yapılmış türler) gün
+  // aralığı — renk bantlaması bu aralığa göre hesaplanır.
+  const _gunOnceVals=filteredRows.map(r=>athWksSon[r.tur]).filter(v=>v!=null);
+  const _minGunOnce=_gunOnceVals.length?Math.min(..._gunOnceVals):0;
+  const _maxGunOnce=_gunOnceVals.length?Math.max(..._gunOnceVals):0;
 
   // İstatistikler
   const stats=useMemo(()=>{
@@ -15185,7 +15209,14 @@ function AntrenmanlarTab({athlete}){
               e('span',{style:{fontSize:18}},tipEmoji(r.tur)),
               e('div',{style:{flex:1,minWidth:0}},
                 e('div',{style:{fontSize:13,fontWeight:600}},r.turLabel),
-                e('div',{style:{fontSize:11,color:'var(--text-secondary)'}},r.yapiNotu)
+                e('div',{style:{fontSize:11,color:'var(--text-secondary)'}},r.yapiNotu),
+                athlete&&(()=>{
+                  const _gun=athWksSon[r.tur];
+                  const _hicYapilmadi=_gun==null;
+                  return e('div',{style:{fontSize:10,fontWeight:600,marginTop:1,color:_hicYapilmadi?'#7c3aed':gunOnceColor(_gun,_minGunOnce,_maxGunOnce)}},
+                    _hicYapilmadi?'🕐 Bu tür daha önce hiç yapılmadı':'🕐 Bu tür son '+_gun+' gün önce yapıldı'
+                  );
+                })()
               ),
               r.gapNotlar&&e('span',{style:_antBadgeStyle('warn')},'YAPI NOTU YOK'),
               r.gapTpl&&e('span',{style:_antBadgeStyle('danger')},'ÜRETECİ YOK'),
@@ -25244,7 +25275,7 @@ function App(){
             .then(merged=>{if(merged&&selId===ath.id)setPlanSnapApp(merged);});
         }
       },athlete,athletes,selId,onSelChange:setSelId,allHistory,workouts,races,testPlanlar}),
-      tab==='antrenmanlar'&&React.createElement(AntrenmanlarTab,{athlete}),
+      tab==='antrenmanlar'&&React.createElement(AntrenmanlarTab,{athlete,workouts}),
       tab==='gecmis'&&React.createElement(Gecmis,{workouts,athletes,races,onDelete:id=>setWorkouts(p=>p.filter(x=>x.id!==id)),onBulkDelete:ids=>setWorkouts(p=>p.filter(x=>!ids.includes(x.id))),onUpdate:handleUpdateWorkout}),
       tab==='analiz'&&React.createElement(AntrenmanAnalizTab,{workouts,athletes}),
       tab==='yukle'&&React.createElement(ExcelYukle,{onImport:list=>setWorkouts(p=>[...p,...list]),athletes,selId,onSelChange:setSelId,workouts}),
