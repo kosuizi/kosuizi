@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.02-0912 --><!DOCTYPE html>
+<!-- Version: v2026.08.02-2022 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.02-0912';
+const APP_VERSION='v2026.08.02-2022';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1098,7 +1098,8 @@ function extractFeedbackSignals(allSnapsObj, athlete){
             // Rozet sistemiyle (bpmValidation/bpmValidationAralik) BİREBİR aynı kademe:
             // tolerans payı (target) içindeki sapmalar sinyal üretmez — gürültü filtrelenir.
             // Üst/alt yön ayrı eşiklere sahip (asimetrik) — bkz. getBpmTol() yorumu.
-            const {targetUp,warnUp,dangerUp,targetDown,warnDown,dangerDown}=getBpmTol(hr);
+            // durSec: sürekli bölgelerde (Z2–Z4) kısa segmentlerin lag payını hesaba katar.
+            const {targetUp,warnUp,dangerUp,targetDown,warnDown,dangerDown}=getBpmTol(hr,rowDurSec(row));
             if(row.bpm > hr.hi_bpm){
               const over=row.bpm-hr.hi_bpm;
               if(over>targetUp){
@@ -6716,13 +6717,23 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
       : zones?.hrZones?.[zIdx];
     if(!hr?.lo_bpm||!hr?.hi_bpm) return null;
     const {lo_bpm,hi_bpm}=hr;
-    const {targetUp,warnUp,dangerUp,targetDown,warnDown,dangerDown}=getBpmTol(hr);
+    // durSec: sürekli bölgelerde (Z2–Z4) kısa segmentlerin lag payını hesaba katar
+    // (örn. cruise bloğu manuel olarak 3dk'ya kısaltıldığında).
+    const {targetUp,warnUp,dangerUp,targetDown,warnDown,dangerDown}=getBpmTol(hr,rowDurSec(rowData));
     // Soğuma: her iki yönde de beklenen sapma → tarafsız gri rozet. Isınma: sadece alt sınır.
     const rowLabel=rowData.label||'';
     const isCooldown=/soğuma|soguma/i.test(rowLabel);
     const isWarmup=/[iı]sınma|isinma/i.test(rowLabel);
     if(isCooldown&&(ovBpm>hi_bpm||ovBpm<lo_bpm)) return{label:'Soğuma Nabzı',color:'#64748b',bg:'#f1f5f9',icon:'↓'};
     if(isWarmup  &&ovBpm<lo_bpm) return{label:'Isınma Nabzı', color:'#64748b',bg:'#f1f5f9',icon:'↑'};
+    // Isınma — yüksek sapma: WARMUP_UP_TOL ile kademeli değerlendirilir (bkz. tanım).
+    if(isWarmup  &&ovBpm>hi_bpm){
+      const over=ovBpm-hi_bpm;
+      if(over<=WARMUP_UP_TOL.targetUp)  return{label:'Hedef Nabız',color:'#22c55e',bg:'#f0fdf4',icon:'♥'};
+      if(over<=WARMUP_UP_TOL.warnUp)    return{label:'Biraz Yüksek Nabız',color:'#f59e0b',bg:'#fffbeb',icon:'↑'};
+      if(over<=WARMUP_UP_TOL.dangerUp)  return{label:'Çok Yüksek Nabız',  color:'#f97316',bg:'#fff7ed',icon:'↑↑'};
+      return                     {label:dangerHighLabel(hr),  color:'#ef4444',bg:'#fef2f2',icon:'⚠'};
+    }
     // Toparlanma amaçlı satır (tekrar arası dinlenme): ORTALAMA değil EN DÜŞÜK nabız girilir.
     // Amaç bir sonraki tekrara hazır olacak kadar toparlanmak — tek yönlü kontrol, eşik = satırın
     // kendi atanmış bölgesinin üst sınırı. Aktif eforla aynı üst-yön toleransı yeniden kullanılır.
@@ -7037,9 +7048,56 @@ const BPM_TOL_TABLE={
   Z5b: {targetUp:5, warnUp:9,  dangerUp:14, targetDown:10, warnDown:17, dangerDown:24},
   Z5c: {targetUp:6, warnUp:11, dangerUp:16, targetDown:6,  warnDown:11, dangerDown:16},
 };
-function getBpmTol(hr){
-  return BPM_TOL_TABLE[hr?.id] || BPM_TOL_TABLE.Z4; // tanınmayan/eksik id için güvenli varsayılan
+// ── Sürekli bölgelerde (Z2–Z4) kısaltılmış segment lag payı ──
+// Z2/Z3/Z4 toleransı normalde "uzun sürekli blok" varsayımıyla sıkı/simetrik tutulur
+// (bkz. yukarıdaki tablo yorumu — Z4, 20dk blokla test edilmiş, lag payı ~1.3bpm
+// ihmal edilebilir). Ancak bir coach bu bölgelerden birinde kısa süreli bir segment
+// tanımlarsa (örn. cruise bloğunu 8dk'dan 3dk'ya manuel kısaltmak), aynı cardiac-lag
+// etkisi (nabzın hedefe ulaşana kadar geçen gecikme) burada da devreye girer — sadece
+// Z5a/Z5b için modellenmemişti. Aynı kanıtlanmış widen-delta'yı (Z5a/Z5b targetDown/
+// warnDown/dangerDown ile Up değerleri arasındaki fark: +5/+8/+10bpm) referans alıp,
+// süre 2dk'nın altına indikçe tam uygulanacak, 6dk'da (mevcut en kısa cruise şablon
+// segmenti + Z4'ün doğrulanmış "güvenli" süresi) sıfıra inecek şekilde kademeli
+// (lineer) dağıtıyoruz. Yalnızca ALT yönü genişletir — sert koşmak hâlâ aynı sıkı
+// üst-yön toleransıyla değerlendirilir.
+const LAG_WIDEN_SHORT_SEC=120;  // bu sürede/altında tam widen uygulanır
+const LAG_WIDEN_LONG_SEC=360;   // bu sürede/üstünde widen sıfırlanır
+const LAG_WIDEN_MAX={targetDown:5, warnDown:8, dangerDown:10}; // Z5a/Z5b'den alınan kanıtlanmış delta
+function lagWidenExtra(durSec){
+  if(!durSec||durSec<=0) return{targetDown:0,warnDown:0,dangerDown:0}; // süre bilinmiyor → değişiklik yok (geriye dönük uyumlu)
+  if(durSec>=LAG_WIDEN_LONG_SEC) return{targetDown:0,warnDown:0,dangerDown:0};
+  const frac=durSec<=LAG_WIDEN_SHORT_SEC?1:1-((durSec-LAG_WIDEN_SHORT_SEC)/(LAG_WIDEN_LONG_SEC-LAG_WIDEN_SHORT_SEC));
+  return{
+    targetDown:Math.round(LAG_WIDEN_MAX.targetDown*frac),
+    warnDown:Math.round(LAG_WIDEN_MAX.warnDown*frac),
+    dangerDown:Math.round(LAG_WIDEN_MAX.dangerDown*frac),
+  };
 }
+// durSec (opsiyonel): satırın gerçek süresi (sn). Verilirse ve bölge sürekli (Z2–Z4)
+// ise, kısa süreye göre alt yön toleransı kademeli genişletilir. Verilmezse veya
+// bölge Z1/Z5x ise davranış öncekiyle birebir aynıdır (Z5x zaten kendi sabit geniş
+// alt toleransına sahip, Z1 zaten en geniş zon).
+function getBpmTol(hr,durSec){
+  const base=BPM_TOL_TABLE[hr?.id] || BPM_TOL_TABLE.Z4; // tanınmayan/eksik id için güvenli varsayılan
+  const isSurekli=hr?.id==='Z2'||hr?.id==='Z3'||hr?.id==='Z4';
+  if(!isSurekli||!durSec) return base;
+  const extra=lagWidenExtra(durSec);
+  if(!extra.targetDown&&!extra.warnDown&&!extra.dangerDown) return base;
+  return{
+    ...base,
+    targetDown:base.targetDown+extra.targetDown,
+    warnDown:base.warnDown+extra.warnDown,
+    dangerDown:base.dangerDown+extra.dangerDown,
+  };
+}
+// ── Isınma üst-yön toleransı — Z1'in genel toleransından (targetUp:8/14/20) AYRI ──
+// Z1'in geniş genel toleransı, Z1'in GERÇEKTEN hedef bölge olduğu antrenmanlar için
+// (kolay, hazırlık, depar — bkz. TUR_ZONE_BEKLENTI) tasarlandı. Isınma satırlarında
+// ise soru "hedefte mi" değil "erken aşırı efora mı giriyor" — bu yüzden Z1'in kendi
+// geniş payını miras almak yanlış: zone genişliği (~%20 LTHR) + geniş tolerans payı
+// üst üste binince, ısınmada nabzın Z3/Z4 sınırına yaklaşması bile "Hedef Nabız"
+// (yeşil) görünebiliyordu. Sürekli-bölge (Z2-Z4) toleransıyla aynı ölçek kullanılıyor.
+const WARMUP_UP_TOL={targetUp:5, warnUp:9, dangerUp:14};
 
 // DANGER eşiğini üstten aşan en kritik kademenin etiketi.
 // "Tehlikeli Nabız" yalnızca Z5c (Maksimal) bölgesinde kullanılır — sporcunun fizyolojik
@@ -7373,7 +7431,11 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
       : zones?.hrZones?.[zi];
     if(!hr?.lo_bpm||!hr?.hi_bpm) return null;
     const {lo_bpm,hi_bpm}=hr;
-    const {targetUp,warnUp,dangerUp,targetDown,warnDown,dangerDown}=getBpmTol(hr);
+    // durSec: sürekli bölgelerde (Z2–Z4) kısa segmentlerin lag payını hesaba katar
+    // (örn. cruise bloğu manuel olarak 3dk'ya kısaltıldığında). Aşağıda "Kısa satır"
+    // bloğunda da kullanılacağından burada bir kez hesaplanıp saklanıyor.
+    const durSec=rowDurSec(row);
+    const {targetUp,warnUp,dangerUp,targetDown,warnDown,dangerDown}=getBpmTol(hr,durSec);
     const bpm=row.bpm;
     // ── Isınma/Soğuma: simetrik yapı, sadece yönü ters. İkisinde de ORTALAMA kullanılır ──
     // Isınma: düşük sapma nötr (henüz ısınmamış, beklenen) — yüksek sapma kademeli uyarı (erken aşırı efor).
@@ -7383,6 +7445,15 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     const isCooldown=/soğuma|soguma/i.test(rowLabel);
     const isWarmup=/[iı]sınma|isinma/i.test(rowLabel);
     if(isWarmup  &&bpm<lo_bpm) return{label:'Isınma Nabzı', color:'#64748b',bg:'#f1f5f9',icon:'↑'};
+    // Isınma — yüksek sapma: WARMUP_UP_TOL (Z1'in geniş genel toleransından ayrı,
+    // daha sıkı) ile kademeli değerlendirilir — bkz. WARMUP_UP_TOL yorumu.
+    if(isWarmup  &&bpm>hi_bpm){
+      const over=bpm-hi_bpm;
+      if(over<=WARMUP_UP_TOL.targetUp)  return{label:'Hedef Nabız',color:'#22c55e',bg:'#f0fdf4',icon:'♥'};
+      if(over<=WARMUP_UP_TOL.warnUp)    return{label:'Biraz Yüksek Nabız',color:'#f59e0b',bg:'#fffbeb',icon:'↑'};
+      if(over<=WARMUP_UP_TOL.dangerUp)  return{label:'Çok Yüksek Nabız',  color:'#f97316',bg:'#fff7ed',icon:'↑↑'};
+      return                     {label:dangerHighLabel(hr),  color:'#ef4444',bg:'#fef2f2',icon:'⚠'};
+    }
     if(isCooldown){
       // 3-değer trend sistemi öncelikli — bpmStart+bpmEnd girilmişse trend rozeti döndür
       const trendBadge=detectCooldownTrend(row.bpmStart,row.bpmAvg,row.bpmEnd,rowDurSec(row),hi_bpm);
@@ -7405,7 +7476,6 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     }
     // ── Kısa satır (≤30 sn): cardiac lag — nabız zone'a ulaşamayabilir ──
     // Tepe nabzı beklenir; alt sınır kontrolü atlanır, sadece üst sınır bak.
-    const durSec=rowDurSec(row);
     const isShortRow=durSec>0&&durSec<=30;
     if(isShortRow){
       if(bpm>hi_bpm){
