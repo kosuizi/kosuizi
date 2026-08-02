@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.02-2152 --><!DOCTYPE html>
+<!-- Version: v2026.08.02-2314 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.02-2152';
+const APP_VERSION='v2026.08.02-2314';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -6796,11 +6796,12 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
     const base = type==='run' ? runRow : restRow;
     if(!base) return null;
     const ovr = overrides[rep]?.[type] || {};
+    // pm/ps artık updateAralikCell tarafından HER ZAMAN birlikte (ikisi de override
+    // ya da ikisi de base'den) yazılıyor — bu yüzden burada zorla-0 gösterimine
+    // gerek yok. Eski partial-override kayıtları (bu düzeltmeden önce kaydedilmiş)
+    // için de spread zaten doğru davranır: eksik taraf base'den (zone-varsayılanı)
+    // gösterilir, 0 değil.
     const merged = {...base, ...ovr};
-    // pm girilmiş ama ps girilmemişse ps=0 göster (zone default'a düşme — computeAvg ile tutarlı)
-    if(ovr.pm != null && ovr.ps == null) merged.ps = 0;
-    // ps girilmiş ama pm girilmemişse pm=0 göster
-    if(ovr.ps != null && ovr.pm == null) merged.pm = 0;
     return merged;
   };
 
@@ -7781,12 +7782,20 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
         upd = {mesafe:val};
       }
     } else if(field==='pm' || field==='ps'){
-      // Sadece değiştirilen alanı kaydet — diğer bileşeni zone'dan ALMA
-      // Böylece pm girilirken ps'e zone değeri bulaşmaz (ve vice versa)
+      // Değiştirilen alan kaydedilir. Diğer bileşen DAHA ÖNCE hiç override
+      // edilmemişse (ilk kez tek taraf dokunuluyorsa), zone-varsayılanından (base)
+      // TAMAMLANIR — böylece saklanan override hiçbir zaman "yarım" (örn. sadece
+      // saniye) kalmaz. Eskiden diğer bileşen boş bırakılıyordu; bu hem ekranda
+      // dokunulmayan tarafın 0 görünmesine (Göksel'in bildirdiği sorun) HEM DE
+      // extractFeedbackSignals'ta "0dk XXsn" gibi anlamsız bir pace'in kalibrasyon
+      // sinyaline karışmasına yol açıyordu (bkz. satır ~1065-1067: pm=undefined
+      // olduğunda (pm||0)*60+ps sadece ps saniye olarak okunuyordu).
+      const otherField=field==='pm'?'ps':'pm';
+      const curOtherOv=field==='pm'?curPsOv:curPmOv;
       upd = {[field]: val};
-      // Süre yeniden hesabı: yalnızca her iki bileşen de açık override'da mevcutsa
-      const pm = field==='pm' ? val : curPmOv;
-      const ps = field==='ps' ? val : curPsOv;
+      if(curOtherOv==null) upd[otherField]=base[otherField]||0;
+      const pm = field==='pm' ? val : (curPmOv!=null?curPmOv:upd.pm);
+      const ps = field==='ps' ? val : (curPsOv!=null?curPsOv:upd.ps);
       if(pm != null && ps != null && curMesafe > 0){
         const paceSec = pm*60+ps;
         if(paceSec>0){
