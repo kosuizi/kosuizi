@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.02-2331 --><!DOCTYPE html>
+<!-- Version: v2026.08.03-0946 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.02-2331';
+const APP_VERSION='v2026.08.03-0946';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -594,6 +594,25 @@ const λ_ctl=1-Math.exp(-1/42);  // τ=42 gün (kronik/fitness)
 const λ_matl=1-Math.exp(-1/14); // τ=14 gün (mekanik akut — tendon kısa-orta vadeli uyum)
 const λ_mctl=1-Math.exp(-1/60); // τ=60 gün (mekanik kronik — bağ dokusu/kemik uzun vadeli uyum)
 const MECH_SCALE=6; // mechLoad (km-eşd.) → TSS ölçeğine normalizasyon (1 km Z2 ≈ 6 TSS)
+
+// ── Planlama aşamasında (henüz gerçekleşmemiş gün) tür bazlı dakika-başı mekanik
+// yük tahmini (km-eşdeğeri/dk) — gerçek mesafe/D+ bilinmediğinden calcMechLoad
+// çalıştırılamaz; yukHedef'in (süre×tür çarpanı) mekanik eksendeki karşılığıdır.
+// Yokuş/tırmanış ağırlıklı türler, tipik D+ katkısı nedeniyle yüksek; düz
+// track/yol antrenmanları (interval, tempo, eşik...) düşük; çapraz antrenman
+// (bisiklet/yüzme) neredeyse sıfır tutuldu. Gerçek veri girildiğinde (isPast)
+// bu tahmine hiç ihtiyaç yok — doğrudan calcMechLoad kullanılır.
+const MECH_TUR_DK_KMESD={
+  yokus_kisa:0.30, yokus_uzun:0.28, tirmanis:0.32, hill_sprint:0.25,
+  teknik:0.20, acici:0.20, uzun:0.17, back_to_back:0.17,
+  capraz:0.05, dinlenme:0,
+};
+const MECH_TUR_DK_VARSAYILAN=0.15; // listede olmayan (düz yol/track) türler için
+function estimateMechLoadForSim(tur,sureDk){
+  if(!tur||tur==='dinlenme'||!sureDk) return 0;
+  const rate=MECH_TUR_DK_KMESD[tur]??MECH_TUR_DK_VARSAYILAN;
+  return round1(sureDk*rate);
+}
 
 // ── Sporcu bazlı taper/zirve override okuyucu ────────────────────────────────
 // Öncelik: athlete.yarıslar[i].taper_w > race.taper_w > otomatik hesap
@@ -13477,6 +13496,17 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
 
   const weeks=[];
   let simAtl=last?.atl||0, simCtl=last?.ctl||0;
+  // ── Mekanik yük simülasyonu (02.08.2026, Göksel'in isteği) ──────────────────
+  // Eskiden mechCtl/mechAtl hiç ileri simüle edilmiyordu, hep last.mechCtl/mechAtl'de
+  // donuk kalıyordu — kardiyo (simAtl/simCtl) her gün ilerlerken mekanik taraf bugünkü
+  // gerçek değerde kilitli kalıyordu. Artık aynı EWMA mantığıyla (λ_matl τ=14,
+  // λ_mctl τ=60 — gerçek geçmiş hesabıyla AYNI sabitler) ilerletiliyor.
+  // Geçmiş/bugün günlerde gerçek mechLoad (actualMech, calcMetrics'ten) kullanılır.
+  // Gelecek (henüz yapılmamış) günlerde gerçek mesafe/D+ bilinmediği için, türe göre
+  // dakika-başı km-eşdeğeri kaba tahmini kullanılır — yukHedef'in (süre×tür çarpanı)
+  // aynı hassasiyet seviyesindeki mekanik karşılığı. Gerçek veri girildiğinde
+  // (isPast) zaten tam calcMechLoad'a döner, bu yalnızca planlama aşaması içindir.
+  let simMechAtl=last?.mechAtl||0, simMechCtl=last?.mechCtl||0;
   let sonYogunGunGlobal=false; // Haftalar arası korunur
   let plannedKaliteliCarry=[]; // Hafta 0'da planlanan kaliteli tipler → hafta 1'de tekrar önleme
 
@@ -13794,7 +13824,7 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       // Geçmiş günler için simüle edilen değerleri kullan (simAtl/simCtl)
       const simState=isToday&&last
         ?{atl:round1(last.atl||0),ctl:round1(last.ctl||0),tsb:round1((last.ctl||0)-(last.atl||0)),acwr:last.acwr||null,mechCtl:round1(last.mechCtl||0),mechAtl:round1(last.mechAtl||0)}
-        :{atl:round1(simAtl),ctl:round1(simCtl),tsb:round1(simCtl-simAtl),acwr:simCtl>1?round2(simAtl/simCtl):null,mechCtl:round1(last?.mechCtl||0),mechAtl:round1(last?.mechAtl||0)};
+        :{atl:round1(simAtl),ctl:round1(simCtl),tsb:round1(simCtl-simAtl),acwr:simCtl>1?round2(simAtl/simCtl):null,mechCtl:round1(simMechCtl),mechAtl:round1(simMechAtl)};
       // isPast: sadece tarih karşılaştırması — saat farkından etkilenmesin
       const isPast=dateStr<`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
       const dtR=primary?Math.ceil((new Date(primary.tarih+'T12:00:00')-new Date(dateStr+'T12:00:00'))/864e5):null;
@@ -13802,10 +13832,11 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       const dtInt=nextInt?Math.ceil((new Date(nextInt.tarih+'T12:00:00')-new Date(dateStr+'T12:00:00'))/864e5):null;
       const phase=primary?calcPhase(dateStr,primary.tarih,primary.prep_weeks,primary,getAthRaceOverride(athlete,primary?.id)):'Temel';
       const actual=athWorkouts.filter(w=>w.date===dateStr);
-      let actualLoad=0,actualKm=0,actualDp=0;
+      let actualLoad=0,actualKm=0,actualDp=0,actualMech=0;
       actual.forEach(w=>{
         const m=calcMetrics(w,athlete);
         actualLoad+=m.yukObj||0;
+        actualMech+=m.mechLoad||0;
         // Mesafe/D+ yalnızca koşu türü antrenmanlardan toplanır — yüzme/bisiklet vb.
         // mesafeleri "haftalık km" gibi koşuya özel metriklere karışmamalı.
         if((w.spor||'kosu')==='kosu'){
@@ -14075,6 +14106,14 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       const loadForSim=Math.round(rawLoad*simFactor);
       simAtl=loadForSim*λ_atl+simAtl*(1-λ_atl);
       simCtl=loadForSim*λ_ctl+simCtl*(1-λ_ctl);
+      // Mekanik yük — geçmişte gerçek (actualMech, calcMetrics), gelecekte türe göre
+      // dakika-başı tahmin (bkz. estimateMechLoadForSim). Kardiyoyla aynı gün için
+      // aynı anda ilerletiliyor — böylece hafta 1'deki yokuş/tırmanış birikimi,
+      // hafta 2'nin mekanik-aşırı-yük kontrollerinde (mechKardioImbalancePlan vb.)
+      // artık görünür oluyor.
+      const mechLoadForSim=isPast?(actualMech||0):estimateMechLoadForSim(planned.tip,planned.sure_dk);
+      simMechAtl=mechLoadForSim*λ_matl+simMechAtl*(1-λ_matl);
+      simMechCtl=mechLoadForSim*λ_mctl+simMechCtl*(1-λ_mctl);
       let comparison=null;
       if((isPast||isToday)&&actual.length>0){
         // DÜZELTME (2026.07.27 — Göksel'in ACWR/TSB tutarsızlığı sonrası sorduğu
