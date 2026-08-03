@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.03-1107 --><!DOCTYPE html>
+<!-- Version: v2026.08.03-1118 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.03-1107';
+const APP_VERSION='v2026.08.03-1118';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -12951,22 +12951,34 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
 
     // ── BAŞLANGIÇ SEVİYESİ: Yürü-Koş programı ──────────────────────────────
     // Sporcu seviyesi 'baslangic' ise tüm koşu günleri yürü-koş antrenmanına yönlendirilir.
-    // Tamamlanan yuru_kos seans sayısına göre sonraki seviye atanır (S1–S12).
+    // Sıradaki seviye ARTIK ham "tamamlanan seans sayısı"na göre değil, en güncel
+    // tarihli yürü-koş kaydının GERÇEK seviyesine göre belirlenir (kayıtlı yapi_notu'dan
+    // parse edilir). Böylece koç bir seansı tekrarlatsa ya da "ata" ile geriye bir
+    // seviyeye dönse dahi, sistem her zaman "son kayıtlı seviye + 1"i önerir —
+    // toplam kayıt sayısına göre ilerlemeyi değil.
     if((athlete.seviye||'baslangic')==='baslangic'){
-      const tamamlananYK=(wkStats.athWorkouts||[]).filter(w=>(w.tur==='yuru_kos'||w._isYuruKos)||(w.yapi_notu&&(w.yapi_notu.startsWith('Yürü-Koş ·')||w.yapi_notu.startsWith('🚶🏃 Yürü-Koş ·')))).length;
-      if(tamamlananYK>=12){
+      const ykWorkoutsAll=(wkStats.athWorkouts||[]).filter(w=>(w.tur==='yuru_kos'||w._isYuruKos)||(w.yapi_notu&&(w.yapi_notu.startsWith('Yürü-Koş ·')||w.yapi_notu.startsWith('🚶🏃 Yürü-Koş ·'))));
+      const tamamlananYK=ykWorkoutsAll.length; // bilgi amaçlı toplam sayaç (seviye kararında kullanılmaz)
+      const sonYK=[...ykWorkoutsAll].sort((a,b)=>(b.date||'').localeCompare(a.date||''))[0];
+      let sonSeviye=0;
+      if(sonYK){
+        const m=(sonYK.yapi_notu||'').match(/·\s*S(\d+)/);
+        if(m) sonSeviye=parseInt(m[1]);
+      }
+      if(sonSeviye>=12){
         // Program tamamlandı — program bitişi mesajı + antrenörü bilgilendir
         kosuTpl=tplKolay(band,35,zones);
         kosuTpl.baslik='🎉 Yürü-Koş Programı Tamamlandı!';
         kosuTpl.yapi_notu='Yürü-Koş programı bitti — seviye güncellemesi gerekiyor';
         kosuTpl.yapilar=[{baslik:'Program Bitti 🎉',detay:'Yürü-Koş S12 tamamlandı. Artık 30 dk sürekli koşabiliyorsunuz! Antrenör, lütfen sporcu seviyesini Rekreasyonel olarak güncelleyin.'}];
-        kosuUyari='Yürü-Koş programı tamamlandı (' +tamamlananYK+ '/12 seans) — seviye güncellemesi gerekiyor';
+        kosuUyari='Yürü-Koş programı tamamlandı (son kayıt: S12) — seviye güncellemesi gerekiyor';
       } else {
-        const sonrakiSeans=tamamlananYK+1;
+        const sonrakiSeans=sonSeviye+1; // son kaydedilen seansın GERÇEK seviyesine göre devam
         kosuTpl=tplYuruKos(sonrakiSeans,zones);
         kosuTpl.tur='yuru_kos';
-        kosuUyari='Başlangıç programı — S'+sonrakiSeans+'/12 · Tamamlanan: '+tamamlananYK+' seans';
+        kosuUyari='Başlangıç programı — S'+sonrakiSeans+'/12 · Son kayıt: '+(sonSeviye>0?('S'+sonSeviye):'yok')+' · Toplam kayıt: '+tamamlananYK+' seans';
       }
+
     } else if((cokYorgun||yukYuksek||acwrOverloadPlan)&&!(isSimulatedFuture&&haftaGunTipi==='kaliteli')){
       // İskelet kaliteli gün seçtiyse simüle günlerde bu bloktan geç — iskelet zaten yük durumuna göre gün seçti
       const sure=Math.round((cokYorgun?30:40)*yMod);
