@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.04-2056 --><!DOCTYPE html>
+<!-- Version: v2026.08.04-2114 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.04-2056';
+const APP_VERSION='v2026.08.04-2114';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -26440,10 +26440,21 @@ function SporcuPlanView(){
   // widget'ı için. Koç panelindeki LiderlikTab ile AYNI fonksiyon
   // (fetchWeekPaceScores) + AYNI hafta (weekOffset=0) — panel paritesi.
   const [miniPaceScores,setMiniPaceScores]=useState({});
+  // Önceki hafta (weekOffset=-1) — sıra değişim oku (↑/↓) için, LiderlikTab'daki
+  // prevStats/prevRankMap ile AYNI mantık (2026.08.04 — Göksel talebi: koç
+  // panelindeki Lider sekmesiyle birebir aynı satır görünümü).
+  const [miniPrevPaceScores,setMiniPrevPaceScores]=useState({});
   useEffect(()=>{
     if(!allAthletes||!allAthletes.length)return;
     let cancelled=false;
-    fetchWeekPaceScores(allAthletes,0).then(sc=>{if(!cancelled)setMiniPaceScores(sc);});
+    Promise.all([
+      fetchWeekPaceScores(allAthletes,0),
+      fetchWeekPaceScores(allAthletes,-1)
+    ]).then(([cur,prev])=>{
+      if(cancelled)return;
+      setMiniPaceScores(cur);
+      setMiniPrevPaceScores(prev);
+    });
     return()=>{cancelled=true;};
   },[allAthletes]);
 
@@ -27146,34 +27157,110 @@ function SporcuPlanView(){
 
         // Sağ: Bu haftanın liderlik tablosu (koç panelindeki LiderlikTab ile
         // AYNI fonksiyonlar — calcWeeklyStats + finalizeLeaderboard — panel paritesi)
+        //
+        // 2026.08.04 — Göksel talebi: önceden sadece madalya+isim+skor gösteriliyordu;
+        // artık koç panelindeki Lider sekmesiyle BİREBİR AYNI satır tasarımı (fotoğraf,
+        // spor dağılımı, Hedef Uyumu %, yaklaşan yarış geri sayımı, mesafe/D+/skor
+        // metrikleri, ilerleme çubuğu, sıra değişim oku) — indirme/paylaşım kontrolleri
+        // ve üst KPI şeridi hariç (bu salt-okunur bir özet widget'ı, tam sekme değil).
         const stats=finalizeLeaderboard(calcWeeklyStats(allWorkouts,allAthletes,0),miniPaceScores);
+        const prevStatsMini=finalizeLeaderboard(calcWeeklyStats(allWorkouts,allAthletes,-1),miniPrevPaceScores);
+        const prevRankMapMini={};
+        prevStatsMini.forEach((r,i)=>{prevRankMapMini[r.ath.id]=i+1;});
         const top=stats.slice(0,10);
         const myRank=stats.findIndex(s=>s.ath.id===athlete.id);
+        const medalColorsMini=['#FFD700','#C0C0C0','#CD7F32'];
+        const medalsMini=['🥇','🥈','🥉'];
+        const todayMini=new Date();
+        const todayStrMini=todayMini.toISOString().split('T')[0];
+        const liderRow=(row,i)=>{
+          const isMe=row.ath.id===athlete.id;
+          const pct=stats[0]?.finalScore>0?Math.round(row.finalScore/stats[0].finalScore*100):0;
+          const sporList=Object.entries(row.sporDagilim||{}).map(([k,v])=>(SPOR_MAP[k]?.emoji||'🏅')+' ×'+v).join(' ');
+          const up=row.uygunlukPct;
+          const upColor=up==null?'var(--text-tertiary)':up>=85?'#2dd4bf':up>=70?'#4ade80':up>=50?'#fbbf24':'#f87171';
+          const athRaceIds=(row.ath.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
+          const nearest=(races||[])
+            .filter(r=>athRaceIds.includes(r.id)&&r.tarih&&r.tarih>=todayStrMini)
+            .map(r=>({...r,daysLeft:Math.ceil((new Date(r.tarih+'T12:00:00')-todayMini)/864e5)}))
+            .sort((a,b)=>a.daysLeft-b.daysLeft)[0];
+          const urgent=nearest&&nearest.daysLeft<=14;
+          const soon=nearest&&nearest.daysLeft<=30;
+          const prevRow=prevStatsMini.find(r=>r.ath.id===row.ath.id);
+          const prevSkor=prevRow?.finalScore||0;
+          const skorDiff=round1(row.finalScore-prevSkor);
+          return React.createElement('div',{key:row.ath.id,style:{
+            display:'flex',alignItems:'center',gap:8,
+            padding:'8px 9px',marginBottom:6,borderRadius:8,
+            background:isMe?'var(--info-bg)':i===0?'rgba(255,215,0,.08)':i===1?'rgba(192,192,192,.06)':i===2?'rgba(205,127,50,.06)':'var(--bg-secondary)',
+            border:i<3&&!isMe?'1px solid '+(i===0?'rgba(255,215,0,.3)':i===1?'rgba(192,192,192,.2)':'rgba(205,127,50,.2)'):'1px solid transparent'
+          }},
+            // Sıra/madalya + değişim oku
+            React.createElement('div',{style:{width:28,textAlign:'center',flexShrink:0}},
+              React.createElement('div',{style:{fontSize:i<3?16:12,fontWeight:700,color:i<3?medalColorsMini[i]:'var(--text-tertiary)'}},
+                i<3?medalsMini[i]:i+1
+              ),
+              (()=>{
+                const prevRank=prevRankMapMini[row.ath.id];
+                const curRank=i+1;
+                if(!prevRank||prevRank===curRank)return React.createElement('div',{style:{fontSize:8,color:'var(--text-tertiary)'}},'—');
+                const diff=prevRank-curRank;
+                return diff>0
+                  ?React.createElement('div',{style:{fontSize:8,color:'#4ade80',fontWeight:700}},`↑${diff}`)
+                  :React.createElement('div',{style:{fontSize:8,color:'#f87171',fontWeight:700}},`↓${Math.abs(diff)}`);
+              })()
+            ),
+            // Fotoğraf
+            row.ath.foto
+              ?React.createElement('img',{src:row.ath.foto,style:{width:32,height:32,borderRadius:4,objectFit:'cover',objectPosition:'top center',border:'2px solid var(--border)',flexShrink:0}})
+              :React.createElement('div',{style:{width:32,height:32,borderRadius:4,background:'var(--bg-primary)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,flexShrink:0}},'👤'),
+            // İsim + spor + Hedef Uyumu + yakın yarış
+            React.createElement('div',{style:{flex:1,minWidth:0}},
+              React.createElement('div',{style:{fontWeight:isMe?700:600,fontSize:12,color:isMe?'var(--info)':'var(--text-primary)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},
+                (row.ath.ad||'')+' '+(row.ath.soyad||'')
+              ),
+              React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',marginTop:1}},sporList||'—'),
+              React.createElement('div',{style:{fontSize:9,color:upColor,fontWeight:600,marginTop:1}},
+                '🎯 Hedef Uyumu: '+(up==null?'—':Math.round(up)+'%')
+              ),
+              nearest&&React.createElement('div',{style:{
+                fontSize:9,marginTop:1,
+                color:nearest.ertelendi?'#fbbf24':urgent?'#f87171':soon?'#fbbf24':'var(--text-tertiary)',
+                fontWeight:nearest.ertelendi||urgent||soon?600:400,
+                textDecoration:nearest.ertelendi?'line-through':'none'
+              }},
+                '🏁 '+nearest.ad+(nearest.ertelendi?' · Ertelendi':' · '+(nearest.daysLeft===0?'bugün':nearest.daysLeft+' gün'))
+              )
+            ),
+            // Metrikler
+            React.createElement('div',{style:{textAlign:'right',flexShrink:0}},
+              React.createElement('div',{style:{display:'flex',gap:8,alignItems:'center',justifyContent:'flex-end'}},
+                Object.entries(row.mesafeBySpor||{}).sort((a,b)=>b[1]-a[1]).slice(0,1).map(([sk,sv])=>
+                  React.createElement('div',{key:sk,style:{textAlign:'center'}},
+                    React.createElement('div',{style:{fontWeight:700,fontSize:12,color:'var(--info)'}},sv+' km'),
+                    React.createElement('div',{style:{fontSize:8,color:'var(--text-tertiary)'}},SPOR_MAP[sk]?.l||sk)
+                  )
+                ),
+                React.createElement('div',{style:{textAlign:'center'}},
+                  React.createElement('div',{style:{fontWeight:700,fontSize:12,color:'#f59e0b'}},row.finalScore),
+                  React.createElement('div',{style:{fontSize:8,color:'var(--text-tertiary)'}},'skor'),
+                  (prevSkor>0||row.finalScore>0)&&React.createElement('div',{style:{fontSize:8,fontWeight:600,color:skorDiff>0?'#34d399':skorDiff<0?'#f87171':'var(--text-tertiary)'}},
+                    (skorDiff>0?'↑':skorDiff<0?'↓':'→')+' '+(skorDiff>0?'+':'')+skorDiff
+                  )
+                )
+              ),
+              row.finalScore>0&&React.createElement('div',{style:{marginTop:4,height:3,background:'var(--bg-primary)',borderRadius:2,width:70,overflow:'hidden',marginLeft:'auto'}},
+                React.createElement('div',{style:{height:'100%',width:pct+'%',background:i===0?'#fbbf24':i===1?'#94a3b8':i===2?'#b45309':'var(--info)',borderRadius:2}})
+              )
+            )
+          );
+        };
         const liderCard=React.createElement('div',{className:'card',style:{padding:'14px 16px',height:'100%'}},
           React.createElement('div',{style:{fontSize:11,fontWeight:700,color:'var(--text-secondary)',marginBottom:8,textTransform:'uppercase',letterSpacing:'0.5px'}},'🏆 Bu Hafta Liderlik'),
-          React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:5}},
-            top.map((s,i)=>{
-              const isMe=s.ath.id===athlete.id;
-              const medal=i===0?'🥇':i===1?'🥈':i===2?'🥉':(i+1)+'.';
-              return React.createElement('div',{key:s.ath.id,style:{
-                display:'flex',alignItems:'center',gap:6,
-                padding:'5px 7px',borderRadius:6,
-                background:isMe?'var(--info-bg)':'transparent',
-                fontSize:11
-              }},
-                React.createElement('span',{style:{minWidth:18,textAlign:'center',fontSize:i<3?14:11}},medal),
-                React.createElement('span',{style:{flex:1,fontWeight:isMe?700:500,color:isMe?'var(--info)':'var(--text-primary)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},(s.ath.ad||'')+' '+(s.ath.soyad||'').substring(0,1)+'.'),
-                React.createElement('span',{style:{fontSize:10,color:'var(--text-tertiary)',fontWeight:600}},Math.round(s.finalScore))
-              );
-            }),
-            myRank>=10&&React.createElement('div',{style:{
-              borderTop:'1px dashed var(--border)',marginTop:4,paddingTop:5,
-              display:'flex',alignItems:'center',gap:6,
-              padding:'5px 7px',background:'var(--info-bg)',borderRadius:6,fontSize:11
-            }},
-              React.createElement('span',{style:{minWidth:18,textAlign:'center'}},(myRank+1)+'.'),
-              React.createElement('span',{style:{flex:1,fontWeight:700,color:'var(--info)'}},'Sen'),
-              React.createElement('span',{style:{fontSize:10,color:'var(--text-tertiary)',fontWeight:600}},Math.round(stats[myRank].finalScore))
+          React.createElement('div',null,
+            top.map((s,i)=>liderRow(s,i)),
+            myRank>=10&&stats[myRank]&&React.createElement('div',{style:{borderTop:'1px dashed var(--border)',marginTop:2,paddingTop:6}},
+              liderRow(stats[myRank],myRank)
             )
           )
         );
