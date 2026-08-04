@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.04-2228 --><!DOCTYPE html>
+<!-- Version: v2026.08.04-2239 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.04-2228';
+const APP_VERSION='v2026.08.04-2239';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1112,9 +1112,23 @@ function extractFeedbackSignals(allSnapsObj, athlete){
           if(actualMesafe>0&&origMesafe>0){
             const diffPct=round1((actualMesafe-origMesafe)/origMesafe*100);
             mesafeDiffPct=diffPct;
-            if(Math.abs(diffPct)<=MESAFE_TOLERANS_PCT) mesafeOk=true;
-            else if(diffPct<0) mesafeDir='az';
-            else mesafeDir='fazla';
+            // KÖK NEDEN DÜZELTMESİ (2026.08.04 — Göksel'in bildirdiği "tüm rozetler
+            // yeşil ama Hedef Uyumu düşük" tutarsızlığı): "Uyumlu" eşiği ÖNCEDEN her
+            // yönde sabit ±%5'ti, ama mesafeClosenessScore (puanlama) ağır basan yönde
+            // ratio'yu 3 katına çıkararak EFEKTİF toleransı zaten %5/3'e düşürüyordu.
+            // Yani rozet "uyumlu" diyordu ama puanlama motoru aynı değeri çok daha dar
+            // bir sınıra göre değerlendirip sert kırıyordu — rozet ile puan çelişiyordu.
+            // Çözüm: "Uyumlu" eşiği de AYNI yön bazlı efektif toleransı kullansın —
+            // kolay bölgede fazla koşma, ana bölümde az koşma için tolerans MESAFE_
+            // TOLERANS_PCT/MESAFE_CEZA_KATSAYISI'ye (≈%1.7) daralır; diğer yön tam
+            // %5 kalır. Böylece rozet ve puan HER ZAMAN aynı şeyi söyler.
+            const mesAzTol=mesZoneKolay?MESAFE_TOLERANS_PCT:MESAFE_TOLERANS_PCT/MESAFE_CEZA_KATSAYISI;
+            const mesFazlaTol=mesZoneKolay?MESAFE_TOLERANS_PCT/MESAFE_CEZA_KATSAYISI:MESAFE_TOLERANS_PCT;
+            if(diffPct<0){
+              if(Math.abs(diffPct)<=mesAzTol) mesafeOk=true; else mesafeDir='az';
+            } else if(diffPct>0){
+              if(diffPct<=mesFazlaTol) mesafeOk=true; else mesafeDir='fazla';
+            } else mesafeOk=true;
           }
         }
 
@@ -7943,8 +7957,16 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     const diffPct=round1((actualMesafe-origMesafe)/origMesafe*100);
     const SKIP_RE_LOKAL=/[iı]sınma|isinma|soğuma|soguma|dinlenme|toparlanma|blok\s*arası|strides\s*arası/i;
     const mesZoneKolay=(row.label&&SKIP_RE_LOKAL.test(row.label))||(row._origZIdx!=null&&row._origZIdx<=1);
-    if(Math.abs(diffPct)<=MESAFE_TOLERANS_PCT) return{label:'Mesafe Uyumlu',color:'#22c55e',bg:'#f0fdf4',icon:'📏'};
+    // KÖK NEDEN DÜZELTMESİ (2026.08.04): "Uyumlu" eşiği artık calcPaceComplianceScore
+    // ile BİREBİR aynı yön bazlı efektif toleransı kullanıyor (bkz. extractFeedbackSignals
+    // içindeki aynı not) — önceden burada sabit ±%5 kullanılıyordu ama puanlama motoru
+    // ağır basan yönde bunu efektif %5/3'e daraltıyordu; rozet "uyumlu" derken puan
+    // sert kırılıyordu. Artık ikisi HER ZAMAN aynı şeyi söylüyor.
     const az=diffPct<0;
+    const mesAzTol=mesZoneKolay?MESAFE_TOLERANS_PCT:MESAFE_TOLERANS_PCT/MESAFE_CEZA_KATSAYISI;
+    const mesFazlaTol=mesZoneKolay?MESAFE_TOLERANS_PCT/MESAFE_CEZA_KATSAYISI:MESAFE_TOLERANS_PCT;
+    const effTol=az?mesAzTol:mesFazlaTol;
+    if(Math.abs(diffPct)<=effTol) return{label:'Mesafe Uyumlu',color:'#22c55e',bg:'#f0fdf4',icon:'📏'};
     const katsayi=az?(mesZoneKolay?1:MESAFE_CEZA_KATSAYISI):(mesZoneKolay?MESAFE_CEZA_KATSAYISI:1);
     const ratio=Math.abs(diffPct)/MESAFE_TOLERANS_PCT*katsayi;
     const yon=az?'Az Koşuldu':'Fazla Koşuldu';
