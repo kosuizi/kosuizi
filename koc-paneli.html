@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.04-1421 --><!DOCTYPE html>
+<!-- Version: v2026.08.04-1435 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.04-1421';
+const APP_VERSION='v2026.08.04-1435';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1087,14 +1087,27 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         // öncesi reçete üzerinde yaptığı manuel mesafe ayarları otomatik olarak
         // hedefe işlenir — sinyal yalnızca BUNDAN SONRA mesafe alanı ayrıca
         // değiştirilip gerçek koşulan mesafe farklı girilirse üretilir.
+        //
+        // KÖK NEDEN DÜZELTMESİ (2026.08.04): Sadece mesafe>0 && _origMesafe>0
+        // yeterli değil — koç antrenman HENÜZ gerçekleşmeden (Ekle'den önce)
+        // reçetede mesafeyi düzenlediğinde de bu ikisi eşit çıkıyor (aynı anda
+        // donduruluyorlar) ve "uyum" (mesafeOk=true) sinyali üretiliyordu — bu da
+        // o hafta HİÇ antrenman yapmamış sporcuların Liderlik'te sanki aktifmiş
+        // gibi puan almasına yol açtı. Düzeltme: satırda pace/nabız/D+'dan EN AZ
+        // biri girilmiş olmalı — bu, satırın gerçekten "loglandığının" kanıtıdır
+        // (Göksel'in senaryosu: mesafe sinyali yalnızca pace/nabız/D+ girişinden
+        // SONRA anlamlıdır).
+        const hasPerfData=(row.pm>0)||(row.ps>0)||(row.bpm!=null)||(row.bpmStart!=null)||(row.bpmAvg!=null)||(row.bpmEnd!=null)||(row.dp>0);
         let mesafeDir=null, mesafeOk=false, mesafeDiffPct=null;
-        const actualMesafe=row.mesafe, origMesafe=row._origMesafe;
-        if(actualMesafe>0&&origMesafe>0){
-          const diffPct=round1((actualMesafe-origMesafe)/origMesafe*100);
-          mesafeDiffPct=diffPct;
-          if(Math.abs(diffPct)<=MESAFE_TOLERANS_PCT) mesafeOk=true;
-          else if(diffPct<0) mesafeDir='az';
-          else mesafeDir='fazla';
+        if(hasPerfData){
+          const actualMesafe=row.mesafe, origMesafe=row._origMesafe;
+          if(actualMesafe>0&&origMesafe>0){
+            const diffPct=round1((actualMesafe-origMesafe)/origMesafe*100);
+            mesafeDiffPct=diffPct;
+            if(Math.abs(diffPct)<=MESAFE_TOLERANS_PCT) mesafeOk=true;
+            else if(diffPct<0) mesafeDir='az';
+            else mesafeDir='fazla';
+          }
         }
 
         if(row.label&&SKIP_RE.test(row.label)){
@@ -20074,7 +20087,7 @@ function VerilenAntrenmaniYapabilmePuaniKarti({athlete}){
     e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4,flexWrap:'wrap',gap:8}},
       e('div',null,
         e('div',{className:'card-title',style:{margin:0}},'Verilen Antrenmanı Yapabilme Puanı'),
-        e('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:2}},'Reçetedeki pace ve Hedef Nabız bölgelerine ne kadar sadık kalındığının ölçümü.')
+        e('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:2}},'Reçetedeki pace, Hedef Nabız bölgeleri ve mesafe hedeflerine ne kadar sadık kalındığının ölçümü.')
       ),
       e('div',{style:{display:'flex',alignItems:'center',gap:6}},
         e('div',{style:{display:'flex',gap:3,flexWrap:'wrap'}},
@@ -20092,7 +20105,7 @@ function VerilenAntrenmaniYapabilmePuaniKarti({athlete}){
       e('div',{style:{display:'flex',alignItems:'baseline',gap:10,marginBottom:10,flexWrap:'wrap'}},
         e('div',{style:{fontSize:34,fontWeight:800,color:puanColor,lineHeight:1}},score.puan),
         e('div',{style:{fontSize:13,fontWeight:600,color:'var(--text-secondary)'}},lbl.text),
-        e('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginLeft:'auto'}},score.total+' pace, '+score.hrTotal+' nabız fazı')
+        e('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginLeft:'auto'}},score.total+' pace, '+score.hrTotal+' nabız, '+(score.mesafeTotal||0)+' mesafe fazı')
       ),
       score.total>0&&e('div',{style:{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:score.hrTotal>0?8:10}},
         [
@@ -20116,15 +20129,29 @@ function VerilenAntrenmaniYapabilmePuaniKarti({athlete}){
           e('div',{style:{fontSize:10,color:'var(--text-tertiary)'}},x.n+' faz')
         ))
       ),
-      (score.yakinlikPuani!=null||score.hrYakinlikPuani!=null)&&e('div',{style:{display:'flex',flexDirection:'column',gap:6,marginBottom:10}},
+      score.mesafeTotal>0&&e('div',{style:{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:10}},
+        [
+          {label:'📏 Uyumlu',pct:score.mesUyumPct,n:score.mesUyum,color:'#16a34a'},
+          {label:'📏 Az Koştu',pct:score.mesAzPct,n:score.mesAz,color:'#ef4444'},
+          {label:'📏 Fazla Koştu',pct:score.mesFazlaPct,n:score.mesFazla,color:'#f59e0b'},
+        ].map((x,i)=>e('div',{key:i,style:{padding:'8px 10px',borderRadius:'var(--radius)',background:'var(--bg-secondary)',border:'1px solid var(--border)'}},
+          e('div',{style:{fontSize:11,fontWeight:600,color:x.color}},x.label),
+          e('div',{style:{fontSize:18,fontWeight:700}},x.pct+'%'),
+          e('div',{style:{fontSize:10,color:'var(--text-tertiary)'}},x.n+' faz')
+        ))
+      ),
+      (score.yakinlikPuani!=null||score.hrYakinlikPuani!=null||score.mesYakinlikPuani!=null)&&e('div',{style:{display:'flex',flexDirection:'column',gap:6,marginBottom:10}},
         score.yakinlikPuani!=null&&e('div',{style:{fontSize:12,color:'var(--text-secondary)',padding:'7px 11px',background:'var(--info-bg)',borderRadius:'var(--radius)',borderLeft:'3px solid var(--info)'}},
           'Pace yakınlık puanı: ',e('b',null,score.yakinlikPuani+'/100')
         ),
         score.hrYakinlikPuani!=null&&e('div',{style:{fontSize:12,color:'var(--text-secondary)',padding:'7px 11px',background:'var(--info-bg)',borderRadius:'var(--radius)',borderLeft:'3px solid var(--info)'}},
           'Nabız yakınlık puanı: ',e('b',null,score.hrYakinlikPuani+'/100')
         ),
+        score.mesYakinlikPuani!=null&&e('div',{style:{fontSize:12,color:'var(--text-secondary)',padding:'7px 11px',background:'var(--info-bg)',borderRadius:'var(--radius)',borderLeft:'3px solid var(--info)'}},
+          'Mesafe yakınlık puanı: ',e('b',null,score.mesYakinlikPuani+'/100')
+        ),
         e('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},
-          'Genel puan: pace ve nabız bileşenleri (her biri uyum oranı %50 + yakınlık puanı %50) ayrı hesaplanıp eşit ağırlıkla ortalanır. Bir fazda sadece biri varsa, sadece o kullanılır.'
+          'Genel puan: pace, mesafe hedefi ve nabız bileşenleri (her biri uyum oranı %50 + yakınlık puanı %50) ayrı hesaplanıp ağırlıklı ortalanır — pace ve mesafe tam ağırlık, nabız yarı ağırlık. Mesafede az koşma, fazla koşmadan 3 kat daha sert cezalandırılır. Bir fazda sadece bazı bileşenler mevcutsa, sadece onlar kullanılır.'
         )
       ),
       score.detay?.length>0&&e('div',{style:{marginTop:10}},
@@ -20144,15 +20171,23 @@ function VerilenAntrenmaniYapabilmePuaniKarti({athlete}){
               yuksek:{text:'❤️ Yüksek',color:'#ef4444'},
               dusuk:{text:'❤️ Düşük',color:'#3b82f6'}
             }[d.hrDir]||null;
+            const mesMeta={
+              uyum:{text:'📏 Uyumlu',color:'#16a34a'},
+              az:{text:'📏 Az Koştu',color:'#ef4444'},
+              fazla:{text:'📏 Fazla Koştu',color:'#f59e0b'}
+            }[d.mesDir]||null;
             const diffTxt=d.diffSec!=null?(d.diffSec>0?'+':'')+d.diffSec+' sn':null;
+            const mesDiffTxt=d.mesDiffPct!=null?(d.mesDiffPct>0?'+':'')+d.mesDiffPct+'%':null;
             return e('div',{key:i,style:{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,padding:'6px 9px',borderRadius:6,background:dirMeta.bg,fontSize:11}},
               e('span',{style:{fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},
                 fmtShort(d.date)+(d.label?' — '+d.label:'')
               ),
-              e('div',{style:{display:'flex',alignItems:'center',gap:8,flexShrink:0}},
+              e('div',{style:{display:'flex',alignItems:'center',gap:8,flexShrink:0,flexWrap:'wrap',justifyContent:'flex-end'}},
                 diffTxt&&e('span',{style:{color:'var(--text-tertiary)'}},diffTxt+(d.tolSec?' (±'+d.tolSec+')':'')),
                 d.dir&&e('span',{style:{fontWeight:700,color:dirMeta.color}},dirMeta.text),
-                hrMeta&&e('span',{style:{fontWeight:700,color:hrMeta.color}},hrMeta.text)
+                hrMeta&&e('span',{style:{fontWeight:700,color:hrMeta.color}},hrMeta.text),
+                mesDiffTxt&&e('span',{style:{color:'var(--text-tertiary)'}},mesDiffTxt),
+                mesMeta&&e('span',{style:{fontWeight:700,color:mesMeta.color}},mesMeta.text)
               )
             );
           })
