@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.04-1104 --><!DOCTYPE html>
+<!-- Version: v2026.08.04-1421 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.04-1104';
+const APP_VERSION='v2026.08.04-1421';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1079,7 +1079,30 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         if(!row||typeof row!=='object') return;
         if(row.type==='header'||row.rpe||row._isSprint) return;
         if(row.type==='rest'||row.type==='walk') return;
-        if(row.label&&SKIP_RE.test(row.label)) return;
+
+        // ── Mesafe Hedefi Uyumu — TÜM satırlarda değerlendirilir (Isınma/Soğuma
+        // DAHİL), pace/nabız'ın aksine SKIP_RE'den etkilenmez (2026.08.04 —
+        // Göksel talebi). _origMesafe her satır kaydında güncel reçete mesafesine
+        // göre yeniden donduğu için (bkz. updateCell, ~satır 7900), koç "Ekle"
+        // öncesi reçete üzerinde yaptığı manuel mesafe ayarları otomatik olarak
+        // hedefe işlenir — sinyal yalnızca BUNDAN SONRA mesafe alanı ayrıca
+        // değiştirilip gerçek koşulan mesafe farklı girilirse üretilir.
+        let mesafeDir=null, mesafeOk=false, mesafeDiffPct=null;
+        const actualMesafe=row.mesafe, origMesafe=row._origMesafe;
+        if(actualMesafe>0&&origMesafe>0){
+          const diffPct=round1((actualMesafe-origMesafe)/origMesafe*100);
+          mesafeDiffPct=diffPct;
+          if(Math.abs(diffPct)<=MESAFE_TOLERANS_PCT) mesafeOk=true;
+          else if(diffPct<0) mesafeDir='az';
+          else mesafeDir='fazla';
+        }
+
+        if(row.label&&SKIP_RE.test(row.label)){
+          // Isınma/Soğuma/Dinlenme: pace/nabız hâlâ hariç tutulur, ama mesafe
+          // sinyali varsa (mevcut davranışı bozmadan) ayrıca kaydedilir.
+          if(mesafeDir||mesafeOk) signals.push({date,label:row.label||null,mesafeDir,mesafeOk,mesafeDiffPct});
+          return;
+        }
         let paceDir=null, hrDir=null, paceOk=false, hrOk=false, paceDiff=null, paceTol=null;
         const pm=row.pm, ps=row.ps;
         if((pm>0)||(ps>0)){
@@ -1134,7 +1157,7 @@ function extractFeedbackSignals(allSnapsObj, athlete){
             } else hrOk=true; // zone içinde
           }
         }
-        if(paceDir||hrDir||paceOk||hrOk) signals.push({date,label:row.label||null,paceDir,hrDir,paceOk,hrOk,hrWeight,zi:zi??0,zoneId:hr?.id||null,paceDiff,paceTol});
+        if(paceDir||hrDir||paceOk||hrOk||mesafeDir||mesafeOk) signals.push({date,label:row.label||null,paceDir,hrDir,paceOk,hrOk,hrWeight,zi:zi??0,zoneId:hr?.id||null,paceDiff,paceTol,mesafeDir,mesafeOk,mesafeDiffPct});
       };
 
       Object.values(rowOvs).forEach(scanRow);
@@ -1186,6 +1209,31 @@ function paceClosenessScore(diffSec,tolSec){
   return 0;
 }
 
+// ── Mesafe Hedefi Uyumu — yakınlık eğrisi (2026.08.04 — Göksel talebi) ─────────
+// Reçetedeki her satırın (Isınma/Ana Bölüm/Soğuma dahil) planlanan mesafesi
+// (_origMesafe — updateCell() içinde her kayıtta güncel reçete değerine göre
+// donar, bkz. satır ~7900) ile fiilen girilen mesafe (row.mesafe) arasındaki
+// %'lik farkı puanlar. AYNI eğri (PACE_CLOSENESS_CURVE) kullanılır ama "az
+// koşma" tarafında ratio MESAFE_AZ_CEZA_KATSAYISI kadar büyütülerek eğri daha
+// erken sert bölgeye düşürülür — yani aynı %'lik sapmada az koşmak, fazla
+// koşmaktan konu edilen kat kadar daha ağır cezalandırılır.
+const MESAFE_TOLERANS_PCT=5;      // ±%5 sapma "tam uyum" sayılır (GPS/ölçüm gürültüsü payı)
+const MESAFE_AZ_CEZA_KATSAYISI=3; // az koşma cezası, fazla koşmanın 3 katı
+function mesafeClosenessScore(diffPct,tolerancePct,azKatsayisi){
+  if(diffPct==null||!tolerancePct) return null;
+  const az=diffPct<0;
+  const ratio=Math.abs(diffPct)/tolerancePct*(az?(azKatsayisi||1):1);
+  if(ratio>=4) return 0;
+  for(let i=0;i<PACE_CLOSENESS_CURVE.length-1;i++){
+    const[r0,s0]=PACE_CLOSENESS_CURVE[i],[r1,s1]=PACE_CLOSENESS_CURVE[i+1];
+    if(ratio>=r0&&ratio<=r1){
+      const t=(ratio-r0)/(r1-r0);
+      return Math.round(s0+(s1-s0)*t);
+    }
+  }
+  return 0;
+}
+
 // extractFeedbackSignals() çıktısından (veya onun bir alt-kümesinden) pace uyum
 // puanını hesaplar. Yalnızca pace karşılaştırması yapılabilen fazlar (paceDir
 // veya paceOk dolu) sayılır — ısınma/soğuma/dinlenme zaten extractFeedbackSignals
@@ -1212,8 +1260,11 @@ function allocatePercentages(counts,total){
 // her seferinde aynı kadar yakın ıskalayan" biri yanıltıcı şekilde yüksek puan alabilir.
 //
 // 2026.07.28 — Göksel talebi: Hedef Nabız (HR bölge) uyumu da puana dahil edildi.
+// 2026.08.04 — Göksel onayı: ağırlık eşitten Pace %100 / Nabız %50'ye değiştirildi
+// (bkz. calcPaceComplianceScore içindeki "Birleşik puan" — pace doğru hızda koşup
+// koşmadığını tam ağırlıkla, doğru nabız bölgesinde olma durumu yarı ağırlıkla yansıtır).
 // Pace ve Nabız AYRI AYRI hesaplanır (biri diğerini etkilemez), sonra ikisi varsa
-// eşit ağırlıklı ortalanır. Bir fazda sadece pace VEYA sadece nabız hedefi
+// ağırlıklı ortalanır. Bir fazda sadece pace VEYA sadece nabız hedefi
 // girilmiş olabilir (örn. Z2 kolay gün nabızla, interval pace ile takip edilir) —
 // bu durumda mevcut olan tek bileşen puana %100 yansır, eksik olan yok sayılır.
 // hrClosenessScore: pace'teki gibi sürekli bir sn/km farkı yerine, extractFeedbackSignals
@@ -1229,9 +1280,11 @@ function hrClosenessScore(hrOk,hrWeight){
 function calcPaceComplianceScore(signals){
   const paceSignals=(signals||[]).filter(s=>s.paceDir||s.paceOk);
   const hrSignals=(signals||[]).filter(s=>s.hrDir||s.hrOk);
+  const mesafeSignals=(signals||[]).filter(s=>s.mesafeDir||s.mesafeOk);
   const total=paceSignals.length; // geriye dönük uyumluluk: "total" hep pace faz sayısıdır
   const hrTotal=hrSignals.length;
-  if(total===0&&hrTotal===0) return null;
+  const mesafeTotal=mesafeSignals.length;
+  if(total===0&&hrTotal===0&&mesafeTotal===0) return null;
 
   // ── Pace bileşeni ──
   let uyum=0,hizli=0,yavas=0,closenessSum=0,closenessN=0;
@@ -1267,23 +1320,54 @@ function calcPaceComplianceScore(signals){
   const hrYakinlikPuani=hrClosenessN>0?round1(hrClosenessSum/hrClosenessN):null;
   const puanNabiz=hrTotal>0?(hrYakinlikPuani!=null?Math.round(hrUyumPct*0.5+hrYakinlikPuani*0.5):Math.round(hrUyumPct)):null;
 
-  // ── Birleşik puan: ikisi de varsa eşit ağırlıklı ortalama, sadece biri varsa o kullanılır ──
-  const puan=(puanPace!=null&&puanNabiz!=null)?Math.round((puanPace+puanNabiz)/2)
-    :(puanPace!=null?puanPace:puanNabiz);
+  // ── Mesafe Hedefi Uyumu bileşeni (2026.08.04 — Göksel talebi) ──────────────
+  // Reçetede görünen (Isınma/Ana Bölüm/Soğuma dahil TÜM satırlar) planlanan
+  // mesafe ile gerçekte girilen mesafe arasındaki fark. Az koşma, fazla
+  // koşmadan MESAFE_AZ_CEZA_KATSAYISI (3x) kat daha sert cezalandırılır —
+  // bu asimetri mesafeClosenessScore() içinde uygulanıyor.
+  let mesUyum=0,mesAz=0,mesFazla=0,mesClosenessSum=0,mesClosenessN=0;
+  const mesDetayByKey={};
+  mesafeSignals.forEach(s=>{
+    let mesDir;
+    if(s.mesafeOk){ mesUyum++; mesDir='uyum'; }
+    else if(s.mesafeDir==='az'){ mesAz++; mesDir='az'; }
+    else if(s.mesafeDir==='fazla'){ mesFazla++; mesDir='fazla'; }
+    const c=mesafeClosenessScore(s.mesafeDiffPct,MESAFE_TOLERANS_PCT,MESAFE_AZ_CEZA_KATSAYISI);
+    if(c!=null){mesClosenessSum+=c;mesClosenessN++;}
+    mesDetayByKey[s.date+'|'+(s.label||'')]={mesDir,mesDiffPct:s.mesafeDiffPct,mesCloseness:c};
+  });
+  const[mesUyumPct,mesAzPct,mesFazlaPct]=allocatePercentages([mesUyum,mesAz,mesFazla],mesafeTotal);
+  const mesYakinlikPuani=mesClosenessN>0?round1(mesClosenessSum/mesClosenessN):null;
+  const puanMesafe=mesafeTotal>0?(mesYakinlikPuani!=null?Math.round(mesUyumPct*0.5+mesYakinlikPuani*0.5):Math.round(mesUyumPct)):null;
 
-  // Faz dökümü: pace ve nabız verisi aynı fazda birleştirilir (biri eksikse null kalır)
-  const allKeys=new Set([...Object.keys(paceDetayByKey),...Object.keys(hrDetayByKey)]);
+  // ── Birleşik puan (2026.08.04 — Göksel onayı): Pace %100, Mesafe Hedefi %100,
+  // Hedef Nabız %50 ağırlık ── Mevcut bileşenlerin ağırlıklı ortalaması alınır;
+  // bir bileşen için hiç sinyal yoksa (o hafta/dönemde hiç veri girilmemişse)
+  // toplamdan tamamen çıkarılır, kalan bileşenler kendi aralarında normalize edilir.
+  const _puanBilesenleri=[];
+  if(puanPace!=null)   _puanBilesenleri.push([puanPace,1.0]);
+  if(puanNabiz!=null)  _puanBilesenleri.push([puanNabiz,0.5]);
+  if(puanMesafe!=null) _puanBilesenleri.push([puanMesafe,1.0]);
+  const _agirlikToplami=_puanBilesenleri.reduce((s,[,w])=>s+w,0);
+  const puan=_puanBilesenleri.length
+    ?Math.round(_puanBilesenleri.reduce((s,[p,w])=>s+p*w,0)/_agirlikToplami)
+    :null;
+
+  // Faz dökümü: pace, nabız ve mesafe verisi aynı fazda birleştirilir (biri eksikse null kalır)
+  const allKeys=new Set([...Object.keys(paceDetayByKey),...Object.keys(hrDetayByKey),...Object.keys(mesDetayByKey)]);
   const bySignal={};
-  [...paceSignals,...hrSignals].forEach(s=>{bySignal[s.date+'|'+(s.label||'')]={date:s.date,label:s.label||null};});
+  [...paceSignals,...hrSignals,...mesafeSignals].forEach(s=>{bySignal[s.date+'|'+(s.label||'')]={date:s.date,label:s.label||null};});
   const detay=[...allKeys].map(k=>({
     ...bySignal[k],
     ...(paceDetayByKey[k]||{dir:null,diffSec:null,tolSec:null,closeness:null}),
-    ...(hrDetayByKey[k]||{hrDir:null,hrWeight:null,hrCloseness:null})
+    ...(hrDetayByKey[k]||{hrDir:null,hrWeight:null,hrCloseness:null}),
+    ...(mesDetayByKey[k]||{mesDir:null,mesDiffPct:null,mesCloseness:null})
   })).sort((a,b)=>b.date<a.date?-1:b.date>a.date?1:0);
 
   return{
     total,uyum,hizli,yavas,uyumPct,hizliPct,yavasPct,yakinlikPuani,puanPace,
     hrTotal,hrUyum,hrYuksek,hrDusuk,hrUyumPct,hrYuksekPct,hrDusukPct,hrYakinlikPuani,puanNabiz,
+    mesafeTotal,mesUyum,mesAz,mesFazla,mesUyumPct,mesAzPct,mesFazlaPct,mesYakinlikPuani,puanMesafe,
     puan,detay
   };
 }
