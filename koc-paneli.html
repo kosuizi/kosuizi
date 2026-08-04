@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.04-1851 --><!DOCTYPE html>
+<!-- Version: v2026.08.04-1944 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.04-1851';
+const APP_VERSION='v2026.08.04-1944';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -7402,7 +7402,7 @@ function dangerHighLabel(hr){
   return hr?.id==='Z5c' ? 'Tehlikeli Nabız' : 'Aşırı Yüksek Nabız';
 }
 
-function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverrides, onSaveOverrides, onSaveDetay, readOnly, originalCueOnly, savedCuePatches, actualOrtNabiz}){
+function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverrides, onSaveOverrides, onSaveDetay, readOnly, originalCueOnly, savedCuePatches, actualOrtNabiz, isWorkoutLogged}){
   // measureZones: girilen gerçek bpm'i bölgeye (Z1-Z5c) yerleştirirken kullanılacak
   // zone sınırları — o antrenmanın TARİHİNDEKİ LTHR/MHR'ye göre hesaplanmış olmalı.
   // Verilmezse (readOnly görünümler, eski çağrılar) 'zones' (güncel profil) ile
@@ -8028,7 +8028,23 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     // Mesafe donmalı — GAP kıyaslaması (calcGAP) bu satırın kendi mesafesini gerektirir;
     // extractFeedbackSignals yalnızca rowOverrides'ı okur, baseRows'a erişemez, dolayısıyla
     // mesafe burada snapshot'lanmazsa aşama bazlı GAP karşılaştırması orada hiç mümkün olmaz.
-    if(r.mesafe>0)           origFields._origMesafe=r.mesafe;
+    //
+    // KÖK NEDEN DÜZELTMESİ (2026.08.04 — Göksel'in bildirdiği "1000m→500m düzeltmesi
+    // yok sayıldı" hatası): ÖNCEDEN _origMesafe HER kayıtta o anki r.mesafe'ye göre
+    // yeniden donuyordu — bu, hangi alanın hangi SIRAYLA düzenlendiğine bağımlı kırılgan
+    // bir mekanizmaydı (mesafe düzeltmesi pace/nabız girişinden SONRA yapılırsa, hedef
+    // yanlışlıkla düzeltme öncesi değere donuyordu). Doğru ayrım "önce/sonra düzenlendi"
+    // değil, antrenmanın FİİLEN YAPILIP YAPILMADIĞI (Ekle) olmalı:
+    //   • Ekle'den ÖNCE (isWorkoutLogged=false): plan hâlâ akışkan — hedef her
+    //     düzenlemede GÜNCEL (bu düzenlemeden SONRAKİ) mesafeye senkronize kalır.
+    //   • Ekle'den SONRA (isWorkoutLogged=true): hedef bu satırda İLK KEZ donduğu
+    //     andan itibaren KİLİTLENİR — sonraki her düzenleme (mesafe alanı dahil)
+    //     artık "gerçek koşulan mesafeyi kaydetme" sayılır, plan düzeltmesi değil.
+    const _currentMesafeForFreeze=field==='mesafe'?val:(r.mesafe||0);
+    const _existingOrigMesafe=rowOverrides[rowIdx]?._origMesafe;
+    const _mesafeLocked=isWorkoutLogged&&_existingOrigMesafe>0;
+    if(_mesafeLocked)                    origFields._origMesafe=_existingOrigMesafe;
+    else if(_currentMesafeForFreeze>0)   origFields._origMesafe=_currentMesafeForFreeze;
     // KÖK NEDEN DÜZELTMESİ: _isGapRow zaten extractFeedbackSignals içinde okunuyordu
     // (bkz. satır ~1165 tol=row._isGapRow?50:25) ama hiçbir zaman persist edilmiyordu —
     // yani haftalık toplu geri bildirimde planlı tırmanış satırları için geniş tolerans
@@ -8099,6 +8115,22 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
       upd = {bpm: parseInt(rawVal)||null};
     }
 
+    // Mesafe hedefi dondurma — updateCell'deki AYNI kilitleme mantığı (2026.08.04 —
+    // Göksel'in bildirdiği "1000m→500m düzeltmesi yok sayıldı" hatası vesilesiyle,
+    // bu fonksiyonun _origMesafe'i HİÇ kaydetmediği ayrı bir eksiklik de fark edildi
+    // — yani interval/tekrarlı antrenmanlarda (Cruise, İnterval, Piramit, On-Off vb.)
+    // mesafe hedefi sinyali daha önce hiçbir zaman üretilemiyordu). base.mesafe
+    // zone/pace'ten türetilmiş varsayılan (aralık şablonunun kendi hedefi); curMesafe
+    // varsa açık override. Kilitleme: Ekle'den önce hedef her düzenlemede güncel
+    // mesafeye senkron kalır; Ekle'den sonra İLK donduğu andan itibaren kilitlenir.
+    const _effectiveCurMesafe=curMesafe>0?curMesafe:(base.mesafe||0);
+    const _currentMesafeForFreezeAr=field==='mesafe'?val:_effectiveCurMesafe;
+    const _existingOrigMesafeAr=curOv._origMesafe;
+    const _mesafeLockedAr=isWorkoutLogged&&_existingOrigMesafeAr>0;
+    const _origMesafeFieldAr=_mesafeLockedAr
+      ?{_origMesafe:_existingOrigMesafeAr}
+      :(_currentMesafeForFreezeAr>0?{_origMesafe:_currentMesafeForFreezeAr}:{});
+
     setAralikOverrides(prev=>{
       const next={...prev};
       if(!next[headerIdx]) next[headerIdx]={};
@@ -8113,6 +8145,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
         _origZIdx:base._origZIdx,
         ...(ohr?.lo_bpm?{_origLoBpm:ohr.lo_bpm}:{}),
         ...(ohr?.hi_bpm?{_origHiBpm:ohr.hi_bpm}:{}),
+        ..._origMesafeFieldAr,
         label:base.label,
         type:base.type,
         ...upd
@@ -18774,6 +18807,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     measureZones:calcZones(athleteAtDate(athlete,day.date)),
                     isYuruyus:day.isYuruyus,
                     tip:_kosuGorunum.displayTip,
+                    isWorkoutLogged:!!split.kosuDone,
                     savedOverrides:(planSnap?.rowOverrides||{})[day.date],
                     savedCuePatches:(planSnap?.overrideMap?.[day.date]?._cuePatch)||{},
                     actualOrtNabiz:split.kosuActuals.find(w=>parseFloat(w.ort_nabiz)>0)?.ort_nabiz||null,
@@ -19275,6 +19309,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     measureZones:calcZones(athleteAtDate(athlete,day.date)),
                     isYuruyus:day.isYuruyus,
                     tip:_kosuGorunumH.displayTip,
+                    isWorkoutLogged:!!_kosuActualH,
                     savedOverrides:(planSnap?.rowOverrides||{})[day.date],
                     savedCuePatches:(planSnap?.overrideMap?.[day.date]?._cuePatch)||{},
                     actualOrtNabiz:day.actual?.find(w=>(w.spor||'kosu')==='kosu'&&parseFloat(w.ort_nabiz)>0)?.ort_nabiz||null,
@@ -24258,6 +24293,7 @@ function Gecmis({workouts,athletes,races,onDelete,onBulkDelete,onUpdate}){
                                   measureZones:calcZones(athleteAtDate(ath,w.date)),
                                   isYuruyus:planDay.isYuruyus,
                                   tip:_kosuGorunumT.displayTip,
+                                  isWorkoutLogged:true,
                                   savedOverrides:(snapCache[cacheKey]?.rowOverrides||{})[w.date],
                                   actualOrtNabiz:parseFloat(w.ort_nabiz)>0?w.ort_nabiz:null,
                                   onSaveOverrides: async (overrides, detaySync)=>{
