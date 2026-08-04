@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.04-1944 --><!DOCTYPE html>
+<!-- Version: v2026.08.04-2056 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.04-1944';
+const APP_VERSION='v2026.08.04-2056';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1119,9 +1119,30 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         }
 
         if(row.label&&SKIP_RE.test(row.label)){
-          // Isınma/Soğuma/Dinlenme: pace/nabız hâlâ hariç tutulur, ama mesafe
-          // sinyali varsa (mevcut davranışı bozmadan) ayrıca kaydedilir.
-          if(mesafeDir||mesafeOk) signals.push({date,label:row.label||null,mesafeDir,mesafeOk,mesafeDiffPct,mesZoneKolay});
+          // Isınma/Dinlenme: pace hâlâ hariç tutulur, ama mesafe sinyali varsa
+          // (mevcut davranışı bozmadan) ayrıca kaydedilir.
+          //
+          // Soğuma İSTİSNASI (2026.08.04 — Göksel talebi): Soğuma satırının nabız
+          // KALİTESİ (bpmStart→bpmEnd düşüşü — bkz. detectCooldownTrend, "Soğuma
+          // Yetersiz" rozetini üreten AYNI mekanizma) artık Hedef Uyumu'nun Nabız
+          // bileşenine (mevcut %50 ağırlık, YENİ bir bileşen DEĞİL) dahil ediliyor.
+          // Sadece Soğuma'da (isCooldownRow) çalışır — Isınma'da bu 3-değerli
+          // bpmStart/Avg/End sistemi yok. 5 kademe → mevcut hrOk/hrWeight (ok/
+          // uyarı/tehlike/kritik) 4 kovasına eşlenir: Tam+İyi=uyumlu (ikisi de
+          // yeterli toparlanma sayılır), Yavaş=uyarı, Yetersiz=tehlike, Aksadı=kritik.
+          let hrDir=null, hrOk=false, hrWeight=0;
+          const isCooldownRow=/soğuma|soguma/i.test(row.label);
+          if(isCooldownRow&&(row.bpmStart!=null||row.bpmEnd!=null)){
+            const trend=detectCooldownTrend(row.bpmStart,row.bpmAvg,row.bpmEnd,rowDurSec(row),row._origHiBpm);
+            if(trend){
+              if(trend.tier==='tam'||trend.tier==='iyi') hrOk=true;
+              else{
+                hrDir='yuksek'; // toparlanma yetersiz = nabız hedeflenenden yüksek kaldı
+                hrWeight=trend.tier==='yavas'?BPM_SIGNAL_WEIGHT.warn:trend.tier==='yetersiz'?BPM_SIGNAL_WEIGHT.danger:BPM_SIGNAL_WEIGHT.critical;
+              }
+            }
+          }
+          if(mesafeDir||mesafeOk||hrDir||hrOk) signals.push({date,label:row.label||null,mesafeDir,mesafeOk,mesafeDiffPct,mesZoneKolay,hrDir,hrOk,hrWeight,zi:row._origZIdx??0,zoneId:null});
           return;
         }
         let paceDir=null, hrDir=null, paceOk=false, hrOk=false, paceDiff=null, paceTol=null;
@@ -1303,6 +1324,34 @@ function hrClosenessScore(hrOk,hrWeight){
   if(hrWeight>=4) return 10;  // kritik sapma
   if(hrWeight>=2) return 40;  // tehlikeli sapma
   return 70;                 // uyarı düzeyi sapma
+}
+
+// ── Soğuma Trend Tespiti (2026.08.04 — Göksel talebi: Hedef Uyumu'na dahil edildi) ──
+// Önceden yalnızca ReceteTablosu içinde (canlı rozet için) tanımlıydı; extractFeedbackSignals
+// de AYNI mantığı kullanabilsin diye üst seviyeye taşındı — closure bağımlılığı yok, saf fonksiyon.
+// drop = bpmStart − bpmEnd; dropRate = drop / faz süresi (bpm/dk).
+// Eğri şekli: bpmAvg >> midExpected → J-eğrisi (nabız fazın büyük bölümünde yüksek kaldı).
+// hi_bpm: sporcunun soğuma başında ZATEN hedef bölgede olduğu durumu ayırt etmek için
+// (ör. soğuma öncesi bir toparlanma fazı nabzı zaten düşürmüşse) — bkz. 'alreadyLow'.
+// `tier` alanı: Hedef Uyumu puanlamasında string karşılaştırma yerine temiz switch için eklendi.
+function detectCooldownTrend(bpmStart,bpmAvg,bpmEnd,durSec,hi_bpm){
+  if(bpmStart==null||bpmEnd==null) return null;
+  const drop=bpmStart-bpmEnd;
+  const durMin=durSec>0?durSec/60:null;
+  const dropRate=durMin!=null?drop/durMin:null;
+  let gecDusus=false;
+  if(bpmAvg!=null){const midExp=(bpmStart+bpmEnd)/2;if(bpmAvg-midExp>8)gecDusus=true;}
+  const not=gecDusus?' · Geç Düşüş':'';
+  // Soğuma başlarken nabız zaten hedef bölgedeyse (ör. önceki toparlanma fazı düşürmüşse),
+  // ölçülecek anlamlı bir "düşüş" kalmaz — bu durum da 'Soğuma Tam' sayılır (zaten hedefteydi).
+  // bpmEnd yine de hi_bpm'i belirgin şekilde aşarsa (gerçekten tekrar hızlanma) uyarı korunur.
+  const alreadyLow=hi_bpm!=null&&bpmStart<=hi_bpm;
+  if(alreadyLow&&bpmEnd<=hi_bpm+5)            return{label:'Soğuma Tam'+not,    color:'#9333ea',bg:'#faf5ff',icon:'✓',tier:'tam'};
+  if(bpmEnd>bpmStart+5)                       return{label:'Soğuma Aksadı',     color:'#ef4444',bg:'#fef2f2',icon:'↑',tier:'aksadi'};
+  if(drop<10)                                 return{label:'Soğuma Yetersiz',   color:'#f97316',bg:'#fff7ed',icon:'→',tier:'yetersiz'};
+  if(drop>=30||(dropRate!=null&&dropRate>=5)) return{label:'Soğuma Tam'+not,    color:'#9333ea',bg:'#faf5ff',icon:'↓↓↓',tier:'tam'};
+  if(drop>=20||(dropRate!=null&&dropRate>=3)) return{label:'Soğuma İyi'+not,    color:'#22c55e',bg:'#f0fdf4',icon:'↓↓',tier:'iyi'};
+  return                                              {label:'Soğuma Yavaş'+not, color:'#f59e0b',bg:'#fffbeb',icon:'↓',tier:'yavas'};
 }
 function calcPaceComplianceScore(signals){
   const paceSignals=(signals||[]).filter(s=>s.paceDir||s.paceOk);
@@ -7686,29 +7735,10 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
   // WARN+1–DANGER bpm          → turuncu "Çok Yüksek/Düşük Nabız"
   // DANGER üstü bpm            → kırmızı "Tehlikeli Nabız"
   // ── Soğuma Trend Tespiti: bpmStart / bpmAvg / bpmEnd → fizyolojik trend rozeti ──
-  // drop = bpmStart − bpmEnd; dropRate = drop / faz süresi (bpm/dk).
-  // Eğri şekli: bpmAvg >> midExpected → J-eğrisi (nabız fazın büyük bölümünde yüksek kaldı).
-  // hi_bpm: sporcunun soğuma başında ZATEN hedef bölgede olduğu durumu ayırt etmek için
-  // (ör. soğuma öncesi bir toparlanma fazı nabzı zaten düşürmüşse) — bkz. 'alreadyLow'.
-  const detectCooldownTrend=(bpmStart,bpmAvg,bpmEnd,durSec,hi_bpm)=>{
-    if(bpmStart==null||bpmEnd==null) return null;
-    const drop=bpmStart-bpmEnd;
-    const durMin=durSec>0?durSec/60:null;
-    const dropRate=durMin!=null?drop/durMin:null;
-    let gecDusus=false;
-    if(bpmAvg!=null){const midExp=(bpmStart+bpmEnd)/2;if(bpmAvg-midExp>8)gecDusus=true;}
-    const not=gecDusus?' · Geç Düşüş':'';
-    // Soğuma başlarken nabız zaten hedef bölgedeyse (ör. önceki toparlanma fazı düşürmüşse),
-    // ölçülecek anlamlı bir "düşüş" kalmaz — bu durum da 'Soğuma Tam' sayılır (zaten hedefteydi).
-    // bpmEnd yine de hi_bpm'i belirgin şekilde aşarsa (gerçekten tekrar hızlanma) uyarı korunur.
-    const alreadyLow=hi_bpm!=null&&bpmStart<=hi_bpm;
-    if(alreadyLow&&bpmEnd<=hi_bpm+5)                    return{label:'Soğuma Tam'+not,    color:'#9333ea',bg:'#faf5ff',icon:'✓'};
-    if(bpmEnd>bpmStart+5)                               return{label:'Soğuma Aksadı',   color:'#ef4444',bg:'#fef2f2',icon:'↑'};
-    if(drop<10)                                         return{label:'Soğuma Yetersiz', color:'#f97316',bg:'#fff7ed',icon:'→'};
-    if(drop>=30||(dropRate!=null&&dropRate>=5)) return{label:'Soğuma Tam'+not,    color:'#9333ea',bg:'#faf5ff',icon:'↓↓↓'};
-    if(drop>=20||(dropRate!=null&&dropRate>=3)) return{label:'Soğuma İyi'+not,    color:'#22c55e',bg:'#f0fdf4',icon:'↓↓'};
-    return                                              {label:'Soğuma Yavaş'+not, color:'#f59e0b',bg:'#fffbeb',icon:'↓'};
-  };
+  // (2026.08.04) Fonksiyonun kendisi üst seviyeye taşındı (bkz. detectCooldownTrend,
+  // ~satır 1300) — extractFeedbackSignals de aynı mantığı kullanabilsin diye. Burada
+  // sadece isim closure içinde kullanılabilir kalsın diye referans bırakıldı.
+  
   // Soğuma/ısınma: zone sapması beklenen fizyolojik durum → tarafsız gri rozet
   const bpmValidation=(row)=>{
     if(!row||row.type==='header'||row._isSprint) return null; // sprint hariç tüm satırlar bpm validasyonuna açık
@@ -20232,7 +20262,7 @@ function VerilenAntrenmaniYapabilmePuaniKarti({athlete}){
           'Mesafe yakınlık puanı: ',e('b',null,score.mesYakinlikPuani+'/100')
         ),
         e('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},
-          'Genel puan: pace, mesafe hedefi ve nabız bileşenleri (her biri uyum oranı %50 + yakınlık puanı %50) ayrı hesaplanıp ağırlıklı ortalanır — pace ve mesafe tam ağırlık, nabız yarı ağırlık. Mesafede ceza yönü antrenman bölgesine göre değişir: kolay/toparlanma bölgesinde (Isınma/Soğuma dahil) fazla koşma, ana bölüm/tempo/interval bölgesinde az koşma 3 kat daha sert cezalandırılır. Bir fazda sadece bazı bileşenler mevcutsa, sadece onlar kullanılır.'
+          'Genel puan: pace, mesafe hedefi ve nabız bileşenleri (her biri uyum oranı %50 + yakınlık puanı %50) ayrı hesaplanıp ağırlıklı ortalanır — pace ve mesafe tam ağırlık, nabız yarı ağırlık. Mesafede ceza yönü antrenman bölgesine göre değişir: kolay/toparlanma bölgesinde (Isınma/Soğuma dahil) fazla koşma, ana bölüm/tempo/interval bölgesinde az koşma 3 kat daha sert cezalandırılır. Soğumanın nabız düşüş kalitesi (Yetersiz/Aksadı vb.) de Nabız bileşenine dahildir — ayrı bir bileşen değildir. Bir fazda sadece bazı bileşenler mevcutsa, sadece onlar kullanılır.'
         )
       ),
       score.detay?.length>0&&e('div',{style:{marginTop:10}},
