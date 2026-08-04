@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.04-1435 --><!DOCTYPE html>
+<!-- Version: v2026.08.04-1825 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.04-1435';
+const APP_VERSION='v2026.08.04-1825';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1098,6 +1098,14 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         // (Göksel'in senaryosu: mesafe sinyali yalnızca pace/nabız/D+ girişinden
         // SONRA anlamlıdır).
         const hasPerfData=(row.pm>0)||(row.ps>0)||(row.bpm!=null)||(row.bpmStart!=null)||(row.bpmAvg!=null)||(row.bpmEnd!=null)||(row.dp>0);
+        // ── Zon bazlı asimetri (2026.08.04 — Göksel talebi) ──────────────────────
+        // Az koşma ile fazla koşma HER ZAMAN eşit derecede kötü değil — antrenmanın
+        // amacına göre değişir. Kolay/toparlanma bölgesinde (Z1–Z2 — Isınma/Soğuma/
+        // Dinlenme de her zaman bu gruba girer) FAZLA koşmak riski taşır (istirahat
+        // amacını bozar, ertesi günkü kaliteli antrenmanı tehlikeye atar); Ana Bölüm/
+        // Tempo/Eşik/Interval gibi Z3+ bölgelerde ise AZ koşmak riski taşır (hedeflenen
+        // fizyolojik uyarı eksik alınır). zIdxToBand ile aynı eşik (zIdx<=1) kullanılır.
+        const mesZoneKolay=(row.label&&SKIP_RE.test(row.label))||(row._origZIdx!=null&&row._origZIdx<=1);
         let mesafeDir=null, mesafeOk=false, mesafeDiffPct=null;
         if(hasPerfData){
           const actualMesafe=row.mesafe, origMesafe=row._origMesafe;
@@ -1113,7 +1121,7 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         if(row.label&&SKIP_RE.test(row.label)){
           // Isınma/Soğuma/Dinlenme: pace/nabız hâlâ hariç tutulur, ama mesafe
           // sinyali varsa (mevcut davranışı bozmadan) ayrıca kaydedilir.
-          if(mesafeDir||mesafeOk) signals.push({date,label:row.label||null,mesafeDir,mesafeOk,mesafeDiffPct});
+          if(mesafeDir||mesafeOk) signals.push({date,label:row.label||null,mesafeDir,mesafeOk,mesafeDiffPct,mesZoneKolay});
           return;
         }
         let paceDir=null, hrDir=null, paceOk=false, hrOk=false, paceDiff=null, paceTol=null;
@@ -1170,7 +1178,7 @@ function extractFeedbackSignals(allSnapsObj, athlete){
             } else hrOk=true; // zone içinde
           }
         }
-        if(paceDir||hrDir||paceOk||hrOk||mesafeDir||mesafeOk) signals.push({date,label:row.label||null,paceDir,hrDir,paceOk,hrOk,hrWeight,zi:zi??0,zoneId:hr?.id||null,paceDiff,paceTol,mesafeDir,mesafeOk,mesafeDiffPct});
+        if(paceDir||hrDir||paceOk||hrOk||mesafeDir||mesafeOk) signals.push({date,label:row.label||null,paceDir,hrDir,paceOk,hrOk,hrWeight,zi:zi??0,zoneId:hr?.id||null,paceDiff,paceTol,mesafeDir,mesafeOk,mesafeDiffPct,mesZoneKolay});
       };
 
       Object.values(rowOvs).forEach(scanRow);
@@ -1226,16 +1234,22 @@ function paceClosenessScore(diffSec,tolSec){
 // Reçetedeki her satırın (Isınma/Ana Bölüm/Soğuma dahil) planlanan mesafesi
 // (_origMesafe — updateCell() içinde her kayıtta güncel reçete değerine göre
 // donar, bkz. satır ~7900) ile fiilen girilen mesafe (row.mesafe) arasındaki
-// %'lik farkı puanlar. AYNI eğri (PACE_CLOSENESS_CURVE) kullanılır ama "az
-// koşma" tarafında ratio MESAFE_AZ_CEZA_KATSAYISI kadar büyütülerek eğri daha
-// erken sert bölgeye düşürülür — yani aynı %'lik sapmada az koşmak, fazla
-// koşmaktan konu edilen kat kadar daha ağır cezalandırılır.
+// %'lik farkı puanlar. AYNI eğri (PACE_CLOSENESS_CURVE) kullanılır ama "ağır
+// basan" yönde ratio MESAFE_CEZA_KATSAYISI kadar büyütülerek eğri daha erken
+// sert bölgeye düşürülür. Hangi yönün ağır bastığı sabit değil, antrenman
+// bölgesine göre değişir (bkz. scanRow → mesZoneKolay): kolay/toparlanma
+// bölgesinde fazla koşmak, ana bölüm/tempo/interval'de az koşmak daha ağır
+// cezalandırılır — ikisi asla eşit ağırlıkta değerlendirilmez.
 const MESAFE_TOLERANS_PCT=5;      // ±%5 sapma "tam uyum" sayılır (GPS/ölçüm gürültüsü payı)
-const MESAFE_AZ_CEZA_KATSAYISI=3; // az koşma cezası, fazla koşmanın 3 katı
-function mesafeClosenessScore(diffPct,tolerancePct,azKatsayisi){
+const MESAFE_CEZA_KATSAYISI=3;    // ağır basan yön, hafif basan yönün 3 katı cezalandırılır
+// azKatsayisi/fazlaKatsayisi ayrı ayrı verilir çünkü hangi yönün "ağır" sayılacağı
+// antrenman bölgesine göre değişir (bkz. scanRow → mesZoneKolay, 2026.08.04 Göksel talebi):
+// kolay/toparlanma bölgesinde fazla koşma ağır, ana bölüm/tempo/interval'de az koşma ağır.
+function mesafeClosenessScore(diffPct,tolerancePct,azKatsayisi,fazlaKatsayisi){
   if(diffPct==null||!tolerancePct) return null;
   const az=diffPct<0;
-  const ratio=Math.abs(diffPct)/tolerancePct*(az?(azKatsayisi||1):1);
+  const katsayi=az?(azKatsayisi||1):(fazlaKatsayisi||1);
+  const ratio=Math.abs(diffPct)/tolerancePct*katsayi;
   if(ratio>=4) return 0;
   for(let i=0;i<PACE_CLOSENESS_CURVE.length-1;i++){
     const[r0,s0]=PACE_CLOSENESS_CURVE[i],[r1,s1]=PACE_CLOSENESS_CURVE[i+1];
@@ -1335,9 +1349,10 @@ function calcPaceComplianceScore(signals){
 
   // ── Mesafe Hedefi Uyumu bileşeni (2026.08.04 — Göksel talebi) ──────────────
   // Reçetede görünen (Isınma/Ana Bölüm/Soğuma dahil TÜM satırlar) planlanan
-  // mesafe ile gerçekte girilen mesafe arasındaki fark. Az koşma, fazla
-  // koşmadan MESAFE_AZ_CEZA_KATSAYISI (3x) kat daha sert cezalandırılır —
-  // bu asimetri mesafeClosenessScore() içinde uygulanıyor.
+  // mesafe ile gerçekte girilen mesafe arasındaki fark. Ceza yönü satırın
+  // antrenman bölgesine göre değişir (bkz. scanRow → mesZoneKolay): kolay/
+  // toparlanma bölgesinde fazla koşma, ana bölüm/tempo/interval'de az koşma
+  // MESAFE_CEZA_KATSAYISI (3x) kat daha sert cezalandırılır.
   let mesUyum=0,mesAz=0,mesFazla=0,mesClosenessSum=0,mesClosenessN=0;
   const mesDetayByKey={};
   mesafeSignals.forEach(s=>{
@@ -1345,9 +1360,11 @@ function calcPaceComplianceScore(signals){
     if(s.mesafeOk){ mesUyum++; mesDir='uyum'; }
     else if(s.mesafeDir==='az'){ mesAz++; mesDir='az'; }
     else if(s.mesafeDir==='fazla'){ mesFazla++; mesDir='fazla'; }
-    const c=mesafeClosenessScore(s.mesafeDiffPct,MESAFE_TOLERANS_PCT,MESAFE_AZ_CEZA_KATSAYISI);
+    const azK=s.mesZoneKolay?1:MESAFE_CEZA_KATSAYISI;
+    const fazlaK=s.mesZoneKolay?MESAFE_CEZA_KATSAYISI:1;
+    const c=mesafeClosenessScore(s.mesafeDiffPct,MESAFE_TOLERANS_PCT,azK,fazlaK);
     if(c!=null){mesClosenessSum+=c;mesClosenessN++;}
-    mesDetayByKey[s.date+'|'+(s.label||'')]={mesDir,mesDiffPct:s.mesafeDiffPct,mesCloseness:c};
+    mesDetayByKey[s.date+'|'+(s.label||'')]={mesDir,mesDiffPct:s.mesafeDiffPct,mesCloseness:c,mesZoneKolay:s.mesZoneKolay};
   });
   const[mesUyumPct,mesAzPct,mesFazlaPct]=allocatePercentages([mesUyum,mesAz,mesFazla],mesafeTotal);
   const mesYakinlikPuani=mesClosenessN>0?round1(mesClosenessSum/mesClosenessN):null;
@@ -1374,7 +1391,7 @@ function calcPaceComplianceScore(signals){
     ...bySignal[k],
     ...(paceDetayByKey[k]||{dir:null,diffSec:null,tolSec:null,closeness:null}),
     ...(hrDetayByKey[k]||{hrDir:null,hrWeight:null,hrCloseness:null}),
-    ...(mesDetayByKey[k]||{mesDir:null,mesDiffPct:null,mesCloseness:null})
+    ...(mesDetayByKey[k]||{mesDir:null,mesDiffPct:null,mesCloseness:null,mesZoneKolay:null})
   })).sort((a,b)=>b.date<a.date?-1:b.date>a.date?1:0);
 
   return{
@@ -20151,7 +20168,7 @@ function VerilenAntrenmaniYapabilmePuaniKarti({athlete}){
           'Mesafe yakınlık puanı: ',e('b',null,score.mesYakinlikPuani+'/100')
         ),
         e('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},
-          'Genel puan: pace, mesafe hedefi ve nabız bileşenleri (her biri uyum oranı %50 + yakınlık puanı %50) ayrı hesaplanıp ağırlıklı ortalanır — pace ve mesafe tam ağırlık, nabız yarı ağırlık. Mesafede az koşma, fazla koşmadan 3 kat daha sert cezalandırılır. Bir fazda sadece bazı bileşenler mevcutsa, sadece onlar kullanılır.'
+          'Genel puan: pace, mesafe hedefi ve nabız bileşenleri (her biri uyum oranı %50 + yakınlık puanı %50) ayrı hesaplanıp ağırlıklı ortalanır — pace ve mesafe tam ağırlık, nabız yarı ağırlık. Mesafede ceza yönü antrenman bölgesine göre değişir: kolay/toparlanma bölgesinde (Isınma/Soğuma dahil) fazla koşma, ana bölüm/tempo/interval bölgesinde az koşma 3 kat daha sert cezalandırılır. Bir fazda sadece bazı bileşenler mevcutsa, sadece onlar kullanılır.'
         )
       ),
       score.detay?.length>0&&e('div',{style:{marginTop:10}},
@@ -20176,6 +20193,7 @@ function VerilenAntrenmaniYapabilmePuaniKarti({athlete}){
               az:{text:'📏 Az Koştu',color:'#ef4444'},
               fazla:{text:'📏 Fazla Koştu',color:'#f59e0b'}
             }[d.mesDir]||null;
+            const mesZoneTxt=d.mesDir&&d.mesDir!=='uyum'?(d.mesZoneKolay?' (kolay)':' (ana bölüm)'):'';
             const diffTxt=d.diffSec!=null?(d.diffSec>0?'+':'')+d.diffSec+' sn':null;
             const mesDiffTxt=d.mesDiffPct!=null?(d.mesDiffPct>0?'+':'')+d.mesDiffPct+'%':null;
             return e('div',{key:i,style:{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,padding:'6px 9px',borderRadius:6,background:dirMeta.bg,fontSize:11}},
@@ -20187,7 +20205,7 @@ function VerilenAntrenmaniYapabilmePuaniKarti({athlete}){
                 d.dir&&e('span',{style:{fontWeight:700,color:dirMeta.color}},dirMeta.text),
                 hrMeta&&e('span',{style:{fontWeight:700,color:hrMeta.color}},hrMeta.text),
                 mesDiffTxt&&e('span',{style:{color:'var(--text-tertiary)'}},mesDiffTxt),
-                mesMeta&&e('span',{style:{fontWeight:700,color:mesMeta.color}},mesMeta.text)
+                mesMeta&&e('span',{style:{fontWeight:700,color:mesMeta.color}},mesMeta.text+mesZoneTxt)
               )
             );
           })
