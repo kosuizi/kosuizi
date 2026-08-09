@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.09-1831 --><!DOCTYPE html>
+<!-- Version: v2026.08.09-1852 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.09-1831';
+const APP_VERSION='v2026.08.09-1852';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -374,7 +374,8 @@ function calcMetrics(w,ath){
   // girilmemişse, yük=0 görünüp CTL/ATL'i olduğundan düşük göstermesin diye türe
   // göre varsayılan bir orta-efor RPE'si kullanılır — açıkça "tahmini" işaretlenir.
   // Kaynak yok, sadece tipik seans yoğunluğuna dayalı makul bir varsayım.
-  const RPE_VARSAYILAN={kuvvet:5, pilates:4, yoga:3, diger:5};
+  // (RPE_VARSAYILAN artık üst seviyede tanımlı — bkz. SPOR_NABIZ_OFFSET yakını —
+  // gün-karşılaştırma hesabı da AYNI sabiti kullanıyor, ölçek tutarlılığı için.)
   let rpeEstimated=false;
   if(!hrGuvenilirSpor&&rpe<=0&&RPE_VARSAYILAN[spor]!=null){
     rpe=RPE_VARSAYILAN[spor];
@@ -2738,6 +2739,13 @@ const SPOR_NABIZ_OFFSET={
   bisiklet:7, yuzme:9, kuerek:3, futbol:2, basketbol:2,
   // kuvvet, yoga, pilates: kasıtlı olarak yok — calcWorkoutZoneDist bunları hariç tutar
 };
+
+// RPE-bazlı (nabız-güvenilmez) sporlar için tipik seans yoğunluğu varsayımı.
+// calcMetrics içinde (gerçek RPE girilmemişse) VE calcBeklenenYuk/gün-karşılaştırma
+// içinde ("beklenen" yük hesabında) AYNI değerler kullanılır — 2026.08.09 Göksel
+// talebi: ikisi aynı ölçekte olmalı, aksi halde "Gerçek/Plan %" kıyası anlamsızlaşır
+// (bkz. kuvvet günlerinde %581/%438 gibi sahte "aşırı yük" uyarıları hatası).
+const RPE_VARSAYILAN={kuvvet:5, pilates:4, yoga:3, diger:5};
 
 // AC sütunundaki katsayı değerinden spor türü tahmin et
 // En yakın katsayıya sahip spor türünü döndürür
@@ -14652,7 +14660,23 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
         // Çapraz yük: gerçek çapraz süresi varsa onu kullan (çapraz için hâlâ YUKKAT —
         // calcBeklenenYuk sadece koşu HR-zone'larını modelliyor)
         const caprazSure=gercekCaprazSure>0?gercekCaprazSure:(planned.isKosuCapraz?45:0);
-        const caprazEkYuk=caprazSure>0?Math.round(caprazSure*(YUKKAT.capraz||0.6)):0;
+        // KÖK NEDEN DÜZELTMESİ (2026.08.09 — Göksel'in bildirdiği "kuvvet günlerinde
+        // %581/%438 gibi sahte 'aşırı yük' uyarıları" hatası): ÖNCEDEN her çapraz
+        // türü için SABİT YUKKAT.capraz(0.6)×süre kullanılıyordu. Ama kuvvet/yoga/
+        // pilates gibi RPE-bazlı sporlarda GERÇEK yük artık RPE×süre (Foster session-
+        // RPE yöntemi, ~RPE 3-5×süre) — 0.6×süre'den KAT KAT büyük bir ölçek. İki
+        // taraf farklı birimlerdeydi, kıyas anlamsızdı. Artık RPE-bazlı sporlarda
+        // (RPE_VARSAYILAN'da tanımlı: kuvvet/pilates/yoga/diğer) "beklenen" de AYNI
+        // RPE×süre ölçeğini, tipik/varsayılan RPE ile kullanıyor — gerçek RPE değil
+        // (o zaman kıyas her zaman ~%100 çıkar, hiçbir sapmayı yakalayamaz); amaç
+        // "tipik bir seansa göre" sapma yakalamak. HR-bazlı çapraz türlerinde
+        // (bisiklet/yüzme/kürek/futbol/basketbol) eski YUKKAT.capraz korunuyor —
+        // onlar zaten farklı, tutarlı bir HR-bazlı ölçekte hesaplanıyor.
+        const gercekCaprazSpor=gercekCapraz?.spor;
+        const caprazRpeVarsayilan=gercekCaprazSpor?RPE_VARSAYILAN[gercekCaprazSpor]:null;
+        const caprazEkYuk=caprazSure>0
+          ?Math.round(caprazSure*(caprazRpeVarsayilan!=null?caprazRpeVarsayilan:(YUKKAT.capraz||0.6)))
+          :0;
 
         const beklenenYuk=calcBeklenenYuk(refTip,refSure,athlete,gercekKosu?.mesafe,gercekKosu?.irtifa,gercekKosu?.zemin_zorluk,planned.yapilar);
         const planKat=YUKKAT[refTip]||1.1;
