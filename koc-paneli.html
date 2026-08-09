@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.09-2028 --><!DOCTYPE html>
+<!-- Version: v2026.08.09-2140 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.09-2028';
+const APP_VERSION='v2026.08.09-2140';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -840,6 +840,54 @@ function acwrFazBand(phase){
   return cfg[phase]||cfg['Gelişme'];
 }
 
+// ── targetCTLForDistance — TEK PAYLAŞILAN kaynak ─────────────────────────
+// raceReadinessScore (Fitness-Talep Dengesi) VE AntrenmanAnalizTab'daki CTL
+// Kalibrasyon paneli AYNI bu fonksiyonu kullanır — iki yerde ayrı tanımlanıp
+// zamanla birbirinden sapması (bu dosyada acwrFazBand'de karşılaşılan hata
+// sınıfı) önlenir.
+//
+// Efor mesafesi (kilométrage-effort): ITRA/UTMB'nin resmi formülü — her 100m
+// tırmanış 1km düz koşuya eşdeğer efor sayılır. Böylece aynı km'deki düz bir
+// yarış ile dağlık bir yarış artık aynı targetCTL'yi almıyor.
+//
+// targetCTL: basamak fonksiyonu değil (eskiden km<=21?45:km<=42?60 gibi —
+// komşu basamak sınırlarında haksız sıçramalar vardı, ve 90km üstü her mesafe
+// aynı 105'i alıyordu). Referans noktalar arasında doğrusal enterpolasyon
+// (sıçrama yok), 90km üstünde son segmentin eğimiyle devam edip 150'de
+// tavanlanıyor (CTL sonsuza kadar anlamlı ölçeklenemez).
+//
+// Referans noktalar (25/35/45/60/75/90) DENEYSEL/COACHING TERCİHİDİR — hakemli
+// literatürde mesafeye endeksli bir "hedef CTL" tablosu yoktur (CTL, TSS
+// hesaplama yöntemine göre görecelidir). Bu yüzden CTL Kalibrasyon paneli var:
+// gerçek yarış sonuçlarından ampirik olarak doğrulanıp/ayarlanabilir.
+// Referans noktalar başlangıçta bu deneyimsel varsayılanlarla başlar; koç
+// panelindeki "Otomatik Güncelle" butonu ile Firebase'deki ctl_calibration
+// düğümünden yüklenen gerçek veriyle ÇALIŞMA ZAMANINDA değiştirilebilir
+// (bkz. setGlobalCtlAnchors, App() içindeki yükleme bloğu).
+let CTL_ANCHORS=[[0,20],[5,25],[10,35],[21,45],[42,60],[60,75],[90,90]];
+function setGlobalCtlAnchors(anchors){
+  if(Array.isArray(anchors)&&anchors.length>=2) CTL_ANCHORS=anchors;
+}
+function targetCTLForDistance(km,dp){
+  const kmEff=(km||0)+(dp||0)/100;
+  let raw;
+  if(kmEff<=CTL_ANCHORS[0][0]){
+    raw=CTL_ANCHORS[0][1];
+  } else {
+    raw=null;
+    for(let i=0;i<CTL_ANCHORS.length-1;i++){
+      const[x0,y0]=CTL_ANCHORS[i],[x1,y1]=CTL_ANCHORS[i+1];
+      if(kmEff<=x1){raw=y0+(y1-y0)*(kmEff-x0)/(x1-x0);break;}
+    }
+    if(raw===null){
+      const[xn1,yn1]=CTL_ANCHORS[CTL_ANCHORS.length-2],[xn,yn]=CTL_ANCHORS[CTL_ANCHORS.length-1];
+      const slope=(yn-yn1)/(xn-xn1);
+      raw=Math.min(150,yn+slope*(kmEff-xn));
+    }
+  }
+  return Math.round(raw);
+}
+
 function raceReadinessScore(ctl,acwr,phase,sakatlık,hrv_durum,daysLeft,race,athlete,workouts){
   if(!acwr||!athlete)return null;
   // ── 6 BAĞIMSIZ FAKTÖR — SAF TOPLAÇI SİSTEM (max=100) ────────────────────
@@ -860,7 +908,8 @@ function raceReadinessScore(ctl,acwr,phase,sakatlık,hrv_durum,daysLeft,race,ath
   const km=parseFloat(race?.mesafe)||0;
   const dp=parseFloat(race?.d_plus)||0;
   const safeCtl=ctl||0;
-  const targetCTL=km<=5?25:km<=10?35:km<=21?45:km<=42?60:km<=60?75:km<=90?90:105;
+  const kmEff=km+dp/100;
+  const targetCTL=targetCTLForDistance(km,dp);
   const ctlRatio=targetCTL>0?Math.min(safeCtl/targetCTL,1.0):0;
   const ctlPct=Math.round(ctlRatio*100);
 
@@ -876,7 +925,7 @@ function raceReadinessScore(ctl,acwr,phase,sakatlık,hrv_durum,daysLeft,race,ath
   detaylar.push({
     baslik:'Fitness-Talep Dengesi',puan:fitPuan,max:30,
     yon:fitPuan>=24?'iyi':fitPuan>=15?'nötr':'kotu',
-    aciklama:`CTL ${round1(safeCtl)} / ${race?.ad||'Yarış'} için gereken ${targetCTL} (%${ctlPct}) — ${
+    aciklama:`CTL ${round1(safeCtl)} / ${race?.ad||'Yarış'} için gereken ${targetCTL}${dp>0?` (efor mesafesi ${round1(kmEff)}km: ${round1(km)}km + ${Math.round(dp)}m D+)`:''} (%${ctlPct}) — ${
       ctlRatio>=1.0?'Yarışın talebi karşılanıyor ✓':
       ctlRatio>=0.8?'İyi seviye, son rötuşlar':
       ctlRatio>=0.6?'Gelişiyor, artış devam etmeli':
@@ -24097,12 +24146,152 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,wor
 }
 
 // ── Antrenman Analizi: Aynı yapıdaki antrenmanları zaman içinde karşılaştır ──
-function AntrenmanAnalizTab({workouts,athletes}){
+function AntrenmanAnalizTab({workouts,athletes,races,raceResults,ctlCalibration,onUpdateCtlAnchors}){
   const [selAth,setSelAth]=useState('');
   const [selTur,setSelTur]=useState('');
   const [selYapi,setSelYapi]=useState('');
   const chartRef=useRef();
   const chartInst=useRef();
+
+  // ── CTL Kalibrasyon — targetCTLForDistance'ı gerçek yarış sonuçlarıyla
+  // doğrulama/ayarlama paneli ─────────────────────────────────────────────
+  // Kalıcı bir depoya ihtiyaç yok: her açılışta races/raceResults/workouts'tan
+  // CANLI hesaplanır. Yeni bir yarış sonucu (Yarışlar sekmesinden) eklendikçe
+  // bu panel otomatik büyür — ayrı bir "kaydet" adımı gerekmiyor.
+  // Referans noktalar (25/35/45/60/75/90) hakemli literatürden gelmiyor (böyle
+  // bir kaynak yok — bkz. targetCTLForDistance yorumu); bu yüzden tek geçerli
+  // kalibrasyon kaynağı takımın kendi geçmiş yarış sonuçları.
+  const calibChartRef=useRef();
+  const calibChartInst=useRef();
+  const calibData=useMemo(()=>{
+    if(!raceResults?.length||!races?.length||!athletes?.length)return[];
+    const out=[];
+    athletes.forEach(ath=>{
+      const athResults=(raceResults||[]).filter(r=>r.athleteId===ath.id);
+      if(!athResults.length)return;
+      const athWks=(workouts||[]).filter(w=>w.athleteId===ath.id&&w.date);
+      if(!athWks.length)return;
+      let hist;
+      try{hist=buildHistory(athWks,ath,races);}catch(e){return;}
+      if(!hist.length)return;
+      athResults.forEach(r=>{
+        const race=races.find(rc=>rc.id===r.raceId);
+        if(!race||!race.mesafe)return;
+        const km=parseFloat(race.mesafe)||0;
+        const dp=parseFloat(race.d_plus)||0;
+        const raceDate=r.date||race.tarih;
+        if(!raceDate)return;
+        // Yarış tarihine kadarki (dahil) en son CTL noktası
+        const onOrBefore=hist.filter(h=>h.date<=raceDate);
+        const point=onOrBefore[onOrBefore.length-1];
+        if(!point)return;
+        const kmEff=round1(km+dp/100);
+        out.push({
+          athAd:((ath.ad||'')+' '+(ath.soyad||'')).trim()||'—',
+          raceAd:race.ad||'Yarış',date:raceDate,
+          km:round1(km),dp:Math.round(dp),kmEff,
+          ctl:point.ctl,
+          hedefCTL:targetCTLForDistance(km,dp),
+          fark:round1(point.ctl-targetCTLForDistance(km,dp)),
+        });
+      });
+    });
+    return out.sort((a,b)=>a.kmEff-b.kmEff);
+  },[athletes,workouts,races,raceResults]);
+
+  // ── Otomatik Güncelle butonu — bölgesel medyan yaklaşımı ────────────────
+  // Her sabit referans noktası (5/10/21/42/60/90 km_eff) için, o noktaya en
+  // yakın komşu referans noktalarının ortası kadar bir "bölge" tanımlanır.
+  // Bölge içindeki gerçek yarış sonuçlarının CTL medyanı yeni referans değeri
+  // olur (medyan, ortalamaya göre uç değerlere karşı daha dayanıklı). Yeterli
+  // veri (MIN_N) olmayan noktalar DEĞİŞTİRİLMEZ — eski değer korunur, böylece
+  // 1-2 sonuçla tüm eğri bozulmaz. (0,20) taban noktası hiç dokunulmaz.
+  const MIN_N=3;
+  const anchorKmPoints=[5,10,21,42,60,90];
+  const handleAutoCalibrate=()=>{
+    if(calibData.length<MIN_N){
+      alert(`Yeterli veri yok. En az ${MIN_N} yarış sonucu gerekli, şu an ${calibData.length} var.`);
+      return;
+    }
+    const mids=anchorKmPoints.slice(0,-1).map((x,i)=>(x+anchorKmPoints[i+1])/2);
+    const bounds=[0,...mids,Infinity];
+    const newAnchors=[[0,20]];
+    const sampleSizes={};
+    const changesSummary=[];
+    let changedCount=0;
+    anchorKmPoints.forEach((kmPoint,i)=>{
+      const lo=bounds[i],hi=bounds[i+1];
+      const inBin=calibData.filter(d=>d.kmEff>=lo&&d.kmEff<hi);
+      sampleSizes[kmPoint]=inBin.length;
+      const oldY=(CTL_ANCHORS.find(a=>a[0]===kmPoint)||[kmPoint,null])[1];
+      if(inBin.length>=MIN_N){
+        const sortedCtl=inBin.map(d=>d.ctl).sort((a,b)=>a-b);
+        const mid=Math.floor(sortedCtl.length/2);
+        const median=sortedCtl.length%2?sortedCtl[mid]:(sortedCtl[mid-1]+sortedCtl[mid])/2;
+        const newY=Math.round(median);
+        newAnchors.push([kmPoint,newY]);
+        if(newY!==oldY){changedCount++;changesSummary.push(`${kmPoint}km: ${oldY} → ${newY}  (n=${inBin.length})`);}
+      } else {
+        newAnchors.push([kmPoint,oldY]);
+      }
+    });
+    if(changedCount===0){
+      alert('Hiçbir referans noktası değişmedi.\n\nÖrnek sayıları:\n'+
+        anchorKmPoints.map(k=>`  ${k}km: n=${sampleSizes[k]}${sampleSizes[k]<MIN_N?' (yetersiz, min '+MIN_N+' gerekli)':''}`).join('\n'));
+      return;
+    }
+    const yetersizler=anchorKmPoints.filter(k=>sampleSizes[k]<MIN_N);
+    const msg=[
+      `${changedCount} referans noktası güncellenecek:`,'',
+      ...changesSummary,'',
+      yetersizler.length?'Değişmeyenler (yetersiz veri, en az '+MIN_N+' sonuç gerekli):':null,
+      ...yetersizler.map(k=>`  ${k}km: n=${sampleSizes[k]}`),'',
+      '⚠️ Bu değişiklik TÜM sporcuların Fitness-Talep Dengesi puanını etkiler.','Devam edilsin mi?'
+    ].filter(l=>l!==null).join('\n');
+    if(!confirm(msg))return;
+    onUpdateCtlAnchors(newAnchors,sampleSizes);
+    alert('✅ Referans noktaları güncellendi ve kaydedildi.');
+  };
+
+  useEffect(()=>{
+    if(!calibChartRef.current||calibData.length<1)return;
+    if(calibChartInst.current)calibChartInst.current.destroy();
+    const maxX=Math.max(100,...calibData.map(d=>d.kmEff))*1.1;
+    const curvePts=[];
+    for(let x=0;x<=maxX;x+=Math.max(2,Math.round(maxX/60))){
+      curvePts.push({x,y:targetCTLForDistance(x,0)});
+    }
+    calibChartInst.current=new Chart(calibChartRef.current,{
+      type:'scatter',
+      data:{datasets:[
+        {type:'line',label:'Mevcut hedef eğrisi (targetCTLForDistance)',
+          data:curvePts,borderColor:'#f59e0b',backgroundColor:'transparent',
+          borderDash:[5,3],pointRadius:0,tension:.15,order:2},
+        {type:'scatter',label:'Gerçek CTL (yarış sonucu)',
+          data:calibData.map(d=>({x:d.kmEff,y:d.ctl})),
+          backgroundColor:calibData.map(d=>d.fark>=0?'#10b981':'#ef4444'),
+          pointRadius:6,pointHoverRadius:8,order:1},
+      ]},
+      options:{
+        responsive:true,maintainAspectRatio:false,
+        scales:{
+          x:{type:'linear',title:{display:true,text:'Efor Mesafesi (km + D+/100)'}},
+          y:{title:{display:true,text:'CTL'}},
+        },
+        plugins:{
+          legend:{position:'top'},
+          tooltip:{callbacks:{label:(ctx)=>{
+            if(ctx.dataset.label.includes('Gerçek')){
+              const d=calibData[ctx.dataIndex];
+              return `${d.athAd} — ${d.raceAd}: CTL ${d.ctl} @ ${d.kmEff}km_eff (hedef ${d.hedefCTL}, fark ${d.fark>=0?'+':''}${d.fark})`;
+            }
+            return 'Hedef eğrisi: '+Math.round(ctx.parsed.y);
+          }}}
+        }
+      }
+    });
+    return()=>{if(calibChartInst.current)calibChartInst.current.destroy();};
+  },[calibData]);
 
   // Seçili sporcunun antrenmanları
   const athWorkouts=useMemo(()=>{
@@ -24225,6 +24414,57 @@ function AntrenmanAnalizTab({workouts,athletes}){
   if(!athletes.length)return React.createElement('div',{className:'empty'},'Henüz sporcu eklenmedi.');
 
   return React.createElement('div',null,
+
+    // ── CTL Kalibrasyon paneli ──────────────────────────────────────────
+    React.createElement('div',{className:'card',style:{marginBottom:12}},
+      React.createElement('div',{className:'card-title'},'🎯 CTL Kalibrasyonu (Yarış Sonuçlarından)'),
+      React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:10}},
+        'targetCTLForDistance eğrisi (turuncu kesikli çizgi), sadece koçun deneyimsel tercihidir — literatürde mesafeye endeksli resmi bir "hedef CTL" tablosu yok. Bu grafik, gerçek yarış sonuçlarına (yeşil=hedefin üstünde bitirdi, kırmızı=altında) göre eğrinin doğruluğunu görsel olarak doğrulamanı sağlar. Yeni sonuç eklendikçe otomatik güncellenir.'
+      ),
+      React.createElement('div',{style:{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginBottom:12}},
+        React.createElement('button',{className:'btn btn-secondary',onClick:handleAutoCalibrate},
+          '🔄 Referans Noktalarını Otomatik Güncelle'
+        ),
+        React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)'}},
+          ctlCalibration?.updatedAt
+            ?'Son güncelleme: '+fmtDate(ctlCalibration.updatedAt.split('T')[0])+' '+new Date(ctlCalibration.updatedAt).toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit'})
+            :'Henüz otomatik güncelleme yapılmadı (varsayılan referans noktaları kullanılıyor)'
+        )
+      ),
+      calibData.length===0&&React.createElement('div',{className:'empty'},
+        'Henüz kalibrasyon verisi yok. "Yarışlar" sekmesinden sporcuların geçmiş yarış sonuçlarını (bitiş süresi) girdikçe burada birikecek.'
+      ),
+      calibData.length>0&&React.createElement('div',null,
+        React.createElement('div',{style:{height:300,position:'relative',marginBottom:12}},
+          React.createElement('canvas',{ref:calibChartRef})
+        ),
+        React.createElement('div',{style:{overflowX:'auto'}},
+          React.createElement('table',{className:'table'},
+            React.createElement('thead',null,
+              React.createElement('tr',null,
+                ['Sporcu','Yarış','Tarih','Efor Mesafesi','Gerçek CTL','Hedef CTL','Fark'].map(h=>
+                  React.createElement('th',{key:h},h)
+                )
+              )
+            ),
+            React.createElement('tbody',null,
+              calibData.map((d,i)=>React.createElement('tr',{key:i},
+                React.createElement('td',null,d.athAd),
+                React.createElement('td',null,d.raceAd),
+                React.createElement('td',null,fmtDate?fmtDate(d.date):d.date),
+                React.createElement('td',null,d.kmEff+'km'+(d.dp>0?' ('+d.km+'km+'+d.dp+'m D+)':'')),
+                React.createElement('td',null,d.ctl),
+                React.createElement('td',null,d.hedefCTL),
+                React.createElement('td',{style:{color:d.fark>=0?'var(--success)':'var(--danger)',fontWeight:600}},
+                  (d.fark>=0?'+':'')+d.fark
+                )
+              ))
+            )
+          )
+        )
+      )
+    ),
+
     React.createElement('div',{className:'card',style:{marginBottom:12}},
       React.createElement('div',{className:'card-title'},'Antrenman Karşılaştırma Analizi'),
       React.createElement('div',{className:'form-grid'},
@@ -25226,6 +25466,7 @@ function App(){
   const [workouts,setWorkouts]=useState([]);
   const [athHistory,setAthHistory]=useState([]);
   const [raceResults,setRaceResults]=useState([]);
+  const [ctlCalibration,setCtlCalibration]=useState(null); // {anchors,updatedAt,sampleSizes}
   const [testPlanlar,setTestPlanlar]=useState([]);
   const [planSnap,setPlanSnapApp]=useState(null); // App level — HaftalikPlan erişir
   const [selId,setSelId]=useState('');
@@ -25251,6 +25492,7 @@ function App(){
       let rr=await fbGet('race_results');
       let tp=await fbGet('test_planlar');
       let cfg=await fbGet('app_config');
+      let cc=await fbGet('ctl_calibration');
 
       // Migration: Firebase boşsa localStorage'dan taşı
       if(!a){a=lsGet('ath2');if(a)await fbSet('ath2',a);}
@@ -25287,6 +25529,7 @@ function App(){
         if(cfg.teamName)setTeamName(cfg.teamName);
         if(cfg.teamLogo)setTeamLogo(cfg.teamLogo);
       }
+      if(cc?.anchors?.length){setCtlCalibration(cc);setGlobalCtlAnchors(cc.anchors);}
       setLoaded(true);
       setTimeout(lsCheckUsage,1000);
     };
@@ -25304,6 +25547,14 @@ function App(){
   useEffect(()=>{if(loaded)fbSet('race_results',raceResults);},[raceResults,loaded]);
   useEffect(()=>{if(loaded)fbSet('test_planlar',testPlanlar);},[testPlanlar,loaded]);
   useEffect(()=>{if(loaded)fbSet('app_config',{darkMode,teamName,teamLogo});},[darkMode,teamName,teamLogo,loaded]);
+  useEffect(()=>{if(loaded&&ctlCalibration)fbSet('ctl_calibration',ctlCalibration);},[ctlCalibration,loaded]);
+
+  // CTL_ANCHORS güncellendiğinde (buton) hem global değişkeni hem Firebase'i
+  // güncelleyen tek giriş noktası — AntrenmanAnalizTab bunu çağırır.
+  const handleUpdateCtlAnchors=(newAnchors,sampleSizes)=>{
+    setGlobalCtlAnchors(newAnchors);
+    setCtlCalibration({anchors:newAnchors,updatedAt:new Date().toISOString(),sampleSizes});
+  };
 
   const handleUpdateAthlete=(newA)=>{
     const oldA=athletes.find(x=>x.id===newA.id);
@@ -25378,7 +25629,7 @@ function App(){
   const handleFullExport=async()=>{
     try{
       if(!db){alert('Firebase bağlantısı yok.');return;}
-      const keys=['ath2','races','wks','ath_hist','race_results','test_planlar','app_config','coaching_cues','plan_snapshots','app_password'];
+      const keys=['ath2','races','wks','ath_hist','race_results','test_planlar','app_config','coaching_cues','plan_snapshots','app_password','ctl_calibration'];
       const snap={};
       for(const k of keys){
         try{
@@ -25448,7 +25699,7 @@ function App(){
 
         // Firebase'e yaz
         const writes=[];
-        const WRITABLE=['ath2','races','wks','ath_hist','race_results','test_planlar','app_config','coaching_cues','plan_snapshots'];
+        const WRITABLE=['ath2','races','wks','ath_hist','race_results','test_planlar','app_config','coaching_cues','plan_snapshots','ctl_calibration'];
         for(const k of WRITABLE){
           if(d[k]!==undefined){
             writes.push(db.ref(k).set(d[k]));
@@ -25473,6 +25724,7 @@ function App(){
           if(d.app_config.teamName)setTeamName(d.app_config.teamName);
           if(d.app_config.teamLogo)setTeamLogo(d.app_config.teamLogo);
         }
+        if(d.ctl_calibration?.anchors?.length){setCtlCalibration(d.ctl_calibration);setGlobalCtlAnchors(d.ctl_calibration.anchors);}
         setShowSettings(false);
         alert('✅ Tam geri yükleme tamamlandı!\n\n'+athlCount+' sporcu, '+wkCount+' antrenman ve tüm veriler geri yüklendi.');
       }catch(err){alert('Geri yükleme hatası: '+err.message);}
@@ -25772,7 +26024,7 @@ function App(){
       },athlete,athletes,selId,onSelChange:setSelId,allHistory,workouts,races,testPlanlar}),
       tab==='antrenmanlar'&&React.createElement(AntrenmanlarTab,{athlete,workouts}),
       tab==='gecmis'&&React.createElement(Gecmis,{workouts,athletes,races,onDelete:id=>setWorkouts(p=>p.filter(x=>x.id!==id)),onBulkDelete:ids=>setWorkouts(p=>p.filter(x=>!ids.includes(x.id))),onUpdate:handleUpdateWorkout}),
-      tab==='analiz'&&React.createElement(AntrenmanAnalizTab,{workouts,athletes}),
+      tab==='analiz'&&React.createElement(AntrenmanAnalizTab,{workouts,athletes,races,raceResults,ctlCalibration,onUpdateCtlAnchors:handleUpdateCtlAnchors}),
       tab==='sporcular'&&React.createElement(SporcularTab,{athletes,races,athHistory,allHistory,workouts,
         onAdd:a=>setAthletes(p=>[...p,a]),
         onUpdate:handleUpdateAthlete,
