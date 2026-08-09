@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.09-1316 --><!DOCTYPE html>
+<!-- Version: v2026.08.09-1457 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.09-1316';
+const APP_VERSION='v2026.08.09-1457';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1348,28 +1348,27 @@ function allocatePercentages(counts,total){
 // zaten sapmayı basamaklı bir ağırlığa (hrWeight: 1=uyarı,2=tehlike,4=kritik)
 // indirgediği için yakınlık da bu basamaklara göre kademeli hesaplanır.
 //
-// ── Wilson Skor Alt Sınırı (2026.08.09 — Göksel talebi: "faz sayısı adaleti") ──
+// ── Faz Sayısı Adaleti — Bayesian/Laplace Düzeltmesi (2026.08.09 — Göksel talebi) ──
 // Az fazda tutturulan yüksek bir uyum oranı ("3 fazda %90") ile çok fazda tutturulan
 // AYNI oran ("30 fazda %90") istatistiksel olarak eşit güvenilirlikte değildir — az
-// veri "şans eseri" olabilir. Wilson alt sınırı, ham oranı bu güvenilirliğe göre
-// aşağı çeker; veri (faz sayısı) arttıkça düzeltme küçülür, ham orana yaklaşır.
-// z=1.2816 → %80 güven aralığı (Göksel'in seçimi: "kesinlikle sert olmasın").
-// Sadece UYUM ORANI (ikili: uyumlu/uyumsuz faz sayısı) üzerinde anlamlıdır —
-// yakınlık puanı (closeness) sürekli bir ortalama olduğu için buraya dahil edilmez.
-// Her bileşen (Pace/Nabız/Mesafe) KENDİ faz sayısına göre ayrı ayrı düzeltilir —
-// tek bir global "n" seçmek keyfi olurdu, çünkü bileşenlerin faz sayıları farklı
-// (örn. Mesafe Isınma/Soğuma'yı da sayar, Pace/Nabız saymaz).
-const WILSON_Z=1.2816;
-function wilsonLowerBoundPct(uyumSayisi,total,z){
+// veri "şans eseri" olabilir. İLK SÜRÜMDE Wilson skor alt sınırı kullanılmıştı, ama
+// n=1'de çok sert bir "uçurum" etkisi yarattı (%100 → %37.8) — Göksel'in "kesinlikle
+// bu kadar sert düşmesin" geri bildirimi üzerine YUMUŞAK bir yönteme geçildi:
+// gözlemlenen oran, "makul bir varsayılan" (BAYES_PRIOR_PCT) ile harmanlanır; veri
+// (faz sayısı) arttıkça varsayılanın etkisi hızla azalır, ham orana yaklaşılır.
+// n=1'de bile kademeli bir sonuç çıkar (~%81), sert sıçrama olmaz — ama "çok fazda
+// tutturulan %100" hâlâ "1 fazda tutturulan %100"den yüksek puanlanır (adalet korunur).
+// Sadece UYUM ORANI (ikili: uyumlu/uyumsuz faz sayısı) üzerinde anlamlıdır — yakınlık
+// puanı (closeness) sürekli bir ortalama olduğu için buraya dahil edilmez. Her bileşen
+// (Pace/Nabız/Mesafe) KENDİ faz sayısına göre ayrı ayrı düzeltilir — tek bir global
+// "n" seçmek keyfi olurdu, çünkü bileşenlerin faz sayıları farklı (örn. Mesafe Isınma/
+// Soğuma'yı da sayar, Pace/Nabız saymaz).
+const BAYES_PRIOR_PCT=75;   // "makul varsayılan" uyum oranı — az veri bu değere çekilir
+const BAYES_PSEUDO_COUNT=3; // varsayılanın kaç faz'lık ağırlığı olsun (küçük=hızlı yakınsar)
+function bayesUyumPct(uyumSayisi,total,priorPct,k){
   if(!total||total<=0) return null;
-  z=z||WILSON_Z;
-  const p=uyumSayisi/total;
-  const z2=z*z;
-  const merkez=p+z2/(2*total);
-  const marj=z*Math.sqrt((p*(1-p)+z2/(4*total))/total);
-  const payda=1+z2/total;
-  const alt=(merkez-marj)/payda;
-  return Math.max(0,Math.min(100,alt*100));
+  priorPct=priorPct??BAYES_PRIOR_PCT; k=k??BAYES_PSEUDO_COUNT;
+  return (uyumSayisi+k*(priorPct/100))/(total+k)*100;
 }
 
 function hrClosenessScore(hrOk,hrWeight){
@@ -1437,7 +1436,7 @@ function calcPaceComplianceScore(signals){
   // ham gözlemlenen oran (dürüst: "3/3 faz uyumlu = %100"); ama puana giren değer
   // faz sayısı arttıkça bu ham orana yaklaşan, azken temkinli aşağı çeken bir
   // güven alt sınırı kullanır. Bkz. wilsonLowerBoundPct tanımı.
-  const uyumPctForScore=wilsonLowerBoundPct(uyum,total);
+  const uyumPctForScore=bayesUyumPct(uyum,total);
   const puanPace=total>0?(yakinlikPuani!=null?Math.round((uyumPctForScore??uyumPct)*0.5+yakinlikPuani*0.5):Math.round(uyumPctForScore??uyumPct)):null;
 
   // ── Hedef Nabız bileşeni ──
@@ -1454,7 +1453,7 @@ function calcPaceComplianceScore(signals){
   });
   const[hrUyumPct,hrYuksekPct,hrDusukPct]=allocatePercentages([hrUyum,hrYuksek,hrDusuk],hrTotal);
   const hrYakinlikPuani=hrClosenessN>0?round1(hrClosenessSum/hrClosenessN):null;
-  const hrUyumPctForScore=wilsonLowerBoundPct(hrUyum,hrTotal);
+  const hrUyumPctForScore=bayesUyumPct(hrUyum,hrTotal);
   const puanNabiz=hrTotal>0?(hrYakinlikPuani!=null?Math.round((hrUyumPctForScore??hrUyumPct)*0.5+hrYakinlikPuani*0.5):Math.round(hrUyumPctForScore??hrUyumPct)):null;
 
   // ── Mesafe Hedefi Uyumu bileşeni (2026.08.04 — Göksel talebi) ──────────────
@@ -1478,7 +1477,7 @@ function calcPaceComplianceScore(signals){
   });
   const[mesUyumPct,mesAzPct,mesFazlaPct]=allocatePercentages([mesUyum,mesAz,mesFazla],mesafeTotal);
   const mesYakinlikPuani=mesClosenessN>0?round1(mesClosenessSum/mesClosenessN):null;
-  const mesUyumPctForScore=wilsonLowerBoundPct(mesUyum,mesafeTotal);
+  const mesUyumPctForScore=bayesUyumPct(mesUyum,mesafeTotal);
   const puanMesafe=mesafeTotal>0?(mesYakinlikPuani!=null?Math.round((mesUyumPctForScore??mesUyumPct)*0.5+mesYakinlikPuani*0.5):Math.round(mesUyumPctForScore??mesUyumPct)):null;
 
   // ── Birleşik puan (2026.08.04 — Göksel onayı): Pace %100, Mesafe Hedefi %100,
@@ -20338,7 +20337,7 @@ function VerilenAntrenmaniYapabilmePuaniKarti({athlete}){
           'Mesafe yakınlık puanı: ',e('b',null,score.mesYakinlikPuani+'/100')
         ),
         e('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},
-          'Genel puan: pace, mesafe hedefi ve nabız bileşenleri (her biri uyum oranı %50 + yakınlık puanı %50) ayrı hesaplanıp ağırlıklı ortalanır — pace ve mesafe tam ağırlık, nabız yarı ağırlık. Mesafede ceza yönü antrenman bölgesine göre değişir: kolay/toparlanma bölgesinde (Isınma/Soğuma dahil) fazla koşma, ana bölüm/tempo/interval bölgesinde az koşma 3 kat daha sert cezalandırılır. Soğumanın nabız düşüş kalitesi (Yetersiz/Aksadı vb.) de Nabız bileşenine dahildir — ayrı bir bileşen değildir. Faz sayısı adaleti: her bileşenin uyum oranı, o bileşenin KENDİ faz sayısına göre istatistiksel bir güven payıyla düzeltilir (Wilson skoru) — az fazda tutturulan yüksek bir oran, çok fazda tutturulan aynı orandan biraz daha düşük puanlanır (az veri daha az güvenilirdir). Bir fazda sadece bazı bileşenler mevcutsa, sadece onlar kullanılır.'
+          'Genel puan: pace, mesafe hedefi ve nabız bileşenleri (her biri uyum oranı %50 + yakınlık puanı %50) ayrı hesaplanıp ağırlıklı ortalanır — pace ve mesafe tam ağırlık, nabız yarı ağırlık. Mesafede ceza yönü antrenman bölgesine göre değişir: kolay/toparlanma bölgesinde (Isınma/Soğuma dahil) fazla koşma, ana bölüm/tempo/interval bölgesinde az koşma 3 kat daha sert cezalandırılır. Soğumanın nabız düşüş kalitesi (Yetersiz/Aksadı vb.) de Nabız bileşenine dahildir — ayrı bir bileşen değildir. Faz sayısı adaleti: her bileşenin uyum oranı, o bileşenin KENDİ faz sayısına göre kademeli bir güven payıyla düzeltilir — az fazda tutturulan yüksek bir oran, çok fazda tutturulan aynı orandan biraz daha düşük puanlanır (az veri daha az güvenilirdir), ama düzeltme yumuşaktır — tek fazda bile sert bir düşüş yaşanmaz. Bir fazda sadece bazı bileşenler mevcutsa, sadece onlar kullanılır.'
         )
       ),
       score.detay?.length>0&&e('div',{style:{marginTop:10}},
