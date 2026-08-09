@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.09-2140 --><!DOCTYPE html>
+<!-- Version: v2026.08.09-2205 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.09-2140';
+const APP_VERSION='v2026.08.09-2205';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -888,7 +888,7 @@ function targetCTLForDistance(km,dp){
   return Math.round(raw);
 }
 
-function raceReadinessScore(ctl,acwr,phase,sakatlık,hrv_durum,daysLeft,race,athlete,workouts){
+function raceReadinessScore(ctl,acwr,phase,sakatlık,hrv_durum,daysLeft,race,athlete,workouts,history){
   if(!acwr||!athlete)return null;
   // ── 6 BAĞIMSIZ FAKTÖR — SAF TOPLAÇI SİSTEM (max=100) ────────────────────
   //
@@ -907,16 +907,33 @@ function raceReadinessScore(ctl,acwr,phase,sakatlık,hrv_durum,daysLeft,race,ath
   const detaylar=[];
   const km=parseFloat(race?.mesafe)||0;
   const dp=parseFloat(race?.d_plus)||0;
-  const safeCtl=ctl||0;
   const kmEff=km+dp/100;
   const targetCTL=targetCTLForDistance(km,dp);
-  const ctlRatio=targetCTL>0?Math.min(safeCtl/targetCTL,1.0):0;
-  const ctlPct=Math.round(ctlRatio*100);
 
   // racePhase — ACWR dahil tüm faktörler için gerekli, öne alındı
   const racePhase=race?.tarih&&race?.prep_weeks
     ?calcPhase(new Date().toISOString().split('T')[0],race.tarih,race.prep_weeks,race)
     :phase;
+
+  // ── Fitness için kullanılacak CTL — Taper'da ZİRVE CTL kullanılır ───────
+  // CTL, 42 günlük üstel ortalama olduğundan taper'da (yük kasıtlı azalınca)
+  // doğal ve SAĞLIKLI olarak birkaç puan düşer (Mujika taper literatürü: form
+  // ortaya çıkar ama CTL'nin kendisi hafif geriler). Eskiden "şu anki CTL"
+  // değerlendiriliyordu — doğru taper yapmış bir sporcu, en hazır olduğu
+  // haftada Fitness-Talep puanının haksız yere düşmesini görebiliyordu. Şimdi
+  // Taper fazında son 6 haftanın (42 gün) ZİRVE CTL'si kullanılıyor — bu,
+  // taper öncesi ulaşılan gerçek fitness'i yansıtır, taper'ın kasıtlı yük
+  // düşüşünü cezalandırmaz. Diğer fazlarda değişiklik yok (şu anki CTL).
+  let safeCtl=ctl||0;
+  let ctlKaynak=null; // açıklama metninde göstermek için, sadece Taper'da dolu
+  if(racePhase==='Taper'&&Array.isArray(history)&&history.length){
+    const cutoff=new Date();cutoff.setDate(cutoff.getDate()-42);
+    const cutoffStr=cutoff.toISOString().split('T')[0];
+    const recentPeak=history.filter(h=>h.date>=cutoffStr).reduce((mx,h)=>Math.max(mx,h.ctl||0),0);
+    if(recentPeak>safeCtl){safeCtl=recentPeak;ctlKaynak='taper-öncesi zirve (son 6 hafta)';}
+  }
+  const ctlRatio=targetCTL>0?Math.min(safeCtl/targetCTL,1.0):0;
+  const ctlPct=Math.round(ctlRatio*100);
 
   // ── 1. Fitness-Talep Dengesi (0-30) ─────────────────────────────────────
   // CTL / yarışın gerektirdiği CTL — spesifik hazırlık prensibi burada
@@ -925,7 +942,7 @@ function raceReadinessScore(ctl,acwr,phase,sakatlık,hrv_durum,daysLeft,race,ath
   detaylar.push({
     baslik:'Fitness-Talep Dengesi',puan:fitPuan,max:30,
     yon:fitPuan>=24?'iyi':fitPuan>=15?'nötr':'kotu',
-    aciklama:`CTL ${round1(safeCtl)} / ${race?.ad||'Yarış'} için gereken ${targetCTL}${dp>0?` (efor mesafesi ${round1(kmEff)}km: ${round1(km)}km + ${Math.round(dp)}m D+)`:''} (%${ctlPct}) — ${
+    aciklama:`CTL ${round1(safeCtl)}${ctlKaynak?` (${ctlKaynak})`:''} / ${race?.ad||'Yarış'} için gereken ${targetCTL}${dp>0?` (efor mesafesi ${round1(kmEff)}km: ${round1(km)}km + ${Math.round(dp)}m D+)`:''} (%${ctlPct}) — ${
       ctlRatio>=1.0?'Yarışın talebi karşılanıyor ✓':
       ctlRatio>=0.8?'İyi seviye, son rötuşlar':
       ctlRatio>=0.6?'Gelişiyor, artış devam etmeli':
@@ -3588,11 +3605,19 @@ const YAPI_NOTLARI={
 
 const EMPTY_W={date:new Date().toISOString().split('T')[0],time:'',spor:'kosu',tur:'',yapi_notu:'',sure_sa:'0',sure_dk:'0',sure_sn:'0',mesafe:'',irtifa:'',ort_nabiz:'',maks_nabiz:'',rpe:'',kadans:'',yer_kontak:'',dikey_salinim:'',zemin_dengesi:'',zemin_zorluk:'1',ort_guc:'',maks_guc:'',notlar:'',analiz_icin:false,yol_yarisi:false,trail_yarisi:false};
 
-function acwrStatus(v){
+function acwrStatus(v,phase){
   if(!v)return{label:'—',cls:'',badge:''};
-  if(v<0.8)return{label:'Düşük yük',cls:'info',badge:'badge-info'};
-  if(v<=1.3)return{label:'İdeal aralık',cls:'good',badge:'badge-good'};
-  if(v<=1.5)return{label:'Dikkat',cls:'warn',badge:'badge-warn'};
+  // Faz verilirse acwrFazBand() (TEK PAYLAŞILAN kaynak, raceReadinessScore ile
+  // aynı) kullanılır; verilmezse geriye dönük uyumluluk için eski sabit
+  // 0.8/1.3/1.5 değerlerine düşer. Böylece "İdeal aralık" etiketi artık
+  // sporcunun gerçek fazına göre değişir — eskiden Taper'da da Zirve'de de
+  // aynı 0.8-1.3 "ideal" gösteriliyordu, raceReadinessScore'daki faz-bazlı
+  // bantla çelişiyordu.
+  const b=phase?acwrFazBand(phase):null;
+  const lo=b?b.peak-0.15:0.8,hi=b?b.peak+0.15:1.3,risk=b?b.highZero:1.5;
+  if(v<lo)return{label:'Düşük yük',cls:'info',badge:'badge-info'};
+  if(v<=hi)return{label:'İdeal aralık',cls:'good',badge:'badge-good'};
+  if(v<=risk)return{label:'Dikkat',cls:'warn',badge:'badge-warn'};
   return{label:'Yüksek risk!',cls:'danger',badge:'badge-danger'};
 }
 function tsbStatus(v){
@@ -4779,7 +4804,7 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
             React.createElement(TD,{ch:r.ctl,st:{textAlign:'right',fontFamily:'monospace'}}),
             React.createElement(TD,{ch:r.atl,st:{textAlign:'right',fontFamily:'monospace',color:'var(--text-secondary)'}}),
             React.createElement(TD,{ch:r.tsb,st:{textAlign:'right',fontFamily:'monospace',color:statusClsColor(tsbStatus(r.tsb).cls)}}),
-            React.createElement(TD,{ch:r.acwr===null?'-':r.acwr,st:{textAlign:'right',fontFamily:'monospace',color:statusClsColor(acwrStatus(r.acwr).cls)}}),
+            React.createElement(TD,{ch:r.acwr===null?'-':r.acwr,st:{textAlign:'right',fontFamily:'monospace',color:statusClsColor(acwrStatus(r.acwr,r.phase).cls)}}),
             React.createElement(TD,{ch:r.band,st:{textAlign:'right',fontFamily:'monospace',color:'var(--text-secondary)'}}),
             React.createElement(TD,{ch:r.phase}),
             React.createElement(TD,{ch:r.seviye,st:{color:r.seviye==='baslangic'?'var(--warn)':r.seviye==='ileri'?'var(--success)':'inherit',fontWeight:r.seviye==='baslangic'?600:400}}),
@@ -20183,10 +20208,15 @@ function ChartACWR({history}){
     const gridColor=isDark?'rgba(255,255,255,.08)':'rgba(0,0,0,.08)';
     const tickColor=isDark?'#777':'#888';
     if(inst.current)inst.current.destroy();
-    // İdeal aralık bandı: 0.8–1.3 arası şeffaf yeşil dolgu
-    // Chart.js'de fill between: üst ve alt çizgi olarak iki dataset
-    const bandTop=data.map(()=>1.3);
-    const bandBot=data.map(()=>0.8);
+    // İdeal aralık bandı — ARTIK GÜNE ÖZEL: her günün kendi fazına göre
+    // acwrFazBand() bandı çiziliyor (raceReadinessScore'daki AYNI ±0.15 bant
+    // mantığı — tek paylaşılan kaynak). Eskiden sabit 0.8–1.3 vardı; bu, tüm
+    // fazlarda (Taper'da bile) aynı "ideal" değeri gösteriyordu ve raceReadinessScore'daki
+    // faz-bazlı bantla çelişiyordu. Sporcu fazlar arasında geçtikçe (Temel→
+    // Gelişme→Zirve→Taper→Yarış Sonrası) bant da buna göre kayar.
+    const bandTop=data.map(d=>{const b=acwrFazBand(d.phase);return round2(b.peak+0.15);});
+    const bandBot=data.map(d=>{const b=acwrFazBand(d.phase);return round2(b.peak-0.15);});
+    const riskLine=data.map(d=>{const b=acwrFazBand(d.phase);return b.highZero;});
     inst.current=new Chart(ref.current,{
       type:'line',
       data:{labels,datasets:[
@@ -20199,8 +20229,8 @@ function ChartACWR({history}){
         // ACWR çizgisi
         {label:'ACWR',data:data.map(d=>d.acwr),borderColor:'#2563eb',borderWidth:2,
          pointRadius:0,tension:.3,spanGaps:true,fill:false},
-        // Risk çizgisi 1.5
-        {label:'_risk',data:data.map(()=>1.5),borderColor:'rgba(220,38,38,0.50)',
+        // Risk çizgisi — fazın kendi highZero sınırı (eskiden sabit 1.5'ti)
+        {label:'_risk',data:riskLine,borderColor:'rgba(220,38,38,0.50)',
          borderWidth:1,borderDash:[4,3],pointRadius:0,fill:false,tension:0,spanGaps:true},
       ]},
       options:{
@@ -20209,7 +20239,10 @@ function ChartACWR({history}){
           legend:{display:false},
           tooltip:{
             filter:item=>item.dataset.label==='ACWR',
-            callbacks:{label:ctx=>'ACWR: '+(ctx.raw!=null?ctx.raw.toFixed(2):'—')}
+            callbacks:{
+              label:ctx=>'ACWR: '+(ctx.raw!=null?ctx.raw.toFixed(2):'—'),
+              afterLabel:ctx=>{const d=data[ctx.dataIndex];return d?.phase?'Faz: '+d.phase+' (ideal '+bandBot[ctx.dataIndex]+'–'+bandTop[ctx.dataIndex]+')':'';}
+            }
           },
         },
         scales:{
@@ -20889,7 +20922,7 @@ function YarislarTab({athlete,races,history,workouts,raceResults,onAddResult,onD
 
   const renderRace=(race)=>{
       const daysLeft=race.tarih?Math.ceil((new Date(race.tarih+'T12:00:00')-today)/864e5):null;
-      const readiness=raceReadinessScore(last?.ctl,last?.acwr,last?.phase,athlete.sakatlık,athlete.hrv_durum,daysLeft,race,athlete,workouts);
+      const readiness=raceReadinessScore(last?.ctl,last?.acwr,last?.phase,athlete.sakatlık,athlete.hrv_durum,daysLeft,race,athlete,workouts,history);
       let target=null;try{target=calcTargetTime(race,athlete,last?.ctl,last?.acwr,workouts);}catch(e){console.error("calcTargetTime err:",e.message);}
       const isPast=daysLeft!==null&&daysLeft<0;
       // Bu yarışa ait sonuçlar
@@ -22007,16 +22040,16 @@ function KarsilastirTab({athletes,races,workouts,allHistory}){
               const hist=allHistory[ath.id]||[];
               const last=hist[hist.length-1];
               const tsbS=tsbStatus(last?.tsb);
-              const acwrS=acwrStatus(last?.acwr);
+              const acwrS=acwrStatus(last?.acwr,last?.phase);
               const daysLeft=filteredRace?.tarih?Math.ceil((new Date(filteredRace.tarih+'T12:00:00')-today)/864e5):null;
-              const readiness=filteredRace?raceReadinessScore(last?.ctl,last?.acwr,last?.phase,ath.sakatlık,ath.hrv_durum,daysLeft,filteredRace,ath,workouts):null;
+              const readiness=filteredRace?raceReadinessScore(last?.ctl,last?.acwr,last?.phase,ath.sakatlık,ath.hrv_durum,daysLeft,filteredRace,ath,workouts,hist):null;
               let target=null;try{target=filteredRace?calcTargetTime(filteredRace,ath,last?.ctl,last?.acwr,workouts):null;}catch(e){console.error("calcTargetTime err:",e.message);}
 
               // Sporcunun yaklaşan yarışları için hazırlık skorları
               const athUpcoming=upcomingRaces.filter(r=>(ath.yarıslar||[]).map(x=>typeof x==='string'?x:x.id).includes(r.id));
               const athReadinessScores=athUpcoming.map(r=>{
                 const dl=Math.ceil((new Date(r.tarih+'T12:00:00')-today)/864e5);
-                const scObj=raceReadinessScore(last?.ctl,last?.acwr,last?.phase,ath.sakatlık,ath.hrv_durum,dl,r,ath,workouts);
+                const scObj=raceReadinessScore(last?.ctl,last?.acwr,last?.phase,ath.sakatlık,ath.hrv_durum,dl,r,ath,workouts,hist);
                 return{race:r,daysLeft:dl,score:scObj?.score??scObj};
               });
 
@@ -22794,7 +22827,7 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
     if(!todayApproved&&tomorrowApproved)return{label:'Yarın iletildi',icon:'✓',bg:'var(--warn-bg)',color:'var(--warn)',border:'var(--warn)'};
     return{label:'Bugün ve yarın iletilmedi',icon:'✗',bg:'var(--danger-bg)',color:'var(--danger)',border:'var(--danger)'};
   })();
-  const acwrS=acwrStatus(last?.acwr);
+  const acwrS=acwrStatus(last?.acwr,last?.phase);
   const tsbS=tsbStatus(last?.tsb);
 
   // Paylaş ref'leri
@@ -22832,7 +22865,7 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
   const daysToRace=nextRace?Math.ceil((new Date(nextRace.tarih+'T12:00:00')-today)/864e5):null;
 
   // Yarış hazırlık skoru
-  const readiness=nextRace?raceReadinessScore(last?.ctl,last?.acwr,last?.phase,athlete?.sakatlık,athlete?.hrv_durum,daysToRace,nextRace,athlete,workouts):null;
+  const readiness=nextRace?raceReadinessScore(last?.ctl,last?.acwr,last?.phase,athlete?.sakatlık,athlete?.hrv_durum,daysToRace,nextRace,athlete,workouts,history):null;
 
   // Bölge dağılımı — seçili periyot (görsel çubuk için)
   const [zonePeriod,setZonePeriod]=React.useState(4);
@@ -23012,7 +23045,7 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
     // ACWR grafiği
     React.createElement('div',{ref:refAcwr,className:'card'},
       React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}},
-        React.createElement('div',{className:'card-title',style:{margin:0}},'ACWR (EWMA) — Son 90 gün  |  ideal: 0.8–1.3  |  risk >1.5'),
+        React.createElement('div',{className:'card-title',style:{margin:0}},'ACWR (EWMA) — Son 90 gün  |  ideal bant faza göre değişir (yeşil alan)'),
         React.createElement(ShareBtn,{elRef:refAcwr,filename:'acwr.png',title:'ACWR Grafiği',text:athlete?.ad+' antrenman yük dengesi'})
       ),
       React.createElement(ChartACWR,{history:chart}),
@@ -23020,11 +23053,13 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
         const lastH=chart[chart.length-1];
         if(!lastH?.acwr)return null;
         const acwr=lastH.acwr;
+        const fazCfg=acwrFazBand(lastH.phase);
+        const idealLow=round2(fazCfg.peak-0.15),idealHigh=round2(fazCfg.peak+0.15);
         let cls,text;
-        if(acwr>1.5)      {cls='danger';text='🚨 ACWR: '+acwr.toFixed(2)+' — Yüksek sakatlık riski! Son 7 günlük yük kronik ortalamanın çok üzerinde. Antrenman yoğunluğunu hemen düşür.';}
-        else if(acwr>1.3) {cls='warn';  text='⚠ ACWR: '+acwr.toFixed(2)+' — İdeal aralığın üstünde. Yük artışını yavaşlat, toparlanmayı önceliklendir.';}
-        else if(acwr>=0.8){cls='good';  text='✓ ACWR: '+acwr.toFixed(2)+' — İdeal aralıkta (0.8–1.3). Yük dengesi sağlıklı, sakatlık riski düşük.';}
-        else              {cls='info';  text='💤 ACWR: '+acwr.toFixed(2)+' — Yük düşük. Kondisyon kazanımı için antrenman yükünü artırabilirsin.';}
+        if(acwr>fazCfg.highZero) {cls='danger';text='🚨 ACWR: '+acwr.toFixed(2)+' — Yüksek sakatlık riski ('+lastH.phase+' fazı). Son 7 günlük yük kronik ortalamanın çok üzerinde. Antrenman yoğunluğunu hemen düşür.';}
+        else if(acwr>idealHigh) {cls='warn';  text='⚠ ACWR: '+acwr.toFixed(2)+' — '+lastH.phase+' fazının ideal aralığının ('+idealLow+'–'+idealHigh+') üstünde. Yük artışını yavaşlat, toparlanmayı önceliklendir.';}
+        else if(acwr>=idealLow){cls='good';  text='✓ ACWR: '+acwr.toFixed(2)+' — '+lastH.phase+' fazı için ideal aralıkta ('+idealLow+'–'+idealHigh+'). Yük dengesi sağlıklı, sakatlık riski düşük.';}
+        else              {cls='info';  text='💤 ACWR: '+acwr.toFixed(2)+' — '+lastH.phase+' fazı için yük düşük. Kondisyon kazanımı için antrenman yükünü artırabilirsin.';}
         return React.createElement('div',{style:{
           marginTop:8,fontSize:12,padding:'7px 11px',borderRadius:'var(--radius)',
           background:cls==='danger'?'var(--danger-bg)':cls==='warn'?'var(--warn-bg)':cls==='good'?'var(--success-bg)':'var(--info-bg)',
@@ -27353,7 +27388,7 @@ function SporcuPlanView(){
         // 2) Form — CTL/ATL/TSB (planSnap.formSnap'ten)
         const ctl=last.ctl;const atl=last.atl;const tsb=last.tsb;const acwr=last.acwr;
         const tsbS=tsbStatus(tsb);
-        const acwrS=acwrStatus(acwr);
+        const acwrS=acwrStatus(acwr,last.phase);
 
         // 3) Haftalık Hedef İlerlemesi — planSnap.weekActuals koç panelinden; yoksa fallback hesap
         const _waSnap=planSnap?.weekActuals||null;
