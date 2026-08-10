@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.10-1956 --><!DOCTYPE html>
+<!-- Version: v2026.08.10-2016 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.10-1956';
+const APP_VERSION='v2026.08.10-2016';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -14266,7 +14266,12 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
     if(weekOff===0||weekOff===1){
       const lastEntry=history[history.length-1];
       const band=ctlBand(lastEntry?.ctl||simCtl||0); // haftaIskeleti için band
-      const fazPhase=primary?calcPhase(new Date(start.getTime()+3*864e5).toISOString().split('T')[0],primary.tarih,primary.prep_weeks,primary,getAthRaceOverride(athlete,primary?.id)):'Temel';
+      // DÜZELTME (Ağu 2026): calcPhase() gün-sayısı bazlı hesap yapıyordu (daysToRace<=taperW*7),
+      // weekTargets ise hafta-bloğu bazlı (Pazartesi-Pazar) hesap yapıyor — kısa taper haftalarında
+      // (taper_w=1 gibi) bu ikisi haftanın ortasında çelişip aynı haftada gün gün faz değiştirebiliyordu
+      // (antrenman bilimine aykırı: bir hafta tek bir faza ait olmalı). Artık tek kaynak: wt.phase
+      // (calcWeeklyTargetsCore) — bu, üstteki rozet ile de birebir aynı değeri kullanır.
+      const fazPhase=wt?.phase||(primary?calcPhase(new Date(start.getTime()+3*864e5).toISOString().split('T')[0],primary.tarih,primary.prep_weeks,primary,getAthRaceOverride(athlete,primary?.id)):'Temel');
       
       // Faza göre max kaliteli gün sayısı
       const maxKaliteliBase={
@@ -14475,7 +14480,13 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       const dtR=primary?Math.ceil((new Date(primary.tarih+'T12:00:00')-new Date(dateStr+'T12:00:00'))/864e5):null;
       const nextInt=intermediate.filter(r=>new Date(r.tarih+'T12:00:00')>=d).sort((a,b)=>new Date(a.tarih)-new Date(b.tarih))[0];
       const dtInt=nextInt?Math.ceil((new Date(nextInt.tarih+'T12:00:00')-new Date(dateStr+'T12:00:00'))/864e5):null;
-      const phase=primary?calcPhase(dateStr,primary.tarih,primary.prep_weeks,primary,getAthRaceOverride(athlete,primary?.id)):'Temel';
+      // DÜZELTME (Ağu 2026): Bu döngü haftanın 7 gününü tek tek dolaşıyor; eskiden her gün
+      // kendi dateStr'iyle calcPhase() (gün-sayısı bazlı) çağırıyordu. Kısa taper haftalarında
+      // (örn. taper_w=1) bu, haftanın ortasında Zirve→Taper geçişine (Salı Zirve, Cuma Taper gibi)
+      // yol açabiliyordu — antrenman bilimine aykırı, çünkü taper haftası bütün olarak tek bir
+      // yükleme/yoğunluk stratejisi izlemeli. Artık haftanın tamamı, weekTargets'ten gelen tek
+      // fazı (wt.phase) kullanıyor — üstteki rozetle ve haftalık hedeflerle birebir tutarlı.
+      const phase=wt?.phase||(primary?calcPhase(dateStr,primary.tarih,primary.prep_weeks,primary,getAthRaceOverride(athlete,primary?.id)):'Temel');
       const actual=athWorkouts.filter(w=>w.date===dateStr);
       let actualLoad=0,actualKm=0,actualDp=0,actualMech=0;
       actual.forEach(w=>{
