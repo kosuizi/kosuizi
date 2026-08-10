@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.09-2205 --><!DOCTYPE html>
+<!-- Version: v2026.08.10-1240 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.09-2205';
+const APP_VERSION='v2026.08.10-1240';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -5251,7 +5251,7 @@ function SporcularTab({athletes,races,athHistory,allHistory,workouts,onAdd,onUpd
       )
     ),
 
-    showA&&React.createElement(SporcuModal,{onClose:()=>setShowA(false),onSave:(d)=>{editA?onUpdate(d):onAdd(d);setShowA(false);},initial:editA,races}),
+    showA&&React.createElement(SporcuModal,{onClose:()=>setShowA(false),onSave:(d)=>{editA?onUpdate({...d,_forceSnap:true}):onAdd(d);setShowA(false);},initial:editA,races}),
     showR&&React.createElement(YarısModal,{onClose:()=>setShowR(false),onSave:(d)=>{if(editR)onUpdateRace({...d,id:editR.id});else onAddRace({...d,id:uid()});setShowR(false);},initial:editR})
   );
 }
@@ -25594,17 +25594,25 @@ function App(){
   const handleUpdateAthlete=(newA)=>{
     const oldA=athletes.find(x=>x.id===newA.id);
     const PROFILE_FIELDS=['vo2max','lthr','mhr','rhr','kilo','boy','vlt','hrv_7gun','sakatlık'];
+    // SporcuModal'dan (sporcu profili düzenleme ekranı) gelen kaydetmelerde işaretlenir.
+    // Bu durumda anket akışıyla paralel olarak, değer değişmese bile snapshot atılır —
+    // aksi halde koç profili "kaydet" dese de değer aynıysa profileHistory'de o tarihe ait
+    // kayıt oluşmuyor ve Sporcu Metrikleri'nin kısa pencereleri (1H/2H/4H) boş kalıyordu.
+    // VLT kalibrasyonu / Test sekmesi gibi otomatik/yan-etki güncellemelerinde bu işaret
+    // olmadığından eski davranış (sadece gerçek değişiklikte snapshot) korunur.
+    const forceSnap=!!newA._forceSnap;
+    if(forceSnap){newA={...newA};delete newA._forceSnap;}
     if(oldA){
       const changes=detectChanges(oldA,newA);
       if(changes.length>0){
         const messages=generateMessages(changes,newA);
         setAthHistory(h=>[...h,{athId:newA.id,date:new Date().toISOString(),changes,messages}]);
       }
-      // Profil değişikliği varsa snapshot ekle
+      // Profil değişikliği varsa VEYA sporcu profili modalından zorunlu kaydediliyorsa snapshot ekle
       const profileChanged=PROFILE_FIELDS.some(f=>String(oldA[f]||'')!==String(newA[f]||''));
-      if(profileChanged){
+      if(profileChanged||forceSnap){
         const snap={date:localDateStr(new Date()),vo2max:newA.vo2max,lthr:newA.lthr,mhr:newA.mhr,rhr:newA.rhr,kilo:newA.kilo,boy:newA.boy,vlt:newA.vlt,hrv_7gun:newA.hrv_7gun,sakatlık:newA.sakatlık};
-        newA={...newA,profileHistory:[...((newA.profileHistory||[]).filter(s=>s.date!==snap.date)),snap].slice(-50)};
+        newA={...newA,profileHistory:[...((newA.profileHistory||[]).filter(s=>s.date!==snap.date)),snap].slice(-80)};
       }
     }
     // Yarış durumu (race condition) damgası: handlePlanGuncelle bu damgayı
@@ -26382,14 +26390,16 @@ function SporcuAnketi(){
       const freshAll=freshAths||athletes;
       const mevcut=freshAll.find(function(a){return a.id===selId;})||athletes.find(function(a){return a.id===selId;})||{};
 
-      const ANKET_SNAP_FIELDS=['kilo','boy','rhr','mhr','lthr','vo2max','hrv_7gun','sakatlık'];
-      const snapChanged=ANKET_SNAP_FIELDS.some(function(f){return String(mevcut[f]||'')!==String(form[f]||'');});
-      const formWithSnap=snapChanged?Object.assign({},form,{
+      // Her anket kaydında snapshot atılır — değer değişmemiş olsa bile.
+      // Amaç: sporcu değerlerini değiştirmeden "Kaydet" dese dahi profileHistory'de
+      // o tarihe ait kayıt oluşsun; aksi halde MetrikGrafikKarti'nin kısa pencereleri
+      // (1H/2H/4H) son gerçek değişiklik eskiyse boş görünüyordu (bkz. 2026.08.10 tespiti).
+      const formWithSnap=Object.assign({},form,{
         profileHistory:[...((mevcut.profileHistory||[]).filter(function(s){return s.date!==localDateStr(new Date());})),
           {date:localDateStr(new Date()),vo2max:form.vo2max,lthr:form.lthr,mhr:form.mhr,rhr:form.rhr,
            kilo:form.kilo,boy:form.boy,hrv_7gun:form.hrv_7gun,sakatlık:form.sakatlık}
-        ].slice(-50)
-      }):form;
+        ].slice(-80)
+      });
       // Fresh data üzerine sadece anket alanlarını yaz (diğer coach alanlarını koru)
       const updated=freshAll.map(function(a){return a.id===selId?Object.assign({},a,formWithSnap,{anket_guncelleme:new Date().toISOString(),_updatedAt:Date.now()}):a;});
       await fbSet('ath2',updated);
