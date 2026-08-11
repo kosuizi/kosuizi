@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.11-0923 --><!DOCTYPE html>
+<!-- Version: v2026.08.11-1007 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.11-0923';
+const APP_VERSION='v2026.08.11-1007';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -2870,6 +2870,32 @@ const SPOR_NABIZ_OFFSET={
   kosu:0, yuruyus:0,
   bisiklet:7, yuzme:9, kuerek:3, futbol:2, basketbol:2,
   // kuvvet, yoga, pilates: kasıtlı olarak yok — calcWorkoutZoneDist bunları hariç tutar
+};
+
+// ── SPOR-BAZLI GÜVEN AĞIRLIĞI (2026.08.11 — Göksel kararı: "confidencePct'e
+// spor-bazlı güven ağırlığı ekleyelim") ─────────────────────────────────────
+// SORUN: calcPeriodZoneDist'teki confidencePct eskiden İKİLİ idi — sadece aşama
+// bazlı (_precise) dakikaları "hassas" sayıyor, ortalama-nabız/Gauss tahminiyle
+// (hrBased) hesaplanan HER dakikayı sporundan bağımsız olarak 0 kabul ediyordu.
+// Bu, ofseti olmayan (koşu/yürüyüş) bir hrBased antrenmanla, ofseti düşük-güvenli
+// tahmini olan (kürek/futbol/basketbol) bir hrBased antrenmanı aynı kefeye koyuyordu
+// — oysa ikincisinin gerçek belirsizliği daha yüksek.
+// ÇÖZÜM: hrBased dakikalar artık TAMAMEN göz ardı edilmiyor, spora göre kısmi
+// ağırlıkla sayılıyor. Ağırlık iki bileşenin çarpımı gibi düşünülebilir:
+//   (a) %LTHR→zone Gauss eğrisinin kendi belirsizliği (tüm hrBased'lerde ortak,
+//       koşuda bile aşama-bazlı ölçüme göre daha az kesin) → taban ~0.60
+//   (b) spor-bazlı nabız ofsetinin güven seviyesi (yukarıdaki SPOR_NABIZ_OFFSET
+//       yorumundaki literatür güven notlarıyla birebir): koşu/yürüyüş ofsetsiz
+//       olduğundan bu bileşenden etkilenmiyor (çarpan 1.0); yüzme orta-iyi;
+//       bisiklet orta; kürek/futbol/basketbol düşük güven, tahmini.
+// Sonuç ağırlıklar (taban 0.60 × spor çarpanı, yuvarlanmış):
+//   kosu/yuruyus: 0.60 (ofset yok)         yuzme: 0.50 (orta-iyi güven)
+//   bisiklet: 0.40 (orta güven)            kuerek/futbol/basketbol: 0.25 (düşük güven)
+// Tanımsız/yeni bir spor eklenirse calcPeriodZoneDist'te güvenli varsayılan
+// olarak en düşük ağırlık (0.25) kullanılır — bilinmeyen için iyimser olunmaz.
+const SPOR_OFSET_GUVEN={
+  kosu:0.60, yuruyus:0.60,
+  yuzme:0.50, bisiklet:0.40, kuerek:0.25, futbol:0.25, basketbol:0.25,
 };
 
 // RPE-bazlı (nabız-güvenilmez) sporlar için tipik seans yoğunluğu varsayımı.
@@ -6296,6 +6322,8 @@ function calcWorkoutZoneDist(w,athlete){
     lowPct:dist.low, highPct:dist.high, anaPct:dist.ana,
     _hrBased:true,
     _precise:false,
+    // SPOR_OFSET_GUVEN'den — calcPeriodZoneDist'in confidencePct hesabında kullanılır.
+    _confWeight:SPOR_OFSET_GUVEN[spor]??0.25,
   };
 }
 
@@ -6311,12 +6339,19 @@ function calcPeriodZoneDist(workouts,athlete,weeks=4,anchorDate=null){
     const d=new Date(w.date+'T12:00:00');
     return d>=cutoff&&d<=end;
   });
-  let low=0,high=0,ana=0,total=0,preciseMin=0;
+  let low=0,high=0,ana=0,total=0,confMin=0;
   wks.forEach(w=>{
     const d=calcWorkoutZoneDist(w,athlete);
     if(!d)return;
     low+=d.lowMin;high+=d.highMin;ana+=d.anaMin;total+=d.totalMin;
-    if(d._precise) preciseMin+=d.totalMin;
+    // GÜNCELLENDİ (2026.08.11 — spor-bazlı güven ağırlığı, bkz. SPOR_OFSET_GUVEN):
+    // eskiden hrBased (ortalama-nabız tahmini) dakikalar sporundan bağımsız olarak
+    // 0 sayılırdı. Artık kısmi ağırlıkla katkı veriyor — ofsetsiz sporlar (koşu/
+    // yürüyüş) daha yüksek, düşük-güvenli ofset tahminine dayanan sporlar (kürek/
+    // futbol/basketbol) daha düşük ağırlıkla. Aşama-bazlı kesin ölçüm (_precise)
+    // hâlâ tam ağırlık (1.0) alır.
+    const konfAgirlik=d._precise?1:(d._confWeight??0.25);
+    confMin+=d.totalMin*konfAgirlik;
   });
   if(total<1)return null;
   return{
@@ -6325,10 +6360,11 @@ function calcPeriodZoneDist(workouts,athlete,weeks=4,anchorDate=null){
     highPct:Math.round(high/total*100),
     anaPct:Math.round(ana/total*100),
     weeks,
-    // Pencere dakikalarının kaçı hassas (faz-bazlı, tarihsel doğru profille
-    // sınıflandırılmış) kaynaktan geldi — kalanı ortalama-nabız Gauss tahmini.
-    // evaluateSignals zone-kaynaklı kısıtlamaları buna göre kısar (bkz. ZONE_CONF_*).
-    confidencePct:Math.round(preciseMin/total*100),
+    // Pencere dakikalarının ağırlıklı ortalama güven oranı: aşama-bazlı kesin ölçüm
+    // %100, ortalama-nabız/Gauss tahmini ise sporun nabız-ofset güvenilirliğine göre
+    // kısmi ağırlıkla katkı verir (bkz. SPOR_OFSET_GUVEN). evaluateSignals zone-
+    // kaynaklı kısıtlamaları buna göre kısar (bkz. ZONE_CONF_*).
+    confidencePct:Math.round(confMin/total*100),
   };
 }
 
