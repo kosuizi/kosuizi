@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.10-2016 --><!DOCTYPE html>
+<!-- Version: v2026.08.11-0923 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.10-2016';
+const APP_VERSION='v2026.08.11-0923';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -5507,6 +5507,48 @@ function weekLabel(offset){
   return start.toLocaleDateString('tr-TR',{day:'2-digit',month:'short'})+' – '+end.toLocaleDateString('tr-TR',{day:'2-digit',month:'short'});
 }
 
+// 2026.08.11 — Göksel'in bildirdiği "bir sporcunun skoru başka bir sporcu
+// antrenman girince değişiyor" sorununun kök nedeni: Efor/Gerçek İş bileşenleri
+// o haftaki TAKIM İÇİ en yüksek değere göre normalize ediliyordu (maxEfor/maxIs),
+// yani her sporcunun skoru diğerlerinin o haftaki girişine bağlıydı. Göksel onayı:
+// artık her sporcu SADECE KENDİ geçmişine göre normalize edilir — başka sporcunun
+// antrenman girip girmemesi bu sporcunun skorunu ASLA etkilemez.
+const BASELINE_LOOKBACK_WEEKS=6; // referans için taranan geçmiş hafta sayısı
+const BASELINE_MIN_ACTIVE_WEEKS=2; // güvenilir referans için gereken min. aktif hafta
+
+// Bir sporcunun, verilen haftadan ÖNCEKİ (o hafta hariç) son BASELINE_LOOKBACK_WEEKS
+// hafta içindeki, antrenman yaptığı haftaların Efor/Gerçek İş ortalamasını döndürür.
+// Yeterli aktif hafta yoksa (yeni sporcu / kısa geçmiş) null döner — bu durumda
+// finalizeLeaderboard nötr (antrenman varsa 100, yoksa 0) mantığa düşer.
+function calcAthleteBaseline(workouts,athlete,weekOffset){
+  const eforVals=[],isVals=[];
+  for(let i=1;i<=BASELINE_LOOKBACK_WEEKS;i++){
+    const {start,end}=getWeekBounds(weekOffset-i);
+    const wks=workouts.filter(w=>{
+      if(w.athleteId!==athlete.id)return false;
+      const d=new Date(w.date+'T12:00:00');
+      return d>=start&&d<=end;
+    });
+    if(wks.length===0)continue; // sadece gerçekten antrenman yapılan haftalar referansa girer
+    const sporSkoru=wks.reduce((s,w)=>{
+      const m=calcMetrics(w,athlete);
+      const yuk=m.yukObj||m.yukSubj||0;
+      const k=SPOR_MAP[w.spor||'kosu']?.k||1.0;
+      return s+yuk*k;
+    },0);
+    const gercekIs=wks.reduce((s,w)=>{
+      const mech=calcMechLoad(w.mesafe,w.irtifa,w.zemin_zorluk);
+      const k=SPOR_MAP[w.spor||'kosu']?.k||1.0;
+      return s+mech*k;
+    },0);
+    eforVals.push(sporSkoru);
+    isVals.push(gercekIs);
+  }
+  if(eforVals.length<BASELINE_MIN_ACTIVE_WEEKS)return{eforBaseline:null,isBaseline:null};
+  const avg=arr=>arr.reduce((s,v)=>s+v,0)/arr.length;
+  return{eforBaseline:round1(avg(eforVals)),isBaseline:round1(avg(isVals))};
+}
+
 function calcWeeklyStats(workouts,athletes,weekOffset=0){
   const {start,end}=getWeekBounds(weekOffset);
   // Pasif (sistemde gizli) sporcular Liderlik hesaplamalarına dahil edilmez
@@ -5552,7 +5594,9 @@ function calcWeeklyStats(workouts,athletes,weekOffset=0){
       const s=w.spor||'kosu';
       sporDagilim[s]=(sporDagilim[s]||0)+1;
     });
-    return{ath:a,mesafe,mesafeBySpor,irtifa,sureSn,count,sporSkoru,gercekIs,sporDagilim,wks};
+    // Kendi geçmişine göre normalizasyon referansı (bkz. calcAthleteBaseline notu)
+    const{eforBaseline,isBaseline}=calcAthleteBaseline(workouts,athObj||a,weekOffset);
+    return{ath:a,mesafe,mesafeBySpor,irtifa,sureSn,count,sporSkoru,gercekIs,sporDagilim,wks,eforBaseline,isBaseline};
   });
 }
 
@@ -5586,14 +5630,17 @@ async function fetchWeekPaceScores(athletes,weekOffset){
 // nihai Liderlik skorunu (Hedef Uyumu %45 + Efor %25 + Gerçek İş %30) hesaplar
 // ve sıralar. paceScores: {athleteId: {puan,puanForScore}|null} — fetchWeekPaceScores'tan gelir.
 function finalizeLeaderboard(rows,paceScores){
-  // Efor ve Gerçek İş farklı birimlerde (TRIMP/hrTSS puanı vs eşdeğer-km) —
-  // adil birleştirmek için takımın o haftaki en yüksek değerine göre 0-100
-  // ölçeğine normalize ediyoruz. Hedef Uyumu (Pace Disiplin) zaten 0-100 puan.
-  const maxEfor=Math.max(0,...rows.map(r=>r.sporSkoru));
-  const maxIs=Math.max(0,...rows.map(r=>r.gercekIs));
+  // 2026.08.11 — Göksel onayı: Efor ve Gerçek İş artık TAKIM İÇİ en yüksek değere
+  // göre DEĞİL, her sporcunun KENDİ son 6 haftalık ortalamasına (bkz.
+  // calcAthleteBaseline) göre 0-100 ölçeğine normalize edilir. Böylece bir
+  // sporcunun skoru SADECE kendi performansına bağlıdır — başka bir sporcunun
+  // o hafta antrenman girip girmemesi bu skoru asla etkilemez. Yeterli geçmişi
+  // olmayan (eforBaseline/isBaseline=null) sporcularda eski nötr mantık geçerli:
+  // o hafta antrenman yaptıysa 100, yapmadıysa 0. Kendi ortalamasını aşan haftalar
+  // 100'de sınırlanır (tek bir aşırı hafta diğer bileşenleri ezmesin diye).
   return rows.map(r=>{
-    const eforNorm=maxEfor>0?round1(r.sporSkoru/maxEfor*100):0;
-    const isNorm=maxIs>0?round1(r.gercekIs/maxIs*100):0;
+    const eforNorm=r.eforBaseline>0?round1(Math.min(100,r.sporSkoru/r.eforBaseline*100)):(r.count>0?100:0);
+    const isNorm=r.isBaseline>0?round1(Math.min(100,r.gercekIs/r.isBaseline*100)):(r.count>0?100:0);
     const raw=paceScores?.[r.ath.id];
     // uygunlukPct: GÖSTERİLEN "🎯 Hedef Uyumu" — HER ZAMAN ham puan (2026.08.09 —
     // Göksel talebi: sporcu her şeyi tam yaptıysa %100 görmeli, istatistiksel
