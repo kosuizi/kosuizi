@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.11-1139 --><!DOCTYPE html>
+<!-- Version: v2026.08.11-2041 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.11-1139';
+const APP_VERSION='v2026.08.11-2041';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1188,15 +1188,25 @@ const BPM_SIGNAL_SCORE_THRESHOLD=4;
 // athlete parametresi: hrZones recompute için kullanılır (_origZIdx → zone center)
 function extractFeedbackSignals(allSnapsObj, athlete){
   const SKIP_RE=/[iı]sınma|isinma|soğuma|soguma|dinlenme|toparlanma|blok\s*arası|strides\s*arası/i;
-  const zones=calcZones(athlete);
   const signals=[];
   if(!allSnapsObj||typeof allSnapsObj!=='object') return signals;
+  // Panel Parite Düzeltmesi (2026.08.11 — Göksel talebi): zone sınırları artık paceValidation
+  // rozetiyle BİREBİR AYNI şekilde TARİHE DUYARLI hesaplanıyor (athleteAtDate — o GÜNÜN
+  // vLT/LTHR/RHR/MHR profiline göre). Önceden burada sporcunun CANLI (güncel) profili
+  // kullanılıyordu — koç vLT'yi veya LTHR/RHR/MHR'ı sonradan güncellediğinde, eski
+  // antrenmanların "Hedef Bölge" değerlendirmesi rozetten (donuk/o günkü) farklılaşıp
+  // taramada (canlı) kayabiliyordu. Artık ikisi de aynı kaynağı (athleteAtDate) kullandığı
+  // için bu kayma engellendi. Aynı tarih birden çok haftada (farklı snap objesinde) tekrar
+  // edebileceğinden basit bir cache ile gereksiz tekrar hesaplamadan kaçınılıyor.
+  const _zonesByDate={};
+  const zonesForDate=(d)=>_zonesByDate[d]||(_zonesByDate[d]=calcZones(athleteAtDate(athlete,d)));
   // allSnapsObj: { weekKey: { rowOverrides: { date: { rowIdx: rowData } } } }
   Object.values(allSnapsObj).forEach(snap=>{
     const rowOverrides=snap?.rowOverrides||{};
     Object.entries(rowOverrides).forEach(([date,dateOv])=>{
       if(!dateOv||typeof dateOv!=='object') return;
       const {__aralik,...rowOvs}=dateOv;
+      const zones=zonesForDate(date); // o günün profiline göre — bkz. yukarıdaki not
 
       // ── Düz satırlar ────────────────────────────────────────────────────────
       const scanRow=(row)=>{
@@ -1318,6 +1328,7 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         }
         let paceDir=null, hrDir=null, paceOk=false, hrOk=false, paceDiff=null, paceTol=null;
         const pm=row.pm, ps=row.ps;
+        const zi=row._origZIdx;
         if((pm>0)||(ps>0)){
           const enteredSec=(pm||0)*60+(ps||0);
           const origPace=row._origPaceSec;
@@ -1332,15 +1343,50 @@ function extractFeedbackSignals(allSnapsObj, athlete){
             if(gap) cmpSec=Math.round(enteredSec/gap.factor);
           }
           if(enteredSec>0&&origPace>0){
-            const diff=cmpSec-origPace;
-            const tol=row._isGapRow?50:25;
-            paceDiff=diff; paceTol=tol; // ham sapma + kullanılan tolerans — hassas yakınlık skoru (bkz. paceClosenessScore) için saklanır
-            if(diff<-tol)      paceDir='fast';
-            else if(diff>tol)  paceDir='slow';
-            else               paceOk=true;   // pace girildi ve zone içinde
+            // ── Panel Parite Düzeltmesi (2026.08.11 — Göksel talebi): ReceteTablosu'ndaki
+            // paceValidation() rozeti ("✓ Hedef Bölge") tüm zone GENİŞLİĞİNİ hedefte sayıyordu
+            // (dar zonelarda ~20 sn, geniş zonelarda ~60 sn/km), ama bu fonksiyon eskiden
+            // sadece hedef NOKTA pace'ine göre sabit ±25/50 sn tolerans kullanıyordu — rozet
+            // yeşilken ("Hedef Bölge") tarama gereksiz yere "sapma" sinyali üretebiliyordu
+            // (özellikle geniş zonelarda). Zone sınırları mevcutsa artık paceValidation ile
+            // AYNI birincil kontrol (tam zone genişliği = hedefte) + AYNI ek tampon
+            // (zoneWidth×0.5, GAP satırlarında ×1.0 — "Biraz Hızlı/Yavaş" eşiği) kullanılır.
+            // Yakınlık puanı (paceClosenessScore) ORAN-tabanlı (|sapma|/tolerans) olduğu için
+            // bu değişiklik puanlamayı genel olarak GEVŞETMİYOR: dar zonelarda (Z3-Z4) eskisinden
+            // daha SIKI, geniş zonelarda (Z1-Z2) rozetle TUTARLI hâle geliyor — ikisi de vLT
+            // kalibrasyonunun ve Yapabilme Puanı'nın amacına hizmet ediyor (gerçek fizyolojik
+            // hassasiyet ihtiyacını yansıtıyor), rastgele bir gevşeme değil. Zone verisi yoksa
+            // (pz boş) eski nokta-tabanlı mantığa (±25/50 sn) düşülür — davranış değişmez.
+            // NOT (2026.08.11 güncellendi): `zones` artık bu date-loop'ta `zonesForDate(date)`
+            // ile tarihe duyarlı hesaplanıyor (bkz. fonksiyon başındaki not) — paceValidation
+            // rozetinin `_mZones`/athleteAtDate mantığıyla BİREBİR aynı, vLT sonradan değişse
+            // bile geçmiş fazların zone genişliği kaymaz. HR eşleşmesi de aynı kaynağı kullanıyor
+            // (bkz. aşağıdaki `hr` değişkeni, _origLoBpm/_origHiBpm donmuşsa onu tercih eder;
+            // donmamışsa artık CANLI değil, o GÜNÜN zone'una düşer — HR için de aynı iyileşme).
+            const pz=zi!=null?zones?.paceZones?.[zi]:null;
+            if(pz?.lo_ms&&pz?.hi_ms){
+              const fastBoundarySec=Math.round(1000/pz.hi_ms); // hızlı sınır (az sn/km)
+              const slowBoundarySec=Math.round(1000/pz.lo_ms); // yavaş sınır (çok sn/km)
+              const zoneWidth=slowBoundarySec-fastBoundarySec;
+              const tol=Math.max(1,Math.round(zoneWidth*(row._isGapRow?1.0:0.5)));
+              if(cmpSec>=fastBoundarySec&&cmpSec<=slowBoundarySec){
+                paceOk=true; paceDiff=0; paceTol=tol; // tam zone içinde — paceValidation'daki "Hedef Bölge" ile birebir
+              } else if(cmpSec<fastBoundarySec){
+                paceDiff=-(fastBoundarySec-cmpSec); paceTol=tol; paceDir='fast';
+              } else {
+                paceDiff=cmpSec-slowBoundarySec; paceTol=tol; paceDir='slow';
+              }
+            } else {
+              // Fallback: zone sınırı verisi yoksa eski nokta-tabanlı mantık
+              const diff=cmpSec-origPace;
+              const tol=row._isGapRow?50:25;
+              paceDiff=diff; paceTol=tol; // ham sapma + kullanılan tolerans — hassas yakınlık skoru (bkz. paceClosenessScore) için saklanır
+              if(diff<-tol)      paceDir='fast';
+              else if(diff>tol)  paceDir='slow';
+              else               paceOk=true;   // pace girildi ve zone içinde
+            }
           }
         }
-        const zi=row._origZIdx;
         let hrWeight=0;
         // Donmuş sınırlar varsa (satır daha önce düzenlenmiş) onları kullan — LTHR sonradan
         // değişse bile geçmiş satırın nabız değerlendirmesi kaymasın. Yoksa (hiç düzenlenmemiş/
