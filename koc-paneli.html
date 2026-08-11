@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.11-2041 --><!DOCTYPE html>
+<!-- Version: v2026.08.11-2137 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.11-2041';
+const APP_VERSION='v2026.08.11-2137';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1289,8 +1289,9 @@ function extractFeedbackSignals(allSnapsObj, athlete){
             // kolay bölgede fazla koşma, ana bölümde az koşma için tolerans MESAFE_
             // TOLERANS_PCT/MESAFE_CEZA_KATSAYISI'ye (≈%1.7) daralır; diğer yön tam
             // %5 kalır. Böylece rozet ve puan HER ZAMAN aynı şeyi söyler.
-            const mesAzTol=mesZoneKolay?MESAFE_TOLERANS_PCT:MESAFE_TOLERANS_PCT/MESAFE_CEZA_KATSAYISI;
-            const mesFazlaTol=mesZoneKolay?MESAFE_TOLERANS_PCT/MESAFE_CEZA_KATSAYISI:MESAFE_TOLERANS_PCT;
+            const mesTabanPct=origMesafe>0?(MESAFE_TOLERANS_MIN_M/origMesafe*100):0;
+            const mesAzTol=Math.max(mesZoneKolay?MESAFE_TOLERANS_PCT:MESAFE_TOLERANS_PCT/MESAFE_CEZA_KATSAYISI,mesTabanPct);
+            const mesFazlaTol=Math.max(mesZoneKolay?MESAFE_TOLERANS_PCT/MESAFE_CEZA_KATSAYISI:MESAFE_TOLERANS_PCT,mesTabanPct);
             if(diffPct<0){
               if(Math.abs(diffPct)<=mesAzTol) mesafeOk=true; else mesafeDir='az';
             } else if(diffPct>0){
@@ -1480,6 +1481,14 @@ function paceClosenessScore(diffSec,tolSec){
 // cezalandırılır — ikisi asla eşit ağırlıkta değerlendirilmez.
 const MESAFE_TOLERANS_PCT=5;      // ±%5 sapma "tam uyum" sayılır (GPS/ölçüm gürültüsü payı)
 const MESAFE_CEZA_KATSAYISI=3;    // ağır basan yön, hafif basan yönün 3 katı cezalandırılır
+// MUTLAK TABAN (2026.08.11 — Göksel talebi): Kısa Isınma/Soğuma segmentlerinde
+// %'lik tolerans metre cinsinden çok dar kalabiliyor (örn. 1900m soğumada "kolay
+// bölge fazla" yönü %5/3≈%1.67'ye daralınca sınır sadece ~32m oluyor). GPS/manuel
+// giriş sapması (birkaç-onlarca metre) bu dar pencereyi aşarsa gereksiz "Fazla
+// Koşuldu" uyarısı üretiyordu. Çözüm: efektif tolerans hep MAX(%'lik tolerans,
+// bu mutlak taban) olsun — kısa segmentlerde taban devreye girer, uzun segmentlerde
+// (taban zaten %'lik toleransın altında kalacağından) davranış değişmez.
+const MESAFE_TOLERANS_MIN_M=30;   // en az ±30m sapma her zaman "tam uyum" sayılır
 // azKatsayisi/fazlaKatsayisi ayrı ayrı verilir çünkü hangi yönün "ağır" sayılacağı
 // antrenman bölgesine göre değişir (bkz. scanRow → mesZoneKolay, 2026.08.04 Göksel talebi):
 // kolay/toparlanma bölgesinde fazla koşma ağır, ana bölüm/tempo/interval'de az koşma ağır.
@@ -7567,7 +7576,7 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
     e('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:10,background:'#1e293b',borderRadius:4,overflow:'hidden'}},
       e('thead',null,
         e('tr',{style:{background:'#0f172a'}},
-          ['#','Aşama','Hedef','Sa','Dk','Sn','Mesafe (m)','Pace dk','Pace sn','Nabız'].map((h,i)=>
+          ['#','Aşama','Hedef','Sa','Dk','Sn','Mesafe (m)','Pace dk','Pace sn','Nabız','D+ (m)'].map((h,i)=>
             e('th',{key:i,style:{padding:'5px 4px',textAlign:i<2?'left':'center',fontWeight:600,fontSize:9,color:'#94a3b8'}},h)
           )
         )
@@ -7607,7 +7616,8 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
                     bpmHint&&React.createElement('span',{style:{fontSize:9,fontWeight:600,color:isShortRow?'#7c3aed':'#3b82f6',lineHeight:1.3,marginTop:1}},isShortRow?'▲tepe':'~ort.')
                   );
                 })()
-              )
+              ),
+              e('td',{style:{...cellSt,color:'#000'}},editableCellAralik(rep,'run','dp',runData.dp>0?runData.dp:0))
             ));
           }
           // Rest satırı
@@ -7644,7 +7654,8 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
                     bpmHint&&React.createElement('span',{style:{fontSize:9,fontWeight:600,color:'#10b981',lineHeight:1.3,marginTop:1}},'▼min')
                   );
                 })()
-              )
+              ),
+              e('td',{style:{...cellSt,color:'#000'}},editableCellAralik(rep,'rest','dp',restData.dp>0?restData.dp:0))
             ));
           }
           return out;
@@ -8067,7 +8078,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     const repCount=hdr.repeatCount||1;
     const computeAvg=(baseRow,kind)=>{
       if(!baseRow) return null;
-      let totMesafe=0,totPaceSec=0,totDurSec=0,paceN=0,bpmSum=0,bpmN=0,n=0;
+      let totMesafe=0,totPaceSec=0,totDurSec=0,paceN=0,bpmSum=0,bpmN=0,n=0,totDp=0;
       // Pace hesabı için YALNIZCA açıkça girilmiş değerler (zone fallback'i hariç tutar)
       // Sebep: baseRow.mesafe ve h/m/s zone pace'den hesaplanır → VLT değişince değişirdi.
       let totExpMesafe=0,totWgtPace=0;
@@ -8082,6 +8093,8 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
         const dh=repOv.h!=null?repOv.h:(baseRow.h||0);
         const dm=repOv.m!=null?repOv.m:(baseRow.m||0);
         const ds=repOv.s!=null?repOv.s:(baseRow.s||0);
+        const dpV=repOv.dp!=null?repOv.dp:(baseRow.dp||0);
+        totDp+=dpV;
         totMesafe+=m;
         totDurSec+=dh*3600+dm*60+ds;
         const pSec=pm*60+ps;
@@ -8104,7 +8117,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
       const avgPaceSec=totExpMesafe>0
         ?Math.round(totWgtPace/totExpMesafe)
         :(paceN>0?Math.round(totPaceSec/paceN):0);
-      const out={mesafe:avgMesafe,...secToHMS(avgDurSec)};
+      const out={mesafe:avgMesafe,dp:totDp,_dpIsSum:true,...secToHMS(avgDurSec)};
       if(avgPaceSec>0){out.pm=Math.floor(avgPaceSec/60);out.ps=avgPaceSec%60;}
       // En az bir rep'te nabız girilmişse ortalamayı ana satıra yansıt
       if(bpmN>0) out.bpm=Math.round(bpmSum/bpmN);
@@ -8379,15 +8392,21 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     // bölgede fazla koşma, ana bölümde az koşma için tolerans daralır (≈%1.7),
     // diğer yön tam %5 kalır. Rozet ve puan HER ZAMAN aynı şeyi söyler.
     const az=diffPct<0;
-    const mesAzTol=mesZoneKolay?MESAFE_TOLERANS_PCT:MESAFE_TOLERANS_PCT/MESAFE_CEZA_KATSAYISI;
-    const mesFazlaTol=mesZoneKolay?MESAFE_TOLERANS_PCT/MESAFE_CEZA_KATSAYISI:MESAFE_TOLERANS_PCT;
+    const mesTabanPct=origMesafe>0?(MESAFE_TOLERANS_MIN_M/origMesafe*100):0;
+    const mesAzTol=Math.max(mesZoneKolay?MESAFE_TOLERANS_PCT:MESAFE_TOLERANS_PCT/MESAFE_CEZA_KATSAYISI,mesTabanPct);
+    const mesFazlaTol=Math.max(mesZoneKolay?MESAFE_TOLERANS_PCT/MESAFE_CEZA_KATSAYISI:MESAFE_TOLERANS_PCT,mesTabanPct);
     const effTol=az?mesAzTol:mesFazlaTol;
     if(Math.abs(diffPct)<=effTol) return{label:'Mesafe Uyumlu',color:'#22c55e',bg:'#f0fdf4',icon:'📏'};
     const katsayi=az?(mesZoneKolay?1:MESAFE_CEZA_KATSAYISI):(mesZoneKolay?MESAFE_CEZA_KATSAYISI:1);
     const ratio=Math.abs(diffPct)/MESAFE_TOLERANS_PCT*katsayi;
     const yon=az?'Az Koşuldu':'Fazla Koşuldu';
-    if(ratio>2) return{label:'Çok '+yon,color:'#ef4444',bg:'#fef2f2',icon:az?'📏▼▼':'📏▲▲'};
-    return{label:'Biraz '+yon,color:'#f59e0b',bg:'#fffbeb',icon:az?'📏▼':'📏▲'};
+    // TEŞHİS AMAÇLI (2026.08.11 — Göksel talebi): kilitli hedef (_origMesafe) ile
+    // hücrede o an görünen değer HER ZAMAN aynı olmayabilir (hedef daha önce farklı
+    // bir anda donmuş olabilir) — rozet metnine hedefi de ekleyerek bu farkı doğrudan
+    // görünür kılıyoruz, tahmin etmeye gerek kalmasın.
+    const detay=' (hedef '+origMesafe+'m)';
+    if(ratio>2) return{label:'Çok '+yon+detay,color:'#ef4444',bg:'#fef2f2',icon:az?'📏▼▼':'📏▲▲'};
+    return{label:'Biraz '+yon+detay,color:'#f59e0b',bg:'#fffbeb',icon:az?'📏▼':'📏▲'};
   };
 
   // ── Satır rengi: GİRİLEN (GAP-düzeltmeli) pace'in düştüğü zon ──────────────
@@ -8581,6 +8600,10 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
       }
     } else if(field==='bpm'){
       upd = {bpm: parseInt(rawVal)||null};
+    } else if(field==='dp'){
+      // D+ (2026.08.11 — Göksel talebi): aralık tekrarlarında da yükseklik kazanımı
+      // girilebilsin — updateCell'deki düz-satır dp mantığıyla AYNI (sıfır/boş → override kaldır)
+      upd = {dp: parseInt(rawVal)||null};
     }
 
     // Mesafe hedefi dondurma — updateCell'deki AYNI kilitleme mantığı (2026.08.04 —
@@ -8657,7 +8680,10 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     totSn+=sn; totMesafe+=mesafe;
     let _gappedThisRow=false;
     if(r.dp>0){
-      const effDp=r.dp*rep;
+      // 2026.08.11 — Göksel talebi: aralık tekrarlarının D+ özeti artık zaten TOPLAM
+      // (bkz. computeAvg → _dpIsSum) — mesafe/pace gibi "tekrar başına" bir değer DEĞİL,
+      // bu yüzden tekrar sayısıyla İKİNCİ KEZ çarpılmamalı (aksi halde D+ şişer).
+      const effDp=r._dpIsSum?r.dp:r.dp*rep;
       totDp+=effDp;
       if(mesafe>0&&sn>0){
         const gap=calcGAP(effDp,mesafe/1000,sn/60);
@@ -8958,11 +8984,14 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
             // sütun hiç oluşturulmaz (bkz. _cols/colSpanN tanımındaki not).
             !readOnly&&React.createElement('td',{style:{
               ...cell(),
-              color:rowOverrides[i]?.dp!=null?'#000':'#64748b',
-              fontStyle:rowOverrides[i]?.dp!=null?'normal':'italic',
+              // 2026.08.11 — Göksel talebi: aralık tekrarlarında girilen D+ değerleri
+              // Aralıklar kapatıldıktan sonra bu özet satırda da (r._aralikAveraged
+              // merge'ünden, bkz. computeAvg) görünsün — mesafe/bpm ile AYNI kaynak.
+              color:(rowOverrides[i]?.dp!=null||(r._aralikAveraged&&r.dp>0))?'#000':'#64748b',
+              fontStyle:(rowOverrides[i]?.dp!=null||(r._aralikAveraged&&r.dp>0))?'normal':'italic',
               fontSize:11}},
               (()=>{
-                const dpVal=rowOverrides[i]?.dp;
+                const dpVal=rowOverrides[i]?.dp!=null?rowOverrides[i].dp:(r._aralikAveraged?r.dp:null);
                 const distM=r.mesafe||0;
                 const paceSec=(r.pm||0)*60+(r.ps||0);
                 let gapNote=null;
