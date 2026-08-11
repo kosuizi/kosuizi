@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.11-2151 --><!DOCTYPE html>
+<!-- Version: v2026.08.11-2229 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.11-2151';
+const APP_VERSION='v2026.08.11-2229';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -2890,7 +2890,7 @@ function compressImage(file,{maxW=800,maxH=800,quality=0.75,onDone,onError}){
   reader.readAsDataURL(file);
 }
 
-const TABS=[{id:'dashboard',label:'🏠 Pano'},{id:'motivasyon',label:'✨ Motivasyon'},{id:'bugun',label:'🗓️ Bugün ve Yarın'},{id:'anketler',label:'📋 Anketler'},{id:'tani',label:'🔍 Tanı'},{id:'plan',label:'📅 Plan'},{id:'lider',label:'🏆 Lider'},{id:'bolge',label:'❤️ Bölgeler'},{id:'test',label:'🧪 Testler'},{id:'yarislar',label:'🏁 Yarışlar'},{id:'karsilastir',label:'⚖️ Karşılaştır'},{id:'ekle',label:'➕ Ekle'},{id:'antrenmanlar',label:'📚 Antrenman'},{id:'gecmis',label:'🕐 Geçmiş'},{id:'analiz',label:'📊 Analiz'},{id:'sporcular',label:'👥 Sporcular & Yarışlar'}];
+const TABS=[{id:'dashboard',label:'🏠 Pano'},{id:'motivasyon',label:'✨ Motivasyon'},{id:'bugun',label:'🗓️ Bugün ve Yarın'},{id:'anketler',label:'📋 Anketler'},{id:'tani',label:'🔍 Tanı'},{id:'plan',label:'📅 Plan'},{id:'lider',label:'🏆 Lider'},{id:'bolge',label:'❤️ Bölgeler'},{id:'test',label:'🧪 Testler'},{id:'yarislar',label:'🏁 Yarışlar'},{id:'karsilastir',label:'⚖️ Karşılaştır'},{id:'ekle',label:'➕ Ekle'},{id:'antrenmanlar',label:'📚 Antrenman'},{id:'gecmis',label:'🕐 Geçmiş'},{id:'analiz',label:'📊 Analiz'},{id:'sporcular',label:'👥 Sporcular & Yarışlar'},{id:'kontrol',label:'🛠️ Kontrol'}];
 
 // 2026.08.09 — Göksel talebi ("k katsayılarının artık önemi kalmadı, amacım her
 // spor türü için doğru bir yük hesaplaması"): Bu k değerleri eskiden kabaca (bir
@@ -4682,6 +4682,170 @@ function BugunTab({athletes,workouts,onSelChange,onTabChange}){
       React.createElement('div',{style:{display:'grid',gap:8,gridTemplateColumns:'repeat(auto-fill,minmax(320px,1fr))'}},
         withRest.map(renderCard)
       )
+    )
+  );
+}
+
+// ── Kontrol Sekmesi — Bayat Override Dedektörü (2026.08.11 — Göksel talebi) ────
+// Amaç: koçun bir satırda yaptığı mesafe/pace/nabız/D+ özelleştirmesinin, "parmak
+// izi" (satırın kaydedildiği andaki _origZIdx/_origPaceSec) o satırın GÜNCEL
+// şablon değeriyle uyuşmadığı için render anında SESSİZCE göz ardı edilip
+// edilmediğini tespit etmek (bkz. ReceteTablosu → rows=baseRows.map, _ovStale
+// kontrolü, ~satır 8090). Bu, şu ana kadar hiçbir UI'da görünmeyen, yalnızca kod
+// okunarak fark edilebilen bir hata sınıfıydı (bkz. Soğuma 1900m→1800m vakası).
+//
+// Yöntem: her sporcu için geriye doğru plan_snapshots taranır (fetchPaceComplianceScore
+// 'all' dalıyla AYNI tarama deseni — PC_HARD_CAP_WEEKS/PC_EMPTY_STREAK_STOP). Her
+// günün kaydedilmiş reçetesi (overrideMap[date].yapilar) ile GÜNCEL bölgeler
+// (calcZones(athlete) — ReceteTablosu'nun bugün kullandığı AYNI kaynak) kullanılarak
+// baseRows YENİDEN kurulur — yani "bu gün şu an açılsa ne görünürdü" simüle edilir.
+// Kaydedilmiş override'ın parmak izi bu YENİDEN KURULMUŞ satırla uyuşmuyorsa VE
+// override anlamlı veri taşıyorsa (mesafe/pace/nabız/D+ girilmişse — boş/yardımcı
+// alanlar rapor edilmez), bulgu listeye eklenir.
+const KONTROL_HARD_CAP_WEEKS=104;
+const KONTROL_EMPTY_STREAK_STOP=6;
+
+function _kontrolHasMeaningfulData(ovRow){
+  if(!ovRow) return false;
+  return (ovRow._origMesafe>0)||(ovRow.mesafe>0)||(ovRow.pm!=null)||(ovRow.ps!=null)||
+    (ovRow.bpm!=null)||(ovRow.bpmStart!=null)||(ovRow.bpmAvg!=null)||(ovRow.bpmEnd!=null)||(ovRow.dp!=null);
+}
+
+async function scanAthleteForStaleOverrides(athlete){
+  const found=[];
+  if(!athlete?.id) return found;
+  let zones;
+  try{ zones=calcZones(athlete); }catch(e){ return found; }
+  let emptyStreak=0;
+  for(let i=0;i<KONTROL_HARD_CAP_WEEKS;i++){
+    const wk=getWeekKey(-i);
+    let snap=null;
+    try{ snap=await fbGet('plan_snapshots/'+athlete.id+'/'+wk); }catch(e){ snap=null; }
+    if(!snap){
+      emptyStreak++;
+      if(emptyStreak>=KONTROL_EMPTY_STREAK_STOP) break;
+      continue;
+    }
+    emptyStreak=0;
+    const rowOverridesByDate=snap.rowOverrides||{};
+    Object.entries(rowOverridesByDate).forEach(([date,dateOv])=>{
+      if(!dateOv||typeof dateOv!=='object') return;
+      const ov=snap.overrideMap?.[date];
+      if(!ov?.yapilar?.length) return; // reçete yeniden kurulamıyor — bu güne dair karar veremeyiz, atla
+      let baseRows;
+      try{
+        const injected=injectRowsFromTpl(ov.yapilar,ov.tip,ov.yapi_notu,ov.sure_dk,zones,athlete.disiplin);
+        baseRows=injected.flatMap(y=>{try{return adimToRows(y,zones).map(r=>({...r,_srcBaslik:y.baslik}));}catch(e){return[];}});
+      }catch(e){ return; }
+      const {__aralik,...rowOvs}=dateOv;
+      const _fp=(ovRow,r,extra)=>{
+        const zMatch=ovRow._origZIdx==null||r._origZIdx==null||ovRow._origZIdx===r._origZIdx;
+        const pMatch=ovRow._origPaceSec==null||r._origPaceSec==null||ovRow._origPaceSec===r._origPaceSec;
+        if(zMatch&&pMatch) return;
+        found.push({
+          athleteId:athlete.id,athleteName:((athlete.ad||'')+' '+(athlete.soyad||'')).trim(),
+          date,weekKey:wk,label:ovRow.label||r?.label||'?',
+          storedZ:ovRow._origZIdx,storedPace:ovRow._origPaceSec,
+          curZ:r?._origZIdx,curPace:r?._origPaceSec,
+          mesafe:ovRow.mesafe,origMesafe:ovRow._origMesafe,
+          pm:ovRow.pm,ps:ovRow.ps,bpm:ovRow.bpm,dp:ovRow.dp,
+          ...extra
+        });
+      };
+      // Düz satırlar
+      Object.entries(rowOvs).forEach(([rowIdxStr,ovRow])=>{
+        const rowIdx=parseInt(rowIdxStr);
+        if(isNaN(rowIdx)||!_kontrolHasMeaningfulData(ovRow)) return;
+        const r=baseRows[rowIdx];
+        _fp(ovRow,r,{rowIdx,tip:'düz'});
+      });
+      // Aralık (tekrarlı) satırlar
+      if(__aralik&&typeof __aralik==='object'){
+        Object.entries(__aralik).forEach(([hIdxStr,repMap])=>{
+          const hIdx=parseInt(hIdxStr);
+          if(isNaN(hIdx)||!repMap||typeof repMap!=='object') return;
+          Object.entries(repMap).forEach(([repStr,typeMap])=>{
+            if(!typeMap||typeof typeMap!=='object') return;
+            ['run','rest'].forEach(kind=>{
+              const ovRow=typeMap[kind];
+              if(!_kontrolHasMeaningfulData(ovRow)) return;
+              const rIdx=hIdx+(kind==='run'?1:2);
+              const r=baseRows[rIdx];
+              _fp(ovRow,r,{rowIdx:hIdx,rep:repStr,kind,tip:'aralık'});
+            });
+          });
+        });
+      }
+    });
+  }
+  return found;
+}
+
+function KontrolTab({athletes}){
+  const [scanning,setScanning]=useState(false);
+  const [progress,setProgress]=useState({done:0,total:0,current:''});
+  const [results,setResults]=useState(null); // null=hiç taranmadı
+  const [scannedAt,setScannedAt]=useState(null);
+
+  const runScan=async()=>{
+    const active=(athletes||[]).filter(a=>!a.pasif);
+    setScanning(true);
+    setResults(null);
+    setProgress({done:0,total:active.length,current:''});
+    const all=[];
+    for(let i=0;i<active.length;i++){
+      const a=active[i];
+      setProgress({done:i,total:active.length,current:(a.ad||'')+' '+(a.soyad||'')});
+      try{
+        const found=await scanAthleteForStaleOverrides(a);
+        all.push(...found);
+      }catch(e){ console.warn('Kontrol taraması hatası:',a.id,e); }
+    }
+    setProgress({done:active.length,total:active.length,current:''});
+    all.sort((x,y)=>(y.date||'').localeCompare(x.date||''));
+    setResults(all);
+    setScannedAt(new Date());
+    setScanning(false);
+  };
+
+  return React.createElement('div',{style:{padding:16,maxWidth:900,margin:'0 auto'}},
+    React.createElement('div',{style:{marginBottom:16}},
+      React.createElement('h2',{style:{margin:'0 0 4px 0',fontSize:18}},'🛠️ Kontrol — Bayat Override Dedektörü'),
+      React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',lineHeight:1.5}},
+        'Bir satırda girilen mesafe/pace/nabız/D+ özelleştirmesi, "parmak izi" güncel şablonla uyuşmadığı için sessizce göz ardı edilmişse burada listelenir. Bu bulgular ekranda hiçbir rozet/uyarı ÜRETMEZ — sadece burada görünür.'
+      )
+    ),
+    React.createElement('button',{
+      onClick:runScan,disabled:scanning,
+      style:{padding:'8px 16px',borderRadius:6,border:'none',background:scanning?'var(--border)':'var(--info)',color:'#fff',fontWeight:700,fontSize:13,cursor:scanning?'default':'pointer'}
+    },scanning?'Taranıyor…':'🔍 Taramayı Başlat'),
+    scanning&&React.createElement('div',{style:{marginTop:10,fontSize:12,color:'var(--text-secondary)'}},
+      `${progress.done}/${progress.total} sporcu tarandı`+(progress.current?' — şu an: '+progress.current:'')
+    ),
+    scannedAt&&!scanning&&React.createElement('div',{style:{marginTop:10,fontSize:11,color:'var(--text-tertiary)'}},
+      'Son tarama: '+scannedAt.toLocaleString('tr-TR')
+    ),
+    results!==null&&!scanning&&React.createElement('div',{style:{marginTop:16}},
+      results.length===0
+        ?React.createElement('div',{style:{padding:16,background:'var(--success-bg,#f0fdf4)',borderRadius:8,color:'var(--success,#22c55e)',fontWeight:600,fontSize:13}},'✓ Bayat override bulunamadı.')
+        :React.createElement('div',null,
+          React.createElement('div',{style:{marginBottom:10,fontSize:13,fontWeight:700,color:'#ef4444'}},results.length+' bulgu bulundu:'),
+          results.map((f,i)=>React.createElement('div',{key:i,style:{
+            padding:'10px 12px',marginBottom:8,borderRadius:8,background:'var(--bg-secondary)',border:'1px solid var(--border)',fontSize:12
+          }},
+            React.createElement('div',{style:{fontWeight:700,marginBottom:4}},f.athleteName+' — '+f.date+' ('+f.tip+(f.rep?', tekrar '+f.rep+' '+f.kind:'')+')'),
+            React.createElement('div',{style:{color:'var(--text-secondary)',marginBottom:4}},'Satır: '+f.label),
+            React.createElement('div',{style:{fontFamily:'monospace',fontSize:11,color:'var(--text-tertiary)'}},
+              'Kayıtlı parmak izi: zon='+(f.storedZ??'—')+', pace='+(f.storedPace??'—')+'sn  →  Güncel: zon='+(f.curZ??'—')+', pace='+(f.curPace??'—')+'sn'
+            ),
+            React.createElement('div',{style:{marginTop:4,fontSize:11}},
+              'Kaybolma riski taşıyan veri: '+
+              [f.origMesafe>0?('hedef mesafe '+f.origMesafe+'m'):null,f.mesafe>0?('girilen mesafe '+f.mesafe+'m'):null,
+               (f.pm!=null||f.ps!=null)?('pace '+(f.pm??0)+':'+String(f.ps??0).padStart(2,'0')):null,
+               f.bpm!=null?('nabız '+f.bpm):null,f.dp!=null?('D+ '+f.dp+'m'):null].filter(Boolean).join(', ')
+            )
+          ))
+        )
     )
   );
 }
@@ -8682,6 +8846,90 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
       return next;
     });
   };
+
+  // ── Ekle-anında hedef dondurma (2026.08.11 — Göksel talebi) ────────────────────
+  // KÖK NEDEN DÜZELTMESİ: hedef (_origMesafe/_origPaceSec/_origZIdx) ÖNCEDEN sadece
+  // coach bir alanı ELLE düzenlediğinde donuyordu. Bu, "Ekle" ile coach'un o satıra
+  // İLK dokunuşu arasında geçen sürede (ör. coach başka bir günün girişini yaparken
+  // sporcunun bölgeleri/pace'i otomatik yeniden kalibre olursa) coach'un GÖRDÜĞÜ değer
+  // ile daha SONRA donacak değerin birbirinden kaymasına yol açıyordu (bkz. Soğuma
+  // 1900m görüntülenip 1800m'nin donması vakası — Göksel'in bildirdiği, 11.08.2026).
+  // Çözüm: isWorkoutLogged false'tan true'ya geçtiği ANDA (Ekle'nin kendisi, coach'un
+  // ilk düzenlemesini beklemeden), henüz hiç override'ı olmayan TÜM satırlar (düz +
+  // aralık) o anki (bu render'daki, coach'un ekranda gördüğü) canlı değerleriyle hemen
+  // dondurulur. Zaten donmuş satırlara (mevcut override'ı olanlara) dokunulmaz —
+  // geçmişte kaydedilmiş antrenmanların hedefleri asla geriye dönük değişmez.
+  const _prevWorkoutLogged=useRef(isWorkoutLogged);
+  useEffect(()=>{
+    const wasLogged=_prevWorkoutLogged.current;
+    _prevWorkoutLogged.current=isWorkoutLogged;
+    if(!isWorkoutLogged||wasLogged) return; // sadece false→true GEÇİŞİNDE, bir kez çalışır
+    if(readOnly) return; // salt-okunur görünümde (ör. Koşu İzlerim) donma işlemi yapılmaz
+
+    // Düz satırlar
+    const newRowOv={...rowOverrides};
+    let changed=false;
+    rows.forEach((r,i)=>{
+      if(!r||r.type==='header') return;
+      if(newRowOv[i]?._origMesafe>0) return; // zaten donmuş — dokunma
+      const ohr=r._origZIdx!=null?zones?.hrZones?.[r._origZIdx]:null;
+      const freeze={};
+      if(r._origPaceSec>0) freeze._origPaceSec=r._origPaceSec;
+      if(r._origZIdx!=null) freeze._origZIdx=r._origZIdx;
+      if(r.label) freeze.label=r.label;
+      if(r.type) freeze.type=r.type;
+      if(r.mesafe>0) freeze._origMesafe=r.mesafe;
+      if(ohr?.lo_bpm) freeze._origLoBpm=ohr.lo_bpm;
+      if(ohr?.hi_bpm) freeze._origHiBpm=ohr.hi_bpm;
+      if(r._isGapRow) freeze._isGapRow=true;
+      if(Object.keys(freeze).length===0) return;
+      newRowOv[i]={...(newRowOv[i]||{}),...freeze};
+      changed=true;
+    });
+
+    // Aralık (tekrarlı) satırlar — her tekrarın koşu/dinlenme bacağı, henüz kendi
+    // override'ı yoksa, updateAralikCell'in de kullandığı AYNI paylaşılan taban
+    // (rows[headerIdx+1]/[headerIdx+2]) üzerinden donuyor.
+    const newAralikOv={};
+    Object.keys(aralikOverrides).forEach(k=>{newAralikOv[k]={...aralikOverrides[k]};});
+    let aralikChanged=false;
+    rows.forEach((hdr,hi)=>{
+      if(hdr.type!=='header'||!(hdr.repeatCount>1)) return;
+      const repCount=hdr.repeatCount;
+      const runBase=rows[hi+1], restBase=rows[hi+2];
+      for(let rep=1;rep<=repCount;rep++){
+        [['run',runBase],['rest',restBase]].forEach(([kind,base])=>{
+          if(!base) return;
+          const existing=newAralikOv[hi]?.[rep]?.[kind];
+          if(existing?._origMesafe>0) return; // zaten donmuş — dokunma
+          const ohr=base._origZIdx!=null?zones?.hrZones?.[base._origZIdx]:null;
+          const freeze={
+            _origPaceSec:base._origPaceSec,
+            _origZIdx:base._origZIdx,
+            ...(ohr?.lo_bpm?{_origLoBpm:ohr.lo_bpm}:{}),
+            ...(ohr?.hi_bpm?{_origHiBpm:ohr.hi_bpm}:{}),
+            ...(base.mesafe>0?{_origMesafe:base.mesafe}:{}),
+            label:base.label,
+            type:base.type
+          };
+          if(!newAralikOv[hi]) newAralikOv[hi]={};
+          if(!newAralikOv[hi][rep]) newAralikOv[hi][rep]={};
+          newAralikOv[hi][rep][kind]={...(newAralikOv[hi][rep][kind]||{}),...freeze};
+          aralikChanged=true;
+        });
+      }
+    });
+
+    if(!changed&&!aralikChanged) return; // dondurulacak hiçbir şey yoksa dokunma
+
+    setRowOverrides(newRowOv);
+    setAralikOverrides(newAralikOv);
+    if(onSaveOverrides){
+      const __zd=computeZoneDistFromRows(baseRows,newRowOv,_mZones,newAralikOv);
+      const __gd=computeGapDataFromRows(baseRows,newRowOv);
+      onSaveOverrides({...newRowOv,__aralik:newAralikOv,...(__zd?{__zoneDist:__zd}:{}),...(__gd?{__gapData:__gd}:{})});
+    }
+  },[isWorkoutLogged]);
 
   // Düzenlenebilir hücre render yardımcısı
   const editableCell=(rowIdx, field, displayVal)=>{
@@ -26378,7 +26626,8 @@ function App(){
         onDeleteRace:id=>setRaces(p=>p.filter(x=>x.id!==id)),
         onDeleteHistoryEntry:entry=>setAthHistory(p=>p.filter(e=>e!==entry))
       }),
-      tab==='tani'&&React.createElement(TaniPaneliTab,{athletes,allHistory,races,workouts})
+      tab==='tani'&&React.createElement(TaniPaneliTab,{athletes,allHistory,races,workouts}),
+      tab==='kontrol'&&React.createElement(KontrolTab,{athletes})
     )
   );
 }
