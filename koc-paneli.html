@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.11-2137 --><!DOCTYPE html>
+<!-- Version: v2026.08.11-2151 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.11-2137';
+const APP_VERSION='v2026.08.11-2151';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1212,7 +1212,7 @@ function extractFeedbackSignals(allSnapsObj, athlete){
       const scanRow=(row)=>{
         if(!row||typeof row!=='object') return;
         if(row.type==='header'||row.rpe||row._isSprint) return;
-        if(row.type==='rest'||row.type==='walk') return;
+        if(row.type==='walk') return;
 
         // ── Aralık özet/ortalama satırı istisnası (2026.08.09 — Göksel'in
         // bildirdiği "Yürü-Tempolu Yürü aralığında Koşu fazı için 'Çok Fazla
@@ -1428,8 +1428,14 @@ function extractFeedbackSignals(allSnapsObj, athlete){
           if(!repMap||typeof repMap!=='object') return;
           Object.values(repMap).forEach(typeMap=>{
             if(!typeMap||typeof typeMap!=='object') return;
-            // Sadece koşu alt-satırları taranır; dinlenme arası hariç
+            // 2026.08.11 — Göksel talebi: dinlenme arası artık da taranıyor. Eskiden
+            // "sadece koşu" idi (pace kalibrasyonunu dinlenme pace'iyle kirletmemek için)
+            // ama bu, mesafe sinyalini de birlikte kapatıyordu — düz satırlardaki
+            // (Isınma/Soğuma/Dinlenme) davranışla TUTARSIZDI. scanRow'un kendi SKIP_RE'si
+            // ("dinlenme" dahil) zaten pace'i otomatik atlayıp mesafeyi (ve varsa nabzı)
+            // kaydediyor — bu yüzden ek bir dallanmaya gerek yok, doğrudan çağırmak yeterli.
             if(typeMap.run) scanRow(typeMap.run);
+            if(typeMap.rest) scanRow(typeMap.rest);
           });
         });
       }
@@ -7445,7 +7451,7 @@ async function saveCueGlobal(label, text){
 }
 
 // Aralıklar editörü — tekrarlı antrenmanlarda her bir tekrarın koşu+dinlenme pace'lerini ayrı düzenler
-function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange, paceValidation, paceToZoneIdx, zones, readOnly}){
+function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange, paceValidation, paceToZoneIdx, zones, readOnly, isWorkoutLogged}){
   const [editKey, setEditKey] = React.useState(null); // 'rep:type:field'
   const e = React.createElement;
 
@@ -7455,6 +7461,34 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
     const hr=zones?.hrZones?.[zIdx];
     if(!hr?.lo_bpm||!hr?.hi_bpm) return null;
     return Math.ceil((hr.lo_bpm+hr.hi_bpm)/2);
+  };
+
+  // ── Mesafe Hedefi rozeti — aralık tekrarları (2026.08.11 — Göksel talebi) ──────
+  // Isınma/Ana Bölüm/Soğuma'daki mesafeValidation (ReceteTablosu, ~satır 8380) ile
+  // BİREBİR aynı tolerans/asimetri mantığı — sadece veri kaynağı farklı: düz satırlarda
+  // row._origMesafe kullanılırken burada rowData (getRowData ile base+override birleşmiş)
+  // içinden okunuyor. _origMesafe zaten updateAralikCell tarafından donduruluyor
+  // (bkz. _origMesafeFieldAr, ~satır 8600) — bu fonksiyon sadece onu okuyup rozete çeviriyor.
+  const mesafeValidationAralik=(rowData)=>{
+    if(!rowData||rowData._isSprint) return null;
+    if(!isWorkoutLogged) return null;
+    const actualMesafe=rowData.mesafe, origMesafe=rowData._origMesafe;
+    if(!(actualMesafe>0)||!(origMesafe>0)) return null;
+    const diffPct=round1((actualMesafe-origMesafe)/origMesafe*100);
+    const SKIP_RE_LOKAL=/[iı]sınma|isinma|soğuma|soguma|dinlenme|toparlanma|blok\s*arası|strides\s*arası/i;
+    const mesZoneKolay=(rowData.label&&SKIP_RE_LOKAL.test(rowData.label))||(rowData._origZIdx!=null&&rowData._origZIdx<=1);
+    const az=diffPct<0;
+    const mesTabanPct=origMesafe>0?(MESAFE_TOLERANS_MIN_M/origMesafe*100):0;
+    const mesAzTol=Math.max(mesZoneKolay?MESAFE_TOLERANS_PCT:MESAFE_TOLERANS_PCT/MESAFE_CEZA_KATSAYISI,mesTabanPct);
+    const mesFazlaTol=Math.max(mesZoneKolay?MESAFE_TOLERANS_PCT/MESAFE_CEZA_KATSAYISI:MESAFE_TOLERANS_PCT,mesTabanPct);
+    const effTol=az?mesAzTol:mesFazlaTol;
+    if(Math.abs(diffPct)<=effTol) return{label:'Mesafe Uyumlu',color:'#22c55e',bg:'#f0fdf4',icon:'📏'};
+    const katsayi=az?(mesZoneKolay?1:MESAFE_CEZA_KATSAYISI):(mesZoneKolay?MESAFE_CEZA_KATSAYISI:1);
+    const ratio=Math.abs(diffPct)/MESAFE_TOLERANS_PCT*katsayi;
+    const yon=az?'Az Koşuldu':'Fazla Koşuldu';
+    const detay=' (hedef '+origMesafe+'m)';
+    if(ratio>2) return{label:'Çok '+yon+detay,color:'#ef4444',bg:'#fef2f2',icon:az?'📏▼▼':'📏▲▲'};
+    return{label:'Biraz '+yon+detay,color:'#f59e0b',bg:'#fffbeb',icon:az?'📏▼':'📏▲'};
   };
 
   // Nabız validasyonu (AralikEditor için — override vs. zone sınırları)
@@ -7595,7 +7629,8 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
               e('td',{style:{padding:'4px 4px',verticalAlign:'middle',textAlign:'center'}},
                 e('div',{style:{display:'flex',flexDirection:'column',gap:3,alignItems:'center'}},
                   pv ? e('span',{style:{display:'inline-block',padding:'2px 5px',borderRadius:3,fontSize:8,fontWeight:700,color:pv.color,background:pv.bg,whiteSpace:'nowrap',lineHeight:1.3}},pv.icon+' '+pv.label) : e('span',{style:{color:'#94a3b8',fontSize:9}},'—'),
-                  (()=>{if(!overrides[rep]?.run?.bpm) return null; const hv=bpmValidationAralik(runData,'run',rep);return hv?e('span',{style:{display:'inline-block',padding:'2px 5px',borderRadius:3,fontSize:8,fontWeight:700,color:hv.color,background:hv.bg,whiteSpace:'nowrap',lineHeight:1.3}},hv.icon+' '+hv.label):null;})()
+                  (()=>{if(!overrides[rep]?.run?.bpm) return null; const hv=bpmValidationAralik(runData,'run',rep);return hv?e('span',{style:{display:'inline-block',padding:'2px 5px',borderRadius:3,fontSize:8,fontWeight:700,color:hv.color,background:hv.bg,whiteSpace:'nowrap',lineHeight:1.3}},hv.icon+' '+hv.label):null;})(),
+                  (()=>{const mv=mesafeValidationAralik(runData);return mv?e('span',{style:{display:'inline-block',padding:'2px 5px',borderRadius:3,fontSize:8,fontWeight:700,color:mv.color,background:mv.bg,whiteSpace:'nowrap',lineHeight:1.3}},mv.icon+' '+mv.label):null;})()
                 )
               ),
               e('td',{style:{...cellSt,color:'#000'}},runData.h>0?runData.h:0),
@@ -7631,7 +7666,8 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
               e('td',{style:{padding:'4px 4px',verticalAlign:'middle',textAlign:'center'}},
                 e('div',{style:{display:'flex',flexDirection:'column',gap:3,alignItems:'center'}},
                   pvR ? e('span',{style:{display:'inline-block',padding:'2px 5px',borderRadius:3,fontSize:8,fontWeight:700,color:pvR.color,background:pvR.bg,whiteSpace:'nowrap',lineHeight:1.3}},pvR.icon+' '+pvR.label) : e('span',{style:{color:'#94a3b8',fontSize:9}},'—'),
-                  (()=>{if(!overrides[rep]?.rest?.bpm) return null; const hv=bpmValidationAralik(restData,'rest',rep);return hv?e('span',{style:{display:'inline-block',padding:'2px 5px',borderRadius:3,fontSize:8,fontWeight:700,color:hv.color,background:hv.bg,whiteSpace:'nowrap',lineHeight:1.3}},hv.icon+' '+hv.label):null;})()
+                  (()=>{if(!overrides[rep]?.rest?.bpm) return null; const hv=bpmValidationAralik(restData,'rest',rep);return hv?e('span',{style:{display:'inline-block',padding:'2px 5px',borderRadius:3,fontSize:8,fontWeight:700,color:hv.color,background:hv.bg,whiteSpace:'nowrap',lineHeight:1.3}},hv.icon+' '+hv.label):null;})(),
+                  (()=>{const mv=mesafeValidationAralik(restData);return mv?e('span',{style:{display:'inline-block',padding:'2px 5px',borderRadius:3,fontSize:8,fontWeight:700,color:mv.color,background:mv.bg,whiteSpace:'nowrap',lineHeight:1.3}},mv.icon+' '+mv.label):null;})()
                 )
               ),
               e('td',{style:{...cellSt,color:'#000'}},restData.h>0?restData.h:0),
@@ -8818,7 +8854,8 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
                     paceValidation,
                     paceToZoneIdx,
                     zones,
-                    readOnly
+                    readOnly,
+                    isWorkoutLogged
                   })
                 )
               )
