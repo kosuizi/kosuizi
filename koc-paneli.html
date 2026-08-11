@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.11-1127 --><!DOCTYPE html>
+<!-- Version: v2026.08.11-1139 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.11-1127';
+const APP_VERSION='v2026.08.11-1139';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -1878,23 +1878,38 @@ function analyzeRecipeFeedbackSignals(signals){
 // disiplini hakkında bilgi verir) ve sapmaların hangi yoğunluk bölgesinde (Z1-Z5c)
 // yoğunlaştığını gösterir. vLT sinyali üretmez ama koç için tanı/telkin amaçlıdır.
 const FB_ZONE_ORDER=['Z1','Z2','Z3','Z4','Z5a','Z5b','Z5c'];
+// Bölge dökümü tablosundaki tarih chip'lerinin renk kodlaması — mevcut badge-info/warn/danger
+// paletiyle tutarlı: sadece pace sapması → info (mavi), sadece nabız sapması → warn (turuncu),
+// ikisi birden (çakışma) → danger (kırmızı).
+const FB_DATE_TYPE_COLOR={
+  pace:{bg:'var(--info-bg)',fg:'var(--info)'},
+  hr:{bg:'var(--warn-bg)',fg:'var(--warn)'},
+  both:{bg:'var(--danger-bg)',fg:'var(--danger)'}
+};
 function summarizeFeedbackBreakdown(signals){
   if(!signals||!signals.length) return null;
   let fastHigh=0, slowLow=0;
   const byZone={};
   signals.forEach(s=>{
     const z=s.zoneId||'Bilinmiyor';
-    if(!byZone[z]) byZone[z]={paceOff:0,hrOff:0,conflict:0,dates:new Set()};
-    if(s.paceDir){ byZone[z].paceOff++; if(s.date) byZone[z].dates.add(s.date); }
-    if(s.hrDir){   byZone[z].hrOff++;   if(s.date) byZone[z].dates.add(s.date); }
+    if(!byZone[z]) byZone[z]={paceOff:0,hrOff:0,conflict:0,dateTypes:{}};
+    if(s.paceDir){ byZone[z].paceOff++; if(s.date){ (byZone[z].dateTypes[s.date]=byZone[z].dateTypes[s.date]||{}).pace=true; } }
+    if(s.hrDir){   byZone[z].hrOff++;   if(s.date){ (byZone[z].dateTypes[s.date]=byZone[z].dateTypes[s.date]||{}).hr=true; } }
     if(s.paceDir&&s.hrDir){
       if(s.paceDir==='fast'&&s.hrDir==='high'){fastHigh++;byZone[z].conflict++;}
       else if(s.paceDir==='slow'&&s.hrDir==='low'){slowLow++;byZone[z].conflict++;}
     }
   });
   const orderedKeys=[...FB_ZONE_ORDER.filter(z=>byZone[z]),...Object.keys(byZone).filter(z=>!FB_ZONE_ORDER.includes(z))];
-  // dates: en yeniden en eskiye sıralı, benzersiz tarih listesi (o bölgede pace veya nabız sapması olan günler)
-  const zones=orderedKeys.map(z=>({zoneId:z,...byZone[z],dates:[...byZone[z].dates].sort().reverse()}));
+  // dates: en yeniden en eskiye sıralı, her biri {date,type} — type: 'both'|'pace'|'hr' (o günkü sapmanın kaynağı)
+  const zones=orderedKeys.map(z=>{
+    const {dateTypes,...rest}=byZone[z];
+    const dates=Object.keys(dateTypes).sort().reverse().map(d=>{
+      const t=dateTypes[d];
+      return {date:d,type:(t.pace&&t.hr)?'both':(t.pace?'pace':'hr')};
+    });
+    return {zoneId:z,...rest,dates};
+  });
   return {conflict:{fastHigh,slowLow},zones};
 }
 
@@ -20178,12 +20193,36 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
                 React.createElement('td',null,z.paceOff||'—'),
                 React.createElement('td',null,z.hrOff||'—'),
                 React.createElement('td',null,z.conflict||'—'),
-                React.createElement('td',{style:{color:'var(--text-tertiary)',whiteSpace:'normal'}},
+                React.createElement('td',{style:{whiteSpace:'normal'}},
                   (z.dates&&z.dates.length)
-                    ?z.dates.map(d=>{const p=d.split('-');return p.length===3?(p[2]+'.'+p[1]):d;}).join(' · ')
-                    :'—'
+                    ?z.dates.map(({date,type})=>{
+                        const p=date.split('-');
+                        const lbl=p.length===3?(p[2]+'.'+p[1]):date;
+                        const c=FB_DATE_TYPE_COLOR[type];
+                        return React.createElement('span',{
+                          key:date,
+                          title:type==='both'?'Pace + Nabız':(type==='pace'?'Pace':'Nabız'),
+                          style:{display:'inline-block',margin:'1px 3px 1px 0',padding:'1px 5px',borderRadius:4,
+                            background:c.bg,color:c.fg,fontWeight:600,fontSize:10,whiteSpace:'nowrap'}
+                        },lbl);
+                      })
+                    :React.createElement('span',{style:{color:'var(--text-tertiary)'}},'—')
                 )
               ))
+            )
+          ),
+          React.createElement('div',{style:{display:'flex',gap:10,marginTop:6,fontSize:10,color:'var(--text-tertiary)',flexWrap:'wrap'}},
+            React.createElement('span',null,
+              React.createElement('span',{style:{display:'inline-block',width:8,height:8,borderRadius:2,background:FB_DATE_TYPE_COLOR.pace.bg,marginRight:4,verticalAlign:'middle'}}),
+              'Sadece Pace'
+            ),
+            React.createElement('span',null,
+              React.createElement('span',{style:{display:'inline-block',width:8,height:8,borderRadius:2,background:FB_DATE_TYPE_COLOR.hr.bg,marginRight:4,verticalAlign:'middle'}}),
+              'Sadece Nabız'
+            ),
+            React.createElement('span',null,
+              React.createElement('span',{style:{display:'inline-block',width:8,height:8,borderRadius:2,background:FB_DATE_TYPE_COLOR.both.bg,marginRight:4,verticalAlign:'middle'}}),
+              'Pace + Nabız'
             )
           )
         )
