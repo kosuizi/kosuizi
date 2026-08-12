@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.12-2213 --><!DOCTYPE html>
+<!-- Version: v2026.08.12-2241 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.12-2213';
+const APP_VERSION='v2026.08.12-2241';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -5958,30 +5958,47 @@ function finalizeLeaderboard(rows,paceScores){
   // göre DEĞİL, her sporcunun KENDİ son 6 haftalık ortalamasına (bkz.
   // calcAthleteBaseline) göre 0-100 ölçeğine normalize edilir. Böylece bir
   // sporcunun skoru SADECE kendi performansına bağlıdır — başka bir sporcunun
-  // o hafta antrenman girip girmemesi bu skoru asla etkilemez. Yeterli geçmişi
-  // olmayan (eforBaseline/isBaseline=null) sporcularda eski nötr mantık geçerli:
-  // o hafta antrenman yaptıysa 100, yapmadıysa 0. Kendi ortalamasını aşan haftalar
-  // 100'de sınırlanır (tek bir aşırı hafta diğer bileşenleri ezmesin diye).
+  // o hafta antrenman girip girmemesi bu skoru asla etkilemez. Kendi ortalamasını
+  // aşan haftalar 100'de sınırlanır (tek bir aşırı hafta diğer bileşenleri ezmesin
+  // diye).
+  //
+  // 2026.08.12 — KÖK NEDEN DÜZELTMESİ (Göksel'in bildirdiği "tek aktivite ile
+  // listenin başına gelme" hatası — örn. tek bir yüzme/hafif koşu ile 1-3. sıra):
+  // Eski mantıkta, yeterli geçmişi OLMAYAN (eforBaseline/isBaseline=null,
+  // BASELINE_MIN_ACTIVE_WEEKS'i karşılamayan) sporcular o hafta antrenman
+  // yaptıysa doğrudan 100 (tam puan) alıyordu. Bu, "veri yok" ile "mükemmel
+  // performans"ı eşitliyordu — yeni/seyrek geçmişli bir sporcu TEK ve HAFİF
+  // bir antrenmanla dahi üç bileşende de 100 alıp öne geçebiliyordu. Artık
+  // baseline yoksa nötr değer 100 değil 50 (antrenman yapılmadıysa hâlâ 0) —
+  // az veri = orta puan, tam puan DEĞİL.
   return rows.map(r=>{
-    const eforNorm=r.eforBaseline>0?round1(Math.min(100,r.sporSkoru/r.eforBaseline*100)):(r.count>0?100:0);
-    const isNorm=r.isBaseline>0?round1(Math.min(100,r.gercekIs/r.isBaseline*100)):(r.count>0?100:0);
+    const eforNorm=r.eforBaseline>0?round1(Math.min(100,r.sporSkoru/r.eforBaseline*100)):(r.count>0?50:0);
+    const isNorm=r.isBaseline>0?round1(Math.min(100,r.gercekIs/r.isBaseline*100)):(r.count>0?50:0);
     const raw=paceScores?.[r.ath.id];
     // uygunlukPct: GÖSTERİLEN "🎯 Hedef Uyumu" — HER ZAMAN ham puan (2026.08.09 —
     // Göksel talebi: sporcu her şeyi tam yaptıysa %100 görmeli, istatistiksel
-    // düzeltme bu göstergeyi hiç etkilememeli).
+    // düzeltme bu göstergeyi hiç etkilememeli). Bu rozetin nötr-100 davranışı
+    // (pace karşılaştırması yoksa ama antrenman varsa) DEĞİŞMEDİ — sadece
+    // aşağıdaki Skor hesabı değişti.
     // uygunlukPctForScore: SADECE Skor/sıralama hesabında kullanılan, faz sayısı
     // adaletiyle (Bayesian) düzeltilmiş versiyon — hiçbir yerde gösterilmez.
     const uygunlukPct=raw?.puan??null;
     const uygunlukPctForScore=raw?.puanForScore??null;
-    // Nötr (100) sadece pace verisi olmayan (o hafta pace karşılaştırması
-    // yapılabilecek faz girilmemiş) AMA gerçekten antrenman yapan sporcuya
-    // uygulanır — yoksa hiç antrenman yapmamış biri, aktif ama düşük puanlı
-    // birinin önüne geçebilir.
     const uygunlukNorm=uygunlukPct!=null?uygunlukPct:(r.count>0?100:0);
-    const uygunlukNormForScore=uygunlukPctForScore!=null?uygunlukPctForScore:(r.count>0?100:0);
-    // Ağırlıklar (2026.07.28 — Göksel onayı): Hedef Uyumu %45, Gerçek İş %30, Efor %25
-    // Skor hesabı ForScore (düzeltilmiş) değeri kullanır — gösterilen uygunlukNorm değil.
-    const finalScore=round1(uygunlukNormForScore*0.45+eforNorm*0.25+isNorm*0.30);
+    // 2026.08.12 düzeltmesi: Skor hesabında Hedef Uyumu bu hafta hiç
+    // ölçülemiyorsa (pace karşılaştırması yapılabilecek faz yok — örn.
+    // koşu-dışı spor ya da plansız giriş) bu bileşen nötr 100 SAYILMAZ,
+    // Skor formülünden tamamen çıkarılır ve %45'lik ağırlığı Efor (%25) ve
+    // Gerçek İş'e (%30) oranlı şekilde dağıtılır. Böylece "ölçülemeyen" bir
+    // bileşen sporcuyu suni şekilde tam puana taşıyıp öne fırlatamaz.
+    let finalScore;
+    if(uygunlukPctForScore!=null){
+      // Ağırlıklar (2026.07.28 — Göksel onayı): Hedef Uyumu %45, Gerçek İş %30, Efor %25
+      finalScore=round1(uygunlukPctForScore*0.45+eforNorm*0.25+isNorm*0.30);
+    }else{
+      const wEfor=0.25/0.55,wIs=0.30/0.55; // ağırlıklar orantılı yeniden dağıtıldı (~%45.45 / %54.55)
+      finalScore=round1(eforNorm*wEfor+isNorm*wIs);
+    }
     return{...r,eforNorm,isNorm,uygunlukPct,uygunlukNorm,finalScore};
   }).sort((a,b)=>b.finalScore-a.finalScore);
 }
