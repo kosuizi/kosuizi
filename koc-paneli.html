@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.12-2241 --><!DOCTYPE html>
+<!-- Version: v2026.08.12-2301 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.12-2241';
+const APP_VERSION='v2026.08.12-2301';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -5868,9 +5868,12 @@ function calcAthleteBaseline(workouts,athlete,weekOffset){
     eforVals.push(sporSkoru);
     isVals.push(gercekIs);
   }
-  if(eforVals.length<BASELINE_MIN_ACTIVE_WEEKS)return{eforBaseline:null,isBaseline:null};
+  // activeWeeks: eforVals.length ile aynı (her ikisi de sadece antrenman yapılan
+  // haftalarda push edilir) — veri tamlığı puanı için ayrıca dışa veriliyor.
+  const activeWeeks=eforVals.length;
+  if(eforVals.length<BASELINE_MIN_ACTIVE_WEEKS)return{eforBaseline:null,isBaseline:null,activeWeeks};
   const avg=arr=>arr.reduce((s,v)=>s+v,0)/arr.length;
-  return{eforBaseline:round1(avg(eforVals)),isBaseline:round1(avg(isVals))};
+  return{eforBaseline:round1(avg(eforVals)),isBaseline:round1(avg(isVals)),activeWeeks};
 }
 
 function calcWeeklyStats(workouts,athletes,weekOffset=0){
@@ -5919,8 +5922,8 @@ function calcWeeklyStats(workouts,athletes,weekOffset=0){
       sporDagilim[s]=(sporDagilim[s]||0)+1;
     });
     // Kendi geçmişine göre normalizasyon referansı (bkz. calcAthleteBaseline notu)
-    const{eforBaseline,isBaseline}=calcAthleteBaseline(workouts,athObj||a,weekOffset);
-    return{ath:a,mesafe,mesafeBySpor,irtifa,sureSn,count,sporSkoru,gercekIs,sporDagilim,wks,eforBaseline,isBaseline};
+    const{eforBaseline,isBaseline,activeWeeks}=calcAthleteBaseline(workouts,athObj||a,weekOffset);
+    return{ath:a,mesafe,mesafeBySpor,irtifa,sureSn,count,sporSkoru,gercekIs,sporDagilim,wks,eforBaseline,isBaseline,baselineActiveWeeks:activeWeeks};
   });
 }
 
@@ -5991,15 +5994,37 @@ function finalizeLeaderboard(rows,paceScores){
     // Skor formülünden tamamen çıkarılır ve %45'lik ağırlığı Efor (%25) ve
     // Gerçek İş'e (%30) oranlı şekilde dağıtılır. Böylece "ölçülemeyen" bir
     // bileşen sporcuyu suni şekilde tam puana taşıyıp öne fırlatamaz.
-    let finalScore;
+    let rawFinalScore;
     if(uygunlukPctForScore!=null){
       // Ağırlıklar (2026.07.28 — Göksel onayı): Hedef Uyumu %45, Gerçek İş %30, Efor %25
-      finalScore=round1(uygunlukPctForScore*0.45+eforNorm*0.25+isNorm*0.30);
+      rawFinalScore=round1(uygunlukPctForScore*0.45+eforNorm*0.25+isNorm*0.30);
     }else{
       const wEfor=0.25/0.55,wIs=0.30/0.55; // ağırlıklar orantılı yeniden dağıtıldı (~%45.45 / %54.55)
-      finalScore=round1(eforNorm*wEfor+isNorm*wIs);
+      rawFinalScore=round1(eforNorm*wEfor+isNorm*wIs);
     }
-    return{...r,eforNorm,isNorm,uygunlukPct,uygunlukNorm,finalScore};
+
+    // 2026.08.12 — Göksel onayı: "kendi geçmişine göre" normalizasyon, geçmişi
+    // az/hafif olan ya da nabız bölgeleri tanımsız bir sporcunun, kendi (güvenilir
+    // olmayan) ölçütünü tutturarak listenin başına gelmesini engelleyemiyordu
+    // (örn. tek bir hafif koşuyla kendi düşük ortalamasını tutturup 100 almak).
+    // ÇÖZÜM — SADECE sporcunun KENDİ profilinden okunan bir "veri tamlığı" çarpanı:
+    // hiçbir başka sporcunun verisine bakılmıyor, takım medyanı/max'ı YOK.
+    //   • Nabız bölgesi tanımlı mı (rhr+mhr ya da lthr — sporcunun kendi profili) → 50p
+    //   • Baseline'daki aktif hafta sayısı (son 6 haftada gerçek antrenman yapılan
+    //     hafta sayısı, zaten calcAthleteBaseline'dan geliyor) → 4+ haftada 50p tam,
+    //     azı orantılı
+    // completeness 0-100 → çarpan 0.5 (en düşük, veri hiç yoksa) .. 1.0 (tam veri).
+    // Böylece veri eksikliği skoru en fazla YARIYA düşürür — sıfırlamaz ama listenin
+    // üst sıralarına asla taşımaz.
+    const hrOk=(parseSayi(r.ath?.lthr)>0)||(parseSayi(r.ath?.rhr)>0&&parseSayi(r.ath?.mhr)>0);
+    const hrPart=hrOk?50:0;
+    const activeWeeks=r.baselineActiveWeeks||0;
+    const historyPart=round1(50*Math.min(1,activeWeeks/4));
+    const completeness=hrPart+historyPart; // 0-100
+    const completenessMult=0.5+0.5*(completeness/100);
+    const finalScore=round1(rawFinalScore*completenessMult);
+
+    return{...r,eforNorm,isNorm,uygunlukPct,uygunlukNorm,rawFinalScore,completeness,finalScore};
   }).sort((a,b)=>b.finalScore-a.finalScore);
 }
 
