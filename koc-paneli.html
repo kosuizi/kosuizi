@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.12-2316 --><!DOCTYPE html>
+<!-- Version: v2026.08.13-0835 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.12-2316';
+const APP_VERSION='v2026.08.13-0835';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -532,21 +532,31 @@ function calcRecovery(w, ath, yukObj){
     :'Tam dinlenme — kas glikojeni yenilenmesi öncelik';
 
   // Hedef zaman — antrenman başlangıç saati + süre + toparlanma süresi
-  const hedef=new Date();
+  // DÜZELTME (13.08.2026 — ülke/saat dilimi): w.date/w.time Strava'dan gelen ve
+  // sporcunun O ANDAKİ bulunduğu yerin yerel duvar saatini temsil eder. Bu değerler
+  // eskiden setFullYear/setHours ile HESAPLAYAN CİHAZIN (genelde koçun, Türkiye'deki)
+  // saat dilimine göre yorumlanıyordu — sporcu Japonya/İngiltere gibi farklı bir
+  // saat diliminde olduğunda toparlanma hedefi saatlerce (Japonya'da ciddi ölçüde)
+  // kayabiliyordu. Artık sporcu kartındaki ülkeye göre (athleteTZ) doğru MUTLAK
+  // zamana çevriliyor — hesaplamayı kim/hangi cihazdan yaptığından bağımsız.
+  const tz=athleteTZ(ath);
+  let hedef;
   if(w.date&&w.time){
     const [yr,mo,dy]=w.date.split('-').map(Number);
     const [h,m]=(w.time||'00:00').split(':').map(Number);
-    hedef.setFullYear(yr,mo-1,dy);
-    hedef.setHours(h,m,0,0);
-    hedef.setMinutes(hedef.getMinutes()+Math.round(durMin)); // antrenman süresi ekle
+    hedef=zonedWallTimeToUtc(yr,mo,dy,h,m,tz);
+    hedef=new Date(hedef.getTime()+Math.round(durMin)*60000); // antrenman süresi ekle
   } else if(w.date){
-    // Saat yoksa gün ortası (12:00) baz al
+    // Saat yoksa gün ortası (12:00, sporcunun yerel saatiyle) baz al
     const [yr,mo,dy]=w.date.split('-').map(Number);
-    hedef.setFullYear(yr,mo-1,dy);
-    hedef.setHours(12,0,0,0);
+    hedef=zonedWallTimeToUtc(yr,mo,dy,12,0,tz);
+  } else {
+    hedef=new Date();
   }
-  hedef.setHours(hedef.getHours()+saatler);
-  const hedefStr=hedef.toLocaleString('tr-TR',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
+  hedef=new Date(hedef.getTime()+saatler*3600000);
+  // Gösterim de sporcunun ülkesinin yerel saatiyle yapılır — koç başka bir saat
+  // diliminden baksa bile "hedef" her zaman sporcunun yerel saatini gösterir.
+  const hedefStr=hedef.toLocaleString('tr-TR',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',timeZone:tz});
 
   return{saatler,kategori,renk,aktivite,hedefStr,hedefISO:hedef.toISOString()};
 }
@@ -2982,7 +2992,84 @@ const SPOR_OFSET_GUVEN={
 // (bkz. kuvvet günlerinde %581/%438 gibi sahte "aşırı yük" uyarıları hatası).
 const RPE_VARSAYILAN={kuvvet:5, pilates:4, yoga:3, diger:5};
 
-const EMPTY_A={ad:'',soyad:'',foto:'',strava:'',cinsiyet:'Erkek',dogum:'',kilo:'',boy:'',rhr:'',mhr:'',lthr:'',ftp:'',vo2max:'',vlt:'',disiplin:'karma',uzun_gun:[],kosu_gunleri:[],capraz_gunleri:[],hrv_durum:'',hrv_7gun:'',sakatlık:'1',motivasyon:'3',dinlenme_siklik:'3x1',pb_5k:'',pb_10k:'',pb_hm:'',pb_m:'',pb_5k_tarih:'',pb_10k_tarih:'',pb_hm_tarih:'',pb_m_tarih:'',yarıslar:[],anket_pin:'',kuvvet_link:'',kuvvet_link2:'',kuvvet_link3:'',kuvvet_aciklama:'',seviye:'baslangic',antrenman_amaci:'',antrenman_amaci_tarih:'',pasif:false,giris_anketi:null,giris_anketi_tarih:''};
+const EMPTY_A={ad:'',soyad:'',foto:'',strava:'',cinsiyet:'Erkek',dogum:'',kilo:'',boy:'',rhr:'',mhr:'',lthr:'',ftp:'',vo2max:'',vlt:'',disiplin:'karma',uzun_gun:[],kosu_gunleri:[],capraz_gunleri:[],hrv_durum:'',hrv_7gun:'',sakatlık:'1',motivasyon:'3',dinlenme_siklik:'3x1',pb_5k:'',pb_10k:'',pb_hm:'',pb_m:'',pb_5k_tarih:'',pb_10k_tarih:'',pb_hm_tarih:'',pb_m_tarih:'',yarıslar:[],anket_pin:'',kuvvet_link:'',kuvvet_link2:'',kuvvet_link3:'',kuvvet_aciklama:'',seviye:'baslangic',antrenman_amaci:'',antrenman_amaci_tarih:'',pasif:false,giris_anketi:null,giris_anketi_tarih:'',ulke:'TR'};
+
+// ── Sporcunun bulunduğu ülke & saat dilimi ────────────────────────────────────
+// Amaç: Strava'dan gelen antrenman date/time alanları sporcunun O ANKİ yerel
+// duvar saatini temsil eder. Koç panelinden (koç Türkiye'de otururken) bu
+// değerlerin toparlanma hedefi gibi MUTLAK zaman hesaplarına çevrilmesi gerektiğinde,
+// tarayıcının kendi saat dilimini (koçun cihazı) değil, sporcunun bulunduğu ülkenin
+// saat dilimini kullanmak gerekir — aksi halde İngiltere için birkaç saatlik,
+// Japonya gibi büyük fark olan ülkeler için ciddi bir kaymaya (yanlış toparlanma
+// süresi / hedef saat) yol açar. Bkz. zonedWallTimeToUtc, athleteTZ, calcRecovery.
+const COUNTRIES=[
+  {code:'TR',name:'Türkiye',flag:'🇹🇷',tz:'Europe/Istanbul'},
+  {code:'GB',name:'İngiltere',flag:'🇬🇧',tz:'Europe/London'},
+  {code:'DE',name:'Almanya',flag:'🇩🇪',tz:'Europe/Berlin'},
+  {code:'FR',name:'Fransa',flag:'🇫🇷',tz:'Europe/Paris'},
+  {code:'NL',name:'Hollanda',flag:'🇳🇱',tz:'Europe/Amsterdam'},
+  {code:'IT',name:'İtalya',flag:'🇮🇹',tz:'Europe/Rome'},
+  {code:'ES',name:'İspanya',flag:'🇪🇸',tz:'Europe/Madrid'},
+  {code:'PT',name:'Portekiz',flag:'🇵🇹',tz:'Europe/Lisbon'},
+  {code:'CH',name:'İsviçre',flag:'🇨🇭',tz:'Europe/Zurich'},
+  {code:'AT',name:'Avusturya',flag:'🇦🇹',tz:'Europe/Vienna'},
+  {code:'BE',name:'Belçika',flag:'🇧🇪',tz:'Europe/Brussels'},
+  {code:'SE',name:'İsveç',flag:'🇸🇪',tz:'Europe/Stockholm'},
+  {code:'NO',name:'Norveç',flag:'🇳🇴',tz:'Europe/Oslo'},
+  {code:'DK',name:'Danimarka',flag:'🇩🇰',tz:'Europe/Copenhagen'},
+  {code:'PL',name:'Polonya',flag:'🇵🇱',tz:'Europe/Warsaw'},
+  {code:'GR',name:'Yunanistan',flag:'🇬🇷',tz:'Europe/Athens'},
+  {code:'RU',name:'Rusya (Moskova)',flag:'🇷🇺',tz:'Europe/Moscow'},
+  {code:'GE',name:'Gürcistan',flag:'🇬🇪',tz:'Asia/Tbilisi'},
+  {code:'AZ',name:'Azerbaycan',flag:'🇦🇿',tz:'Asia/Baku'},
+  {code:'AE',name:'BAE (Dubai)',flag:'🇦🇪',tz:'Asia/Dubai'},
+  {code:'QA',name:'Katar',flag:'🇶🇦',tz:'Asia/Qatar'},
+  {code:'SA',name:'Suudi Arabistan',flag:'🇸🇦',tz:'Asia/Riyadh'},
+  {code:'IL',name:'İsrail',flag:'🇮🇱',tz:'Asia/Jerusalem'},
+  {code:'EG',name:'Mısır',flag:'🇪🇬',tz:'Africa/Cairo'},
+  {code:'MA',name:'Fas',flag:'🇲🇦',tz:'Africa/Casablanca'},
+  {code:'ZA',name:'Güney Afrika',flag:'🇿🇦',tz:'Africa/Johannesburg'},
+  {code:'KE',name:'Kenya',flag:'🇰🇪',tz:'Africa/Nairobi'},
+  {code:'ET',name:'Etiyopya',flag:'🇪🇹',tz:'Africa/Addis_Ababa'},
+  {code:'IN',name:'Hindistan',flag:'🇮🇳',tz:'Asia/Kolkata'},
+  {code:'CN',name:'Çin',flag:'🇨🇳',tz:'Asia/Shanghai'},
+  {code:'KR',name:'Güney Kore',flag:'🇰🇷',tz:'Asia/Seoul'},
+  {code:'JP',name:'Japonya',flag:'🇯🇵',tz:'Asia/Tokyo'},
+  {code:'SG',name:'Singapur',flag:'🇸🇬',tz:'Asia/Singapore'},
+  {code:'TH',name:'Tayland',flag:'🇹🇭',tz:'Asia/Bangkok'},
+  {code:'AU',name:'Avustralya (Sidney)',flag:'🇦🇺',tz:'Australia/Sydney'},
+  {code:'NZ',name:'Yeni Zelanda',flag:'🇳🇿',tz:'Pacific/Auckland'},
+  {code:'US',name:'ABD (New York)',flag:'🇺🇸',tz:'America/New_York'},
+  {code:'US_LA',name:'ABD (Los Angeles)',flag:'🇺🇸',tz:'America/Los_Angeles'},
+  {code:'CA',name:'Kanada (Toronto)',flag:'🇨🇦',tz:'America/Toronto'},
+  {code:'BR',name:'Brezilya',flag:'🇧🇷',tz:'America/Sao_Paulo'},
+  {code:'MX',name:'Meksika',flag:'🇲🇽',tz:'America/Mexico_City'}
+];
+// Verilen mutlak ana (date), belirtilen saat diliminin o andaki UTC farkını dakika olarak döndürür.
+function tzOffsetMinutes(date,tz){
+  try{
+    const dtf=new Intl.DateTimeFormat('en-US',{timeZone:tz,hour12:false,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    const parts=dtf.formatToParts(date).reduce((acc,p)=>{if(p.type!=='literal')acc[p.type]=p.value;return acc;},{});
+    const hh=parts.hour==='24'?'00':parts.hour;
+    const asUTC=Date.UTC(parts.year,parts.month-1,parts.day,hh,parts.minute,parts.second);
+    return (asUTC-date.getTime())/60000;
+  }catch(e){return 180;} // Intl/tz başarısız olursa TR (UTC+3) varsayılanına düş
+}
+// Bir ülkedeki duvar saati (yıl,ay,gün,saat,dakika) okumasını, o an gerçekte
+// karşılık geldiği MUTLAK UTC zamanına çevirir (DST/yaz saati dahil, 2 adımlı yaklaşım).
+function zonedWallTimeToUtc(y,mo,d,h,mi,tz){
+  const guess=new Date(Date.UTC(y,mo-1,d,h,mi,0));
+  const off1=tzOffsetMinutes(guess,tz);
+  let real=new Date(guess.getTime()-off1*60000);
+  const off2=tzOffsetMinutes(real,tz);
+  if(off2!==off1) real=new Date(guess.getTime()-off2*60000);
+  return real;
+}
+// Sporcunun kart üzerinde tanımlı ülkesine göre IANA saat dilimi kimliğini döndürür (varsayılan TR).
+function athleteTZ(ath){
+  const c=COUNTRIES.find(x=>x.code===(ath&&ath.ulke||'TR'));
+  return c?c.tz:'Europe/Istanbul';
+}
 
 // ── Giriş Anketi — yeni sporcu onboarding formu ────────────────────────────
 // Amaç: Bir sporcuyla çalışmaya başlamadan önce koçun ihtiyaç duyduğu
@@ -4050,8 +4137,16 @@ function SporcuModal({onClose,onSave,initial,races}){
           fsel('Cinsiyet',f.cinsiyet,v=>set('cinsiyet',v),[{v:'Erkek',l:'Erkek'},{v:'Kadin',l:'Kadın'}]),
           fg('Dogum Tarihi',f.dogum,v=>set('dogum',v),'date'),
           fg('Boy (cm)',f.boy,v=>set('boy',v),'number',{min:100,max:250}),
-          fg('Kilo (kg)',f.kilo,v=>set('kilo',v),'number',{min:30,max:200,step:.1})
-        )
+          fg('Kilo (kg)',f.kilo,v=>set('kilo',v),'number',{min:30,max:200,step:.1}),
+          fsel('Bulunduğu Ülke',f.ulke||'TR',v=>set('ulke',v),COUNTRIES.map(c=>({v:c.code,l:c.flag+' '+c.name})))
+        ),
+        f.ulke&&f.ulke!=='TR'&&(()=>{
+          const c=COUNTRIES.find(x=>x.code===f.ulke);
+          if(!c)return null;
+          const localNow=new Date().toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit',timeZone:c.tz});
+          return React.createElement('div',{style:{width:'100%',fontSize:12,color:'var(--text-secondary)',marginTop:-4,marginBottom:6}},
+            'ℹ️ '+c.flag+' '+c.name+' şu an saat '+localNow+' — toparlanma süresi ve hedef saat hesapları bu saat dilimine göre yapılır.');
+        })()
       ),
       // Strava bağlantısı
       React.createElement('div',{className:'form-group',style:{marginBottom:8}},
@@ -5375,6 +5470,16 @@ function SporcularTab({athletes,races,athHistory,allHistory,workouts,onAdd,onUpd
             React.createElement('div',{style:{flex:1}},
               React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:4}},
                 React.createElement('h3',{style:{margin:0,fontSize:14}},(a.ad||'')+' '+(a.soyad||'')),
+                (()=>{
+                  const c=COUNTRIES.find(x=>x.code===(a.ulke||'TR'));
+                  if(!c||c.code==='TR')return null; // TR varsayılan — kalabalık yapmasın, sadece seyahatteki sporcular vurgulansın
+                  const localNow=new Date().toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit',timeZone:c.tz});
+                  return React.createElement('span',{
+                    style:{fontSize:11,fontWeight:600,padding:'2px 8px',borderRadius:99,
+                      background:'var(--info-bg)',color:'var(--info)',border:'1px solid var(--info)',flexShrink:0},
+                    title:c.name+' — yerel saat '+localNow+' (toparlanma/hedef saat hesapları bu saat dilimine göre yapılır)'
+                  },c.flag+' '+c.name+' · '+localNow);
+                })(),
                 a.pasif&&React.createElement('span',{
                   style:{fontSize:11,fontWeight:700,padding:'2px 8px',borderRadius:99,
                     background:'var(--warn-bg)',color:'var(--warn)',border:'1px solid var(--warn)',flexShrink:0},
