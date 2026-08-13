@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.13-0835 --><!DOCTYPE html>
+<!-- Version: v2026.08.13-0931 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.13-0835';
+const APP_VERSION='v2026.08.13-0931';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -848,6 +848,19 @@ function acwrFazBand(phase){
     'Yarış Sonrası':{peak:0.50, lowZero:0.10, highZero:0.90, aciklama:'Yarış sonrası toparlanma — düşük yük normal'},
   };
   return cfg[phase]||cfg['Gelişme'];
+}
+
+// ── isPlannedLoadReduction — TEK PAYLAŞILAN kaynak (13.08.2026 sohbeti) ──
+// CTL düşüşü her zaman "kondisyon kaybı" anlamına gelmez: taper, yarış sonrası
+// toparlanma veya yarışla ilgisiz periyodize dinlenme haftalarında bu düşüş
+// KASITLI ve SAĞLIKLIDIR (Mujika taper literatürü). Ayırt edici sinyal: akut yük
+// (ATL) kronik ortalamanın (CTL) belirgin altında seyrediyorsa, sporcu bilinçli
+// olarak yükünü azaltıyor demektir — bu, yarışa bağlı olmayan (isRecovery)
+// dinlenme haftaları için de faz etiketinden bağımsız çalışır.
+function isPlannedLoadReduction(phase,atl,ctl){
+  if(phase==='Taper'||phase==='Yarış Sonrası')return true;
+  if(ctl>5&&atl!=null&&atl<ctl*0.75)return true;
+  return false;
 }
 
 // ── targetCTLForDistance — TEK PAYLAŞILAN kaynak ─────────────────────────
@@ -13170,8 +13183,9 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
   // antrenman yükünü engellememeli. forceLow/preferLow zone sinyallerinden geliyorsa
   // kaldırılır; forceQuality normal akışa girebilir.
   // Korunan: forceEasy (akut overload), planForceEasy (planlı dinlenme haftası),
-  // mechKardioDanger (mekanik/kardio dengesizliği), planPreferLow (hafta bazlı kararlar).
-  const düşükYükIstisnası=!forceEasy&&!planForceEasy&&!mechKardioDanger&&acwr<0.65&&tsb>10&&(inj||1)<4&&hrv!=='dengesiz'&&hrv!=='düşük';
+  // mechKardioDanger (mekanik/kardio dengesizliği), planPreferLow (hafta bazlı kararlar),
+  // planWeek?.isRecovery (planlı dinlenme haftası — missed geçmişi olmasa bile).
+  const düşükYükIstisnası=!forceEasy&&!planForceEasy&&!mechKardioDanger&&!planWeek?.isRecovery&&acwr<0.65&&tsb>10&&(inj||1)<4&&hrv!=='dengesiz'&&hrv!=='düşük';
   if(düşükYükIstisnası){
     if(forceLow){
       forceLow=false;
@@ -13190,7 +13204,7 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
   const isTaper=planPhaseNow==='Taper';
   const isZirveActive=planPhaseNow==='Zirve'&&!isPlanRecoveryNow;
 
-  if(!forceEasy&&!forceLow&&!preferLow&&!isTaper&&(hasZone||hasZone2w)&&zone2wFull){
+  if(!forceEasy&&!forceLow&&!preferLow&&!isTaper&&!isPlanRecoveryNow&&(hasZone||hasZone2w)&&zone2wFull){
     const anaEsik=isZirveActive?5:3;
     const anaEksik2w=anaPct2w<anaEsik&&lowPct2w<85;
     if(anaEksik2w&&tsb>5&&acwr<1.1&&!kaliteliYapildi){
@@ -13676,7 +13690,10 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   }
 
   // ── Süre artırımı: toparlanma tamamsa ve TSB iyiyse ──────────────────────
-  if(!forceEasy&&!forceLow&&!preferLow&&!isPast&&tsb>5&&acwr<1.1&&recoveryKalanSaat===0
+  // Taper/planlı dinlenme haftasında TSB yüksek + ACWR düşük olması NORMALDİR
+  // (kasıtlı yük azaltımının doğal sonucu) — bu durumda süre artırımı tetiklenmemeli,
+  // aksi halde taper'ın amacına aykırı şekilde hacim geri yüklenmiş olur.
+  if(!forceEasy&&!forceLow&&!preferLow&&!isPast&&!isTaper&&!isPlanRecoveryNow&&tsb>5&&acwr<1.1&&recoveryKalanSaat===0
     &&['aerobik','uzun','kolay'].includes(tpl.tip)){
     const bonus=tsb>15?10:5;
     const eskiSure=tpl.sure_dk;
@@ -21141,11 +21158,13 @@ function AerobikVerimlilikKarti({history,athlete}){
       else                 msgs.push({cls:'warn', text:'📉 Aerobik taban henüz zayıf ('+fmtPaceStr(lastVal/60,1)+' / 140 bpm). Düzenli Z2 antrenmanı ile iyileşir.'});
 
       // Trend yorumu (seçilen pencere vs önceki eşit pencere)
+      const _lastHistAerT=history&&history.length?history[history.length-1]:null;
+      const _aerPlannedReduction=_lastHistAerT?isPlannedLoadReduction(_lastHistAerT.phase,_lastHistAerT.atl,_lastHistAerT.ctl):false;
       if(avgOlder!==null){
         const diff=round1(avgRecent-avgOlder); // negatif = iyileşme (hızlanma)
         const pct=Math.round(Math.abs(diff)/avgOlder*100);
         if(diff<-5)       msgs.push({cls:'good', text:'📈 Son '+period+' haftada aerobik verimlilik %'+pct+' iyileşti ('+diff+' sn/km) — aynı nabızda daha hızlı koşuyorsun. Aerobik taban güçleniyor.'});
-        else if(diff<5)   msgs.push({cls:'info', text:'➡ Son '+period+' haftada verimlilik stabil ('+(diff>=0?'+':'')+diff+' sn/km). Z2 antrenman hacmini artırarak gelişimi hızlandırabilirsin.'});
+        else if(diff<5)   msgs.push({cls:'info', text:_aerPlannedReduction?('➡ Son '+period+' haftada verimlilik stabil ('+(diff>=0?'+':'')+diff+' sn/km) — taper/dinlenme döneminde bu normal.'):('➡ Son '+period+' haftada verimlilik stabil ('+(diff>=0?'+':'')+diff+' sn/km). Z2 antrenman hacmini artırarak gelişimi hızlandırabilirsin.')});
         else               msgs.push({cls:'warn', text:'⚠ Son '+period+' haftada aerobik verimlilik %'+pct+' geriledi (+'+diff+' sn/km) — yorgunluk, hastalık veya yüksek şiddet ağırlığı olabilir.'});
       }else{
         msgs.push({cls:'info', text:'ℹ Trend karşılaştırması için önceki '+period+' haftalık dönemde en az 3 Z2 antrenmanı gerekiyor.'});
@@ -23270,6 +23289,10 @@ function MotivasyonTab({athlete,workouts,history}){
   };
 
   const ctlT=calcCtlTrend(history,8);
+  // Taper/yarış sonrası/dinlenme dönemlerinde CTL düşüşü kasıtlı ve sağlıklıdır —
+  // "kondisyon kaybı" olarak yorumlanmamalı (bkz. isPlannedLoadReduction, paylaşılan kaynak)
+  const _lastHistEntry=(history&&history.length)?history[history.length-1]:null;
+  const _ctlPlannedReduction=_lastHistEntry?isPlannedLoadReduction(_lastHistEntry.phase,_lastHistEntry.atl,_lastHistEntry.ctl):false;
   const aerT=calcAerEffTrend(history,4);
   const gectikceler=calcGectikceHedefler(workouts,athlete.id,8);
   const validRatios=gectikceler.filter(g=>g.ratio!=null);
@@ -23293,8 +23316,8 @@ function MotivasyonTab({athlete,workouts,history}){
       ctlT
         ?React.createElement(SinyalSatiri,{icon:'📈',label:'CTL (Fitness)',
             value:`${ctlT.prev} → ${ctlT.last} (${ctlT.diff>0?'+':''}${ctlT.diff})`,
-            tone:ctlT.diff>3?'good':ctlT.diff<-3?'warn':'info',
-            desc:ctlT.diff>3?`Son ${ctlT.days} günde kondisyon istikrarlı büyüyor.`:ctlT.diff<-3?`Son ${ctlT.days} günde kondisyon kaybı var.`:`Son ${ctlT.days} günde kondisyon korunuyor.`})
+            tone:ctlT.diff>3?'good':ctlT.diff<-3?(_ctlPlannedReduction?'info':'warn'):'info',
+            desc:ctlT.diff>3?`Son ${ctlT.days} günde kondisyon istikrarlı büyüyor.`:ctlT.diff<-3?(_ctlPlannedReduction?`Son ${ctlT.days} günde CTL düştü — taper/dinlenme döneminde bu beklenen bir düşüş, kondisyon kaybı değil.`:`Son ${ctlT.days} günde kondisyon kaybı var.`):`Son ${ctlT.days} günde kondisyon korunuyor.`})
         :React.createElement(SinyalBosSatiri,{icon:'📈',label:'CTL (Fitness)',desc:'Antrenman geçmişi birikince burada görünecek.'}),
       aerT
         ?(aerT.avgOlder!=null
@@ -23718,10 +23741,19 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
         const tsb=lastH.tsb||0;
         const ctlTrend=prevH?round1(ctl-(prevH.ctl||0)):null;
         const msgs=[];
-        // CTL trendi
+        // CTL trendi — taper/yarış sonrası/dinlenme dönemlerinde kasıtlı CTL
+        // düşüşü "kondisyon kaybı" olarak yorumlanmamalı (bkz. isPlannedLoadReduction)
+        const _plannedReduction=isPlannedLoadReduction(lastH.phase,atl,ctl);
         if(ctlTrend!==null){
           if(ctlTrend>3) msgs.push({cls:'good',text:'📈 CTL son haftada +'+ctlTrend+' arttı — kondisyon gelişiyor.'});
-          else if(ctlTrend<-3) msgs.push({cls:'warn',text:'📉 CTL son haftada '+ctlTrend+' düştü — kondisyon kaybı var. Antrenman yükünü artır.'});
+          else if(ctlTrend<-3){
+            if(_plannedReduction){
+              const _sebep=lastH.phase==='Taper'?'taper':lastH.phase==='Yarış Sonrası'?'yarış sonrası toparlanma':'dinlenme/planlı yük azaltma';
+              msgs.push({cls:'info',text:'📉 CTL son haftada '+ctlTrend+' düştü — ancak '+_sebep+' döneminde bu beklenen ve sağlıklı bir düşüş. Antrenman yükünü artırmaya gerek yok.'});
+            } else {
+              msgs.push({cls:'warn',text:'📉 CTL son haftada '+ctlTrend+' düştü — kondisyon kaybı var. Antrenman yükünü artır.'});
+            }
+          }
           else msgs.push({cls:'info',text:'➡ CTL stabil ('+round1(ctl)+') — kondisyon korunuyor.'});
         }
         // TSB yorumu
