@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.13-1549 --><!DOCTYPE html>
+<!-- Version: v2026.08.13-2335 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.13-1549';
+const APP_VERSION='v2026.08.13-2335';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -8922,8 +8922,24 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
       upd={dp:parseInt(rawVal)||null};
     }
     const origFields={};
-    if(r._origPaceSec>0)    origFields._origPaceSec=r._origPaceSec;
-    if(r._origZIdx!=null)   origFields._origZIdx=r._origZIdx;
+    // Pace/Zone hedefi dondurma — mesafe ile AYNI kilitleme mantığı (Göksel talebi,
+    // 2026.08.13): Ekle'den ÖNCE (isWorkoutLogged=false) hedef her düzenlemede güncel
+    // reçete pace/zone'una senkron kalır (herhangi bir kontrol tetiklenmez). Ekle'den
+    // SONRA (isWorkoutLogged=true) hedef bu satırda İLK KEZ donduğu andan itibaren
+    // KİLİTLENİR — sonraki pace düzenlemesi artık "gerçek koşulan pace'i kaydetme"
+    // sayılır ve mevcut kontrol (biraz hızlı/çok yavaş vb.) buna göre çalışır.
+    const _currentPaceForFreeze=r._origPaceSec>0?r._origPaceSec:0;
+    const _currentZIdxForFreeze=r._origZIdx;
+    const _existingOrigPaceSec=rowOverrides[rowIdx]?._origPaceSec;
+    const _existingOrigZIdx=rowOverrides[rowIdx]?._origZIdx;
+    const _paceLocked=isWorkoutLogged&&_existingOrigPaceSec>0;
+    if(_paceLocked){
+      origFields._origPaceSec=_existingOrigPaceSec;
+      if(_existingOrigZIdx!=null) origFields._origZIdx=_existingOrigZIdx;
+    } else {
+      if(_currentPaceForFreeze>0) origFields._origPaceSec=_currentPaceForFreeze;
+      if(_currentZIdxForFreeze!=null) origFields._origZIdx=_currentZIdxForFreeze;
+    }
     if(r.label)             origFields.label=r.label;
     if(r.type)              origFields.type=r.type;
     // Mesafe donmalı — GAP kıyaslaması (calcGAP) bu satırın kendi mesafesini gerektirir;
@@ -8954,7 +8970,8 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     // Nabız bölge SINIRLARI da donsun — sadece hangi bölge (_origZIdx) değil, o anki LTHR'a göre
     // hesaplanmış bpm aralığı da kaydedilir. Yoksa LTHR sonradan değişirse "aynı bölge" farklı
     // bpm sınırlarına denk gelir ve geçmiş satırın nabız değerlendirmesi yine kayar.
-    const ohr=r._origZIdx!=null?zones?.hrZones?.[r._origZIdx]:null;
+    const _zIdxForHr=_paceLocked?_existingOrigZIdx:_currentZIdxForFreeze;
+    const ohr=_zIdxForHr!=null?zones?.hrZones?.[_zIdxForHr]:null;
     if(ohr?.lo_bpm) origFields._origLoBpm=ohr.lo_bpm;
     if(ohr?.hi_bpm) origFields._origHiBpm=ohr.hi_bpm;
     const newOverrides={...rowOverrides,[rowIdx]:{...(rowOverrides[rowIdx]||{}), ...origFields, ...upd}};
@@ -9036,18 +9053,29 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
       ?{_origMesafe:_existingOrigMesafeAr}
       :(_currentMesafeForFreezeAr>0?{_origMesafe:_currentMesafeForFreezeAr}:{});
 
+    // Pace/Zone hedefi dondurma — updateCell'deki AYNI kilitleme mantığı (2026.08.13 —
+    // Göksel talebi, mesafe ile aynı davranış aralıklı antrenmanlara da uygulandı):
+    // Ekle'den önce hedef her düzenlemede güncel şablon pace/zone'una senkron kalır;
+    // Ekle'den sonra İLK donduğu andan itibaren kilitlenir.
+    const _existingOrigPaceSecAr=curOv._origPaceSec;
+    const _existingOrigZIdxAr=curOv._origZIdx;
+    const _paceLockedAr=isWorkoutLogged&&_existingOrigPaceSecAr>0;
+    const _origPaceZFieldAr=_paceLockedAr
+      ?{_origPaceSec:_existingOrigPaceSecAr,...(_existingOrigZIdxAr!=null?{_origZIdx:_existingOrigZIdxAr}:{})}
+      :{_origPaceSec:base._origPaceSec,_origZIdx:base._origZIdx};
+
     setAralikOverrides(prev=>{
       const next={...prev};
       if(!next[headerIdx]) next[headerIdx]={};
       if(!next[headerIdx][rep]) next[headerIdx][rep]={};
       if(!next[headerIdx][rep][type]) next[headerIdx][rep][type]={};
-      // Nabız bölge sınırları da donsun — bkz. updateCell'deki aynı mantık
-      const ohr=base._origZIdx!=null?zones?.hrZones?.[base._origZIdx]:null;
+      // Nabız bölge sınırları da donsun — kilitliyse kilitli zIdx'e, değilse canlı zIdx'e göre
+      const _zIdxForHrAr=_paceLockedAr?_existingOrigZIdxAr:base._origZIdx;
+      const ohr=_zIdxForHrAr!=null?zones?.hrZones?.[_zIdxForHrAr]:null;
       next[headerIdx][rep][type]={
         ...next[headerIdx][rep][type],
         // Sinyal üretimi için kalıcı meta alanlar — extractFeedbackSignals okur
-        _origPaceSec:base._origPaceSec,
-        _origZIdx:base._origZIdx,
+        ..._origPaceZFieldAr,
         ...(ohr?.lo_bpm?{_origLoBpm:ohr.lo_bpm}:{}),
         ...(ohr?.hi_bpm?{_origHiBpm:ohr.hi_bpm}:{}),
         ..._origMesafeFieldAr,
