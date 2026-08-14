@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.14-2158 --><!DOCTYPE html>
+<!-- Version: v2026.08.14-2205 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.14-2158';
+const APP_VERSION='v2026.08.14-2205';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -26629,7 +26629,19 @@ function App(){
   useEffect(()=>{if(loaded)fbSet('ath_hist',athHistory);},[athHistory,loaded]);
   useEffect(()=>{if(loaded)fbSet('race_results',raceResults);},[raceResults,loaded]);
   useEffect(()=>{if(loaded)fbSet('test_planlar',testPlanlar);},[testPlanlar,loaded]);
-  useEffect(()=>{if(loaded)fbSet('app_config',{darkMode,teamName,teamLogo,kayit_token:kayitToken,kayit_token_display:kayitTokenDisplay,kayit_aktif:kayitAktif});},[darkMode,teamName,teamLogo,kayitToken,kayitTokenDisplay,kayitAktif,loaded]);
+  // NOT (Ağustos 2026): kayit_token BİLEREK bu genel yazma efektinin dışında bırakıldı.
+  // kayit_token artık aşağıdaki canlı dinleyici (db.ref('app_config/kayit_token').on('value',...))
+  // ile Firebase'den tek yönlü olarak senkronize ediliyor. Eğer bu efekt kayit_token'ı da
+  // yazsaydı, birden fazla sekme/oturum açıkken ya da bu efekt farklı bir bağımlılık
+  // değişikliği yüzünden tetiklendiğinde, o anki (belki bayat) yerel kayitToken değeri
+  // Firebase'deki güncel değerin üzerine yazılabilir — tam da bir sporcunun kayıt sırasında
+  // token'ı tüketmeye çalıştığı transaction'ın "current!==t" görüp abort etmesine yol
+  // açabilecek bir yarış durumu. kayit_token'a yazma SADECE onGenerateKayitLink içindeki
+  // doğrudan (await'li) fbUpdate çağrısıyla yapılmalı.
+  // ÖNEMLİ: Burada fbSet DEĞİL fbUpdate kullanılıyor — fbSet tüm app_config düğümünü bu
+  // objeyle DEĞİŞTİRİR (kayit_token'ı da SİLERDİ), fbUpdate ise sadece verilen alanları
+  // birleştirir (merge) ve kayit_token'a hiç dokunmaz.
+  useEffect(()=>{if(loaded)fbUpdate('app_config',{darkMode,teamName,teamLogo,kayit_token_display:kayitTokenDisplay,kayit_aktif:kayitAktif});},[darkMode,teamName,teamLogo,kayitTokenDisplay,kayitAktif,loaded]);
   useEffect(()=>{if(loaded&&ctlCalibration)fbSet('ctl_calibration',ctlCalibration);},[ctlCalibration,loaded]);
 
   // Kayıt linkinin "kullanıldı" durumunu panelde ANLIK göstermek için canlı dinleyici.
@@ -28037,6 +28049,14 @@ function SporcuKayit(){
       });
       if(!claim.committed){
         setSaving(false);
+        // Teşhis: transaction neden abort etti? Sunucudaki son görülen değeri kaydet.
+        const serverVal=claim.snapshot?claim.snapshot.val():undefined;
+        setDebugInfo({
+          submitAsamasindaBasarisiz:true,
+          urlToken:t?(t.length>8?t.slice(0,4)+'…'+t.slice(-4):t):'(yok)',
+          sunucudakiSonDeger:serverVal===null?'null (tüketilmiş)':serverVal===undefined?'(okunamadı)':(serverVal.length>8?serverVal.slice(0,4)+'…'+serverVal.slice(-4):serverVal),
+          eslesme:serverVal===t
+        });
         setTokenValid(false);
         return;
       }
@@ -28069,10 +28089,15 @@ function SporcuKayit(){
           debugInfo
             ?(debugInfo.hata
                 ?'hata: '+debugInfo.hata
-                :'URL token: '+debugInfo.urlToken+'\n'+
-                  'Firebase\'de aktif token var mı: '+(debugInfo.firebaseTokenExists?'evet':'hayır')+'\n'+
-                  'Token eşleşiyor mu: '+(debugInfo.eslesme?'evet':'hayır')+'\n'+
-                  'Link aktif mi: '+(debugInfo.kayitAktif===null?'bilinmiyor':(debugInfo.kayitAktif?'evet':'hayır (Pasif Yap ile kapatılmış)')))
+                :debugInfo.submitAsamasindaBasarisiz
+                  ?('Form GÖNDERİLİRKEN token tüketilemedi (sayfa ilk açıldığında geçerliydi).\n'+
+                    'URL token: '+debugInfo.urlToken+'\n'+
+                    'Gönderim anında sunucudaki değer: '+debugInfo.sunucudakiSonDeger+'\n'+
+                    'Eşleşiyor muydu: '+(debugInfo.eslesme?'evet (beklenmedik abort)':'hayır'))
+                  :'URL token: '+debugInfo.urlToken+'\n'+
+                    'Firebase\'de aktif token var mı: '+(debugInfo.firebaseTokenExists?'evet':'hayır')+'\n'+
+                    'Token eşleşiyor mu: '+(debugInfo.eslesme?'evet':'hayır')+'\n'+
+                    'Link aktif mi: '+(debugInfo.kayitAktif===null?'bilinmiyor':(debugInfo.kayitAktif?'evet':'hayır (Pasif Yap ile kapatılmış)')))
             :'(teşhis verisi henüz gelmedi — sayfayı yenile)'
         )
       ),
