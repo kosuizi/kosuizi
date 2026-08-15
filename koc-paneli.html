@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.15-2301 --><!DOCTYPE html>
+<!-- Version: v2026.08.15-2321 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.15-2301';
+const APP_VERSION='v2026.08.15-2321';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -8925,6 +8925,9 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     const val=parseInt(rawVal)||0;
     let upd={};
     let _detaySync=null; // {baslik,text} — mesafe elle değişince fazın "X dk" metnini ters yönde senkronize etmek için
+    // Coach'un pm/ps hücresini ELLE düzenlediği YENİ pace/zone — hedef dondurma bloğunda
+    // kullanılır (bkz. aşağıdaki _currentPaceForFreeze). Sadece pm/ps dalında doldurulur.
+    let _editedPaceSec=null, _editedZIdx=null;
     if(field==='mesafe'){
       const paceSec=(r.pm||0)*60+(r.ps||0);
       if(paceSec>0&&val>0){
@@ -8962,6 +8965,17 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
           upd.color=ZONE_COLORS_INLINE[zi];
           upd.textColor=ZONE_TEXT_COLOR[zi];
         }
+        // KÖK NEDEN DÜZELTMESİ (2026.08.15 — Göksel'in bildirdiği "manuel pace
+        // yavaşlatması sonrası Çok Yavaş rozeti" hatası): coach pm/ps hücresini
+        // ELLE düzenlediğinde, bu YENİ pace/zone hedef dondurma bloğuna aktarılır.
+        // ÖNCEDEN hedef dondurma HER ZAMAN r._origPaceSec'i (satırın reçete/şablon
+        // ÜRETİMİNDEN gelen, coach'un düzenlemesinden bağımsız orijinal değeri)
+        // kullanıyordu — yani coach pace'i elle yavaşlatsa bile, Ekle'den sonra
+        // dondurulan "hedef" hâlâ eski/hızlı reçete pace'i oluyordu; sporcu coach'un
+        // yeni (yavaş) hedefini birebir uygulasa da değerlendirme eski hedefe göre
+        // yapıldığından "Çok Yavaş" rozeti yanlışlıkla çıkıyordu.
+        _editedPaceSec=paceSec;
+        _editedZIdx=paceToZoneIdx(paceSec);
       }
     } else if(field==='bpm'){
       // bpm: sıfır veya boş girilirse override kaldır (null → önerilen değere dön)
@@ -8983,8 +8997,12 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     // SONRA (isWorkoutLogged=true) hedef bu satırda İLK KEZ donduğu andan itibaren
     // KİLİTLENİR — sonraki pace düzenlemesi artık "gerçek koşulan pace'i kaydetme"
     // sayılır ve mevcut kontrol (biraz hızlı/çok yavaş vb.) buna göre çalışır.
-    const _currentPaceForFreeze=r._origPaceSec>0?r._origPaceSec:0;
-    const _currentZIdxForFreeze=r._origZIdx;
+    // Coach pm/ps'i elle düzenlediyse (_editedPaceSec dolu) hedef ARTIK bu yeni pace'e
+    // senkron olmalı — reçetenin orijinal (değişmemiş) r._origPaceSec'ine değil. Diğer
+    // tüm alan düzenlemelerinde (mesafe/bpm/dp) davranış eskisi gibi r._origPaceSec'e
+    // dayanır (bu düzenlemeler pace hedefini değiştirme niyeti taşımaz).
+    const _currentPaceForFreeze=_editedPaceSec!=null?_editedPaceSec:(r._origPaceSec>0?r._origPaceSec:0);
+    const _currentZIdxForFreeze=_editedPaceSec!=null?_editedZIdx:r._origZIdx;
     const _existingOrigPaceSec=rowOverrides[rowIdx]?._origPaceSec;
     const _existingOrigZIdx=rowOverrides[rowIdx]?._origZIdx;
     const _paceLocked=isWorkoutLogged&&_existingOrigPaceSec>0;
@@ -9051,6 +9069,10 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     const curMesafe = curOv.mesafe != null ? curOv.mesafe : 0; // zone fallback YOK
 
     let upd = {};
+    // Coach'un pm/ps hücresini ELLE düzenlediği YENİ pace/zone — aşağıdaki hedef
+    // dondurma bloğunda kullanılır (updateCell'deki _editedPaceSec/_editedZIdx ile
+    // AYNI mantık, aralık editörüne taşındı — bkz. 2026.08.15 notu).
+    let _editedPaceSecAr=null, _editedZIdxAr=null;
     if(field==='mesafe'){
       // Pace: override'da her iki bileşen de varsa kullan; yoksa base (display amaçlı)
       const pm = curPmOv != null ? curPmOv : (base.pm||0);
@@ -9077,11 +9099,21 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
       if(curOtherOv==null) upd[otherField]=base[otherField]||0;
       const pm = field==='pm' ? val : (curPmOv!=null?curPmOv:upd.pm);
       const ps = field==='ps' ? val : (curPsOv!=null?curPsOv:upd.ps);
-      if(pm != null && ps != null && curMesafe > 0){
+      if(pm != null && ps != null){
         const paceSec = pm*60+ps;
         if(paceSec>0){
-          const newSec = Math.round(curMesafe/1000*paceSec);
-          upd = {...upd, ...secToHMS(newSec)};
+          // KÖK NEDEN DÜZELTMESİ (2026.08.15) — updateCell'deki AYNI hata aralık
+          // editöründe de vardı: hedef dondurma HER ZAMAN base._origPaceSec'i (şablonun
+          // orijinal pace'i, coach'un düzenlemesinden bağımsız) kullanıyordu. Coach
+          // pace'i elle yavaşlattığında bile Ekle sonrası dondurulan hedef eski/hızlı
+          // şablon pace'i oluyor, sporcu coach'un yeni hedefini uygulasa da "Çok Yavaş"
+          // rozeti yanlışlıkla çıkıyordu. Artık coach'un yazdığı YENİ pace/zone hedefe aktarılır.
+          _editedPaceSecAr=paceSec;
+          _editedZIdxAr=paceToZoneIdx(paceSec);
+          if(curMesafe > 0){
+            const newSec = Math.round(curMesafe/1000*paceSec);
+            upd = {...upd, ...secToHMS(newSec)};
+          }
         }
       }
     } else if(field==='bpm'){
@@ -9115,17 +9147,22 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     const _existingOrigPaceSecAr=curOv._origPaceSec;
     const _existingOrigZIdxAr=curOv._origZIdx;
     const _paceLockedAr=isWorkoutLogged&&_existingOrigPaceSecAr>0;
+    // Coach pm/ps'i elle düzenlediyse (_editedPaceSecAr dolu) hedef bu YENİ pace'e
+    // senkron olur — base._origPaceSec (şablonun değişmemiş orijinali) yerine.
     const _origPaceZFieldAr=_paceLockedAr
       ?{_origPaceSec:_existingOrigPaceSecAr,...(_existingOrigZIdxAr!=null?{_origZIdx:_existingOrigZIdxAr}:{})}
-      :{_origPaceSec:base._origPaceSec,_origZIdx:base._origZIdx};
+      :(_editedPaceSecAr!=null
+        ?{_origPaceSec:_editedPaceSecAr,_origZIdx:_editedZIdxAr}
+        :{_origPaceSec:base._origPaceSec,_origZIdx:base._origZIdx});
 
     setAralikOverrides(prev=>{
       const next={...prev};
       if(!next[headerIdx]) next[headerIdx]={};
       if(!next[headerIdx][rep]) next[headerIdx][rep]={};
       if(!next[headerIdx][rep][type]) next[headerIdx][rep][type]={};
-      // Nabız bölge sınırları da donsun — kilitliyse kilitli zIdx'e, değilse canlı zIdx'e göre
-      const _zIdxForHrAr=_paceLockedAr?_existingOrigZIdxAr:base._origZIdx;
+      // Nabız bölge sınırları da donsun — kilitliyse kilitli zIdx'e, değilse (elle
+      // düzenlenmişse yeni, değilse canlı şablon) zIdx'e göre
+      const _zIdxForHrAr=_paceLockedAr?_existingOrigZIdxAr:(_editedZIdxAr!=null?_editedZIdxAr:base._origZIdx);
       const ohr=_zIdxForHrAr!=null?zones?.hrZones?.[_zIdxForHrAr]:null;
       next[headerIdx][rep][type]={
         ...next[headerIdx][rep][type],
