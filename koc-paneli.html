@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.15-1003 --><!DOCTYPE html>
+<!-- Version: v2026.08.15-1014 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.15-1003';
+const APP_VERSION='v2026.08.15-1014';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -28155,14 +28155,17 @@ function SporcuKayit(){
       // Basit bir "önce oku, sonra yaz" (fbGet+fbSet) burada YETERSİZ kalırdı, çünkü iki
       // istek arasında race window'u bırakır.
       //
-      // BİLİNEN TUZAK (Ağustos 2026): Bu sayfa daha önce bu veri yoluna hiç dokunmamışsa
-      // (dinleyici yok, sadece düz okuma), transaction() İLK çağrıldığında bazen gerçek
-      // sunucu değerini değil "henüz bilinmiyor" anlamına gelen bir null ile update
-      // fonksiyonunu çalıştırabiliyor; fonksiyon bunu "zaten tüketilmiş" sanıp abort
-      // ederse, Firebase gerçek değeri getirip TEKRAR DENEMİYOR (abort kesin bir karardır).
-      // Bunu tolere etmek için: abort olursa, düz bir fbGet ile GERÇEK sunucu değerini
-      // doğrudan kontrol ediyoruz — hâlâ bizim token'ımızla eşleşiyorsa bu sahte bir
-      // abort'tur, transaction'ı yeniden deniyoruz (en fazla 3 kez).
+      // KÖK NEDEN BULUNDU (Ağustos 2026): fbGet() Firebase'in .get() metodunu kullanıyor —
+      // bu, sunucudan doğrudan (SyncTree/yerel önbelleği hiç dokunmadan) okuyan YENİ nesil
+      // bir API. .transaction() ise optimistik ilk tahminini SyncTree'den yapıyor; bu yola
+      // daha önce .once()/.on() ile hiç dokunulmadıysa SyncTree'de bilgi YOK, transaction bu
+      // yüzden "bilinmiyor" anlamına gelen null ile başlıyor ve fonksiyonumuz bunu "zaten
+      // tüketilmiş" sanıp abort ediyordu — plain fbGet doğru değeri gösterse bile, çünkü
+      // fbGet'in okuması SyncTree'yi hiç beslemiyordu (loglardaki "yeniden kontrol" satırları
+      // bunu kanıtladı: düz okuma her seferinde doğru token'ı gösterdi, transaction yine de
+      // abort etti). Çözüm: transaction'dan HEMEN ÖNCE gerçek bir .once('value') okuması
+      // yaparak SyncTree'yi doğru değerle besliyoruz.
+      await db.ref('app_config/kayit_token').once('value');
       let claim=null;
       for(let attempt=1;attempt<=3;attempt++){
         claim=await db.ref('app_config/kayit_token').transaction(current=>{
@@ -28171,9 +28174,9 @@ function SporcuKayit(){
         });
         if(claim.committed)break;
         if(attempt<3){
-          const realCfg=await fbGet('app_config');
-          const realVal=realCfg?realCfg.kayit_token:undefined;
-          logKayitEvent('consume_abort_retry_check',t,{deneme:attempt,duzOkumaGercekDeger:realVal===null?'null':realVal===undefined?'okunamadi':realVal});
+          const freshSnap=await db.ref('app_config/kayit_token').once('value'); // SyncTree'yi tazele
+          const realVal=freshSnap.exists()?freshSnap.val():null;
+          logKayitEvent('consume_abort_retry_check',t,{deneme:attempt,duzOkumaGercekDeger:realVal===null?'null':realVal});
           if(realVal!==t)break; // gerçekten farklı/tüketilmiş — tekrar denemenin anlamı yok
           // realVal===t: transaction'ın gördüğü değer bayattı, tekrar dene
         }
