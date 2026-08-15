@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.15-1014 --><!DOCTYPE html>
+<!-- Version: v2026.08.15-1023 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.15-1014';
+const APP_VERSION='v2026.08.15-1023';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -2853,25 +2853,6 @@ async function fbUpdate(key,val){
   }
 }
 
-// Kayıt linki token'ı için hafif bir olay günlüğü — "kim, ne zaman, token'ı neye
-// çevirdi" sorusunu tahminle değil veriyle cevaplayabilmek için (Ağustos 2026,
-// tekrarlayan "sunucuda null çıkıyor" sorununu araştırırken eklendi). Coach panelinde
-// Sporcular sekmesindeki kayıt linki kutusunun altında son 15 kayıt gösterilir.
-// Bu, oturum kilidi/güvenlik kontrolünden bağımsız çalışır (transaction/generate her
-// zaman loglanmalı) ve sessizce başarısız olabilir (log kaybı kritik değil).
-function logKayitEvent(action,value,extra){
-  try{
-    if(!db&&!initFirebase())return;
-    db.ref('kayit_token_log').push({
-      ts:Date.now(),
-      action, // 'generate' | 'consume' | 'consume_aborted'
-      value:value?(value.length>8?value.slice(0,4)+'…'+value.slice(-4):value):null,
-      source:typeof SESSION_ID!=='undefined'?SESSION_ID.slice(0,8):'sporcu-sayfasi',
-      ...extra
-    }).catch(()=>{});
-  }catch(e){}
-}
-
 const lsGet=(k)=>{try{const v=localStorage.getItem(k);return v?JSON.parse(v):null}catch{return null}};
 const LS_WARN_THRESHOLD=0.80;
 let _lsWarnShown=false;
@@ -5342,7 +5323,7 @@ function GecisSemasiInfo(){
   );
 }
 
-function SporcularTab({athletes,races,athHistory,allHistory,workouts,onAdd,onUpdate,onDelete,onAddRace,onUpdateRace,onDeleteRace,onDeleteHistoryEntry,kayitToken,kayitTokenDisplay,kayitAktif,kayitGenerating,onGenerateKayitLink,onToggleKayitAktif}){
+function SporcularTab({athletes,races,athHistory,allHistory,workouts,onAdd,onUpdate,onDelete,onAddRace,onUpdateRace,onDeleteRace,onDeleteHistoryEntry,kayitToken,kayitAktif,kayitGenerating,onGenerateKayitLink,onToggleKayitAktif}){
   const [subTab,setSubTab]=useState('sporcular');
   const [showA,setShowA]=useState(false);
   const [showR,setShowR]=useState(false);
@@ -5350,8 +5331,6 @@ function SporcularTab({athletes,races,athHistory,allHistory,workouts,onAdd,onUpd
   const [editR,setEditR]=useState(null);
   const [expandHist,setExpandHist]=useState({});
   const [showPastRaces,setShowPastRaces]=useState(false);
-  const [kayitLog,setKayitLog]=useState(null); // null=gösterilmiyor, []=yüklendi
-  const [kayitLogLoading,setKayitLogLoading]=useState(false);
   const rMap=Object.fromEntries(races.map(r=>[r.id,r]));
   const hrv_colors={düşük:'badge-danger',dengesiz:'badge-warn',dengeli:'badge-good'};
 
@@ -5488,82 +5467,26 @@ function SporcularTab({athletes,races,athHistory,allHistory,workouts,onAdd,onUpd
       React.createElement('div',{style:{background:'var(--success-bg)',border:'1px solid var(--success)',borderRadius:'var(--radius-lg)',padding:'12px 16px',marginBottom:12,display:'flex',flexDirection:'column',gap:8}},
         React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}},
           React.createElement('span',{style:{fontSize:13,color:'var(--success)',fontWeight:600}},'Kendi Kendine Kayıt Linki:'),
-          kayitTokenDisplay&&kayitToken!==kayitTokenDisplay&&React.createElement('span',{className:'badge badge-info'},'✅ Kullanıldı'),
-          kayitTokenDisplay&&kayitToken===kayitTokenDisplay&&!kayitAktif&&React.createElement('span',{className:'badge badge-warn'},'Pasif')
+          kayitToken&&!kayitAktif&&React.createElement('span',{className:'badge badge-warn'},'Pasif')
         ),
         kayitGenerating
           ?React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)'}},'⏳ Link oluşturuluyor...')
-          :!kayitTokenDisplay
+          :!kayitToken
           ?React.createElement('div',{style:{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}},
               React.createElement('span',{style:{fontSize:12,color:'var(--text-secondary)'}},'Sporcuların kendi kendini sisteme eklemesi için bir link oluştur.'),
               React.createElement('button',{className:'btn btn-sm btn-primary',onClick:onGenerateKayitLink,disabled:kayitGenerating},'Link Oluştur')
             )
-          :kayitToken!==kayitTokenDisplay
-            // Token tüketildi (bir sporcu bu linkle az önce kayıt oldu) — canlı dinleyici
-            // sayesinde bu durum sayfa yenilenmeden anında görünür (bkz. App bileşenindeki
-            // db.ref('app_config/kayit_token').on('value',...) dinleyicisi).
-            ?React.createElement(React.Fragment,null,
-                React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)'}},'Bu link bir sporcu tarafından kullanıldı ve artık geçersiz. Yeni bir sporcu daveti için yeni bir link oluştur.'),
-                React.createElement('div',{className:'flex-gap'},
-                  React.createElement('button',{className:'btn btn-sm btn-primary',onClick:onGenerateKayitLink,disabled:kayitGenerating},'Yeni Link Oluştur')
-                )
-              )
-            :React.createElement(React.Fragment,null,
-                React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}},
-                  React.createElement('code',{style:{flex:1,fontSize:12,padding:'4px 8px',background:'var(--bg-primary)',border:'1px solid var(--border)',borderRadius:'var(--radius)',wordBreak:'break-all',userSelect:'all'}},window.location.origin+window.location.pathname+'?form=kayit&t='+kayitToken),
-                  React.createElement('button',{className:'btn btn-sm btn-primary',onClick:()=>{const l=window.location.origin+window.location.pathname+'?form=kayit&t='+kayitToken;if(navigator.clipboard){navigator.clipboard.writeText(l).then(()=>alert('Link kopyalandı!'));}else{alert(l);}}},'Kopyala')
-                ),
-                React.createElement('div',{className:'flex-gap'},
-                  React.createElement('button',{className:'btn btn-sm',onClick:onToggleKayitAktif},kayitAktif?'Pasif Yap':'Aktif Yap'),
-                  React.createElement('button',{className:'btn btn-sm btn-danger',onClick:onGenerateKayitLink,disabled:kayitGenerating},'Yeni Link Oluştur')
-                ),
-                React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},'Bu link TEK KULLANIMLIKTIR — bir kişi kayıt olduğu anda otomatik olarak "Kullanıldı" durumuna geçer (bu kutuda anlık görünür) ve aynı linkle ikinci bir kişi kayıt yapamaz. Her sporcu için ayrı ayrı "Yeni Link Oluştur" ile yeni bir link üretmen gerekir. Not: Link oluşturulduktan sonra Firebase\'e yazılması bir-iki saniye sürebilir — bu kutuda gösterilene kadar linki paylaşma/test etme.')
-              )
-      ),
-      // Debug: kayıt linki olay günlüğü — "kim ne zaman token'ı neye çevirdi" sorusunu
-      // tahminle değil kayıtla cevaplamak için (Ağustos 2026). Sadece istenince yüklenir.
-      React.createElement('div',{style:{marginBottom:16}},
-        React.createElement('button',{
-          className:'btn btn-sm',
-          onClick:async()=>{
-            if(kayitLog!==null){setKayitLog(null);return;} // tekrar tıklayınca kapat
-            setKayitLogLoading(true);
-            try{
-              const raw=await fbGet('kayit_token_log');
-              const arr=raw?Object.values(raw):[];
-              arr.sort((a,b)=>(b.ts||0)-(a.ts||0));
-              setKayitLog(arr.slice(0,20));
-            }catch(e){setKayitLog([]);}
-            setKayitLogLoading(false);
-          }
-        },kayitLog!==null?'Olay Günlüğünü Gizle':'🕵️ Kayıt Linki Olay Günlüğü (Debug)'),
-        kayitLogLoading&&React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',marginTop:6}},'Yükleniyor...'),
-        kayitLog&&kayitLog.length===0&&React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',marginTop:6}},'Henüz hiç kayıt yok.'),
-        kayitLog&&kayitLog.length>0&&React.createElement('div',{style:{
-          marginTop:8,fontSize:11,fontFamily:'monospace',background:'var(--bg-secondary)',
-          border:'1px solid var(--border)',borderRadius:'var(--radius)',padding:10,
-          maxHeight:260,overflowY:'auto',display:'flex',flexDirection:'column',gap:4
-        }},
-          kayitLog.map((e,i)=>{
-            const d=e.ts?new Date(e.ts):null;
-            const zaman=d?d.toLocaleString('tr-TR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}):'?';
-            const actionLabel={
-              generate:'🆕 link oluşturuldu',
-              consume:'✅ kayıt başarılı (tüketildi)',
-              consume_aborted:'❌ tüketme BAŞARISIZ (kesin)',
-              consume_abort_retry_check:'🔁 abort sonrası yeniden kontrol',
-              live_listener_observed:'👁️ değişiklik gözlendi',
-              migration_fallback_fired:'⚠️ migration fallback çalıştı'
-            }[e.action]||e.action;
-            const extras=Object.keys(e).filter(k=>!['ts','action','value','source'].includes(k))
-              .map(k=>k+': '+e[k]).join(' — ');
-            return React.createElement('div',{key:i,style:{borderBottom:i<kayitLog.length-1?'1px solid var(--border)':'none',paddingBottom:4}},
-              zaman+' — '+actionLabel+' — token: '+(e.value||'null')+
-              (extras?' — '+extras:'')+
-              ' — kaynak: '+(e.source||'?')
-            );
-          })
-        )
+          :React.createElement(React.Fragment,null,
+              React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}},
+                React.createElement('code',{style:{flex:1,fontSize:12,padding:'4px 8px',background:'var(--bg-primary)',border:'1px solid var(--border)',borderRadius:'var(--radius)',wordBreak:'break-all',userSelect:'all'}},window.location.origin+window.location.pathname+'?form=kayit&t='+kayitToken),
+                React.createElement('button',{className:'btn btn-sm btn-primary',onClick:()=>{const l=window.location.origin+window.location.pathname+'?form=kayit&t='+kayitToken;if(navigator.clipboard){navigator.clipboard.writeText(l).then(()=>alert('Link kopyalandı!'));}else{alert(l);}}},'Kopyala')
+              ),
+              React.createElement('div',{className:'flex-gap'},
+                React.createElement('button',{className:'btn btn-sm',onClick:onToggleKayitAktif},kayitAktif?'Pasif Yap':'Aktif Yap'),
+                React.createElement('button',{className:'btn btn-sm btn-danger',onClick:onGenerateKayitLink,disabled:kayitGenerating},'Yeni Link Oluştur')
+              ),
+              React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},'Bu link, sen "Pasif Yap"a basana kadar geçerlidir ve birden fazla sporcu bu linkle kendini ekleyebilir. "Yeni Link Oluştur" eski linki geçersiz kılar.')
+            )
       ),
       React.createElement('div',{className:'flex-gap',style:{marginBottom:16}},
         React.createElement('button',{className:'btn btn-primary',onClick:()=>{setEditA(null);setShowA(true)}},'+ Sporcu Ekle')
@@ -26619,8 +26542,7 @@ function App(){
   const [darkMode,setDarkMode]=useState(false);
   const [teamName,setTeamName]=useState('Koşu İzi');
   const [teamLogo,setTeamLogo]=useState('');
-  const [kayitToken,setKayitToken]=useState(''); // Aktif (henüz kullanılmamış) kayıt linki token'ı — Firebase'deki gerçek değeri canlı yansıtır
-  const [kayitTokenDisplay,setKayitTokenDisplay]=useState(''); // En son üretilen token — kullanıldıktan sonra da panelde göstermeye devam etmek için
+  const [kayitToken,setKayitToken]=useState(''); // Kendi kendine kayıt linki token'ı — "Pasif Yap"a kadar geçerli, çoklu kullanım
   const [kayitAktif,setKayitAktif]=useState(true); // Kayıt linki aktif/pasif
   const [kayitGenerating,setKayitGenerating]=useState(false); // Link Firebase'e yazılana kadar true
   const [showSettings,setShowSettings]=useState(false);
@@ -26651,15 +26573,11 @@ function App(){
       if(!cfg){
         cfg=lsGet('app_config');
         if(cfg){
-          // GÜVENLİK (Ağustos 2026): Bu migration SADECE Firebase'de app_config hiç
-          // yoksa çalışır (çok nadir — normalde her açılışta zaten var). kayit_token
-          // alanlarını BİLEREK bu yazmadan hariç tutuyoruz: localStorage'daki kopya
-          // bayat olabilir (örn. hiç token üretilmeden önceki bir andan kalma) ve bunu
-          // olduğu gibi geri yazmak, o sırada aktif olan güncel bir kayıt linkini
-          // yanlışlıkla silebilirdi. logKayitEvent ile de işaretliyoruz ki bu satır
-          // gerçekten çalışırsa günlükte görünsün.
-          const {kayit_token,kayit_token_display,kayit_aktif,...cfgSafe}=cfg;
-          logKayitEvent('migration_fallback_fired',null,{not:'app_config migration calisti, kayit_* alanlari haric tutuldu'});
+          // GÜVENLİK: Bu migration SADECE Firebase'de app_config hiç yoksa çalışır (çok
+          // nadir). kayit_token/kayit_aktif'i BİLEREK bu yazmadan hariç tutuyoruz —
+          // localStorage'daki kopya bayat olabilir ve bunu olduğu gibi geri yazmak, o
+          // sırada aktif olan güncel bir kayıt linkini yanlışlıkla değiştirebilirdi.
+          const {kayit_token,kayit_aktif,...cfgSafe}=cfg;
           await fbUpdate('app_config',cfgSafe);
         }
       }
@@ -26691,7 +26609,6 @@ function App(){
         if(cfg.teamName)setTeamName(cfg.teamName);
         if(cfg.teamLogo)setTeamLogo(cfg.teamLogo);
         if(cfg.kayit_token)setKayitToken(cfg.kayit_token);
-        if(cfg.kayit_token_display)setKayitTokenDisplay(cfg.kayit_token_display);
         if(cfg.kayit_aktif!=null)setKayitAktif(cfg.kayit_aktif);
       }
       if(cc?.anchors?.length){setCtlCalibration(cc);setGlobalCtlAnchors(cc.anchors);}
@@ -26711,41 +26628,13 @@ function App(){
   useEffect(()=>{if(loaded)fbSet('ath_hist',athHistory);},[athHistory,loaded]);
   useEffect(()=>{if(loaded)fbSet('race_results',raceResults);},[raceResults,loaded]);
   useEffect(()=>{if(loaded)fbSet('test_planlar',testPlanlar);},[testPlanlar,loaded]);
-  // NOT (Ağustos 2026): kayit_token BİLEREK bu genel yazma efektinin dışında bırakıldı.
-  // kayit_token artık aşağıdaki canlı dinleyici (db.ref('app_config/kayit_token').on('value',...))
-  // ile Firebase'den tek yönlü olarak senkronize ediliyor. Eğer bu efekt kayit_token'ı da
-  // yazsaydı, birden fazla sekme/oturum açıkken ya da bu efekt farklı bir bağımlılık
-  // değişikliği yüzünden tetiklendiğinde, o anki (belki bayat) yerel kayitToken değeri
-  // Firebase'deki güncel değerin üzerine yazılabilir — tam da bir sporcunun kayıt sırasında
-  // token'ı tüketmeye çalıştığı transaction'ın "current!==t" görüp abort etmesine yol
-  // açabilecek bir yarış durumu. kayit_token'a yazma SADECE onGenerateKayitLink içindeki
-  // doğrudan (await'li) fbUpdate çağrısıyla yapılmalı.
-  // ÖNEMLİ: Burada fbSet DEĞİL fbUpdate kullanılıyor — fbSet tüm app_config düğümünü bu
-  // objeyle DEĞİŞTİRİR (kayit_token'ı da SİLERDİ), fbUpdate ise sadece verilen alanları
-  // birleştirir (merge) ve kayit_token'a hiç dokunmaz.
-  useEffect(()=>{if(loaded)fbUpdate('app_config',{darkMode,teamName,teamLogo,kayit_token_display:kayitTokenDisplay,kayit_aktif:kayitAktif});},[darkMode,teamName,teamLogo,kayitTokenDisplay,kayitAktif,loaded]);
+  // NOT (Ağustos 2026): Kayıt linki artık "Pasif Yap"a kadar geçerli, çoklu-kullanımlı
+  // basit bir modele geçirildi (tek kullanımlık transaction tabanlı tüketim mekanizması
+  // kaldırıldı — Firebase transaction/.get() SyncTree uyumsuzluğu yüzünden güvenilmez
+  // çıktı). kayit_token artık SADECE onGenerateKayitLink ile değişir, bu yüzden diğer
+  // state alanlarıyla birlikte bu genel efektte güvenle senkronize edilebilir.
+  useEffect(()=>{if(loaded)fbUpdate('app_config',{darkMode,teamName,teamLogo,kayit_token:kayitToken,kayit_aktif:kayitAktif});},[darkMode,teamName,teamLogo,kayitToken,kayitAktif,loaded]);
   useEffect(()=>{if(loaded&&ctlCalibration)fbSet('ctl_calibration',ctlCalibration);},[ctlCalibration,loaded]);
-
-  // Kayıt linkinin "kullanıldı" durumunu panelde ANLIK göstermek için canlı dinleyici.
-  // SporcuKayit sayfası bir sporcu kayıt olduğunda app_config/kayit_token'ı transaction
-  // ile null'a çeviriyor (bkz. SporcuKayit.handleSubmit) — bu değişikliği burada dinleyip
-  // koç panelini sayfa yenilenmeden güncel tutuyoruz. Diğer tüm veriler (ath2, races vb.)
-  // hâlâ tek seferlik fbGet ile yükleniyor; bu, "kullanıldı" bilgisinin gerçek zamanlı
-  // olması gerektiği için bilinçli bir istisna.
-  useEffect(()=>{
-    if(!loaded||!db)return;
-    const ref=db.ref('app_config/kayit_token');
-    let first=true;
-    const listener=ref.on('value',snap=>{
-      const v=snap.val()||'';
-      setKayitToken(v);
-      // İlk bağlanmada (mount) mevcut değeri loglama — sadece SONRAKİ değişiklikleri
-      // logla, yoksa her panel açılışında gereksiz bir 'observed' kaydı oluşur.
-      if(!first)logKayitEvent('live_listener_observed',v||null);
-      first=false;
-    });
-    return ()=>ref.off('value',listener);
-  },[loaded]);
 
   // CTL_ANCHORS güncellendiğinde (buton) hem global değişkeni hem Firebase'i
   // güncelleyen tek giriş noktası — AntrenmanAnalizTab bunu çağırır.
@@ -26930,7 +26819,6 @@ function App(){
           if(d.app_config.teamName)setTeamName(d.app_config.teamName);
           if(d.app_config.teamLogo)setTeamLogo(d.app_config.teamLogo);
           if(d.app_config.kayit_token)setKayitToken(d.app_config.kayit_token);
-          if(d.app_config.kayit_token_display)setKayitTokenDisplay(d.app_config.kayit_token_display);
           if(d.app_config.kayit_aktif!=null)setKayitAktif(d.app_config.kayit_aktif);
         }
         if(d.ctl_calibration?.anchors?.length){setCtlCalibration(d.ctl_calibration);setGlobalCtlAnchors(d.ctl_calibration.anchors);}
@@ -27242,32 +27130,26 @@ function App(){
         onUpdateRace:r=>setRaces(p=>p.map(x=>x.id===r.id?r:x)),
         onDeleteRace:id=>setRaces(p=>p.filter(x=>x.id!==id)),
         onDeleteHistoryEntry:entry=>setAthHistory(p=>p.filter(e=>e!==entry)),
-        kayitToken,kayitTokenDisplay,kayitAktif,kayitGenerating,
+        kayitToken,kayitAktif,kayitGenerating,
         onGenerateKayitLink:async()=>{
-          if(kayitTokenDisplay&&!confirm('Yeni bir link oluşturursan eski kayıt linki artık çalışmaz. Devam edilsin mi?'))return;
+          if(kayitToken&&!confirm('Yeni bir link oluşturursan eski kayıt linki artık çalışmaz. Devam edilsin mi?'))return;
           const t=uid()+uid();
           setKayitGenerating(true);
           try{
             // Linkin panelde gösterilmeden ÖNCE Firebase'e yazılmasını garanti ediyoruz.
             // Aksi halde link ekranda anında görünür (yerel state hemen güncellenir) ama
             // arka plandaki ağ yazması henüz tamamlanmadan biri linke tıklarsa, sayfa
-            // Firebase'den eski/boş değeri okur ve "bağlantı geçerli değil" uyarısı alır
-            // (Ağustos 2026 — Göksel'in tek tıklamada yaşadığı sorunun olası kök nedeni).
-            const res=await fbUpdate('app_config',{kayit_token:t,kayit_token_display:t,kayit_aktif:true});
+            // Firebase'den eski/boş değeri okur ve "bağlantı geçerli değil" uyarısı alır.
+            const res=await fbUpdate('app_config',{kayit_token:t,kayit_aktif:true});
             if(res&&res.blocked){
-              // ÖNEMLİ (Ağustos 2026): Panel aynı anda başka bir sekme/cihazda da açıksa,
-              // oturum kilidi bu yazmayı SESSİZCE engeller — önceden burada hiç kontrol
-              // edilmiyordu ve link panelde "başarıyla oluşmuş" gibi görünüyordu, oysa
-              // Firebase'e HİÇ yazılmamış oluyordu. Bu, sporcunun linke tıkladığında ya da
-              // formu gönderdiğinde "geçersiz" uyarısı almasının olası sebeplerinden biri.
+              // Panel aynı anda başka bir sekme/cihazda da açıksa, oturum kilidi bu
+              // yazmayı sessizce engeller — burada açıkça uyarıyoruz.
               alert('⚠️ Link oluşturulamadı: Bu panel şu anda AKTİF OTURUM değil.\n\nCoach panelini başka bir sekmede veya cihazda da açık tutuyor olabilirsin — Firebase güvenlik amacıyla sadece en son açılan sekmeden yazmaya izin veriyor.\n\nLütfen diğer sekmeleri/cihazları kapatıp bu sayfayı yenile, sonra tekrar dene.');
               setKayitGenerating(false);
               return;
             }
             setKayitToken(t);
-            setKayitTokenDisplay(t);
             setKayitAktif(true);
-            logKayitEvent('generate',t);
           }catch(e){
             alert('Link oluşturulurken bir hata oluştu, lütfen tekrar dene: '+e.message);
           }
@@ -28105,13 +27987,10 @@ function SporcuKayit(){
   const [done,setDone]=useState(false);
   const [err,setErr]=useState('');
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
-  // Çift gönderimi (mobilde hızlı çift dokunma / "ghost click") engelleyen kilit.
-  // React state (saving) ile değil useRef ile yapılıyor, çünkü state güncellemesi
-  // asenkron — iki tıklama neredeyse aynı anda gelirse, ikinci tıklama butonun
-  // "disabled" olmasını beklemeden handleSubmit'i tekrar çalıştırabilir. useRef
-  // senkron ve anlık olduğu için bu yarış durumunu tamamen ortadan kaldırıyor
-  // (Ağustos 2026 — token'ın submit anında zaten "null" görünmesinin kök nedeni
-  // muhtemelen buydu).
+  // Çift gönderimi (mobilde hızlı çift dokunma / "ghost click") engelleyen kilit —
+  // aksi halde bir tıklamadan iki aynı sporcu kaydı oluşabilir. useRef kullanılıyor
+  // çünkü senkron ve anlık; React state (saving) asenkron olduğu için ikinci tıklama
+  // butonun "disabled" olmasını beklemeden handleSubmit'i tekrar tetikleyebilirdi.
   const submitLockRef=React.useRef(false);
 
   useEffect(()=>{
@@ -28146,56 +28025,18 @@ function SporcuKayit(){
     try{
       const params=new URLSearchParams(window.location.search);
       const t=params.get('t')||'';
-      if(!db){setErr('Bağlantı hazır değil, lütfen sayfayı yenile.');setSaving(false);return;}
-      // Linkin TEK KULLANIMLIK olmasını garanti eden adım: kayıt tamamlanmadan hemen
-      // önce token'ı atomik bir transaction ile "tüketiyoruz" (app_config/kayit_token'ı
-      // null'a çeviriyoruz). İki kişi aynı anda aynı linki kullanmaya çalışırsa, Firebase
-      // transaction mekanizması ikinci denemeyi güncel (artık null olan) değerle yeniden
-      // çalıştırır ve o da "current!==t" görüp abort eder — yani sadece BİRİ başarılı olur.
-      // Basit bir "önce oku, sonra yaz" (fbGet+fbSet) burada YETERSİZ kalırdı, çünkü iki
-      // istek arasında race window'u bırakır.
-      //
-      // KÖK NEDEN BULUNDU (Ağustos 2026): fbGet() Firebase'in .get() metodunu kullanıyor —
-      // bu, sunucudan doğrudan (SyncTree/yerel önbelleği hiç dokunmadan) okuyan YENİ nesil
-      // bir API. .transaction() ise optimistik ilk tahminini SyncTree'den yapıyor; bu yola
-      // daha önce .once()/.on() ile hiç dokunulmadıysa SyncTree'de bilgi YOK, transaction bu
-      // yüzden "bilinmiyor" anlamına gelen null ile başlıyor ve fonksiyonumuz bunu "zaten
-      // tüketilmiş" sanıp abort ediyordu — plain fbGet doğru değeri gösterse bile, çünkü
-      // fbGet'in okuması SyncTree'yi hiç beslemiyordu (loglardaki "yeniden kontrol" satırları
-      // bunu kanıtladı: düz okuma her seferinde doğru token'ı gösterdi, transaction yine de
-      // abort etti). Çözüm: transaction'dan HEMEN ÖNCE gerçek bir .once('value') okuması
-      // yaparak SyncTree'yi doğru değerle besliyoruz.
-      await db.ref('app_config/kayit_token').once('value');
-      let claim=null;
-      for(let attempt=1;attempt<=3;attempt++){
-        claim=await db.ref('app_config/kayit_token').transaction(current=>{
-          if(current&&current===t)return null;
-          return; // abort — token zaten kullanılmış ya da bağlantı geçersiz
-        });
-        if(claim.committed)break;
-        if(attempt<3){
-          const freshSnap=await db.ref('app_config/kayit_token').once('value'); // SyncTree'yi tazele
-          const realVal=freshSnap.exists()?freshSnap.val():null;
-          logKayitEvent('consume_abort_retry_check',t,{deneme:attempt,duzOkumaGercekDeger:realVal===null?'null':realVal});
-          if(realVal!==t)break; // gerçekten farklı/tüketilmiş — tekrar denemenin anlamı yok
-          // realVal===t: transaction'ın gördüğü değer bayattı, tekrar dene
-        }
-      }
-      if(!claim.committed){
+      if(!db){setErr('Bağlantı hazır değil, lütfen sayfayı yenile.');setSaving(false);submitLockRef.current=false;return;}
+      // Link artık "Pasif Yap"a kadar geçerli, çoklu kullanımlı — gönderim anında sadece
+      // koçun linki o sırada pasife almadığını/değiştirmediğini taze bir okumayla teyit
+      // ediyoruz (form doldurulurken koç "Pasif Yap"a basmış olabilir).
+      const cfgFresh=await fbGet('app_config');
+      const stillValid=!!(cfgFresh&&cfgFresh.kayit_token&&cfgFresh.kayit_token===t&&cfgFresh.kayit_aktif!==false);
+      if(!stillValid){
         setSaving(false);
-        // Teşhis: transaction neden abort etti? Sunucudaki son görülen değeri kaydet.
-        const serverVal=claim.snapshot?claim.snapshot.val():undefined;
-        logKayitEvent('consume_aborted',t,{sunucuda:serverVal===null?'null':serverVal===undefined?'okunamadi':serverVal});
-        setDebugInfo({
-          submitAsamasindaBasarisiz:true,
-          urlToken:t?(t.length>8?t.slice(0,4)+'…'+t.slice(-4):t):'(yok)',
-          sunucudakiSonDeger:serverVal===null?'null (tüketilmiş)':serverVal===undefined?'(okunamadı)':(serverVal.length>8?serverVal.slice(0,4)+'…'+serverVal.slice(-4):serverVal),
-          eslesme:serverVal===t
-        });
+        submitLockRef.current=false;
         setTokenValid(false);
         return;
       }
-      logKayitEvent('consume',t);
       // Yarış koşulunu önlemek için taze veri üzerine ekle
       const fresh=await fbGet('ath2')||[];
       const yeni={...EMPTY_A,...f,id:uid(),pasif:true,disiplin:'karma',
