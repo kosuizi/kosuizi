@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.15-2321 --><!DOCTYPE html>
+<!-- Version: v2026.08.15-2341 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.15-2321';
+const APP_VERSION='v2026.08.15-2341';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -8350,6 +8350,27 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
   // Verilmezse (readOnly görünümler, eski çağrılar) 'zones' (güncel profil) ile
   // geriye dönük uyumluluk sağlanır — hedef pace/renk gösterimi hep 'zones' kullanır.
   const _mZones=measureZones||zones;
+  // Hedef dondurma için pace→zone eşlemesi — paceToZoneIdx CANLI `zones` kullanır
+  // (renk gösterimi gibi anlık amaçlar için doğru), ama paceValidation() rozet
+  // karşılaştırmasında sınır olarak `_mZones` (o günün TARİHİNE göre hesaplanmış
+  // bölge) kullanıyor (bkz. paceValidation, ~satır 8800: _mZones?.paceZones?.[zi]).
+  // KÖK NEDEN DÜZELTMESİ (2026.08.15 — Göksel'in "hedefe göre doğru pace girildiği
+  // hâlde Çok Yavaş çıkmaya devam ediyor" bildirimi): coach'un elle düzenlediği pace
+  // için hedef zone'u paceToZoneIdx (canlı zones) ile hesaplayıp dondurmak, `_mZones`
+  // `zones`'dan farklıysa (örn. o günün vLT'si güncel vLT'den farklıysa) YANLIŞ zone
+  // sınırlarıyla kıyaslamaya yol açıyordu — index aynı olsa bile _mZones.paceZones[zi]
+  // ile zones.paceZones[zi] farklı pace aralıklarını temsil edebiliyor. Artık hedef
+  // zone'u DOĞRUDAN _mZones üzerinden, paceValidation'ın kullanacağı AYNI kaynaktan
+  // hesaplanıyor — tutarlılık garanti altına alınıyor.
+  const _mZonePaceToZoneIdx=(paceSec)=>{
+    if(!_mZones?.paceZones||!paceSec) return null;
+    const paceMs=1000/paceSec;
+    for(let i=_mZones.paceZones.length-1;i>=0;i--){
+      const z=_mZones.paceZones[i];
+      if(z&&z.lo_ms&&paceMs>=z.lo_ms) return i;
+    }
+    return 0;
+  };
   const [customCues, setCustomCues] = useState(_cueCache.data||{});
   const [editingLabel, setEditingLabel] = useState(null);
   const [editText, setEditText] = useState('');
@@ -8975,7 +8996,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
         // yeni (yavaş) hedefini birebir uygulasa da değerlendirme eski hedefe göre
         // yapıldığından "Çok Yavaş" rozeti yanlışlıkla çıkıyordu.
         _editedPaceSec=paceSec;
-        _editedZIdx=paceToZoneIdx(paceSec);
+        _editedZIdx=_mZonePaceToZoneIdx(paceSec);
       }
     } else if(field==='bpm'){
       // bpm: sıfır veya boş girilirse override kaldır (null → önerilen değere dön)
@@ -9109,7 +9130,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
           // şablon pace'i oluyor, sporcu coach'un yeni hedefini uygulasa da "Çok Yavaş"
           // rozeti yanlışlıkla çıkıyordu. Artık coach'un yazdığı YENİ pace/zone hedefe aktarılır.
           _editedPaceSecAr=paceSec;
-          _editedZIdxAr=paceToZoneIdx(paceSec);
+          _editedZIdxAr=_mZonePaceToZoneIdx(paceSec);
           if(curMesafe > 0){
             const newSec = Math.round(curMesafe/1000*paceSec);
             upd = {...upd, ...secToHMS(newSec)};
