@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.15-0828 --><!DOCTYPE html>
+<!-- Version: v2026.08.15-0914 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.15-0828';
+const APP_VERSION='v2026.08.15-0914';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -2853,6 +2853,25 @@ async function fbUpdate(key,val){
   }
 }
 
+// Kayıt linki token'ı için hafif bir olay günlüğü — "kim, ne zaman, token'ı neye
+// çevirdi" sorusunu tahminle değil veriyle cevaplayabilmek için (Ağustos 2026,
+// tekrarlayan "sunucuda null çıkıyor" sorununu araştırırken eklendi). Coach panelinde
+// Sporcular sekmesindeki kayıt linki kutusunun altında son 15 kayıt gösterilir.
+// Bu, oturum kilidi/güvenlik kontrolünden bağımsız çalışır (transaction/generate her
+// zaman loglanmalı) ve sessizce başarısız olabilir (log kaybı kritik değil).
+function logKayitEvent(action,value,extra){
+  try{
+    if(!db&&!initFirebase())return;
+    db.ref('kayit_token_log').push({
+      ts:Date.now(),
+      action, // 'generate' | 'consume' | 'consume_aborted'
+      value:value?(value.length>8?value.slice(0,4)+'…'+value.slice(-4):value):null,
+      source:typeof SESSION_ID!=='undefined'?SESSION_ID.slice(0,8):'sporcu-sayfasi',
+      ...extra
+    }).catch(()=>{});
+  }catch(e){}
+}
+
 const lsGet=(k)=>{try{const v=localStorage.getItem(k);return v?JSON.parse(v):null}catch{return null}};
 const LS_WARN_THRESHOLD=0.80;
 let _lsWarnShown=false;
@@ -5331,6 +5350,8 @@ function SporcularTab({athletes,races,athHistory,allHistory,workouts,onAdd,onUpd
   const [editR,setEditR]=useState(null);
   const [expandHist,setExpandHist]=useState({});
   const [showPastRaces,setShowPastRaces]=useState(false);
+  const [kayitLog,setKayitLog]=useState(null); // null=gösterilmiyor, []=yüklendi
+  const [kayitLogLoading,setKayitLogLoading]=useState(false);
   const rMap=Object.fromEntries(races.map(r=>[r.id,r]));
   const hrv_colors={düşük:'badge-danger',dengesiz:'badge-warn',dengeli:'badge-good'};
 
@@ -5498,6 +5519,47 @@ function SporcularTab({athletes,races,athHistory,allHistory,workouts,onAdd,onUpd
                 ),
                 React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},'Bu link TEK KULLANIMLIKTIR — bir kişi kayıt olduğu anda otomatik olarak "Kullanıldı" durumuna geçer (bu kutuda anlık görünür) ve aynı linkle ikinci bir kişi kayıt yapamaz. Her sporcu için ayrı ayrı "Yeni Link Oluştur" ile yeni bir link üretmen gerekir. Not: Link oluşturulduktan sonra Firebase\'e yazılması bir-iki saniye sürebilir — bu kutuda gösterilene kadar linki paylaşma/test etme.')
               )
+      ),
+      // Debug: kayıt linki olay günlüğü — "kim ne zaman token'ı neye çevirdi" sorusunu
+      // tahminle değil kayıtla cevaplamak için (Ağustos 2026). Sadece istenince yüklenir.
+      React.createElement('div',{style:{marginBottom:16}},
+        React.createElement('button',{
+          className:'btn btn-sm',
+          onClick:async()=>{
+            if(kayitLog!==null){setKayitLog(null);return;} // tekrar tıklayınca kapat
+            setKayitLogLoading(true);
+            try{
+              const raw=await fbGet('kayit_token_log');
+              const arr=raw?Object.values(raw):[];
+              arr.sort((a,b)=>(b.ts||0)-(a.ts||0));
+              setKayitLog(arr.slice(0,20));
+            }catch(e){setKayitLog([]);}
+            setKayitLogLoading(false);
+          }
+        },kayitLog!==null?'Olay Günlüğünü Gizle':'🕵️ Kayıt Linki Olay Günlüğü (Debug)'),
+        kayitLogLoading&&React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',marginTop:6}},'Yükleniyor...'),
+        kayitLog&&kayitLog.length===0&&React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',marginTop:6}},'Henüz hiç kayıt yok.'),
+        kayitLog&&kayitLog.length>0&&React.createElement('div',{style:{
+          marginTop:8,fontSize:11,fontFamily:'monospace',background:'var(--bg-secondary)',
+          border:'1px solid var(--border)',borderRadius:'var(--radius)',padding:10,
+          maxHeight:260,overflowY:'auto',display:'flex',flexDirection:'column',gap:4
+        }},
+          kayitLog.map((e,i)=>{
+            const d=e.ts?new Date(e.ts):null;
+            const zaman=d?d.toLocaleString('tr-TR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}):'?';
+            const actionLabel={
+              generate:'🆕 link oluşturuldu',
+              consume:'✅ kayıt başarılı (tüketildi)',
+              consume_aborted:'❌ tüketme BAŞARISIZ',
+              live_listener_observed:'👁️ değişiklik gözlendi'
+            }[e.action]||e.action;
+            return React.createElement('div',{key:i,style:{borderBottom:i<kayitLog.length-1?'1px solid var(--border)':'none',paddingBottom:4}},
+              zaman+' — '+actionLabel+' — token: '+(e.value||'null')+
+              (e.sunucuda!==undefined?' — sunucuda: '+e.sunucuda:'')+
+              ' — kaynak: '+(e.source||'?')
+            );
+          })
+        )
       ),
       React.createElement('div',{className:'flex-gap',style:{marginBottom:16}},
         React.createElement('button',{className:'btn btn-primary',onClick:()=>{setEditA(null);setShowA(true)}},'+ Sporcu Ekle')
@@ -26655,7 +26717,15 @@ function App(){
   useEffect(()=>{
     if(!loaded||!db)return;
     const ref=db.ref('app_config/kayit_token');
-    const listener=ref.on('value',snap=>{setKayitToken(snap.val()||'');});
+    let first=true;
+    const listener=ref.on('value',snap=>{
+      const v=snap.val()||'';
+      setKayitToken(v);
+      // İlk bağlanmada (mount) mevcut değeri loglama — sadece SONRAKİ değişiklikleri
+      // logla, yoksa her panel açılışında gereksiz bir 'observed' kaydı oluşur.
+      if(!first)logKayitEvent('live_listener_observed',v||null);
+      first=false;
+    });
     return ()=>ref.off('value',listener);
   },[loaded]);
 
@@ -27179,6 +27249,7 @@ function App(){
             setKayitToken(t);
             setKayitTokenDisplay(t);
             setKayitAktif(true);
+            logKayitEvent('generate',t);
           }catch(e){
             alert('Link oluşturulurken bir hata oluştu, lütfen tekrar dene: '+e.message);
           }
@@ -28073,6 +28144,7 @@ function SporcuKayit(){
         setSaving(false);
         // Teşhis: transaction neden abort etti? Sunucudaki son görülen değeri kaydet.
         const serverVal=claim.snapshot?claim.snapshot.val():undefined;
+        logKayitEvent('consume_aborted',t,{sunucuda:serverVal===null?'null':serverVal===undefined?'okunamadi':serverVal});
         setDebugInfo({
           submitAsamasindaBasarisiz:true,
           urlToken:t?(t.length>8?t.slice(0,4)+'…'+t.slice(-4):t):'(yok)',
@@ -28082,6 +28154,7 @@ function SporcuKayit(){
         setTokenValid(false);
         return;
       }
+      logKayitEvent('consume',t);
       // Yarış koşulunu önlemek için taze veri üzerine ekle
       const fresh=await fbGet('ath2')||[];
       const yeni={...EMPTY_A,...f,id:uid(),pasif:true,disiplin:'karma',
