@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.15-0914 --><!DOCTYPE html>
+<!-- Version: v2026.08.15-1003 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.15-0914';
+const APP_VERSION='v2026.08.15-1003';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -5550,12 +5550,16 @@ function SporcularTab({athletes,races,athHistory,allHistory,workouts,onAdd,onUpd
             const actionLabel={
               generate:'🆕 link oluşturuldu',
               consume:'✅ kayıt başarılı (tüketildi)',
-              consume_aborted:'❌ tüketme BAŞARISIZ',
-              live_listener_observed:'👁️ değişiklik gözlendi'
+              consume_aborted:'❌ tüketme BAŞARISIZ (kesin)',
+              consume_abort_retry_check:'🔁 abort sonrası yeniden kontrol',
+              live_listener_observed:'👁️ değişiklik gözlendi',
+              migration_fallback_fired:'⚠️ migration fallback çalıştı'
             }[e.action]||e.action;
+            const extras=Object.keys(e).filter(k=>!['ts','action','value','source'].includes(k))
+              .map(k=>k+': '+e[k]).join(' — ');
             return React.createElement('div',{key:i,style:{borderBottom:i<kayitLog.length-1?'1px solid var(--border)':'none',paddingBottom:4}},
               zaman+' — '+actionLabel+' — token: '+(e.value||'null')+
-              (e.sunucuda!==undefined?' — sunucuda: '+e.sunucuda:'')+
+              (extras?' — '+extras:'')+
               ' — kaynak: '+(e.source||'?')
             );
           })
@@ -26644,7 +26648,21 @@ function App(){
       if(!w){w=lsGet('wks');if(w)await fbSet('wks',w);}
       if(!h){h=lsGet('ath_hist');if(h)await fbSet('ath_hist',h);}
       if(!rr){rr=lsGet('race_results');if(rr)await fbSet('race_results',rr);}
-      if(!cfg){cfg=lsGet('app_config');if(cfg)await fbSet('app_config',cfg);}
+      if(!cfg){
+        cfg=lsGet('app_config');
+        if(cfg){
+          // GÜVENLİK (Ağustos 2026): Bu migration SADECE Firebase'de app_config hiç
+          // yoksa çalışır (çok nadir — normalde her açılışta zaten var). kayit_token
+          // alanlarını BİLEREK bu yazmadan hariç tutuyoruz: localStorage'daki kopya
+          // bayat olabilir (örn. hiç token üretilmeden önceki bir andan kalma) ve bunu
+          // olduğu gibi geri yazmak, o sırada aktif olan güncel bir kayıt linkini
+          // yanlışlıkla silebilirdi. logKayitEvent ile de işaretliyoruz ki bu satır
+          // gerçekten çalışırsa günlükte görünsün.
+          const {kayit_token,kayit_token_display,kayit_aktif,...cfgSafe}=cfg;
+          logKayitEvent('migration_fallback_fired',null,{not:'app_config migration calisti, kayit_* alanlari haric tutuldu'});
+          await fbUpdate('app_config',cfgSafe);
+        }
+      }
 
       if(a?.length){
         setAthletes(a);
@@ -28136,10 +28154,30 @@ function SporcuKayit(){
       // çalıştırır ve o da "current!==t" görüp abort eder — yani sadece BİRİ başarılı olur.
       // Basit bir "önce oku, sonra yaz" (fbGet+fbSet) burada YETERSİZ kalırdı, çünkü iki
       // istek arasında race window'u bırakır.
-      const claim=await db.ref('app_config/kayit_token').transaction(current=>{
-        if(current&&current===t)return null;
-        return; // abort — token zaten kullanılmış ya da bağlantı geçersiz
-      });
+      //
+      // BİLİNEN TUZAK (Ağustos 2026): Bu sayfa daha önce bu veri yoluna hiç dokunmamışsa
+      // (dinleyici yok, sadece düz okuma), transaction() İLK çağrıldığında bazen gerçek
+      // sunucu değerini değil "henüz bilinmiyor" anlamına gelen bir null ile update
+      // fonksiyonunu çalıştırabiliyor; fonksiyon bunu "zaten tüketilmiş" sanıp abort
+      // ederse, Firebase gerçek değeri getirip TEKRAR DENEMİYOR (abort kesin bir karardır).
+      // Bunu tolere etmek için: abort olursa, düz bir fbGet ile GERÇEK sunucu değerini
+      // doğrudan kontrol ediyoruz — hâlâ bizim token'ımızla eşleşiyorsa bu sahte bir
+      // abort'tur, transaction'ı yeniden deniyoruz (en fazla 3 kez).
+      let claim=null;
+      for(let attempt=1;attempt<=3;attempt++){
+        claim=await db.ref('app_config/kayit_token').transaction(current=>{
+          if(current&&current===t)return null;
+          return; // abort — token zaten kullanılmış ya da bağlantı geçersiz
+        });
+        if(claim.committed)break;
+        if(attempt<3){
+          const realCfg=await fbGet('app_config');
+          const realVal=realCfg?realCfg.kayit_token:undefined;
+          logKayitEvent('consume_abort_retry_check',t,{deneme:attempt,duzOkumaGercekDeger:realVal===null?'null':realVal===undefined?'okunamadi':realVal});
+          if(realVal!==t)break; // gerçekten farklı/tüketilmiş — tekrar denemenin anlamı yok
+          // realVal===t: transaction'ın gördüğü değer bayattı, tekrar dene
+        }
+      }
       if(!claim.committed){
         setSaving(false);
         // Teşhis: transaction neden abort etti? Sunucudaki son görülen değeri kaydet.
