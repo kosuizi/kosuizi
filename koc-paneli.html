@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.14-2215 --><!DOCTYPE html>
+<!-- Version: v2026.08.15-0828 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.14-2215';
+const APP_VERSION='v2026.08.15-0828';
 // TRIMP: Banister (1991) — doğru versiyon, cinsiyet katsayısı dahil
 function calcTRIMP(durMin,avgHR,rhr,mhr,cinsiyet){
   if(!avgHR||!rhr||!mhr||durMin<=0)return 0;
@@ -2828,19 +2828,20 @@ function _mergeCleanIntoLocal(cur,clean){
 async function fbUpdate(key,val){
   if(_sessionLocked){
     console.warn('[Oturum Kilidi] Bu sekme artık aktif oturum değil, yazma engellendi:',key);
-    return;
+    return{blocked:true};
   }
   const clean=stripUndefined(val);
   if(!db&&!initFirebase()){
     const cur=lsGet(key)||{};
     lsSet(key,_mergeCleanIntoLocal(cur,clean));
-    return;
+    return{blocked:false,offline:true};
   }
   try{
     if(_authReady) await _authReady; // Auth bitmeden yazma yapma
     await db.ref(key).update(clean);
     const cur=lsGet(key)||{};
     lsSet(key,_mergeCleanIntoLocal(cur,clean));
+    return{blocked:false};
   }catch(e){
     console.warn('fbUpdate error',key,e);
     const cur=lsGet(key)||{};
@@ -2848,6 +2849,7 @@ async function fbUpdate(key,val){
     if(key.includes('plan_snapshots')){
       console.error('PLAN KAYIT HATASI (update):',e.message,e.code);
     }
+    return{blocked:false,error:e.message};
   }
 }
 
@@ -27162,8 +27164,18 @@ function App(){
             // Aksi halde link ekranda anında görünür (yerel state hemen güncellenir) ama
             // arka plandaki ağ yazması henüz tamamlanmadan biri linke tıklarsa, sayfa
             // Firebase'den eski/boş değeri okur ve "bağlantı geçerli değil" uyarısı alır
-            // (Ağustos 2026 — Göksel'in tek tıklamada yaşadığı sorunun kök nedeni).
-            await fbUpdate('app_config',{kayit_token:t,kayit_token_display:t,kayit_aktif:true});
+            // (Ağustos 2026 — Göksel'in tek tıklamada yaşadığı sorunun olası kök nedeni).
+            const res=await fbUpdate('app_config',{kayit_token:t,kayit_token_display:t,kayit_aktif:true});
+            if(res&&res.blocked){
+              // ÖNEMLİ (Ağustos 2026): Panel aynı anda başka bir sekme/cihazda da açıksa,
+              // oturum kilidi bu yazmayı SESSİZCE engeller — önceden burada hiç kontrol
+              // edilmiyordu ve link panelde "başarıyla oluşmuş" gibi görünüyordu, oysa
+              // Firebase'e HİÇ yazılmamış oluyordu. Bu, sporcunun linke tıkladığında ya da
+              // formu gönderdiğinde "geçersiz" uyarısı almasının olası sebeplerinden biri.
+              alert('⚠️ Link oluşturulamadı: Bu panel şu anda AKTİF OTURUM değil.\n\nCoach panelini başka bir sekmede veya cihazda da açık tutuyor olabilirsin — Firebase güvenlik amacıyla sadece en son açılan sekmeden yazmaya izin veriyor.\n\nLütfen diğer sekmeleri/cihazları kapatıp bu sayfayı yenile, sonra tekrar dene.');
+              setKayitGenerating(false);
+              return;
+            }
             setKayitToken(t);
             setKayitTokenDisplay(t);
             setKayitAktif(true);
