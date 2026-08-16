@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.16-1659 --><!DOCTYPE html>
+<!-- Version: v2026.08.16-1716 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.16-1659';
+const APP_VERSION='v2026.08.16-1716';
 // 🔧 GEÇİCİ ANAHTAR (2026.08.16 — Göksel talebi): Hedef Uyumu skorlama hataları
 // doğrulanıp düzeltilene kadar, Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ı sporculardan GİZLENİR — yerine bir bakım mesajı
@@ -1312,7 +1312,13 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         // fizyolojik uyarı eksik alınır). zIdxToBand ile aynı eşik (zIdx<=1) kullanılır.
         const mesZoneKolay=(row.label&&SKIP_RE.test(row.label))||(row._origZIdx!=null&&row._origZIdx<=1);
         let mesafeDir=null, mesafeOk=false, mesafeDiffPct=null;
-        if(hasPerfData){
+        // GEÇİCİ OLARAK DEVRE DIŞI (2026.08.16 — Göksel talebi): mesafe kontrolünün
+        // neyle neyi kıyaslaması gerektiği iyi tanımlanmamış olabileceği için mesafe
+        // sinyali Hedef Uyumu puanlamasından tamamen çıkarıldı (mesafeDir/mesafeOk hep
+        // null/false kalır → mesafeSignals boş → puanMesafe null → ağırlık otomatik
+        // olarak Pace+Nabız'a dağılır, bkz. calcPaceComplianceScore). Tekrar açılmak
+        // istenirse aşağıdaki "if(false&&" → "if(" yapılabilir.
+        if(false&&hasPerfData){
           const actualMesafe=row.mesafe, origMesafe=row._origMesafe;
           if(actualMesafe>0&&origMesafe>0){
             const diffPct=round1((actualMesafe-origMesafe)/origMesafe*100);
@@ -7926,6 +7932,8 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
   // içinden okunuyor. _origMesafe zaten updateAralikCell tarafından donduruluyor
   // (bkz. _origMesafeFieldAr, ~satır 8600) — bu fonksiyon sadece onu okuyup rozete çeviriyor.
   const mesafeValidationAralik=(rowData)=>{
+    // GEÇİCİ OLARAK DEVRE DIŞI (2026.08.16 — Göksel talebi) — bkz. mesafeValidation() aynı notu.
+    return null;
     if(!rowData||rowData._isSprint) return null;
     if(!isWorkoutLogged) return null;
     const actualMesafe=rowData.mesafe, origMesafe=rowData._origMesafe;
@@ -8901,6 +8909,11 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
   // antrenmanın FİİLEN "Ekle"den girilip girilmediği (isWorkoutLogged) — bileşenin
   // kendi prop'u, closure'dan doğrudan okunuyor. Ekle'den önce rozet HİÇ gösterilmez.
   const mesafeValidation=(row)=>{
+    // GEÇİCİ OLARAK DEVRE DIŞI (2026.08.16 — Göksel talebi): mesafe kontrolünün
+    // neyle neyi kıyaslaması gerektiği iyi tanımlanmamış olabileceği için hem
+    // rozet hem Hedef Uyumu puanlamasındaki mesafe sinyali (bkz. extractFeedbackSignals)
+    // kaldırıldı. Tekrar açılmak istenirse bu erken return kaldırılabilir.
+    return null;
     if(!row||row.type==='header'||row._isSprint) return null;
     if(!isWorkoutLogged) return null;
     // Aralık özet/ortalama satırı istisnası (2026.08.09 — Göksel talebi):
@@ -9148,10 +9161,27 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     const curMesafe = curOv.mesafe != null ? curOv.mesafe : 0; // zone fallback YOK
 
     let upd = {};
-    // Coach'un pm/ps hücresini ELLE düzenlediği YENİ pace/zone — aşağıdaki hedef
-    // dondurma bloğunda kullanılır (updateCell'deki _editedPaceSec/_editedZIdx ile
-    // AYNI mantık, aralık editörüne taşındı — bkz. 2026.08.15 notu).
-    let _editedPaceSecAr=null, _editedZIdxAr=null;
+    // KÖK NEDEN DÜZELTMESİ (2026.08.16 — Göksel'in bildirdiği "aynı Cruise·S3
+    // aralığında 6:01 'Biraz Hızlı', 5:51 'Çok Yavaş' çıkıyor" çelişkisi):
+    // ÖNCEDEN bu fonksiyon updateCell'deki (düz satır) "coach pace hücresini elle
+    // düzenlerse hedef de o pace'e göre yeniden türetilir" mantığını AYNEN aralık
+    // (tekrar) editörüne taşımıştı. Ama aralık editöründe pm/ps hücresine yazmak
+    // HER ZAMAN o tekrarın GERÇEKLEŞEN sonucunu girmek anlamına gelir — düz
+    // satırlardaki gibi "coach bilinçli olarak hedefi değiştiriyor" senaryosu değil.
+    // Önceki mantıkta her tekrarın Ekle-sonrası İLK pace girişi kendi zone'unu
+    // (_mZonePaceToZoneIdx ile en yakın bölgeyi) o tekrarın "hedefi" olarak
+    // donduruyordu — yani AYNI aralığın (örn. Cruise · S3) tüm tekrarları ortak
+    // TEK bir hedefe göre değil, HER TEKRAR kendi girilen değerinden türetilmiş
+    // FARKLI bir "sahte hedefe" göre değerlendiriliyordu. Bu da yan yana duran iki
+    // tekrarın (6:01 ve 5:51 gibi, aralarında sadece 10 sn fark olsa da) komşu
+    // bölgelere düşüp birbiriyle çelişen rozetler (biri "Hızlı", diğeri "Yavaş")
+    // üretmesine yol açıyordu. Düzeltme: aralık tekrarlarında pace hedefi ARTIK
+    // asla girilen değerden türetilmez — tüm tekrarlar her zaman base._origPaceSec/
+    // base._origZIdx (aralığın TEK ortak plan hedefi) ile karşılaştırılır. Hedefi
+    // gerçekten değiştirmek isteyen koç bunu reçete/şablon üzerinden (Ekle'den
+    // önce) yapmalı — düz satırlardaki "elle hedef değiştirme" özelliği (bkz.
+    // updateCell, 2026.08.15/16 notları) bu değişiklikten ETKİLENMEDİ, sadece
+    // aralık editörü için kaldırıldı.
     if(field==='mesafe'){
       // Pace: override'da her iki bileşen de varsa kullan; yoksa base (display amaçlı)
       const pm = curPmOv != null ? curPmOv : (base.pm||0);
@@ -9180,19 +9210,12 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
       const ps = field==='ps' ? val : (curPsOv!=null?curPsOv:upd.ps);
       if(pm != null && ps != null){
         const paceSec = pm*60+ps;
-        if(paceSec>0){
-          // KÖK NEDEN DÜZELTMESİ (2026.08.15) — updateCell'deki AYNI hata aralık
-          // editöründe de vardı: hedef dondurma HER ZAMAN base._origPaceSec'i (şablonun
-          // orijinal pace'i, coach'un düzenlemesinden bağımsız) kullanıyordu. Coach
-          // pace'i elle yavaşlattığında bile Ekle sonrası dondurulan hedef eski/hızlı
-          // şablon pace'i oluyor, sporcu coach'un yeni hedefini uygulasa da "Çok Yavaş"
-          // rozeti yanlışlıkla çıkıyordu. Artık coach'un yazdığı YENİ pace/zone hedefe aktarılır.
-          _editedPaceSecAr=paceSec;
-          _editedZIdxAr=_mZonePaceToZoneIdx(paceSec);
-          if(curMesafe > 0){
-            const newSec = Math.round(curMesafe/1000*paceSec);
-            upd = {...upd, ...secToHMS(newSec)};
-          }
+        // NOT (2026.08.16): burada ARTIK hedef (_editedPaceSecAr/_editedZIdxAr)
+        // türetilmiyor — bkz. yukarıdaki kök neden notu. Girilen pace yalnızca
+        // mesafe/süre tutarlılığı için kullanılır, hedefi ETKİLEMEZ.
+        if(paceSec>0&&curMesafe > 0){
+          const newSec = Math.round(curMesafe/1000*paceSec);
+          upd = {...upd, ...secToHMS(newSec)};
         }
       }
     } else if(field==='bpm'){
