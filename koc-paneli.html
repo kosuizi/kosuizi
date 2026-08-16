@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.16-1207 --><!DOCTYPE html>
+<!-- Version: v2026.08.16-1618 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.16-1207';
+const APP_VERSION='v2026.08.16-1618';
 // 🔧 GEÇİCİ ANAHTAR (2026.08.16 — Göksel talebi): Hedef Uyumu skorlama hataları
 // doğrulanıp düzeltilene kadar, Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ı sporculardan GİZLENİR — yerine bir bakım mesajı
@@ -6250,7 +6250,7 @@ function DiagnosticPanel({loading,data,athName}){
   if(loading) return React.createElement('div',{style:{padding:'10px 14px',marginBottom:8,background:'rgba(56,189,248,.08)',border:'1px solid rgba(56,189,248,.2)',borderRadius:10,color:'#7dd3fc',fontSize:12}},'🔍 Tanı verisi çekiliyor…');
   if(!data) return null;
   if(data.error) return React.createElement('div',{style:{padding:'10px 14px',marginBottom:8,background:'rgba(248,113,113,.08)',border:'1px solid rgba(248,113,113,.2)',borderRadius:10,color:'#f87171',fontSize:12}},'Hata: '+data.error);
-  const{weekKey,hasSnap,debugLog=[],score}=data;
+  const{weekKey,hasSnap,debugLog=[],score,rawSample}=data;
   const skips=debugLog.filter(d=>d.status==='skip');
   const included=debugLog.filter(d=>d.status==='included');
   // Skip nedenlerini grupla
@@ -6310,6 +6310,14 @@ function DiagnosticPanel({loading,data,athName}){
           ))
         )
       )
+    ),
+    rawSample&&React.createElement('div',{style:{marginTop:8}},
+      React.createElement('details',null,
+        React.createElement('summary',{style:{cursor:'pointer',color:'#38bdf8',fontSize:10,fontWeight:600}},'🔬 Firebase\'de gerçekte kayıtlı ham veri ('+rawSample.date+' · Tekrar '+rawSample.rep+')'),
+        React.createElement('pre',{style:{maxHeight:200,overflowY:'auto',marginTop:4,padding:8,background:'#0f172a',borderRadius:6,fontSize:10,color:'#a5f3fc',whiteSpace:'pre-wrap',wordBreak:'break-all'}},
+          JSON.stringify(rawSample.data,null,2)
+        )
+      )
     )
   );
 }
@@ -6362,7 +6370,25 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
       const debugLog=[];
       const signals=extractFeedbackSignals({[weekKey]:snap||{}},ath,debugLog);
       const score=calcPaceComplianceScore(signals);
-      setDiagData({weekKey,hasSnap:!!snap,debugLog,signals,score});
+      // GEÇİCİ TANI: __aralik içeren ilk günün, ilk tekrarının HAM (Firebase'de
+      // gerçekte kayıtlı) verisini yakala — "mesafe kaydediliyor mu?" sorusunu
+      // extractFeedbackSignals'ı hiç karıştırmadan doğrudan cevaplar.
+      let rawSample=null;
+      const rowOv=snap?.rowOverrides||{};
+      for(const date of Object.keys(rowOv)){
+        const dOv=rowOv[date];
+        const aralik=dOv?.__aralik;
+        if(aralik&&typeof aralik==='object'){
+          for(const hIdx of Object.keys(aralik)){
+            const repMap=aralik[hIdx];
+            const firstRepKey=Object.keys(repMap||{})[0];
+            const firstRep=repMap?.[firstRepKey];
+            if(firstRep){rawSample={date,headerIdx:hIdx,rep:firstRepKey,data:firstRep};break;}
+          }
+        }
+        if(rawSample) break;
+      }
+      setDiagData({weekKey,hasSnap:!!snap,debugLog,signals,score,rawSample});
     }catch(e){
       setDiagData({error:String(e?.message||e)});
     }
