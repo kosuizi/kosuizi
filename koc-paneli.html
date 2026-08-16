@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.16-1740 --><!DOCTYPE html>
+<!-- Version: v2026.08.16-1824 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.16-1740';
+const APP_VERSION='v2026.08.16-1824';
 // 🔧 GEÇİCİ ANAHTAR (2026.08.16 — Göksel talebi): Hedef Uyumu skorlama hataları
 // doğrulanıp düzeltilene kadar, Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ı sporculardan GİZLENİR — yerine bir bakım mesajı
@@ -8041,6 +8041,35 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
     // için de spread zaten doğru davranır: eksik taraf base'den (zone-varsayılanı)
     // gösterilir, 0 değil.
     const merged = {...base, ...ovr};
+    // KÖK NEDEN DÜZELTMESİ (2026.08.16 — retroaktif düzeltme): 2026.08.16-1740'tan
+    // ÖNCE kaydedilmiş tekrarlarda ovr._targetZIdx/_targetPaceSec, o tekrarın eski
+    // buggy mantıkla KENDİ girilen pace'inden türetilmiş "sahte hedefi" olabilir
+    // (bkz. updateAralikCell'deki kök neden notu — Göksel'in "6:01 Biraz Hızlı,
+    // 5:51 Çok Yavaş" bildirdiği çelişki). Kod düzeltmesi yalnızca YENİ girişleri
+    // etkiliyordu; zaten kaydedilmiş bu stale alanlar spread ile base'in ÜZERİNE
+    // yazılmaya devam ediyor, yani ESKİ hatalı veriler ekranda hâlâ görünüyordu.
+    // Aralık tekrarlarında pace hedefi ARTIK HİÇBİR ZAMAN rep-bazlı olamayacağı için
+    // (tüm tekrarlar ortak tek plan hedefine göre değerlendirilir), bu iki alan
+    // burada HER ZAMAN silinir — paceValidation otomatik olarak _origZIdx/_origPaceSec'e
+    // (base'in kendi, ortak hedefi) düşer. Bu, geçmişte kaydedilmiş hatalı verileri de
+    // migration'a gerek kalmadan düzeltir.
+    delete merged._targetZIdx;
+    delete merged._targetPaceSec;
+    // AYNI KÖK NEDENİN NABIZ TARAFI (2026.08.16 — Göksel'in ekran görüntüsünde
+    // fark edilen ikinci çelişki: aynı 163 bpm bir tekrarda "Hedef Nabız", başka
+    // bir tekrarda "Yetersiz Yoğunluk" çıkıyordu). _origLoBpm/_origHiBpm eskiden
+    // updateAralikCell içinde o anki `_zIdxForHrAr`'a göre donduruluyordu — bu da
+    // buggy dönemde İLGİLİ TEKRARIN kendi pace'inden türetilmiş (muhtemelen yanlış)
+    // zone'un bpm sınırlarıydı. Yani her tekrar hem farklı bir "hedef pace zone"una
+    // hem de o zone'un farklı bpm aralığına göre değerlendiriliyordu — iki kat sapma.
+    // Pace tarafındaki gibi bu iki alan da burada silinir; bpmValidationAralik
+    // otomatik olarak CANLI zones.hrZones[_origZIdx] sınırlarına düşer — bu artık
+    // TÜM tekrarlar için AYNI (base._origZIdx paylaşılan hedeften). Kaybedilen tek
+    // şey, LTHR sonradan değişirse bu geçmiş antrenmanın nabız değerlendirmesinin de
+    // kayması (freeze koruması) — ama tutarlı/doğru bir sonuç, tutarsız/yanlış bir
+    // "korumalı" sonuçtan HER ZAMAN tercih edilir.
+    delete merged._origLoBpm;
+    delete merged._origHiBpm;
     return merged;
   };
 
@@ -9242,49 +9271,26 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
       ?{_origMesafe:_existingOrigMesafeAr}
       :(_currentMesafeForFreezeAr>0?{_origMesafe:_currentMesafeForFreezeAr}:{});
 
-    // Pace/Zone hedefi dondurma — updateCell'deki AYNI kilitleme mantığı (2026.08.13 —
-    // Göksel talebi, mesafe ile aynı davranış aralıklı antrenmanlara da uygulandı):
-    // Ekle'den önce hedef her düzenlemede güncel şablon pace/zone'una senkron kalır;
-    // Ekle'den sonra İLK donduğu andan itibaren kilitlenir.
-    // KÖK NEDEN DÜZELTMESİ (2026.08.15) — updateCell'deki AYNI ayrım burada da uygulandı:
-    // _origPaceSec/_origZIdx HER ZAMAN base'in (şablonun) kendi değerini yansıtır — bu,
-    // düz satırlardaki üst-seviye "kalıntı override" parmak izi kontrolüyle simetrik/
-    // tutarlı kalması ve gelecekte aynı kontrolün aralık satırlarına da uygulanabilmesi
-    // içindir. Coach'un elle düzenlediği HEDEF ayrı alanlarda tutulur: _targetPaceSec/
-    // _targetZIdx — paceValidation bunları önceliklendirir (yoksa _origZIdx'e düşer).
-    const _existingTargetPaceSecAr=curOv._targetPaceSec;
-    const _existingTargetZIdxAr=curOv._targetZIdx;
-    const _paceLockedAr=isWorkoutLogged&&_existingTargetPaceSecAr>0;
+    // Pace/Zone hedefi — aralık tekrarlarında ARTIK rep-bazlı kilitleme/dondurma
+    // YOK (bkz. aşağıdaki 2026.08.16 ikinci-tur notu): tüm tekrarlar her zaman
+    // base'in (şablonun) ortak plan hedefine göre değerlendirilir.
     const _origPaceZFieldAr={_origPaceSec:base._origPaceSec,_origZIdx:base._origZIdx};
-    // KÖK NEDEN DÜZELTMESİ (2026.08.16) — updateCell'deki AYNI hata burada da vardı:
-    // coach PACE DIŞI bir alanı (mesafe/bpm/dp) düzenlediğinde, hedef HER ZAMAN
-    // base._origPaceSec'e (şablon varsayılanı) senkronlanıyordu — daha önce elle
-    // ayarlanmış özel bir hedef varsa bile SİLİNİYORDU. Artık pace-dışı düzenlemede
-    // önce mevcut kaydedilmiş hedef (_existingTargetPaceSecAr) korunur; hiç yoksa
-    // şablon varsayılanına senkron kalmaya devam eder.
-    // NOT (2026.08.16 düzeltmesi): _editedPaceSecAr/_editedZIdxAr artık hiçbir zaman
-    // set edilmiyor (bkz. yukarıdaki kök neden notu — aralık tekrarlarında pace hedefi
-    // girilen değerden türetilmiyor) — bu yüzden aşağıdaki dallanma sadeleştirildi.
-    // ÖNCEKİ HATA (bu değişiklik sırasında oluşan regresyon — Göksel'in "tekrarlı
-    // kısımları yazamıyorum, düzenleme kutusu açık kalıyor" bildirimiyle bulundu):
-    // bu iki değişkenin TANIMI kaldırılmıştı ama KULLANIMLARI unutulmuştu — her pm/ps
-    // girişinde "ReferenceError: _editedPaceSecAr is not defined" fırlatılıyor, hata
-    // React commit'ini yarıda kesip düzenleme kutusunu açık bırakıyordu.
-    const _targetPaceZFieldAr=_paceLockedAr
-      ?{_targetPaceSec:_existingTargetPaceSecAr,...(_existingTargetZIdxAr!=null?{_targetZIdx:_existingTargetZIdxAr}:{})}
-      :(_existingTargetPaceSecAr>0
-          ?{_targetPaceSec:_existingTargetPaceSecAr,...(_existingTargetZIdxAr!=null?{_targetZIdx:_existingTargetZIdxAr}:{})}
-          :{_targetPaceSec:base._origPaceSec,_targetZIdx:base._origZIdx});
+    // KÖK NEDEN DÜZELTMESİ (2026.08.16 — ikinci tur): önceki kilitleme mantığı
+    // curOv._targetPaceSec/_targetZIdx'i (Firebase'de zaten kayıtlı, ESKİ buggy
+    // mantıkla dondurulmuş "sahte hedef") okuyup bir sonraki kayıtta GERİ YAZIYORDU —
+    // yani getRowData() ekranda bu alanları gizlese bile, coach var olan bir tekrarı
+    // düzenlediğinde (ör. mesafe/dp alanı) bozuk hedef Firebase'e sessizce yeniden
+    // yazılıyordu. Aralık tekrarlarında hedef ARTIK HER ZAMAN base'in ortak plan
+    // hedefidir — rep-bazlı "mevcut hedefi koru" dalı tamamen kaldırıldı.
+    const _targetPaceZFieldAr={_targetPaceSec:base._origPaceSec,_targetZIdx:base._origZIdx};
 
     setAralikOverrides(prev=>{
       const next={...prev};
       if(!next[headerIdx]) next[headerIdx]={};
       if(!next[headerIdx][rep]) next[headerIdx][rep]={};
       if(!next[headerIdx][rep][type]) next[headerIdx][rep][type]={};
-      // Nabız bölge sınırları da donsun — kilitliyse kilitli zIdx'e, değilse mevcut
-      // kaydedilmiş hedefe, o da yoksa şablonun (base) kendi zIdx'ine göre
-      const _zIdxForHrAr=_paceLockedAr?_existingTargetZIdxAr:(_existingTargetZIdxAr!=null?_existingTargetZIdxAr:base._origZIdx);
-      const ohr=_zIdxForHrAr!=null?zones?.hrZones?.[_zIdxForHrAr]:null;
+      // Nabız bölge sınırları da her zaman base'in ortak zIdx'ine göre (aynı kök neden)
+      const ohr=base._origZIdx!=null?zones?.hrZones?.[base._origZIdx]:null;
       next[headerIdx][rep][type]={
         ...next[headerIdx][rep][type],
         // Sinyal üretimi için kalıcı meta alanlar — extractFeedbackSignals okur
