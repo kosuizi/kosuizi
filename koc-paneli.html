@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.16-0113 --><!DOCTYPE html>
+<!-- Version: v2026.08.16-1026 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.16-0113';
+const APP_VERSION='v2026.08.16-1026';
 // 🔧 GEÇİCİ ANAHTAR (2026.08.16 — Göksel talebi): Hedef Uyumu skorlama hataları
 // doğrulanıp düzeltilene kadar, Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ı sporculardan GİZLENİR — yerine bir bakım mesajı
@@ -1216,7 +1216,13 @@ const BPM_SIGNAL_SCORE_THRESHOLD=4;
 // Tüm plan_snapshots verisinden reçete geribildirim sinyalleri çıkarır.
 // Yalnızca kalite fazları (ısınma/soğuma/dinlenme dışı) kullanılır.
 // athlete parametresi: hrZones recompute için kullanılır (_origZIdx → zone center)
-function extractFeedbackSignals(allSnapsObj, athlete){
+// 2026.08.16 — GEÇİCİ TANI ARACI (Göksel talebi): 3. parametre `debugLog` isteğe
+// bağlıdır — verilirse scanRow'un HER satır için verdiği dahil/hariç kararı bu
+// diziye eklenir (dahil edilme mantığının kendisi HİÇ değişmez, sadece gözlemlenir).
+// Tüm mevcut çağrılar (fetchWeekPaceScores, fetchPaceComplianceScore vb.) bu
+// parametreyi vermez → debugLog=undefined → sıfır davranış/performans etkisi.
+// Kök neden teşhisi netleşince bu enstrümantasyon kaldırılabilir.
+function extractFeedbackSignals(allSnapsObj, athlete, debugLog){
   const SKIP_RE=/[iı]sınma|isinma|soğuma|soguma|dinlenme|toparlanma|blok\s*arası|strides\s*arası/i;
   const signals=[];
   if(!allSnapsObj||typeof allSnapsObj!=='object') return signals;
@@ -1239,10 +1245,16 @@ function extractFeedbackSignals(allSnapsObj, athlete){
       const zones=zonesForDate(date); // o günün profiline göre — bkz. yukarıdaki not
 
       // ── Düz satırlar ────────────────────────────────────────────────────────
-      const scanRow=(row)=>{
-        if(!row||typeof row!=='object') return;
-        if(row.type==='header'||row.rpe||row._isSprint) return;
-        if(row.type==='walk') return;
+      const scanRow=(row,ctxLabel)=>{
+        // GEÇİCİ TANI: dbgPush çağrıları mevcut mantığa hiçbir etki yapmaz —
+        // debugLog verilmediyse (normal kullanım) tamamen no-op'tur.
+        const dbgPush=(status,reason,extra)=>{
+          if(!debugLog) return;
+          debugLog.push({date,ctx:ctxLabel||row?.label||null,label:row?.label||null,type:row?.type||null,status,reason,...(extra||{})});
+        };
+        if(!row||typeof row!=='object'){dbgPush('skip','geçersiz satır (boş/obje değil)');return;}
+        if(row.type==='header'||row.rpe||row._isSprint){dbgPush('skip','header / rpe / sprint satırı — hiç değerlendirilmez');return;}
+        if(row.type==='walk'){dbgPush('skip',"type==='walk' — Isınma/Soğuma/Dinlenme yürüyüşü, TAMAMEN hariç (mesafe+nabız dahil)");return;}
 
         // ── Aralık özet/ortalama satırı istisnası (2026.08.09 — Göksel'in
         // bildirdiği "Yürü-Tempolu Yürü aralığında Koşu fazı için 'Çok Fazla
@@ -1260,7 +1272,7 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         // satırları (repeatCount>1 ile işaretli — tüm aralık/tekrar türleri:
         // interval, piramit, blok) SİNYAL ÜRETİMİNDEN TAMAMEN HARİÇ TUT — doğru,
         // güvenilir veri zaten __aralik'teki tekrar-bazlı satırlardan geliyor.
-        if(row.repeatCount>1) return;
+        if(row.repeatCount>1){dbgPush('skip','özet/ortalama satır (repeatCount>1) — gerçek veri __aralik tekrarlarından geliyor');return;}
 
         // ── Serbest Koşu istisnası (2026.08.09 — Göksel'in bildirdiği hata:
         // "Serbest Koşu"da hedef pace/nabız bölgesi YOK ('hissinize göre koşun'),
@@ -1275,7 +1287,7 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         // persist edilmiş satır verisini okuyor) — bu yüzden burada AYNI istisnayı
         // satırın kendi etiketinden (donmuş 'Serbest Koşu' label'ı — şablonda sabit
         // metin) tespit ediyoruz. Mesafe kontrolü de aynı sebeple hariç tutulur.
-        if(row.label==='Serbest Koşu') return;
+        if(row.label==='Serbest Koşu'){dbgPush('skip',"'Serbest Koşu' istisnası — hedef bölge yok");return;}
 
         // ── Mesafe Hedefi Uyumu — TÜM satırlarda değerlendirilir (Isınma/Soğuma
         // DAHİL), pace/nabız'ın aksine SKIP_RE'den etkilenmez (2026.08.04 —
@@ -1354,7 +1366,10 @@ function extractFeedbackSignals(allSnapsObj, athlete){
               }
             }
           }
-          if(mesafeDir||mesafeOk||hrDir||hrOk) signals.push({date,label:row.label||null,mesafeDir,mesafeOk,mesafeDiffPct,mesZoneKolay,hrDir,hrOk,hrWeight,zi:row._origZIdx??0,zoneId:null});
+          if(mesafeDir||mesafeOk||hrDir||hrOk){
+            signals.push({date,label:row.label||null,mesafeDir,mesafeOk,mesafeDiffPct,mesZoneKolay,hrDir,hrOk,hrWeight,zi:row._origZIdx??0,zoneId:null});
+            dbgPush('included','SKIP_RE dalı (Isınma/Soğuma/Dinlenme etiketi) — sinyal skorlamaya girdi',{mesafeDir,mesafeOk,hrDir,hrOk,hrWeight});
+          } else dbgPush('skip','SKIP_RE dalı — performans verisi girilmemiş, sinyal üretilmedi');
           return;
         }
         let paceDir=null, hrDir=null, paceOk=false, hrOk=false, paceDiff=null, paceTol=null;
@@ -1450,16 +1465,19 @@ function extractFeedbackSignals(allSnapsObj, athlete){
             } else hrOk=true; // zone içinde
           }
         }
-        if(paceDir||hrDir||paceOk||hrOk||mesafeDir||mesafeOk) signals.push({date,label:row.label||null,paceDir,hrDir,paceOk,hrOk,hrWeight,zi:zi??0,zoneId:hr?.id||null,paceDiff,paceTol,mesafeDir,mesafeOk,mesafeDiffPct,mesZoneKolay});
+        if(paceDir||hrDir||paceOk||hrOk||mesafeDir||mesafeOk){
+          signals.push({date,label:row.label||null,paceDir,hrDir,paceOk,hrOk,hrWeight,zi:zi??0,zoneId:hr?.id||null,paceDiff,paceTol,mesafeDir,mesafeOk,mesafeDiffPct,mesZoneKolay});
+          dbgPush('included','normal faz — sinyal skorlamaya girdi',{paceDir,hrDir,paceOk,hrOk,hrWeight,mesafeDir,mesafeOk});
+        } else dbgPush('skip','normal faz — performans verisi girilmemiş (pace/nabız/mesafe boş)');
       };
 
       Object.values(rowOvs).forEach(scanRow);
 
       // ── Aralık (interval) satırları — __aralik yapısı ───────────────────────
       if(__aralik&&typeof __aralik==='object'){
-        Object.values(__aralik).forEach(repMap=>{
+        Object.entries(__aralik).forEach(([headerIdx,repMap])=>{
           if(!repMap||typeof repMap!=='object') return;
-          Object.values(repMap).forEach(typeMap=>{
+          Object.entries(repMap).forEach(([repKey,typeMap])=>{
             if(!typeMap||typeof typeMap!=='object') return;
             // 2026.08.11 — Göksel talebi: dinlenme arası artık da taranıyor. Eskiden
             // "sadece koşu" idi (pace kalibrasyonunu dinlenme pace'iyle kirletmemek için)
@@ -1467,8 +1485,12 @@ function extractFeedbackSignals(allSnapsObj, athlete){
             // (Isınma/Soğuma/Dinlenme) davranışla TUTARSIZDI. scanRow'un kendi SKIP_RE'si
             // ("dinlenme" dahil) zaten pace'i otomatik atlayıp mesafeyi (ve varsa nabzı)
             // kaydediyor — bu yüzden ek bir dallanmaya gerek yok, doğrudan çağırmak yeterli.
-            if(typeMap.run) scanRow(typeMap.run);
-            if(typeMap.rest) scanRow(typeMap.rest);
+            // NOT (2026.08.16 — tanı bulgusu): "Yürüyüş" (rest) fazlarının kendi etiketi
+            // SKIP_RE'ye ("dinlenme" vb.) UYMUYOR ve type:'walk' taşıyor — bu yüzden
+            // yukarıdaki varsayımın aksine scanRow'un `type==='walk'` erken çıkışına takılıp
+            // TAMAMEN hariç tutuluyor olabilir. debugLog bunu doğrudan gösterir.
+            if(typeMap.run) scanRow(typeMap.run,'Tekrar '+repKey+' · Koşu');
+            if(typeMap.rest) scanRow(typeMap.rest,'Tekrar '+repKey+' · Dinlenme (Yürüyüş)');
           });
         });
       }
@@ -6208,6 +6230,63 @@ function finalizeLeaderboard(rows,paceScores){
   }).sort((a,b)=>b.finalScore-a.finalScore);
 }
 
+// 2026.08.16 — GEÇİCİ TANI PANELİ (Göksel talebi): Hedef Uyumu skorlama hatası
+// araştırması için. extractFeedbackSignals'ın debugLog çıktısını ve
+// calcPaceComplianceScore'un ham bileşen dökümünü gösterir. Kök neden bulunup
+// düzeltme doğrulandığında bu komponent + LiderlikTab'daki 🔍 butonu/state'i
+// kaldırılabilir.
+function DiagnosticPanel({loading,data,athName}){
+  if(loading) return React.createElement('div',{style:{padding:'10px 14px',marginBottom:8,background:'rgba(56,189,248,.08)',border:'1px solid rgba(56,189,248,.2)',borderRadius:10,color:'#7dd3fc',fontSize:12}},'🔍 Tanı verisi çekiliyor…');
+  if(!data) return null;
+  if(data.error) return React.createElement('div',{style:{padding:'10px 14px',marginBottom:8,background:'rgba(248,113,113,.08)',border:'1px solid rgba(248,113,113,.2)',borderRadius:10,color:'#f87171',fontSize:12}},'Hata: '+data.error);
+  const{weekKey,hasSnap,debugLog=[],score}=data;
+  const skips=debugLog.filter(d=>d.status==='skip');
+  const included=debugLog.filter(d=>d.status==='included');
+  // Skip nedenlerini grupla
+  const skipGroups={};
+  skips.forEach(s=>{skipGroups[s.reason]=(skipGroups[s.reason]||0)+1;});
+  const box=(label,val,color)=>React.createElement('div',{style:{textAlign:'center',flex:1}},
+    React.createElement('div',{style:{fontSize:9,color:'#64748b',textTransform:'uppercase'}},label),
+    React.createElement('div',{style:{fontSize:16,fontWeight:700,color:color||'#f1f5f9'}},val==null?'—':val)
+  );
+  return React.createElement('div',{style:{padding:'12px 14px',marginBottom:8,background:'rgba(56,189,248,.06)',border:'1px solid rgba(56,189,248,.2)',borderRadius:10,fontSize:12,color:'#cbd5e1'}},
+    React.createElement('div',{style:{fontWeight:700,color:'#7dd3fc',marginBottom:8}},'🔍 '+athName+' — '+weekKey+(hasSnap?'':' (snapshot bulunamadı)')),
+    score&&React.createElement('div',{style:{display:'flex',gap:6,marginBottom:10,padding:'8px 0',borderTop:'1px solid rgba(255,255,255,.08)',borderBottom:'1px solid rgba(255,255,255,.08)'}},
+      box('🎯 Toplam',score.puan!=null?score.puan+'%':'—','#38bdf8'),
+      box('Pace ('+score.total+')',score.puanPace!=null?score.puanPace+'%':'—'),
+      box('Nabız ('+score.hrTotal+')',score.puanNabiz!=null?score.puanNabiz+'%':'—'),
+      box('Mesafe ('+score.mesafeTotal+')',score.puanMesafe!=null?score.puanMesafe+'%':'—')
+    ),
+    !score&&React.createElement('div',{style:{color:'#f87171',marginBottom:10}},'Bu hafta hiç sinyal üretilmedi (score=null).'),
+    React.createElement('div',{style:{fontWeight:600,color:'#f1f5f9',marginBottom:4}},'Hariç tutulan fazlar: '+skips.length+' / '+debugLog.length),
+    Object.entries(skipGroups).sort((a,b)=>b[1]-a[1]).map(([reason,n])=>
+      React.createElement('div',{key:reason,style:{fontSize:11,color:'#fbbf24',marginBottom:2}},'• ×'+n+' — '+reason)
+    ),
+    React.createElement('div',{style:{fontWeight:600,color:'#f1f5f9',margin:'10px 0 4px'}},'Skorlamaya giren fazlar: '+included.length),
+    React.createElement('div',{style:{maxHeight:220,overflowY:'auto',border:'1px solid rgba(255,255,255,.08)',borderRadius:6}},
+      included.length===0
+        ?React.createElement('div',{style:{padding:8,color:'#64748b',fontSize:11}},'—')
+        :included.map((s,idx)=>React.createElement('div',{key:idx,style:{padding:'5px 8px',borderBottom:idx<included.length-1?'1px solid rgba(255,255,255,.05)':'none',fontSize:11}},
+            React.createElement('span',{style:{color:'#94a3b8'}},s.date+' · '+(s.ctx||s.label||'—')+' — '),
+            s.paceDir!=null&&React.createElement('span',{style:{color:s.paceOk?'#4ade80':'#f87171'}},'Pace:'+(s.paceOk?'✓':s.paceDir)+' '),
+            s.hrDir!=null&&React.createElement('span',{style:{color:s.hrOk?'#4ade80':'#f87171'}},'Nabız:'+(s.hrOk?'✓':s.hrDir+'('+s.hrWeight+')')+' '),
+            s.mesafeDir!=null&&React.createElement('span',{style:{color:s.mesafeOk?'#4ade80':'#f87171'}},'Mesafe:'+(s.mesafeOk?'✓':s.mesafeDir))
+          ))
+    ),
+    Object.entries(skipGroups).length===0&&skips.length===0&&null,
+    React.createElement('div',{style:{marginTop:8}},
+      React.createElement('details',null,
+        React.createElement('summary',{style:{cursor:'pointer',color:'#64748b',fontSize:10}},'Hariç tutulan fazların tam listesi'),
+        React.createElement('div',{style:{maxHeight:180,overflowY:'auto',marginTop:4}},
+          skips.map((s,idx)=>React.createElement('div',{key:idx,style:{padding:'3px 6px',fontSize:10,color:'#94a3b8',borderBottom:'1px solid rgba(255,255,255,.03)'}},
+            s.date+' · '+(s.ctx||s.label||'—')+' — '+s.reason
+          ))
+        )
+      )
+    )
+  );
+}
+
 function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
   const [weekOffset,setWeekOffset]=useState(0);
   const [downloading,setDownloading]=useState(false);
@@ -6237,6 +6316,31 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
     });
     return()=>{cancelled=true;};
   },[athKey,weekOffset]);
+
+  // 2026.08.16 — GEÇİCİ TANI ARACI (Göksel talebi): Hedef Uyumu skorlama hatası
+  // araştırması için. Bir sporcu satırındaki 🔍 ikonuna basınca, o sporcunun bu
+  // haftaki plan_snapshot'ı çekilip extractFeedbackSignals+calcPaceComplianceScore
+  // AYNEN skorlamada kullanıldığı gibi çalıştırılır — ama debugLog ile HANGİ
+  // fazın dahil/hariç tutulduğu da görünür kılınır. Kök neden bulununca bu
+  // state/fonksiyon ve aşağıdaki render bloğu kaldırılabilir.
+  const [diagAthId,setDiagAthId]=useState(null);
+  const [diagData,setDiagData]=useState(null);
+  const [diagLoading,setDiagLoading]=useState(false);
+  const runDiagnostic=async(ath)=>{
+    if(diagAthId===ath.id){setDiagAthId(null);return;} // tekrar tıklayınca kapat
+    setDiagAthId(ath.id);setDiagData(null);setDiagLoading(true);
+    try{
+      const weekKey=getWeekKey(weekOffset);
+      const snap=await fbGet('plan_snapshots/'+ath.id+'/'+weekKey);
+      const debugLog=[];
+      const signals=extractFeedbackSignals({[weekKey]:snap||{}},ath,debugLog);
+      const score=calcPaceComplianceScore(signals);
+      setDiagData({weekKey,hasSnap:!!snap,debugLog,signals,score});
+    }catch(e){
+      setDiagData({error:String(e?.message||e)});
+    }
+    setDiagLoading(false);
+  };
 
   const stats=React.useMemo(()=>finalizeLeaderboard(rawStats,paceScores),[rawStats,paceScores]);
   // Bir önceki haftanın sıralaması — değişim okları için
@@ -6431,7 +6535,8 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
           if(row.count===0&&i>=activeCount)return null;
           const pct=stats[0].finalScore>0?Math.round(row.finalScore/stats[0].finalScore*100):0;
           const sporList=Object.entries(row.sporDagilim).map(([k,v])=>(SPOR_MAP[k]?.emoji||'🏅')+' ×'+v).join(' ');
-          return React.createElement('div',{key:row.ath.id,
+          return React.createElement(React.Fragment,{key:row.ath.id},
+          React.createElement('div',{
             ref:el=>{if(el)athCardRefs.current[row.ath.id]=el;},
             style:{
             display:'flex',alignItems:'center',gap:12,
@@ -6539,7 +6644,23 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
                 flexShrink:0,transition:'.15s',opacity:sharing&&sharing!==row.ath.id?.5:1
               },
               title:'Kartı paylaş'
-            },sharing===row.ath.id?'◌':'↗')
+            },sharing===row.ath.id?'◌':'↗'),
+            // 2026.08.16 — GEÇİCİ TANI butonu (Göksel talebi): Hedef Uyumu skorlama
+            // hatası araştırması için. Kök neden bulununca kaldırılabilir.
+            React.createElement('button',{
+              'data-no-export':true,
+              onClick:e=>{e.stopPropagation();runDiagnostic(row.ath);},
+              style:{
+                background:diagAthId===row.ath.id?'rgba(56,189,248,.25)':'rgba(255,255,255,.08)',
+                border:'none',borderRadius:8,padding:'6px 8px',cursor:'pointer',
+                color:diagAthId===row.ath.id?'#38bdf8':'#94a3b8',fontSize:14,flexShrink:0,transition:'.15s'
+              },
+              title:'🛠️ Geçici: Hedef Uyumu tanı çıktısı'
+            },'🔍')
+          ),
+          diagAthId===row.ath.id&&React.createElement(DiagnosticPanel,{
+            key:row.ath.id+'-diag',loading:diagLoading,data:diagData,athName:(row.ath.ad||'')+' '+(row.ath.soyad||'')
+          })
           );
         }).filter(Boolean)
       ),
