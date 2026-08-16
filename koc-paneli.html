@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.16-1618 --><!DOCTYPE html>
+<!-- Version: v2026.08.16-1640 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.16-1618';
+const APP_VERSION='v2026.08.16-1640';
 // 🔧 GEÇİCİ ANAHTAR (2026.08.16 — Göksel talebi): Hedef Uyumu skorlama hataları
 // doğrulanıp düzeltilene kadar, Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ı sporculardan GİZLENİR — yerine bir bakım mesajı
@@ -6250,7 +6250,7 @@ function DiagnosticPanel({loading,data,athName}){
   if(loading) return React.createElement('div',{style:{padding:'10px 14px',marginBottom:8,background:'rgba(56,189,248,.08)',border:'1px solid rgba(56,189,248,.2)',borderRadius:10,color:'#7dd3fc',fontSize:12}},'🔍 Tanı verisi çekiliyor…');
   if(!data) return null;
   if(data.error) return React.createElement('div',{style:{padding:'10px 14px',marginBottom:8,background:'rgba(248,113,113,.08)',border:'1px solid rgba(248,113,113,.2)',borderRadius:10,color:'#f87171',fontSize:12}},'Hata: '+data.error);
-  const{weekKey,hasSnap,debugLog=[],score,rawSample}=data;
+  const{weekKey,hasSnap,debugLog=[],score,rawSample,rawAllAralik=[]}=data;
   const skips=debugLog.filter(d=>d.status==='skip');
   const included=debugLog.filter(d=>d.status==='included');
   // Skip nedenlerini grupla
@@ -6307,6 +6307,23 @@ function DiagnosticPanel({loading,data,athName}){
         React.createElement('div',{style:{maxHeight:180,overflowY:'auto',marginTop:4}},
           skips.map((s,idx)=>React.createElement('div',{key:idx,style:{padding:'3px 6px',fontSize:10,color:'#94a3b8',borderBottom:'1px solid rgba(255,255,255,.03)'}},
             s.date+' · '+(s.ctx||s.label||'—')+' — '+s.reason
+          ))
+        )
+      )
+    ),
+    rawAllAralik.length>0&&React.createElement('div',{style:{marginTop:8}},
+      React.createElement('details',null,
+        React.createElement('summary',{style:{cursor:'pointer',color:'#38bdf8',fontSize:10,fontWeight:600}},
+          '🔬 Tüm tekrarların ham mesafe durumu ('+rawAllAralik.length+' tekrar — Firebase\'de mesafe kayıtlı: '+rawAllAralik.filter(r=>r.runHasMesafe||r.restHasMesafe).length+')'
+        ),
+        React.createElement('div',{style:{maxHeight:260,overflowY:'auto',marginTop:4,border:'1px solid rgba(255,255,255,.08)',borderRadius:6}},
+          rawAllAralik.map((r,idx)=>React.createElement('details',{key:idx,style:{borderBottom:idx<rawAllAralik.length-1?'1px solid rgba(255,255,255,.05)':'none'}},
+            React.createElement('summary',{style:{cursor:'pointer',padding:'4px 8px',fontSize:10,color:(r.runHasMesafe||r.restHasMesafe)?'#4ade80':'#64748b'}},
+              r.date+' · Tekrar '+r.rep+' — Koşu mesafe:'+(r.runHasMesafe?r.runMesafe+'m ✓':'yok')+' · Dinlenme mesafe:'+(r.restHasMesafe?r.restMesafe+'m ✓':'yok')
+            ),
+            React.createElement('pre',{style:{margin:'0 8px 6px',padding:8,background:'#0f172a',borderRadius:6,fontSize:9,color:'#a5f3fc',whiteSpace:'pre-wrap',wordBreak:'break-all'}},
+              JSON.stringify(r.data,null,2)
+            )
           ))
         )
       )
@@ -6370,13 +6387,32 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
       const debugLog=[];
       const signals=extractFeedbackSignals({[weekKey]:snap||{}},ath,debugLog);
       const score=calcPaceComplianceScore(signals);
-      // GEÇİCİ TANI: __aralik içeren ilk günün, ilk tekrarının HAM (Firebase'de
-      // gerçekte kayıtlı) verisini yakala — "mesafe kaydediliyor mu?" sorusunu
-      // extractFeedbackSignals'ı hiç karıştırmadan doğrudan cevaplar.
-      let rawSample=null;
+      // GEÇİCİ TANI: __aralik içeren TÜM tekrarların HAM (Firebase'de gerçekte
+      // kayıtlı) verisini yakala — "hangi tekrarlarda mesafe gerçekten kaydedilmiş"
+      // sorusunu extractFeedbackSignals'ı hiç karıştırmadan doğrudan cevaplar.
+      const rawAllAralik=[];
       const rowOv=snap?.rowOverrides||{};
       for(const date of Object.keys(rowOv)){
         const dOv=rowOv[date];
+        const aralik=dOv?.__aralik;
+        if(!aralik||typeof aralik!=='object') continue;
+        for(const hIdx of Object.keys(aralik)){
+          const repMap=aralik[hIdx]||{};
+          for(const repKey of Object.keys(repMap)){
+            const entry=repMap[repKey];
+            rawAllAralik.push({
+              date,headerIdx:hIdx,rep:repKey,
+              runHasMesafe:entry?.run?.mesafe>0,runMesafe:entry?.run?.mesafe,
+              restHasMesafe:entry?.rest?.mesafe>0,restMesafe:entry?.rest?.mesafe,
+              data:entry
+            });
+          }
+        }
+      }
+      let rawSample=null;
+      const rowOv2=snap?.rowOverrides||{};
+      for(const date of Object.keys(rowOv2)){
+        const dOv=rowOv2[date];
         const aralik=dOv?.__aralik;
         if(aralik&&typeof aralik==='object'){
           for(const hIdx of Object.keys(aralik)){
@@ -6388,7 +6424,7 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
         }
         if(rawSample) break;
       }
-      setDiagData({weekKey,hasSnap:!!snap,debugLog,signals,score,rawSample});
+      setDiagData({weekKey,hasSnap:!!snap,debugLog,signals,score,rawSample,rawAllAralik});
     }catch(e){
       setDiagData({error:String(e?.message||e)});
     }
