@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.16-1824 --><!DOCTYPE html>
+<!-- Version: v2026.08.16-1923 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.16-1824';
+const APP_VERSION='v2026.08.16-1923';
 // 🔧 GEÇİCİ ANAHTAR (2026.08.16 — Göksel talebi): Hedef Uyumu skorlama hataları
 // doğrulanıp düzeltilene kadar, Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ı sporculardan GİZLENİR — yerine bir bakım mesajı
@@ -1377,7 +1377,19 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         // _targetZIdx/_targetPaceSec, yoksa _origZIdx/_origPaceSec'e (fingerprint =
         // şablonun kendi değeri) düşülür. Bkz. updateCell/paceValidation aynı notu.
         const zi=row._targetZIdx!=null?row._targetZIdx:row._origZIdx;
-        if((pm>0)||(ps>0)){
+        // KÖK NEDEN DÜZELTMESİ (2026.08.16 — Göksel'in fark ettiği "Yürüyüş fazları
+        // puanlamaya dahil edilmemeli ama edilmiş" hatası): ReceteTablosu'ndaki
+        // paceValidation() rozeti dinlenme/toparlanma (row.type==='rest'||'walk')
+        // fazlarında ZATEN hiç pace rozeti üretmiyordu (bkz. OP-YK3, 29.07.2026 —
+        // bu fazların amacı toparlanmak, YAVAŞ olmaları beklenen/istenen bir şey,
+        // "kötü" değil). Ama extractFeedbackSignals'ın kendi pace bloğunda bu istisna
+        // HİÇ yoktu — yani Yürü-Koş gibi antrenmanlarda her yürüyüş faz'ı koşu hedefine
+        // göre kıyaslanıp otomatik "Yavaş" sinyali üretiyor, Hedef Uyumu puanını
+        // haksız yere çekiyordu (rozet ekranı doğruydu, puanlama motoru yanlıştı).
+        // Çözüm: pace bloğu artık paceValidation ile BİREBİR aynı type kontrolünü
+        // uyguluyor — rest/walk fazları pace sinyali üretmez, sadece nabız (aşağıdaki
+        // hr bloğu zaten type'tan bağımsız, EN DÜŞÜK nabız/toparlanma mantığıyla çalışıyor).
+        if((pm>0||ps>0)&&row.type!=='rest'&&row.type!=='walk'){
           const enteredSec=(pm||0)*60+(ps||0);
           const origPace=row._targetPaceSec!=null?row._targetPaceSec:row._origPaceSec;
           // GAP düzeltmesi: paceValidation ile BİREBİR aynı mantık (bkz. ReceteTablosu →
@@ -1449,12 +1461,23 @@ function extractFeedbackSignals(allSnapsObj, athlete){
             // Üst/alt yön ayrı eşiklere sahip (asimetrik) — bkz. getBpmTol() yorumu.
             // durSec: sürekli bölgelerde (Z2–Z4) kısa segmentlerin lag payını hesaba katar.
             const {targetUp,warnUp,dangerUp,targetDown,warnDown,dangerDown}=getBpmTol(hr,rowDurSec(row));
+            // KÖK NEDEN DÜZELTMESİ (2026.08.16 — aynı fazın nabız versiyonu): rest/walk
+            // (toparlanma) fazlarında bpmValidation() rozeti YALNIZCA üst sınırı kontrol
+            // eder — "ne kadar düşük nabızla toparlanırsan o kadar iyi, alt sınır diye bir
+            // şey yok" (bkz. ~satır 7995 "Toparlanma Sağlandı/Yavaş/Yetersiz/Sağlanamadı").
+            // Bu fonksiyon ise HER zaman iki yönlü (lo_bpm VE hi_bpm) kontrol ediyordu —
+            // yani bir toparlanma fazında nabız zone'un alt sınırının bile altına düşerse
+            // (ki bu TAM İSTENEN şey), puanlama yanlışlıkla "Düşük Nabız" cezası veriyordu.
+            // Çözüm: rest/walk fazlarında alt sınır kontrolü tamamen atlanır.
+            const _isRecoveryPhase=row.type==='rest'||row.type==='walk';
             if(row.bpm > hr.hi_bpm){
               const over=row.bpm-hr.hi_bpm;
               if(over>targetUp){
                 hrDir='high';
                 hrWeight=over<=warnUp?BPM_SIGNAL_WEIGHT.warn:over<=dangerUp?BPM_SIGNAL_WEIGHT.danger:BPM_SIGNAL_WEIGHT.critical;
               } else hrOk=true; // nabız girildi ve tolerans payı içinde (Hedef Nabız)
+            } else if(_isRecoveryPhase){
+              hrOk=true; // toparlanma fazı: üst sınırın altındaysa (ne kadar düşük olursa olsun) uyumlu
             } else if(row.bpm < hr.lo_bpm){
               const under=hr.lo_bpm-row.bpm;
               if(under>targetDown){
