@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.16-1935 --><!DOCTYPE html>
+<!-- Version: v2026.08.17-1216 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.16-1935';
+const APP_VERSION='v2026.08.17-1216';
 // 🔧 GEÇİCİ ANAHTAR (2026.08.16 — Göksel talebi): Hedef Uyumu skorlama hataları
 // doğrulanıp düzeltilene kadar, Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ı sporculardan GİZLENİR — yerine bir bakım mesajı
@@ -17098,7 +17098,7 @@ function PickDebugInfo({debug}){
   );
 }
 
-function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapInit,onPlanSnapChange,onAthletesRefresh,onSaveWorkout,onUpdateWorkout,onUpdateAthlete}){  const [showLoading,setShowLoading]=useState(false);
+function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapInit,onPlanSnapChange,onAthletesRefresh,onWorkoutsRefresh,onSaveWorkout,onUpdateWorkout,onUpdateAthlete}){  const [showLoading,setShowLoading]=useState(false);
   const [selectedPrimary,setSelectedPrimary]=useState(null);
   const [planMode,setPlanModeLocal]=useState('optimize');
   const [expandDay,setExpandDay]=useState(null);
@@ -17771,6 +17771,33 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       }
     }catch(e){console.warn('handlePlanGuncelle: taze veri alınamadı, mevcut state kullanılıyor',e);}
 
+    // KÖK NEDEN DÜZELTMESİ (17.08.2026 — Göksel bildirimi: "bir gün önce yapılan
+    // Cruise·S2 antrenmanına rağmen aynı tür yine seçiliyor VE '🕐 ilk kez'
+    // rozeti çıkıyor"): workouts prop'u sayfa ilk açıldığında BİR KEZ fbGet('wks')
+    // ile okunuyor (bkz. App useEffect, satır ~26790) — sonrasında canlı Firebase
+    // dinleyicisi YOK. Sporcu kendi cihazından antrenman girdiğinde, koçun ÖNCEDEN
+    // AÇIK sekmesindeki workouts state'i bundan habersiz kalır. handlePlanGuncelle
+    // şimdiye kadar SADECE freshAthlete'i tazeliyordu (yukarıda) — workouts hâlâ
+    // bayattı. Sonuç: hem tekrar-önleme (recentKaliteli/yasak, generateTwoWeekPlan
+    // ~15165) hem de "son kullanım" rozeti (turSonKullanim/athWksSon, ~17493 ve
+    // ~20600) aynı bayat workouts'tan türediği için dünkü antrenmanı GÖRMÜYOR —
+    // motor türü "hiç yapılmadı" sanıp yeniden seçiyor, rozet de "ilk kez"
+    // gösteriyor. Çözüm: freshAthlete ile birebir aynı desen — fbGet('wks') ile
+    // taze çek, henüz Firebase'e yazılmamış (çok yeni, yerel) kayıtları id ile
+    // birleştirerek kaybetme, ve onWorkoutsRefresh ile App state'ini de güncelle
+    // (aksi halde bu fonksiyon içindeki hesap düzelir ama rozet — HaftalikPlanTab'ın
+    // kendi athWksSon useMemo'su — hâlâ eski workouts prop'unu kullanmaya devam eder).
+    let freshWorkouts=workouts||[];
+    try{
+      const freshWks=await fbGet('wks');
+      if(Array.isArray(freshWks)){
+        const freshIds=new Set(freshWks.map(w=>w.id));
+        const localOnly=(workouts||[]).filter(w=>w.id&&!freshIds.has(w.id));
+        freshWorkouts=[...freshWks,...localOnly];
+        if(onWorkoutsRefresh) onWorkoutsRefresh(freshWorkouts);
+      }
+    }catch(e){console.warn('handlePlanGuncelle: taze antrenman verisi alınamadı, mevcut state kullanılıyor',e);}
+
     const curSnap=planSnapRef.current||{};
     const todayStr=localDateStr(new Date());
     // GÖZLEMLENEBİLİRLİK KİLİDİ (24.07.2026 — "buton hiçbir şey yapmıyor" şikayeti):
@@ -17811,7 +17838,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     const newRotOffset=((curSnap.rotOffset||0)+1)%97;
     freshAthlete={...freshAthlete,_planRotOffset:newRotOffset};
 
-    const newSnap=generatePlanSnapshot(freshAthlete,history,races,workouts||[],testPlanlar||[],null,curSnap.weekEff||null);
+    const newSnap=generatePlanSnapshot(freshAthlete,history,races,freshWorkouts,testPlanlar||[],null,curSnap.weekEff||null);
     newSnap.rotOffset=newRotOffset;
     newSnap.planMode=planMode;
     newSnap.selectedPrimary=selectedPrimary||null;
@@ -17833,7 +17860,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     };
     const protectedDates=new Set();
     // 1. Gerçek antrenman yapılmış günler (geçmiş)
-    const athWkDates=new Set((workouts||[]).filter(w=>w.athleteId===freshAthlete.id).map(w=>w.date));
+    const athWkDates=new Set(freshWorkouts.filter(w=>w.athleteId===freshAthlete.id).map(w=>w.date));
     athWkDates.forEach(ds=>protectedDates.add(ds));
     // 2. Geçmiş tüm override girişleri
     if(curSnap.manualOverrides){
@@ -17962,7 +17989,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     // Son temizlik: profilde olmayan günleri dinlenmeye çek
     const guncelKosuGunleri=freshAthlete.kosu_gunleri||[];
     const guncelCaprazGunleri=freshAthlete.capraz_gunleri||[];
-    const gercekAntrenmanGunleri=new Set((workouts||[]).filter(w=>w.athleteId===freshAthlete.id).map(w=>w.date));
+    const gercekAntrenmanGunleri=new Set(freshWorkouts.filter(w=>w.athleteId===freshAthlete.id).map(w=>w.date));
     Object.keys(newSnap.overrideMap||{}).forEach(ds=>{
       if(ds<todayStr) return;
       const ov=newSnap.overrideMap[ds];
@@ -27299,7 +27326,7 @@ function App(){
       tab==='anketler'&&React.createElement(AnketlerTab,{athletes,onUpdateAthlete:handleUpdateAthlete}),
       tab==='dashboard'&&React.createElement(Dashboard,{workouts:athWks,athlete,history,races,teamLogo,teamName,planSnap}),
       tab==='motivasyon'&&React.createElement(ErrorBoundary,null,React.createElement(MotivasyonTab,{athlete,workouts:athWks,history})),
-      tab==='plan'&&React.createElement(HaftalikPlanTab,{athlete,history,races,workouts,testPlanlar,planSnapInit:planSnap,onPlanSnapChange:setPlanSnapApp,onAthletesRefresh:freshList=>setAthletes(freshList),onUpdateAthlete:handleUpdateAthlete,onUpdateWorkout:handleUpdateWorkout,onSaveWorkout:w=>{const ath=athletes.find(a=>a.id===w.athleteId);const m=calcMetrics(w,ath);const rec=calcRecovery(w,ath,m.yukObj);const mergedHedef=mergeRecoveryHedef(rec.hedefISO,rec.saatler,workouts,w.athleteId);setWorkouts(p=>[...p,{...w,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:mergedHedef}]);}}),
+      tab==='plan'&&React.createElement(HaftalikPlanTab,{athlete,history,races,workouts,testPlanlar,planSnapInit:planSnap,onPlanSnapChange:setPlanSnapApp,onAthletesRefresh:freshList=>setAthletes(freshList),onWorkoutsRefresh:freshWks=>setWorkouts(freshWks),onUpdateAthlete:handleUpdateAthlete,onUpdateWorkout:handleUpdateWorkout,onSaveWorkout:w=>{const ath=athletes.find(a=>a.id===w.athleteId);const m=calcMetrics(w,ath);const rec=calcRecovery(w,ath,m.yukObj);const mergedHedef=mergeRecoveryHedef(rec.hedefISO,rec.saatler,workouts,w.athleteId);setWorkouts(p=>[...p,{...w,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:mergedHedef}]);}}),
       tab==='lider'&&React.createElement(LiderlikTab,{athletes,workouts,teamName,teamLogo,races}),
       tab==='bolge'&&React.createElement(BolgeTab,{athlete,workouts:athWks,onUpdateAthlete:handleUpdateAthlete}),
       tab==="test"&&React.createElement(TestTab,{athlete,history,races,workouts,onUpdateAthlete:handleUpdateAthlete,onSaveWorkout:w=>setWorkouts(p=>[...p,w]),onUpdateWorkout:handleUpdateWorkout,onDeleteWorkout:id=>setWorkouts(p=>p.filter(x=>x.id!==id)),testPlanlar,onSaveTestPlan:p=>setTestPlanlar(prev=>[...prev.filter(x=>!(x.athId===p.athId&&x.testTur===p.testTur)),p]),onDeleteTestPlan:id=>setTestPlanlar(p=>p.filter(x=>x.id!==id))}),
