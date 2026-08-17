@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.17-1254 --><!DOCTYPE html>
+<!-- Version: v2026.08.17-1529 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.17-1254';
+const APP_VERSION='v2026.08.17-1529';
 // 🔧 GEÇİCİ ANAHTAR (2026.08.16 — Göksel talebi): Hedef Uyumu skorlama hataları
 // doğrulanıp düzeltilene kadar, Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ı sporculardan GİZLENİR — yerine bir bakım mesajı
@@ -1235,13 +1235,30 @@ function extractFeedbackSignals(allSnapsObj, athlete){
     const rowOverrides=snap?.rowOverrides||{};
     Object.entries(rowOverrides).forEach(([date,dateOv])=>{
       if(!dateOv||typeof dateOv!=='object') return;
-      const {__aralik,...rowOvs}=dateOv;
+      const {__aralik,__workoutLogged,__tip,...rowOvs}=dateOv;
+      // KÖK NEDEN DÜZELTMESİ (2026.08.17 — Göksel talebi, bkz. ReceteTablosu →
+      // _withLoggedFlag'deki eşleşen not): __workoutLogged açıkça false ise, bu tarihin
+      // rowOverrides'ı Ekle'den ÖNCE (sadece reçete üzerinde pace/mesafe düzenlemesiyle)
+      // oluşmuş demektir — sporcu o antrenmanı hiç yapmamış olabilir, bu yüzden tamamen
+      // atlanır (aşağıdaki hem düz satır hem __aralik taraması dahil). undefined ise
+      // (bu düzeltmeden ÖNCE kaydedilmiş eski veri) GERİYE DÖNÜK UYUMLULUK için eski
+      // davranış (tarama) korunur — geçmiş Liderlik/Hedef Uyumu puanları bozulmaz.
+      if(__workoutLogged===false) return;
       const zones=zonesForDate(date); // o günün profiline göre — bkz. yukarıdaki not
 
       // ── Düz satırlar ────────────────────────────────────────────────────────
       const scanRow=(row)=>{
         if(!row||typeof row!=='object') return;
-        if(row.type==='header'||row.rpe||row._isSprint) return;
+        // KÖK NEDEN DÜZELTMESİ (2026.08.17 — Göksel talebi): "row.rpe" buradan (blanket/
+        // tüm sinyal türlerini kapsayan üst seviye eleme) KALDIRILDI. row.rpe ReceteTablosu'nun
+        // paceValidation()'ında (~satır 8890) rozet üretmeyi engellemek için kullanılır — ama
+        // SADECE pace için (bpmValidation'da rpe kontrolü YOK, HR her zaman değerlendirilir).
+        // Burada rpe üst seviyede tutulduğu için RPE etiketi taşıyan HER satır (yarış, strides,
+        // tırmanış/yokuş sprintleri, Yürü-Koş koşu fazları vb.) HR (ve gelecekte mesafe) sinyalinden
+        // de TAMAMEN dışlanıyordu — rozet ekranda doğru gösterilirken (HR rozeti çıkıyordu) puanlama
+        // motoru o veriyi hiç görmüyordu. Aşağıya (pace bloğu, "_rpeExcludesPace") taşındı — artık
+        // sadece pace sinyalini etkiliyor, tıpkı paceValidation/bpmValidation'daki gibi.
+        if(row.type==='header'||row._isSprint) return;
         // 2026.08.16 — KÖK NEDEN DÜZELTMESİ (Göksel onayı): "type==='walk' → tamamen
         // hariç" satırı kaldırıldı. Bu satır Isınma/Soğuma/aralık-içi "Yürüyüş"
         // (dinlenme) fazlarının HİÇBİRİNİN mesafe/nabız sinyali üretmemesine yol
@@ -1389,7 +1406,22 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         // Çözüm: pace bloğu artık paceValidation ile BİREBİR aynı type kontrolünü
         // uyguluyor — rest/walk fazları pace sinyali üretmez, sadece nabız (aşağıdaki
         // hr bloğu zaten type'tan bağımsız, EN DÜŞÜK nabız/toparlanma mantığıyla çalışıyor).
-        if((pm>0||ps>0)&&row.type!=='rest'&&row.type!=='walk'){
+        //
+        // KÖK NEDEN DÜZELTMESİ (2026.08.17 — Göksel talebi): paceValidation'daki İKİ ek
+        // istisna burada eksikti:
+        //  (1) row.rpe&&tip!=='yuru_kos'&&row.type!=='walk' → RPE etiketli satırlar (yarış,
+        //      strides, tırmanış/yokuş sprintleri) pace yerine efor bazlı değerlendirilir —
+        //      Yürü-Koş'ta İSTİSNA (koşu fazları hem RPE hem hedef pace taşır, bkz. OP-YK1).
+        //      tip artık __tip üzerinden erişilebilir (bkz. fonksiyon başı — ReceteTablosu'nun
+        //      her save'de eklediği günlük bayrak). __tip eski veride (bu düzeltmeden önce
+        //      kaydedilmiş) undefined kalır → istisna uygulanmaz → eski davranış (dışla)
+        //      korunur, geçmiş puanlar bozulmaz.
+        //  (2) tip==='yaris' → Yarışlarda pace kontrolü hiç yapılmaz (paceValidation ~satır
+        //      8891). __tip yoksa (eski veri) '🏁' etiket öneki geriye dönük bir vekil olarak
+        //      kullanılır (yarış satırlarının HER İKİ üretim yolunda da sabit, bkz. planDay).
+        const _rpeExcludesPace=row.rpe&&__tip!=='yuru_kos'&&row.type!=='walk';
+        const _isRaceRow=__tip==='yaris'||(row.label&&row.label.startsWith('🏁'));
+        if((pm>0||ps>0)&&row.type!=='rest'&&row.type!=='walk'&&!_rpeExcludesPace&&!_isRaceRow){
           const enteredSec=(pm||0)*60+(ps||0);
           const origPace=row._targetPaceSec!=null?row._targetPaceSec:row._origPaceSec;
           // GAP düzeltmesi: paceValidation ile BİREBİR aynı mantık (bkz. ReceteTablosu →
@@ -8483,6 +8515,30 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     }
     return 0;
   };
+
+  // ── __workoutLogged / __tip günlük bayrakları (2026.08.17 — Göksel talebi) ─────────
+  // KÖK NEDEN: extractFeedbackSignals() (Hedef Uyumu/Liderlik puanlaması, %45 ağırlık)
+  // bu ana kadar bir satırın GERÇEKTEN Ekle SONRASI mı yoksa Ekle'den ÖNCE reçete
+  // üzerinde yapılan salt bir düzenleme mi olduğunu ayırt edemiyordu — sadece pm/ps/bpm
+  // dolu mu diye bakıyordu. Ama Ekle'den ÖNCE (isWorkoutLogged=false) koç reçete üzerinde
+  // pace'i elle düzenlediğinde, updateCell HEM girilen (pm/ps) HEM hedefi (_targetPaceSec/
+  // _targetZIdx) AYNI ANDA aynı değere senkronize ediyor (bkz. _currentPaceForFreeze) —
+  // yani extractFeedbackSignals bu satırı "hedefe TAM uyumlu" (paceOk=true) olarak
+  // okuyordu, sporcu o antrenmanı HİÇ yapmamış olsa (Ekle hiç basılmamış) bile. Mesafe
+  // için 2026.08.04'te bulunanla AYNI kök neden ("bu da o hafta hiç antrenman yapmamış
+  // sporcuların Liderlik'te sanki aktifmiş gibi puan almasına yol açtı") — ama pace hâlâ
+  // AKTİF puanlama girdisi olduğu için çok daha etkili bir sızıntı.
+  //
+  // Çözüm: her kayıtta bu tarihin GERÇEKTEN loglanıp loglanmadığını (isWorkoutLogged)
+  // ve o günün antrenman tipini (tip — extractFeedbackSignals'ın normalde erişemediği,
+  // sadece persist edilmiş satır verisini okuyan bir fonksiyon olduğu için) taşıyan iki
+  // bayrak eklenir. __workoutLogged MONOTONİK'tir (bkz. aşağıdaki OR) — bir kez gerçekten
+  // Ekle geçtiyse sonraki hiçbir kayıtta false'a düşürülmez; savedOverrides'ta zaten true
+  // ise (önceki bir kayıttan) o da korunur. Eski/bu düzeltmeden ÖNCE kaydedilmiş veride bu
+  // alanlar undefined kalır — extractFeedbackSignals bunu geriye dönük uyumluluk için
+  // "eski davranış" (tara) olarak yorumlar, geçmiş puanlar bozulmaz (bkz. extractFeedbackSignals
+  // içindeki eşleşen not).
+  const _withLoggedFlag=(ov)=>({...ov,__workoutLogged:!!(isWorkoutLogged||savedOverrides?.__workoutLogged),__tip:tip});
   const [customCues, setCustomCues] = useState(_cueCache.data||{});
   const [editingLabel, setEditingLabel] = useState(null);
   const [editText, setEditText] = useState('');
@@ -9053,7 +9109,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
       }
     }
     setRowOverrides(newRowOv);
-    if(onSaveOverrides){const __zd=computeZoneDistFromRows(baseRows,newRowOv,_mZones,aralikOverrides);const __gd=computeGapDataFromRows(baseRows,newRowOv);onSaveOverrides({...newRowOv,__aralik:aralikOverrides,...(__zd?{__zoneDist:__zd}:{}),...(__gd?{__gapData:__gd}:{})});}
+    if(onSaveOverrides){const __zd=computeZoneDistFromRows(baseRows,newRowOv,_mZones,aralikOverrides);const __gd=computeGapDataFromRows(baseRows,newRowOv);onSaveOverrides(_withLoggedFlag({...newRowOv,__aralik:aralikOverrides,...(__zd?{__zoneDist:__zd}:{}),...(__gd?{__gapData:__gd}:{})}));}
   };
 
   // Hücre güncelleme: mesafe, pm veya ps değişince diğerlerini hesapla
@@ -9211,7 +9267,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     const newOverrides={...rowOverrides,[rowIdx]:{...(rowOverrides[rowIdx]||{}), ...origFields, ...upd}};
     setRowOverrides(newOverrides);
     setEditCell(null);
-    if(onSaveOverrides){const __zd=computeZoneDistFromRows(baseRows,newOverrides,_mZones,aralikOverrides);const __gd=computeGapDataFromRows(baseRows,newOverrides);onSaveOverrides({...newOverrides,__aralik:aralikOverrides,...(__zd?{__zoneDist:__zd}:{}),...(__gd?{__gapData:__gd}:{})},_detaySync);}
+    if(onSaveOverrides){const __zd=computeZoneDistFromRows(baseRows,newOverrides,_mZones,aralikOverrides);const __gd=computeGapDataFromRows(baseRows,newOverrides);onSaveOverrides(_withLoggedFlag({...newOverrides,__aralik:aralikOverrides,...(__zd?{__zoneDist:__zd}:{}),...(__gd?{__gapData:__gd}:{})}),_detaySync);}
   };
 
   // Aralıklar editörü için per-rep cell güncelleme
@@ -9344,7 +9400,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
         ...upd
       };
       // Firebase'e yaz: rowOverrides + __aralik birleşimi
-      if(onSaveOverrides){const __zd=computeZoneDistFromRows(baseRows,rowOverrides,_mZones,next);const __gd=computeGapDataFromRows(baseRows,rowOverrides);onSaveOverrides({...rowOverrides,__aralik:next,...(__zd?{__zoneDist:__zd}:{}),...(__gd?{__gapData:__gd}:{})});}
+      if(onSaveOverrides){const __zd=computeZoneDistFromRows(baseRows,rowOverrides,_mZones,next);const __gd=computeGapDataFromRows(baseRows,rowOverrides);onSaveOverrides(_withLoggedFlag({...rowOverrides,__aralik:next,...(__zd?{__zoneDist:__zd}:{}),...(__gd?{__gapData:__gd}:{})}));}
       return next;
     });
   };
@@ -9422,14 +9478,26 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
       }
     });
 
-    if(!changed&&!aralikChanged) return; // dondurulacak hiçbir şey yoksa dokunma
+    if(!changed&&!aralikChanged){
+      // Satır bazında dondurulacak bir şey yok (tüm satırlar zaten Ekle'den ÖNCE koç
+      // tarafından tek tek düzenlenmiş olabilir — bkz. _withLoggedFlag notu) — ama
+      // __workoutLogged bayrağı bu geçişte YİNE DE yazılmalı, yoksa extractFeedbackSignals
+      // bu tarihin gerçekten Ekle sonrası olduğunu hiçbir zaman öğrenemez. Bayrak zaten
+      // true ise (önceki bir save'den) gereksiz tekrar yazmaktan kaçınılır.
+      if(onSaveOverrides&&!rowOverrides.__workoutLogged){
+        const __zd=computeZoneDistFromRows(baseRows,rowOverrides,_mZones,aralikOverrides);
+        const __gd=computeGapDataFromRows(baseRows,rowOverrides);
+        onSaveOverrides(_withLoggedFlag({...rowOverrides,__aralik:aralikOverrides,...(__zd?{__zoneDist:__zd}:{}),...(__gd?{__gapData:__gd}:{})}));
+      }
+      return; // dondurulacak hiçbir şey yoksa satırlara dokunma
+    }
 
     setRowOverrides(newRowOv);
     setAralikOverrides(newAralikOv);
     if(onSaveOverrides){
       const __zd=computeZoneDistFromRows(baseRows,newRowOv,_mZones,newAralikOv);
       const __gd=computeGapDataFromRows(baseRows,newRowOv);
-      onSaveOverrides({...newRowOv,__aralik:newAralikOv,...(__zd?{__zoneDist:__zd}:{}),...(__gd?{__gapData:__gd}:{})});
+      onSaveOverrides(_withLoggedFlag({...newRowOv,__aralik:newAralikOv,...(__zd?{__zoneDist:__zd}:{}),...(__gd?{__gapData:__gd}:{})}));
     }
   },[isWorkoutLogged]);
 
@@ -28848,6 +28916,14 @@ function SporcuPlanView(){
             // Bkz. koç panelindeki aynı not — "Biraz Hızlı/Yavaş" rozeti bu günün
             // tarihindeki vLT'ye göre değerlendirilsin, bugünkü (görüntüleme anındaki) vLT'ye göre değil.
             measureZones:calcZones(athleteAtDate(athlete,info.date)),
+            // KÖK NEDEN DÜZELTMESİ (2026.08.17 — panel paritesi, Göksel talebi): bu prop
+            // hiç geçilmiyordu → isWorkoutLogged her zaman undefined/false kalıyordu →
+            // paceValidation/bpmValidation (ReceteTablosu içi) HER ZAMAN null dönüyordu —
+            // yani sporcu "Koşu İzlerim" sayfasında antrenmanını Ekle'den tamamen sonra
+            // bile HİÇBİR pace/nabız rozeti GÖRMÜYORDU (koç panelinde ise doğru gösteriliyordu,
+            // bkz. HaftalikPlanTab → isWorkoutLogged:!!split.kosuDone). Koç panelindeki AYNI
+            // kaynak (split.kosuDone) burada da kullanılır.
+            isWorkoutLogged:!!split.kosuDone,
             savedOverrides:(planSnap?.rowOverrides||{})[info.date],
             savedCuePatches:(planSnap?.overrideMap?.[info.date]?._cuePatch)||{},
             actualOrtNabiz:split.kosuActuals.find(w=>parseFloat(w.ort_nabiz)>0)?.ort_nabiz||null
@@ -29554,6 +29630,12 @@ function SporcuPlanView(){
                                   tip:_kosuGorunumHL.displayTip,
                                   savedOverrides:(snapCacheH[weekKey]?.rowOverrides||{})[w.date],
                                   readOnly:true,
+                                  // KÖK NEDEN DÜZELTMESİ (2026.08.17 — panel paritesi, Göksel talebi):
+                                  // eksikti → rozet hiç gösterilmiyordu. Bu blok zaten sadece GERÇEK bir
+                                  // workouts kaydı (w) üzerinden açılıyor — yani her zaman gerçekten
+                                  // loglanmış — koç panelindeki eşdeğeri (Gecmis tab) ile aynı sebeple
+                                  // sabit true (bkz. AntrenmanEkle/Gecmis'teki ReceteTablosu çağrısı).
+                                  isWorkoutLogged:true,
                                   actualOrtNabiz:parseFloat(w.ort_nabiz)>0?w.ort_nabiz:null
                                 });
                             })()
