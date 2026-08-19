@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.19-1151 --><!DOCTYPE html>
+<!-- Version: v2026.08.19-1213 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.19-1151';
+const APP_VERSION='v2026.08.19-1213';
 // 🔧 GEÇİCİ ANAHTAR (2026.08.16 — Göksel talebi): Hedef Uyumu skorlama hataları
 // doğrulanıp düzeltilene kadar, Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ı sporculardan GİZLENİR — yerine bir bakım mesajı
@@ -5366,9 +5366,38 @@ function RawAralikInspector({athletes}){
             _origZIdx:v._origZIdx??null,_origPaceSec:v._origPaceSec??null});
         });
       }
+      // Reconstruct denemesi — İKİ tarayıcının (KontrolTab + backfill) kullandığı
+      // AYNI koddan geçirilir. Eğer bu ikisi neden Erhan'ı hiç görmüyor sorusuna
+      // yanıt "reconstruct sessizce patlıyor" ise, burada GERÇEK hata mesajını göreceğiz
+      // (scanner'lardaki try/catch hatayı yutup sessizce atlıyordu — burada YUTMUYORUZ).
+      let reconstruct=null;
+      const athlete=(athletes||[]).find(a=>a.id===athId);
+      if(athlete&&ov?.yapilar?.length){
+        try{
+          const zones=calcZones(athlete);
+          const injected=injectRowsFromTpl(ov.yapilar,ov.tip,ov.yapi_notu,ov.sure_dk,zones,athlete.disiplin);
+          const baseRows=injected.flatMap(y=>{
+            try{return adimToRows(y,zones).map(r=>({...r,_srcBaslik:y.baslik}));}
+            catch(e){return[{_rowError:e.message,_srcBaslik:y.baslik}];}
+          });
+          reconstruct={
+            ok:true,totalRows:baseRows.length,
+            sample:baseRows.map((r,idx)=>({
+              idx,label:r.label||r._rowError||'—',type:r.type||'—',
+              _isSprint:r._isSprint===true?'true':(r._isSprint===false?'false':'—yok—'),
+              rpe:r.rpe??'—yok—',_origZIdx:r._origZIdx??null,_origPaceSec:r._origPaceSec??null,
+              repeatCount:r.repeatCount??null,_rowError:r._rowError||null
+            }))
+          };
+        }catch(e){
+          reconstruct={ok:false,error:e.message,stack:(e.stack||'').split('\n').slice(0,4).join(' | ')};
+        }
+      }else if(!athlete){
+        reconstruct={ok:false,error:'Sporcu objesi athletes listesinde bulunamadı (athId eşleşmedi).'};
+      }
       setResult({
         weekKey,hasDate:!!dateOv,hasYapilar:!!(ov?.yapilar?.length),hasAralik:!!dateOv?.__aralik,
-        yapilarCount:ov?.yapilar?.length||0,rows
+        yapilarCount:ov?.yapilar?.length||0,rows,reconstruct
       });
     }catch(e){ setResult({error:e.message}); }
     setLoading(false);
@@ -5402,14 +5431,33 @@ function RawAralikInspector({athletes}){
       ),
       result.rows.length===0
         ?React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)'}},'Bu tarihte satır kaydı bulunamadı.')
-        :React.createElement('div',{style:{maxHeight:360,overflowY:'auto'}},
+        :React.createElement('div',{style:{maxHeight:360,overflowY:'auto',marginBottom:14}},
           result.rows.map((r,i)=>React.createElement('div',{key:i,style:{
             padding:'6px 8px',marginBottom:4,borderRadius:6,background:'var(--bg-secondary)',fontSize:11,fontFamily:'monospace'
           }},
             'h'+r.hIdx+'/rep'+r.rep+'/'+r.kind+' · '+r.label+' (type:'+r.type+') · _isSprint='+r._isSprint+' · rpe='+JSON.stringify(r.rpe)+
             ' · pm='+r.pm+' ps='+r.ps+' bpm='+r.bpm+' mesafe='+r.mesafe+' · _origZIdx='+r._origZIdx+' _origPaceSec='+r._origPaceSec
           ))
-        )
+        ),
+      result.reconstruct&&React.createElement('div',null,
+        React.createElement('div',{style:{fontSize:13,fontWeight:700,marginBottom:6}},'🔧 baseRows Yeniden Kurma Denemesi (scanner'+"'"+'ların kullandığı AYNI kod yolu):'),
+        !result.reconstruct.ok
+          ?React.createElement('div',{style:{padding:12,background:'#fef2f2',borderRadius:8,fontSize:12,color:'#ef4444',fontFamily:'monospace'}},
+              '❌ HATA (scanner'+"'"+'lar bu hatayı sessizce yutup günü atlıyordu): '+result.reconstruct.error,
+              result.reconstruct.stack?React.createElement('div',{style:{marginTop:6,fontSize:10,opacity:0.8}},result.reconstruct.stack):null
+            )
+          :React.createElement('div',null,
+              React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',marginBottom:6}},'✓ Yeniden kurma başarılı — '+result.reconstruct.totalRows+' satır üretildi:'),
+              React.createElement('div',{style:{maxHeight:300,overflowY:'auto'}},
+                result.reconstruct.sample.map((r,i)=>React.createElement('div',{key:i,style:{
+                  padding:'4px 8px',marginBottom:2,borderRadius:6,
+                  background:r._rowError?'#fef2f2':'var(--bg-secondary)',fontSize:11,fontFamily:'monospace'
+                }},
+                  '['+r.idx+'] '+r.label+' (type:'+r.type+(r.repeatCount?', repeatCount:'+r.repeatCount:'')+') · _isSprint='+r._isSprint+' · rpe='+JSON.stringify(r.rpe)+' · _origZIdx='+r._origZIdx+' _origPaceSec='+r._origPaceSec
+                ))
+              )
+            )
+      )
     )
   );
 }
