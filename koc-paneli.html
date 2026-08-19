@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.19-0847 --><!DOCTYPE html>
+<!-- Version: v2026.08.19-1151 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.19-0847';
+const APP_VERSION='v2026.08.19-1151';
 // 🔧 GEÇİCİ ANAHTAR (2026.08.16 — Göksel talebi): Hedef Uyumu skorlama hataları
 // doğrulanıp düzeltilene kadar, Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ı sporculardan GİZLENİR — yerine bir bakım mesajı
@@ -5322,6 +5322,98 @@ function SprintRpeBackfillPanel({athletes}){
   );
 }
 
+function RawAralikInspector({athletes}){
+  const [athId,setAthId]=useState('');
+  const [dateStr,setDateStr]=useState('');
+  const [loading,setLoading]=useState(false);
+  const [result,setResult]=useState(null); // {weekKey, hasDate, hasYapilar, hasAralik, rows:[...]} | {error}
+
+  const inspect=async()=>{
+    if(!athId||!dateStr) return;
+    setLoading(true);
+    setResult(null);
+    try{
+      const weekKey=getWeekKeyForDate(dateStr);
+      const snap=await fbGet('plan_snapshots/'+athId+'/'+weekKey);
+      if(!snap){ setResult({error:'Bu hafta ('+weekKey+') için plan_snapshots kaydı hiç yok.',weekKey}); setLoading(false); return; }
+      const dateOv=snap.rowOverrides?.[dateStr];
+      const ov=snap.overrideMap?.[dateStr];
+      const rows=[];
+      if(dateOv?.__aralik){
+        Object.entries(dateOv.__aralik).forEach(([hIdx,repMap])=>{
+          Object.entries(repMap||{}).forEach(([rep,typeMap])=>{
+            ['run','rest'].forEach(kind=>{
+              const r=typeMap?.[kind];
+              if(!r) return;
+              rows.push({
+                hIdx,rep,kind,label:r.label||'—',type:r.type||'—',
+                _isSprint:r._isSprint===true?'true':(r._isSprint===false?'false':'—YOK—'),
+                rpe:r.rpe??'—YOK—',
+                pm:r.pm??null,ps:r.ps??null,bpm:r.bpm??null,mesafe:r.mesafe??null,
+                _origZIdx:r._origZIdx??null,_origPaceSec:r._origPaceSec??null
+              });
+            });
+          });
+        });
+      }
+      // Düz satırlar da (varsa) göster
+      if(dateOv){
+        Object.entries(dateOv).forEach(([k,v])=>{
+          if(k==='__aralik'||isNaN(parseInt(k))) return;
+          rows.push({hIdx:'-',rep:'-',kind:'düz #'+k,label:v.label||'—',type:v.type||'—',
+            _isSprint:v._isSprint===true?'true':(v._isSprint===false?'false':'—YOK—'),
+            rpe:v.rpe??'—YOK—',pm:v.pm??null,ps:v.ps??null,bpm:v.bpm??null,mesafe:v.mesafe??null,
+            _origZIdx:v._origZIdx??null,_origPaceSec:v._origPaceSec??null});
+        });
+      }
+      setResult({
+        weekKey,hasDate:!!dateOv,hasYapilar:!!(ov?.yapilar?.length),hasAralik:!!dateOv?.__aralik,
+        yapilarCount:ov?.yapilar?.length||0,rows
+      });
+    }catch(e){ setResult({error:e.message}); }
+    setLoading(false);
+  };
+
+  return React.createElement('div',{style:{marginTop:28,paddingTop:20,borderTop:'2px dashed var(--border)'}},
+    React.createElement('h2',{style:{margin:'0 0 4px 0',fontSize:18}},'🔬 Ham Kayıt İncele'),
+    React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:12}},
+      'Belirli bir sporcu+tarih için Firebase\'deki HAM veriyi (hiçbir yorum/hesaplama katmadan) gösterir — bir kaydın neden tarama sonuçlarında çıkmadığını anlamak için.'
+    ),
+    React.createElement('div',{style:{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center',marginBottom:10}},
+      React.createElement('select',{value:athId,onChange:e=>setAthId(e.target.value),
+        style:{padding:'6px 10px',borderRadius:6,border:'1px solid var(--border)',fontSize:13}},
+        React.createElement('option',{value:''},'— Sporcu seç —'),
+        (athletes||[]).map(a=>React.createElement('option',{key:a.id,value:a.id},((a.ad||'')+' '+(a.soyad||'')).trim()))
+      ),
+      React.createElement('input',{type:'date',value:dateStr,onChange:e=>setDateStr(e.target.value),
+        style:{padding:'6px 10px',borderRadius:6,border:'1px solid var(--border)',fontSize:13}}),
+      React.createElement('button',{onClick:inspect,disabled:!athId||!dateStr||loading,
+        style:{padding:'8px 16px',borderRadius:6,border:'none',
+          background:(!athId||!dateStr||loading)?'var(--border)':'var(--info)',color:'#fff',fontWeight:700,fontSize:13,
+          cursor:(!athId||!dateStr||loading)?'default':'pointer'}
+      },loading?'Yükleniyor…':'İncele')
+    ),
+    result&&result.error&&React.createElement('div',{style:{padding:12,background:'#fef2f2',color:'#ef4444',borderRadius:8,fontSize:12}},result.error),
+    result&&!result.error&&React.createElement('div',null,
+      React.createElement('div',{style:{fontSize:12,marginBottom:8,color:'var(--text-secondary)'}},
+        'Hafta: '+result.weekKey+' · Tarih kaydı var mı: '+(result.hasDate?'✓':'✗ YOK')+
+        ' · overrideMap.yapilar: '+(result.hasYapilar?('✓ ('+result.yapilarCount+' adım)'):'✗ YOK/BOŞ — baseRows yeniden kurulamaz, tarama araçları bu tarihi SESSİZCE atlar')+
+        ' · __aralik: '+(result.hasAralik?'✓':'✗ yok')
+      ),
+      result.rows.length===0
+        ?React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)'}},'Bu tarihte satır kaydı bulunamadı.')
+        :React.createElement('div',{style:{maxHeight:360,overflowY:'auto'}},
+          result.rows.map((r,i)=>React.createElement('div',{key:i,style:{
+            padding:'6px 8px',marginBottom:4,borderRadius:6,background:'var(--bg-secondary)',fontSize:11,fontFamily:'monospace'
+          }},
+            'h'+r.hIdx+'/rep'+r.rep+'/'+r.kind+' · '+r.label+' (type:'+r.type+') · _isSprint='+r._isSprint+' · rpe='+JSON.stringify(r.rpe)+
+            ' · pm='+r.pm+' ps='+r.ps+' bpm='+r.bpm+' mesafe='+r.mesafe+' · _origZIdx='+r._origZIdx+' _origPaceSec='+r._origPaceSec
+          ))
+        )
+    )
+  );
+}
+
 function KontrolTab({athletes}){
   const [scanning,setScanning]=useState(false);
   const [progress,setProgress]=useState({done:0,total:0,current:''});
@@ -5388,7 +5480,8 @@ function KontrolTab({athletes}){
           ))
         )
     ),
-    React.createElement(SprintRpeBackfillPanel,{athletes})
+    React.createElement(SprintRpeBackfillPanel,{athletes}),
+    React.createElement(RawAralikInspector,{athletes})
   );
 }
 
