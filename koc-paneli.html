@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.18-2339 --><!DOCTYPE html>
+<!-- Version: v2026.08.19-0847 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.18-2339';
+const APP_VERSION='v2026.08.19-0847';
 // 🔧 GEÇİCİ ANAHTAR (2026.08.16 — Göksel talebi): Hedef Uyumu skorlama hataları
 // doğrulanıp düzeltilene kadar, Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ı sporculardan GİZLENİR — yerine bir bakım mesajı
@@ -1247,7 +1247,7 @@ function extractFeedbackSignals(allSnapsObj, athlete){
       const zones=zonesForDate(date); // o günün profiline göre — bkz. yukarıdaki not
 
       // ── Düz satırlar ────────────────────────────────────────────────────────
-      const scanRow=(row)=>{
+      const scanRow=(row,_rep)=>{
         if(!row||typeof row!=='object') return;
         // KÖK NEDEN DÜZELTMESİ (2026.08.17 — Göksel talebi): "row.rpe" buradan (blanket/
         // tüm sinyal türlerini kapsayan üst seviye eleme) KALDIRILDI. row.rpe ReceteTablosu'nun
@@ -1526,16 +1526,16 @@ function extractFeedbackSignals(allSnapsObj, athlete){
             } else hrOk=true; // zone içinde
           }
         }
-        if(paceDir||hrDir||paceOk||hrOk||mesafeDir||mesafeOk) signals.push({date,label:row.label||null,paceDir,hrDir,paceOk,hrOk,hrWeight,zi:zi??0,zoneId:hr?.id||null,paceDiff,paceTol,mesafeDir,mesafeOk,mesafeDiffPct,mesZoneKolay});
+        if(paceDir||hrDir||paceOk||hrOk||mesafeDir||mesafeOk) signals.push({date,label:row.label||null,_rep:_rep??null,paceDir,hrDir,paceOk,hrOk,hrWeight,zi:zi??0,zoneId:hr?.id||null,paceDiff,paceTol,mesafeDir,mesafeOk,mesafeDiffPct,mesZoneKolay});
       };
 
       Object.values(rowOvs).forEach(scanRow);
 
       // ── Aralık (interval) satırları — __aralik yapısı ───────────────────────
       if(__aralik&&typeof __aralik==='object'){
-        Object.values(__aralik).forEach(repMap=>{
+        Object.entries(__aralik).forEach(([_hIdxStr,repMap])=>{
           if(!repMap||typeof repMap!=='object') return;
-          Object.values(repMap).forEach(typeMap=>{
+          Object.entries(repMap).forEach(([repStr,typeMap])=>{
             if(!typeMap||typeof typeMap!=='object') return;
             // 2026.08.11 — Göksel talebi: dinlenme arası artık da taranıyor. Eskiden
             // "sadece koşu" idi (pace kalibrasyonunu dinlenme pace'iyle kirletmemek için)
@@ -1565,8 +1565,8 @@ function extractFeedbackSignals(allSnapsObj, athlete){
               const {_targetZIdx,_targetPaceSec,_origLoBpm,_origHiBpm,...rest}=leg;
               return rest;
             };
-            if(typeMap.run) scanRow(_cleanLeg(typeMap.run));
-            if(typeMap.rest) scanRow(_cleanLeg(typeMap.rest));
+            if(typeMap.run) scanRow(_cleanLeg(typeMap.run),repStr);
+            if(typeMap.rest) scanRow(_cleanLeg(typeMap.rest),repStr);
           });
         });
       }
@@ -1782,6 +1782,18 @@ function calcPaceComplianceScore(signals){
   // ── Pace bileşeni ──
   let uyum=0,hizli=0,yavas=0,closenessSum=0,closenessN=0;
   const paceDetayByKey={};
+  // KÖK NEDEN DÜZELTMESİ (2026.08.19 — Göksel'in bildirdiği "Tur 1'de 8 tekrar var
+  // ama Faz Dökümü'nde tek satır görünüyor" hatası): Aralıklı/tekrarlı antrenmanlarda
+  // (İnterval, Piramit, Strides, On-Off vb.) AYNI Tur'un tüm tekrarları AYNI etiketi
+  // ("Tur 1 — ON" gibi) taşır. Anahtar sadece date+label olduğunda, aynı Tur'un 8
+  // tekrarı bu SABİT'in üzerine art arda yazılıyor ve döküm listesinde sadece SON
+  // işlenen tekrar (genelde son rep) hayatta kalıyordu — sanki puanlama tek satırmış
+  // gibi YANLIŞ bir izlenim veriyordu. ÖNEMLİ: bu SADECE bir GÖRÜNTÜLEME hatasıydı —
+  // aşağıdaki uyum/hizli/yavas sayaçları ZATEN her tekrarı ayrı ayrı sayıyordu (bu
+  // forEach döngüsünün kendisi), yani "🎯 Hedef Uyumu" puanı hep doğruydu. Çözüm:
+  // extractFeedbackSignals artık her aralık sinyaline _rep (tekrar no) ekliyor —
+  // anahtara dahil edilerek her tekrar kendi satırında görünür.
+  const _sigKey=(s)=>s.date+'|'+(s.label||'')+'|'+(s._rep??'');
   paceSignals.forEach(s=>{
     let dir;
     if(s.paceOk){ uyum++; dir='uyum'; }
@@ -1789,7 +1801,7 @@ function calcPaceComplianceScore(signals){
     else if(s.paceDir==='slow'){ yavas++; dir='yavas'; }
     const c=paceClosenessScore(s.paceDiff,s.paceTol);
     if(c!=null){closenessSum+=c;closenessN++;}
-    paceDetayByKey[s.date+'|'+(s.label||'')]={dir,diffSec:s.paceDiff,tolSec:s.paceTol,closeness:c};
+    paceDetayByKey[_sigKey(s)]={dir,diffSec:s.paceDiff,tolSec:s.paceTol,closeness:c};
   });
   // uyum+hizli+yavas===total her zaman geçerlidir (her faz tam olarak bu üç
   // kovadan birine düşer) — bu yüzden yüzdeler de tam 100.0'a toplanmalı.
@@ -1818,7 +1830,7 @@ function calcPaceComplianceScore(signals){
     else if(s.hrDir==='low'){ hrDusuk++; hrDir='dusuk'; }
     const c=hrClosenessScore(s.hrOk,s.hrWeight);
     if(c!=null){hrClosenessSum+=c;hrClosenessN++;}
-    hrDetayByKey[s.date+'|'+(s.label||'')]={hrDir,hrWeight:s.hrWeight,hrCloseness:c};
+    hrDetayByKey[_sigKey(s)]={hrDir,hrWeight:s.hrWeight,hrCloseness:c};
   });
   const[hrUyumPct,hrYuksekPct,hrDusukPct]=allocatePercentages([hrUyum,hrYuksek,hrDusuk],hrTotal);
   const hrYakinlikPuani=hrClosenessN>0?round1(hrClosenessSum/hrClosenessN):null;
@@ -1844,7 +1856,7 @@ function calcPaceComplianceScore(signals){
     const fazlaK=s.mesZoneKolay?MESAFE_CEZA_KATSAYISI:1;
     const c=mesafeClosenessScore(s.mesafeDiffPct,MESAFE_TOLERANS_PCT,azK,fazlaK);
     if(c!=null){mesClosenessSum+=c;mesClosenessN++;}
-    mesDetayByKey[s.date+'|'+(s.label||'')]={mesDir,mesDiffPct:s.mesafeDiffPct,mesCloseness:c,mesZoneKolay:s.mesZoneKolay};
+    mesDetayByKey[_sigKey(s)]={mesDir,mesDiffPct:s.mesafeDiffPct,mesCloseness:c,mesZoneKolay:s.mesZoneKolay};
   });
   const[mesUyumPct,mesAzPct,mesFazlaPct]=allocatePercentages([mesUyum,mesAz,mesFazla],mesafeTotal);
   const mesYakinlikPuani=mesClosenessN>0?round1(mesClosenessSum/mesClosenessN):null;
@@ -1880,7 +1892,7 @@ function calcPaceComplianceScore(signals){
   // Faz dökümü: pace, nabız ve mesafe verisi aynı fazda birleştirilir (biri eksikse null kalır)
   const allKeys=new Set([...Object.keys(paceDetayByKey),...Object.keys(hrDetayByKey),...Object.keys(mesDetayByKey)]);
   const bySignal={};
-  [...paceSignals,...hrSignals,...mesafeSignals].forEach(s=>{bySignal[s.date+'|'+(s.label||'')]={date:s.date,label:s.label||null};});
+  [...paceSignals,...hrSignals,...mesafeSignals].forEach(s=>{bySignal[_sigKey(s)]={date:s.date,label:s.label||null,rep:s._rep??null};});
   const detay=[...allKeys].map(k=>({
     ...bySignal[k],
     ...(paceDetayByKey[k]||{dir:null,diffSec:null,tolSec:null,closeness:null}),
@@ -5070,6 +5082,246 @@ async function scanAthleteForStaleOverrides(athlete){
   return found;
 }
 
+// ── Sprint/RPE Geriye Dönük Doldurma (2026.08.18 — Göksel talebi) ─────────────
+// GEÇMİŞ vakalar için: updateCell/updateAralikCell (ve Ekle-anında dondurma) DÜZELTMEDEN
+// ÖNCE kaydedilmiş satır/rep kayıtlarında _isSprint/rpe hiç yoktu — extractFeedbackSignals
+// bu yüzden Hill Sprint/Depar/Strides/On-Off gibi satırların sinyallerini rozet gizliyken
+// bile sessizce puanlamaya dahil ediyordu. Bu fonksiyon SADECE ÖNİZLEME üretir (hiçbir
+// yazma yapmaz) — scanAthleteForStaleOverrides ile AYNI (zaten güvenilen) baseRows yeniden
+// kurma + parmak izi eşleştirme mantığını kullanır. Parmak izi TUTMAYAN (Kontrol tab'ının
+// ayrıca raporladığı "bayat override") kayıtlar için TAHMİN YÜRÜTÜLMEZ — atlanır, çünkü o
+// durumda hangi baseRow'a ait olduğu güvenilir değildir.
+async function scanAthleteForSprintRpeBackfill(athlete){
+  const patches=[];
+  if(!athlete?.id) return patches;
+  let zones;
+  try{ zones=calcZones(athlete); }catch(e){ return patches; }
+  let emptyStreak=0;
+  for(let i=0;i<KONTROL_HARD_CAP_WEEKS;i++){
+    const wk=getWeekKey(-i);
+    let snap=null;
+    try{ snap=await fbGet('plan_snapshots/'+athlete.id+'/'+wk); }catch(e){ snap=null; }
+    if(!snap){
+      emptyStreak++;
+      if(emptyStreak>=KONTROL_EMPTY_STREAK_STOP) break;
+      continue;
+    }
+    emptyStreak=0;
+    const rowOverridesByDate=snap.rowOverrides||{};
+    Object.entries(rowOverridesByDate).forEach(([date,dateOv])=>{
+      if(!dateOv||typeof dateOv!=='object') return;
+      const ov=snap.overrideMap?.[date];
+      if(!ov?.yapilar?.length) return; // reçete yeniden kurulamıyor — atla (Kontrol tab da aynı kuralı uygular)
+      let baseRows;
+      try{
+        const injected=injectRowsFromTpl(ov.yapilar,ov.tip,ov.yapi_notu,ov.sure_dk,zones,athlete.disiplin);
+        baseRows=injected.flatMap(y=>{try{return adimToRows(y,zones).map(r=>({...r,_srcBaslik:y.baslik}));}catch(e){return[];}});
+      }catch(e){ return; }
+      const {__aralik,...rowOvs}=dateOv;
+      // scanAthleteForStaleOverrides'daki _fp ile AYNI eşleşme kuralı — ama burada
+      // sadece boolean dönüyor (rapor değil, sadece "güvenle eşleşti mi?")
+      const _fpOk=(ovRow,r)=>{
+        if(!r) return false;
+        const zMatch=ovRow._origZIdx==null||r._origZIdx==null||ovRow._origZIdx===r._origZIdx;
+        const pMatch=ovRow._origPaceSec==null||r._origPaceSec==null||ovRow._origPaceSec===r._origPaceSec;
+        return zMatch&&pMatch;
+      };
+      const _consider=(ovRow,r,extra)=>{
+        if(!_kontrolHasMeaningfulData(ovRow)) return; // hiç gerçek veri yoksa zaten puanlamaya girmiyor
+        if(!_fpOk(ovRow,r)) return; // eşleşmiyor — tahmin yürütme, atla (Kontrol tab ayrıca raporlar)
+        const wantSprint=!!r._isSprint, wantRpe=r.rpe||null;
+        const hasSprint=!!ovRow._isSprint, hasRpe=ovRow.rpe||null;
+        if(!wantSprint&&!wantRpe) return; // eklenecek bir şey yok
+        const needSprint=wantSprint!==hasSprint, needRpe=wantRpe!==hasRpe;
+        if(!needSprint&&!needRpe) return; // zaten doğru/eksiksiz
+        patches.push({
+          athleteId:athlete.id,
+          athleteName:((athlete.ad||'')+' '+(athlete.soyad||'')).trim(),
+          weekKey:wk,date,label:ovRow.label||r.label||'?',
+          ...extra,
+          needSprint,needRpe,isSprint:wantSprint,rpe:wantRpe
+        });
+      };
+      // Düz satırlar
+      Object.entries(rowOvs).forEach(([rowIdxStr,ovRow])=>{
+        const rowIdx=parseInt(rowIdxStr);
+        if(isNaN(rowIdx)) return;
+        _consider(ovRow,baseRows[rowIdx],{kind:'düz',path:`rowOverrides/${date}/${rowIdx}`});
+      });
+      // Aralık (tekrarlı) satırlar
+      if(__aralik&&typeof __aralik==='object'){
+        Object.entries(__aralik).forEach(([hIdxStr,repMap])=>{
+          const hIdx=parseInt(hIdxStr);
+          if(isNaN(hIdx)||!repMap||typeof repMap!=='object') return;
+          Object.entries(repMap).forEach(([repStr,typeMap])=>{
+            if(!typeMap||typeof typeMap!=='object') return;
+            ['run','rest'].forEach(legKind=>{
+              const ovRow=typeMap[legKind];
+              const rIdx=hIdx+(legKind==='run'?1:2);
+              _consider(ovRow,baseRows[rIdx],{kind:'aralık',legKind,rep:repStr,path:`rowOverrides/${date}/__aralik/${hIdx}/${repStr}/${legKind}`});
+            });
+          });
+        });
+      }
+    });
+  }
+  return patches;
+}
+
+// Önizlemede onaylanan patch listesini Firebase'e yazar. HER PATCH SADECE kendi
+// _isSprint/rpe alt-yolunu (needSprint/needRpe true olan alanları) hedefler —
+// fbUpdate'in çoklu-yol .update() semantiği sayesinde (bkz. fbUpdate üstündeki
+// büyük not) kardeş alanlara (mesafe, pm, ps, bpm, _origMesafe, vb.) KESİNLİKLE
+// dokunulmaz. Aynı sporcu+hafta'ya ait tüm patch'ler TEK bir fbUpdate çağrısında
+// gruplanır (network/yarış riskini azaltır).
+async function applySprintRpeBackfillPatches(patches){
+  const groups={};
+  (patches||[]).forEach(p=>{
+    const gk=p.athleteId+'|'+p.weekKey;
+    if(!groups[gk]) groups[gk]={athleteId:p.athleteId,weekKey:p.weekKey,fields:{}};
+    if(p.needSprint) groups[gk].fields[p.path+'/_isSprint']=p.isSprint;
+    if(p.needRpe)    groups[gk].fields[p.path+'/rpe']=p.rpe;
+  });
+  let done=0; const errors=[];
+  for(const g of Object.values(groups)){
+    if(Object.keys(g.fields).length===0) continue;
+    try{
+      await fbUpdate('plan_snapshots/'+g.athleteId+'/'+g.weekKey, g.fields);
+      done++;
+    }catch(e){ errors.push({athleteId:g.athleteId,weekKey:g.weekKey,error:e.message}); }
+  }
+  return {done,total:Object.keys(groups).length,errors};
+}
+
+function SprintRpeBackfillPanel({athletes}){
+  const [scanning,setScanning]=useState(false);
+  const [progress,setProgress]=useState({done:0,total:0,current:''});
+  const [patches,setPatches]=useState(null); // null=hiç taranmadı, []=temiz
+  const [scannedAt,setScannedAt]=useState(null);
+  const [applying,setApplying]=useState(false);
+  const [applyResult,setApplyResult]=useState(null);
+  const [confirmText,setConfirmText]=useState('');
+
+  const runScan=async()=>{
+    const active=(athletes||[]).filter(a=>!a.pasif);
+    setScanning(true);
+    setPatches(null);
+    setApplyResult(null);
+    setConfirmText('');
+    setProgress({done:0,total:active.length,current:''});
+    const all=[];
+    for(let i=0;i<active.length;i++){
+      const a=active[i];
+      setProgress({done:i,total:active.length,current:(a.ad||'')+' '+(a.soyad||'')});
+      try{
+        const found=await scanAthleteForSprintRpeBackfill(a);
+        all.push(...found);
+      }catch(e){ console.warn('Sprint/RPE backfill taraması hatası:',a.id,e); }
+    }
+    setProgress({done:active.length,total:active.length,current:''});
+    all.sort((x,y)=>(y.date||'').localeCompare(x.date||''));
+    setPatches(all);
+    setScannedAt(new Date());
+    setScanning(false);
+  };
+
+  const doApply=async()=>{
+    if(confirmText.trim().toUpperCase()!=='ONAYLA') return;
+    setApplying(true);
+    try{
+      const res=await applySprintRpeBackfillPatches(patches);
+      setApplyResult(res);
+    }catch(e){
+      setApplyResult({done:0,total:0,errors:[{error:e.message}]});
+    }
+    setApplying(false);
+  };
+
+  // Sporcu bazında özet — önizlemede tek tek 100+ satır yerine kısa bir tablo
+  const byAthlete=React.useMemo(()=>{
+    if(!patches) return [];
+    const m={};
+    patches.forEach(p=>{
+      if(!m[p.athleteId]) m[p.athleteId]={name:p.athleteName,count:0,weeks:new Set()};
+      m[p.athleteId].count++;
+      m[p.athleteId].weeks.add(p.weekKey);
+    });
+    return Object.values(m).sort((a,b)=>b.count-a.count);
+  },[patches]);
+
+  return React.createElement('div',{style:{marginTop:28,paddingTop:20,borderTop:'2px dashed var(--border)'}},
+    React.createElement('h2',{style:{margin:'0 0 4px 0',fontSize:18}},'🔧 Sprint/RPE Puanlaması — Geriye Dönük Doldurma'),
+    React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',lineHeight:1.5,marginBottom:12}},
+      'Bu araç, Hill Sprint/Depar/Strides ("_isSprint") ve On-Off gibi RPE\'li kısa-patlama satır/tekrarlarında eksik olan kimlik alanlarını (_isSprint, rpe) geçmiş kayıtlara ekler — Hedef Uyumu puanlamasının rozet ekranıyla aynı şeyi söylemesi için. SADECE bu iki alan yazılır; mesafe/pace/nabız/D+ gibi hiçbir veri değiştirilmez veya silinmez. Parmak izi güncel şablonla uyuşmayan (yukarıdaki Bayat Override listesinde görünen) kayıtlara tahmin yürütülmez, atlanır.'
+    ),
+    React.createElement('button',{
+      onClick:runScan,disabled:scanning||applying,
+      style:{padding:'8px 16px',borderRadius:6,border:'none',background:(scanning||applying)?'var(--border)':'var(--info)',color:'#fff',fontWeight:700,fontSize:13,cursor:(scanning||applying)?'default':'pointer'}
+    },scanning?'Taranıyor…':'🔍 Önizleme Taraması (hiçbir şey YAZMAZ)'),
+    scanning&&React.createElement('div',{style:{marginTop:10,fontSize:12,color:'var(--text-secondary)'}},
+      `${progress.done}/${progress.total} sporcu tarandı`+(progress.current?' — şu an: '+progress.current:'')
+    ),
+    scannedAt&&!scanning&&React.createElement('div',{style:{marginTop:10,fontSize:11,color:'var(--text-tertiary)'}},
+      'Son tarama: '+scannedAt.toLocaleString('tr-TR')
+    ),
+    patches!==null&&!scanning&&React.createElement('div',{style:{marginTop:16}},
+      patches.length===0
+        ?React.createElement('div',{style:{padding:16,background:'var(--success-bg,#f0fdf4)',borderRadius:8,color:'var(--success,#22c55e)',fontWeight:600,fontSize:13}},'✓ Eksik bulunamadı — tüm geçmiş kayıtlar zaten tutarlı.')
+        :React.createElement('div',null,
+          React.createElement('div',{style:{marginBottom:10,fontSize:13,fontWeight:700,color:'#f59e0b'}},
+            patches.length+' kayıt güncellenecek ('+byAthlete.length+' sporcu) — henüz HİÇBİR ŞEY YAZILMADI:'
+          ),
+          React.createElement('div',{style:{marginBottom:14}},
+            byAthlete.map((a,i)=>React.createElement('div',{key:i,style:{fontSize:12,padding:'4px 0',borderBottom:'1px solid var(--border)'}},
+              a.name+' — '+a.count+' kayıt, '+a.weeks.size+' hafta'
+            ))
+          ),
+          React.createElement('details',{style:{marginBottom:14}},
+            React.createElement('summary',{style:{fontSize:12,cursor:'pointer',color:'var(--text-secondary)'}},'Tüm kayıtları göster ('+patches.length+')'),
+            React.createElement('div',{style:{marginTop:8,maxHeight:300,overflowY:'auto'}},
+              patches.map((p,i)=>React.createElement('div',{key:i,style:{
+                padding:'6px 8px',marginBottom:4,borderRadius:6,background:'var(--bg-secondary)',fontSize:11,fontFamily:'monospace'
+              }},
+                p.athleteName+' · '+p.date+' · '+p.label+' ('+p.kind+(p.rep?' rep'+p.rep+' '+p.legKind:'')+') → '+
+                (p.needSprint?'_isSprint='+p.isSprint+' ':'')+(p.needRpe?'rpe="'+p.rpe+'"':'')
+              ))
+            )
+          ),
+          !applyResult&&React.createElement('div',{style:{padding:12,background:'#fffbeb',border:'1px solid #f59e0b',borderRadius:8}},
+            React.createElement('div',{style:{fontSize:12,marginBottom:8,fontWeight:600}},
+              'Uygulamak için aşağıya büyük harflerle ONAYLA yaz ve butona bas.'
+            ),
+            React.createElement('input',{
+              type:'text',value:confirmText,onChange:e=>setConfirmText(e.target.value),
+              placeholder:'ONAYLA',
+              style:{padding:'6px 10px',borderRadius:6,border:'1px solid var(--border)',fontSize:13,marginRight:8,width:120}
+            }),
+            React.createElement('button',{
+              onClick:doApply,
+              disabled:applying||confirmText.trim().toUpperCase()!=='ONAYLA',
+              style:{padding:'8px 16px',borderRadius:6,border:'none',
+                background:(applying||confirmText.trim().toUpperCase()!=='ONAYLA')?'var(--border)':'#ef4444',
+                color:'#fff',fontWeight:700,fontSize:13,
+                cursor:(applying||confirmText.trim().toUpperCase()!=='ONAYLA')?'default':'pointer'}
+            },applying?'Uygulanıyor…':'✅ Onayla ve Uygula')
+          ),
+          applyResult&&React.createElement('div',{style:{marginTop:12,padding:12,borderRadius:8,
+            background:applyResult.errors?.length?'#fef2f2':'#f0fdf4',
+            color:applyResult.errors?.length?'#ef4444':'#22c55e'}},
+            React.createElement('div',{style:{fontWeight:700,fontSize:13}},
+              applyResult.done+'/'+applyResult.total+' sporcu-hafta grubu güncellendi.'
+            ),
+            applyResult.errors?.length>0&&React.createElement('div',{style:{marginTop:6,fontSize:11}},
+              applyResult.errors.map((e,i)=>React.createElement('div',{key:i},
+                (e.athleteId||'?')+' '+(e.weekKey||'')+': '+e.error
+              ))
+            )
+          )
+        )
+    )
+  );
+}
+
 function KontrolTab({athletes}){
   const [scanning,setScanning]=useState(false);
   const [progress,setProgress]=useState({done:0,total:0,current:''});
@@ -5135,7 +5387,8 @@ function KontrolTab({athletes}){
             )
           ))
         )
-    )
+    ),
+    React.createElement(SprintRpeBackfillPanel,{athletes})
   );
 }
 
@@ -9227,6 +9480,14 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     // birkaç satır aşağıda) tutulur — paceValidation bu yeni alanları okur.
     if(r._origPaceSec>0) origFields._origPaceSec=r._origPaceSec;
     if(r._origZIdx!=null) origFields._origZIdx=r._origZIdx;
+    // KÖK NEDEN DÜZELTMESİ (2026.08.18 — geniş tutarlılık denetimi, aralık/tekrarlı
+    // satırlardaki AYNI hatanın düz-satır versiyonu): _isSprint ve rpe buraya da HİÇ
+    // kaydedilmiyordu. Rozet ekranı (paceValidation/bpmValidation) bunu her zaman
+    // CANLI r'den okuduğu için doğru davranıyordu, ama extractFeedbackSignals kayıtlı
+    // ham veriyi okur — Hill Sprint/Depar (_isSprint) gibi düz satırlarda da rozet
+    // gizliyken puanlama bu sinyali sessizce dahil ediyordu.
+    if(r._isSprint) origFields._isSprint=true;
+    if(r.rpe) origFields.rpe=r.rpe;
     // Hedef (validasyonda kullanılan) Pace/Zone dondurma — mesafe ile AYNI kilitleme
     // mantığı (Göksel talebi, 2026.08.13): Ekle'den ÖNCE (isWorkoutLogged=false) hedef
     // her düzenlemede güncel reçete pace/zone'una senkron kalır. Ekle'den SONRA
@@ -9480,6 +9741,10 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
       if(ohr?.lo_bpm) freeze._origLoBpm=ohr.lo_bpm;
       if(ohr?.hi_bpm) freeze._origHiBpm=ohr.hi_bpm;
       if(r._isGapRow) freeze._isGapRow=true;
+      // KÖK NEDEN DÜZELTMESİ (2026.08.18) — updateCell'deki AYNI not: coach hiç
+      // dokunmadan otomatik donan düz satırlarda da _isSprint/rpe kaydedilmeli.
+      if(r._isSprint) freeze._isSprint=true;
+      if(r.rpe) freeze.rpe=r.rpe;
       if(Object.keys(freeze).length===0) return;
       newRowOv[i]={...(newRowOv[i]||{}),...freeze};
       changed=true;
@@ -21765,7 +22030,7 @@ function VerilenAntrenmaniYapabilmePuaniKarti({athlete}){
             const mesDiffTxt=d.mesDiffPct!=null?(d.mesDiffPct>0?'+':'')+d.mesDiffPct+'%':null;
             return e('div',{key:i,style:{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,padding:'6px 9px',borderRadius:6,background:dirMeta.bg,fontSize:11}},
               e('span',{style:{fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},
-                fmtShort(d.date)+(d.label?' — '+d.label:'')
+                fmtShort(d.date)+(d.label?' — '+d.label:'')+(d.rep?' #'+d.rep:'')
               ),
               e('div',{style:{display:'flex',alignItems:'center',gap:8,flexShrink:0,flexWrap:'wrap',justifyContent:'flex-end'}},
                 diffTxt&&e('span',{style:{color:'var(--text-tertiary)'}},diffTxt+(d.tolSec?' (±'+d.tolSec+')':'')),
