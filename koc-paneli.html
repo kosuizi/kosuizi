@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.19-1337 --><!DOCTYPE html>
+<!-- Version: v2026.08.19-1349 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.19-1337';
+const APP_VERSION='v2026.08.19-1349';
 // 🔧 GEÇİCİ ANAHTAR (2026.08.16 — Göksel talebi): Hedef Uyumu skorlama hataları
 // doğrulanıp düzeltilene kadar, Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ı sporculardan GİZLENİR — yerine bir bakım mesajı
@@ -6277,6 +6277,14 @@ function weekLabel(offset){
 const BASELINE_LOOKBACK_WEEKS=6; // referans için taranan geçmiş hafta sayısı
 const BASELINE_MIN_ACTIVE_WEEKS=2; // güvenilir referans için gereken min. aktif hafta
 
+// 2026.08.19 — Göksel talebi: Skor formülündeki (Hedef Uyumu/Efor/Gerçek İş)
+// ağırlıklar artık sabit değil, Liderlik sekmesinden (⚙ Ağırlıklar paneli)
+// değiştirilebilir ve app_config/leaderboard_weights altında Firebase'e
+// kaydedilir — hem Koç Paneli hem Koşu İzlerim aynı kayıtlı değeri okur
+// (panel paritesi). Bu sabit SADECE hiç kayıt yoksa (ilk kurulum / eski veri)
+// kullanılan varsayılan değerdir. Üç değer TOPLAMDA 100 olmalıdır.
+const DEFAULT_LEADERBOARD_WEIGHTS={hedefUyumu:50,efor:15,gercekIs:35};
+
 // Bir sporcunun, verilen haftadan ÖNCEKİ (o hafta hariç) son BASELINE_LOOKBACK_WEEKS
 // hafta içindeki, antrenman yaptığı haftaların Efor/Gerçek İş ortalamasını döndürür.
 // Yeterli aktif hafta yoksa (yeni sporcu / kısa geçmiş) null döner — bu durumda
@@ -6396,9 +6404,12 @@ async function fetchWeekPaceScores(athletes,weekOffset){
 }
 
 // calcWeeklyStats'ın ham satırlarını Pace Disiplin puanlarıyla birleştirip
-// nihai Liderlik skorunu (Hedef Uyumu %45 + Efor %25 + Gerçek İş %30) hesaplar
-// ve sıralar. paceScores: {athleteId: {puan,puanForScore}|null} — fetchWeekPaceScores'tan gelir.
-function finalizeLeaderboard(rows,paceScores){
+// nihai Liderlik skorunu hesaplar ve sıralar. paceScores: {athleteId:
+// {puan,puanForScore}|null} — fetchWeekPaceScores'tan gelir. weights:
+// {hedefUyumu,efor,gercekIs} (yüzde, toplamı 100) — verilmezse
+// DEFAULT_LEADERBOARD_WEIGHTS kullanılır (bkz. yukarıdaki not, 2026.08.19).
+function finalizeLeaderboard(rows,paceScores,weights){
+  const w=weights||DEFAULT_LEADERBOARD_WEIGHTS;
   // 2026.08.11 — Göksel onayı: Efor ve Gerçek İş artık TAKIM İÇİ en yüksek değere
   // göre DEĞİL, her sporcunun KENDİ son 6 haftalık ortalamasına (bkz.
   // calcAthleteBaseline) göre 0-100 ölçeğine normalize edilir. Böylece bir
@@ -6445,7 +6456,7 @@ function finalizeLeaderboard(rows,paceScores){
     // şekilde düşük bir NÖTR değer (50) kullanılıyor — "ölçülemeyen veri = düşük
     // güven", büyütme değil.
     const uygunlukForScoreEffective=uygunlukPctForScore!=null?uygunlukPctForScore:50;
-    const rawFinalScore=round1(uygunlukForScoreEffective*0.45+eforNorm*0.25+isNorm*0.30);
+    const rawFinalScore=round1(uygunlukForScoreEffective*(w.hedefUyumu/100)+eforNorm*(w.efor/100)+isNorm*(w.gercekIs/100));
 
     // 2026.08.12 — Göksel onayı: "kendi geçmişine göre" normalizasyon, geçmişi
     // az/hafif olan ya da nabız bölgeleri tanımsız bir sporcunun, kendi (güvenilir
@@ -6472,12 +6483,39 @@ function finalizeLeaderboard(rows,paceScores){
   }).sort((a,b)=>b.finalScore-a.finalScore);
 }
 
-function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
+function LiderlikTab({athletes,workouts,teamName,teamLogo,races,leaderboardWeights,setLeaderboardWeights}){
   const [weekOffset,setWeekOffset]=useState(0);
   const [downloading,setDownloading]=useState(false);
   const [sharing,setSharing]=useState(null); // athId being shared
   const cardRef=React.useRef();
   const athCardRefs=React.useRef({});
+
+  // ── Skor ağırlıkları ayar paneli (2026.08.19 — Göksel talebi) ──────────────
+  // savedWeights: Firebase'e kayıtlı, App() state'inden gelen değer.
+  // weightsDraft: panel açıkken üzerinde oynanan taslak — liderlik listesi
+  // ANINDA (kaydetmeden) bu taslağa göre yeniden hesaplanır, böylece Göksel
+  // sayfayı yenilemeden oranlarla oynayıp sonucu canlı görebilir. "Kaydet"e
+  // basılınca taslak App() state'ine yazılır ve oradan Firebase'e kalıcı
+  // olarak kaydedilir (hem Koç Paneli hem Koşu İzlerim bunu okur).
+  const savedWeights=leaderboardWeights||DEFAULT_LEADERBOARD_WEIGHTS;
+  const [showWeightPanel,setShowWeightPanel]=useState(false);
+  const [weightsDraft,setWeightsDraft]=useState(savedWeights);
+  const [weightsSaved,setWeightsSaved]=useState(true); // taslak kayıtlı değerle aynı mı
+  // Panel her açıldığında taslağı güncel kayıtlı değerle senkronize et
+  React.useEffect(()=>{if(showWeightPanel)setWeightsDraft(savedWeights);},[showWeightPanel]); // eslint-disable-line
+  const weightsTotal=(weightsDraft.hedefUyumu||0)+(weightsDraft.efor||0)+(weightsDraft.gercekIs||0);
+  const weightsValid=weightsTotal===100;
+  const updateWeightDraft=(key,val)=>{
+    const n=val===''?0:Math.max(0,Math.min(100,parseInt(val,10)||0));
+    setWeightsDraft(d=>({...d,[key]:n}));
+    setWeightsSaved(false);
+  };
+  const saveWeights=()=>{
+    if(!weightsValid)return;
+    setLeaderboardWeights(weightsDraft);
+    setWeightsSaved(true);
+  };
+  const resetWeightsToDefault=()=>{setWeightsDraft(DEFAULT_LEADERBOARD_WEIGHTS);setWeightsSaved(false);};
   const rawStats=React.useMemo(()=>calcWeeklyStats(workouts,athletes,weekOffset),[workouts,athletes,weekOffset]);
   const rawPrevStats=React.useMemo(()=>calcWeeklyStats(workouts,athletes,weekOffset-1),[workouts,athletes,weekOffset]);
 
@@ -6502,9 +6540,9 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
     return()=>{cancelled=true;};
   },[athKey,weekOffset]);
 
-  const stats=React.useMemo(()=>finalizeLeaderboard(rawStats,paceScores),[rawStats,paceScores]);
+  const stats=React.useMemo(()=>finalizeLeaderboard(rawStats,paceScores,weightsDraft),[rawStats,paceScores,weightsDraft]);
   // Bir önceki haftanın sıralaması — değişim okları için
-  const prevStats=React.useMemo(()=>finalizeLeaderboard(rawPrevStats,prevPaceScores),[rawPrevStats,prevPaceScores]);
+  const prevStats=React.useMemo(()=>finalizeLeaderboard(rawPrevStats,prevPaceScores,weightsDraft),[rawPrevStats,prevPaceScores,weightsDraft]);
   const prevRankMap=React.useMemo(()=>{
     const m={};prevStats.forEach((r,i)=>{m[r.ath.id]=i+1;});return m;
   },[prevStats]);
@@ -6646,10 +6684,54 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
       React.createElement('span',{style:{fontWeight:600,fontSize:14,minWidth:120,textAlign:'center'}},weekLabel(weekOffset)),
       React.createElement('button',{className:'btn btn-sm',disabled:weekOffset>=0,onClick:()=>setWeekOffset(o=>Math.min(0,o+1))},'Sonraki →'),
       paceLoading&&React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)'}},'Hedef Uyumu hesaplanıyor…'),
-      React.createElement('button',{className:'btn btn-primary btn-sm',style:{marginLeft:'auto'},onClick:downloadImage},
+      React.createElement('button',{
+        className:'btn btn-sm',
+        style:{marginLeft:'auto'},
+        onClick:()=>setShowWeightPanel(s=>!s)
+      },'⚙ Ağırlıklar'),
+      React.createElement('button',{className:'btn btn-primary btn-sm',onClick:downloadImage},
         downloading?'İndiriliyor...':'⬇ İndir'
       ),
       React.createElement('button',{className:'btn btn-sm',onClick:shareFullCard,disabled:downloading},'↗ Paylaş')
+    ),
+
+    // Skor ağırlıkları ayar paneli — açılır/kapanır, kaydedilmeden liderlik
+    // listesine anında yansır (bkz. weightsDraft notu)
+    showWeightPanel&&React.createElement('div',{style:{
+      marginBottom:12,padding:'12px 14px',borderRadius:10,
+      background:'var(--bg-secondary,#f1f5f9)',border:'1px solid var(--border,rgba(0,0,0,.08))'
+    }},
+      React.createElement('div',{style:{fontSize:12,fontWeight:600,marginBottom:8}},'Skor Ağırlıkları'),
+      React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:10}},
+        'Skor = Hedef Uyumu + Efor + Gerçek İş. Üç değerin TOPLAMI 100 olmalı. Değişiklikler aşağıdaki listeye anında yansır; kalıcı olması (ve Koşu İzlerim\'e de yansıması) için Kaydet\'e basmalısınız.'
+      ),
+      React.createElement('div',{style:{display:'flex',gap:14,flexWrap:'wrap',alignItems:'flex-end'}},
+        [['hedefUyumu','🎯 Hedef Uyumu'],['efor','💪 Efor'],['gercekIs','⛰ Gerçek İş']].map(([key,label])=>
+          React.createElement('div',{key,style:{display:'flex',flexDirection:'column',gap:4}},
+            React.createElement('label',{style:{fontSize:11,color:'var(--text-secondary)'}},label),
+            React.createElement('div',{style:{display:'flex',alignItems:'center',gap:4}},
+              React.createElement('input',{
+                type:'number',min:0,max:100,step:1,
+                value:weightsDraft[key],
+                onChange:e=>updateWeightDraft(key,e.target.value),
+                style:{width:60,padding:'4px 6px',borderRadius:6,border:'1px solid var(--border,#cbd5e1)'}
+              }),
+              React.createElement('span',{style:{fontSize:12,color:'var(--text-tertiary)'}},'%')
+            )
+          )
+        )
+      ),
+      React.createElement('div',{style:{display:'flex',alignItems:'center',gap:10,marginTop:10}},
+        React.createElement('span',{style:{fontSize:12,fontWeight:600,color:weightsValid?'var(--success,#16a34a)':'var(--danger,#dc2626)'}},
+          'Toplam: '+weightsTotal+'%'+(weightsValid?' ✓':' — 100 olmalı')
+        ),
+        React.createElement('button',{
+          className:'btn btn-primary btn-sm',
+          disabled:!weightsValid||weightsSaved,
+          onClick:saveWeights
+        },weightsSaved?'Kaydedildi ✓':'Kaydet'),
+        React.createElement('button',{className:'btn btn-sm',onClick:resetWeightsToDefault},'Varsayılana Dön (50/15/35)')
+      )
     ),
 
     // Paylaşım kartı — koyu tasarım
@@ -6810,7 +6892,9 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races}){
 
       // Alt not
       React.createElement('div',{style:{marginTop:16,paddingTop:12,borderTop:'1px solid rgba(255,255,255,.06)',display:'flex',justifyContent:'space-between',alignItems:'center'}},
-        React.createElement('div',{style:{fontSize:10,color:'#334155'}},'Skor = Hedef Uyumu %45 + Efor %25 + Gerçek İş %30'),
+        React.createElement('div',{style:{fontSize:10,color:'#334155'}},
+          'Skor = Hedef Uyumu %'+weightsDraft.hedefUyumu+' + Efor %'+weightsDraft.efor+' + Gerçek İş %'+weightsDraft.gercekIs
+        ),
         React.createElement('div',{style:{fontSize:11,color:'#334155',fontWeight:600}},'kosuizi.app')
       )
     )
@@ -27077,6 +27161,7 @@ function App(){
   const [kayitToken,setKayitToken]=useState(''); // Kendi kendine kayıt linki token'ı — "Pasif Yap"a kadar geçerli, çoklu kullanım
   const [kayitAktif,setKayitAktif]=useState(true); // Kayıt linki aktif/pasif
   const [kayitGenerating,setKayitGenerating]=useState(false); // Link Firebase'e yazılana kadar true
+  const [leaderboardWeights,setLeaderboardWeights]=useState(DEFAULT_LEADERBOARD_WEIGHTS); // Liderlik skor ağırlıkları — bkz. DEFAULT_LEADERBOARD_WEIGHTS notu
   const [showSettings,setShowSettings]=useState(false);
   const [sessionLocked,setSessionLocked]=useState(false);
   const {pcView,zoom:pcZoom,toggle:togglePcView}=usePcView();
@@ -27142,6 +27227,7 @@ function App(){
         if(cfg.teamLogo)setTeamLogo(cfg.teamLogo);
         if(cfg.kayit_token)setKayitToken(cfg.kayit_token);
         if(cfg.kayit_aktif!=null)setKayitAktif(cfg.kayit_aktif);
+        if(cfg.leaderboard_weights)setLeaderboardWeights(cfg.leaderboard_weights);
       }
       if(cc?.anchors?.length){setCtlCalibration(cc);setGlobalCtlAnchors(cc.anchors);}
       setLoaded(true);
@@ -27165,7 +27251,7 @@ function App(){
   // kaldırıldı — Firebase transaction/.get() SyncTree uyumsuzluğu yüzünden güvenilmez
   // çıktı). kayit_token artık SADECE onGenerateKayitLink ile değişir, bu yüzden diğer
   // state alanlarıyla birlikte bu genel efektte güvenle senkronize edilebilir.
-  useEffect(()=>{if(loaded)fbUpdate('app_config',{darkMode,teamName,teamLogo,kayit_token:kayitToken,kayit_aktif:kayitAktif});},[darkMode,teamName,teamLogo,kayitToken,kayitAktif,loaded]);
+  useEffect(()=>{if(loaded)fbUpdate('app_config',{darkMode,teamName,teamLogo,kayit_token:kayitToken,kayit_aktif:kayitAktif,leaderboard_weights:leaderboardWeights});},[darkMode,teamName,teamLogo,kayitToken,kayitAktif,leaderboardWeights,loaded]);
   useEffect(()=>{if(loaded&&ctlCalibration)fbSet('ctl_calibration',ctlCalibration);},[ctlCalibration,loaded]);
 
   // CTL_ANCHORS güncellendiğinde (buton) hem global değişkeni hem Firebase'i
@@ -27605,7 +27691,7 @@ function App(){
       tab==='dashboard'&&React.createElement(Dashboard,{workouts:athWks,athlete,history,races,teamLogo,teamName,planSnap}),
       tab==='motivasyon'&&React.createElement(ErrorBoundary,null,React.createElement(MotivasyonTab,{athlete,workouts:athWks,history})),
       tab==='plan'&&React.createElement(HaftalikPlanTab,{athlete,history,races,workouts,testPlanlar,planSnapInit:planSnap,onPlanSnapChange:setPlanSnapApp,onAthletesRefresh:freshList=>setAthletes(freshList),onWorkoutsRefresh:freshWks=>setWorkouts(freshWks),onUpdateAthlete:handleUpdateAthlete,onUpdateWorkout:handleUpdateWorkout,onSaveWorkout:w=>{const ath=athletes.find(a=>a.id===w.athleteId);const m=calcMetrics(w,ath);const rec=calcRecovery(w,ath,m.yukObj);const mergedHedef=mergeRecoveryHedef(rec.hedefISO,rec.saatler,workouts,w.athleteId);setWorkouts(p=>[...p,{...w,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:mergedHedef}]);}}),
-      tab==='lider'&&React.createElement(LiderlikTab,{athletes,workouts,teamName,teamLogo,races}),
+      tab==='lider'&&React.createElement(LiderlikTab,{athletes,workouts,teamName,teamLogo,races,leaderboardWeights,setLeaderboardWeights}),
       tab==='bolge'&&React.createElement(BolgeTab,{athlete,workouts:athWks,onUpdateAthlete:handleUpdateAthlete}),
       tab==="test"&&React.createElement(TestTab,{athlete,history,races,workouts,onUpdateAthlete:handleUpdateAthlete,onSaveWorkout:w=>setWorkouts(p=>[...p,w]),onUpdateWorkout:handleUpdateWorkout,onDeleteWorkout:id=>setWorkouts(p=>p.filter(x=>x.id!==id)),testPlanlar,onSaveTestPlan:p=>setTestPlanlar(prev=>[...prev.filter(x=>!(x.athId===p.athId&&x.testTur===p.testTur)),p]),onDeleteTestPlan:id=>setTestPlanlar(p=>p.filter(x=>x.id!==id))}),
       tab==='yarislar'&&React.createElement(ErrorBoundary,null,React.createElement(YarislarTab,{athlete,races,history,workouts:athWks,raceResults,onAddResult:r=>setRaceResults(p=>[...p,r]),onDeleteResult:id=>setRaceResults(p=>p.filter(x=>x.id!==id))})),
@@ -28735,6 +28821,9 @@ function SporcuPlanView(){
   const [loading,setLoading]=useState(true);
   const [appName,setAppName]=useState('Koşu İzi');
   const [logo,setLogo]=useState('');
+  // "Bu Hafta Liderlik" widget'ı Koç Panelindeki LiderlikTab ile AYNI skor
+  // ağırlıklarını kullanmalı (panel paritesi) — bkz. DEFAULT_LEADERBOARD_WEIGHTS notu
+  const [lbWeights,setLbWeights]=useState(DEFAULT_LEADERBOARD_WEIGHTS);
   const athId=new URLSearchParams(window.location.search).get('id');
   const {pcView,zoom:pcZoom,toggle:togglePcView}=usePcView();
 
@@ -28767,6 +28856,7 @@ function SporcuPlanView(){
         const cfg=await fbGet('app_config');
         if(cfg?.teamName) setAppName(cfg.teamName);
         if(cfg?.teamLogo) setLogo(cfg.teamLogo);
+        if(cfg?.leaderboard_weights) setLbWeights(cfg.leaderboard_weights);
         const aths=await fbGet('ath2');
         const ath=(aths||[]).find(a=>a.id===athId);
         setAthlete(ath||null);
@@ -29497,8 +29587,8 @@ function SporcuPlanView(){
         // spor dağılımı, Hedef Uyumu %, yaklaşan yarış geri sayımı, mesafe/D+/skor
         // metrikleri, ilerleme çubuğu, sıra değişim oku) — indirme/paylaşım kontrolleri
         // ve üst KPI şeridi hariç (bu salt-okunur bir özet widget'ı, tam sekme değil).
-        const stats=finalizeLeaderboard(calcWeeklyStats(allWorkouts,allAthletes,0),miniPaceScores);
-        const prevStatsMini=finalizeLeaderboard(calcWeeklyStats(allWorkouts,allAthletes,-1),miniPrevPaceScores);
+        const stats=finalizeLeaderboard(calcWeeklyStats(allWorkouts,allAthletes,0),miniPaceScores,lbWeights);
+        const prevStatsMini=finalizeLeaderboard(calcWeeklyStats(allWorkouts,allAthletes,-1),miniPrevPaceScores,lbWeights);
         const prevRankMapMini={};
         prevStatsMini.forEach((r,i)=>{prevRankMapMini[r.ath.id]=i+1;});
         const top=stats.slice(0,10);
