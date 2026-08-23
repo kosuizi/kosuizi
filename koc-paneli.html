@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.23-1836 --><!DOCTYPE html>
+<!-- Version: v2026.08.23-1848 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.23-1836';
+const APP_VERSION='v2026.08.23-1848';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -6417,12 +6417,45 @@ async function fetchWeekPaceScores(athletes,weekOffset){
   return out;
 }
 
+// Sporcunun kendi geçmiş Hedef Uyumu (Pace Disiplin) ortalamasını hesaplar — Efor/
+// Gerçek İş baseline'ı (calcAthleteBaseline) ile AYNI pencere/eşik (BASELINE_LOOKBACK_
+// WEEKS/BASELINE_MIN_ACTIVE_WEEKS), tutarlılık için. 2026.08.23 — Göksel talebi:
+// finalizeLeaderboard'da Hedef Uyumu ölçülemeyen haftalarda (yarış, koşu-dışı spor,
+// plansız giriş vb.) düz nötr 50 yerine, MÜMKÜNSE sporcunun kendi son 6 haftalık
+// gerçek Hedef Uyumu ortalaması kullanılır — "bu sporcu genelde ne kadar disiplinli"
+// sorusuna, o hafta ölçüm olmasa bile, kendi geçmişinden makul bir tahmin üretir.
+// Genelde disiplinli bir sporcu (örn. kendi ortalaması 87) → ölçülemeyen haftada da
+// 87 sayılır, düz 50 değil. Genelde tutarsız bir sporcu → kendi (düşük) ortalamasına
+// düşer, haksız yere ödüllenmez. Yeterli ölçülebilir hafta yoksa (yeni sporcu / sürekli
+// ölçülemeyen geçmiş) null döner — finalizeLeaderboard bu durumda eski davranışa
+// (nötr 50) düşer. HİÇBİR başka sporcunun verisine bakılmaz — sadece kendi geçmişi.
+async function fetchAthletePaceBaselines(athletes,weekOffset){
+  const out={};
+  await Promise.all((athletes||[]).map(async a=>{
+    const vals=[];
+    for(let i=1;i<=BASELINE_LOOKBACK_WEEKS;i++){
+      const weekKey=getWeekKey(weekOffset-i);
+      try{
+        const snap=await fbGet('plan_snapshots/'+a.id+'/'+weekKey);
+        if(!snap)continue; // o hafta hiç snapshot yok — atla, referansı bozmadan devam et
+        const signals=extractFeedbackSignals({[weekKey]:snap},a);
+        const score=calcPaceComplianceScore(signals);
+        if(score?.puanForScore!=null) vals.push(score.puanForScore);
+      }catch(e){/* okunamadı — atla */}
+    }
+    out[a.id]=vals.length>=BASELINE_MIN_ACTIVE_WEEKS?round1(vals.reduce((s,v)=>s+v,0)/vals.length):null;
+  }));
+  return out;
+}
+
 // calcWeeklyStats'ın ham satırlarını Pace Disiplin puanlarıyla birleştirip
 // nihai Liderlik skorunu hesaplar ve sıralar. paceScores: {athleteId:
 // {puan,puanForScore}|null} — fetchWeekPaceScores'tan gelir. weights:
 // {hedefUyumu,efor,gercekIs} (yüzde, toplamı 100) — verilmezse
 // DEFAULT_LEADERBOARD_WEIGHTS kullanılır (bkz. yukarıdaki not, 2026.08.19).
-function finalizeLeaderboard(rows,paceScores,weights){
+// paceBaselines: {athleteId: number|null} — fetchAthletePaceBaselines'tan gelir,
+// bu hafta Hedef Uyumu ölçülemediğinde nötr 50 yerine kullanılır (bkz. 2026.08.23 notu).
+function finalizeLeaderboard(rows,paceScores,weights,paceBaselines){
   const w=weights||DEFAULT_LEADERBOARD_WEIGHTS;
   // 2026.08.11 — Göksel onayı: Efor ve Gerçek İş artık TAKIM İÇİ en yüksek değere
   // göre DEĞİL, her sporcunun KENDİ son 6 haftalık ortalamasına (bkz.
@@ -6488,7 +6521,16 @@ function finalizeLeaderboard(rows,paceScores,weights){
     // daha da arttı). Artık dışlamak yerine, baseline-yok durumuyla TUTARLI
     // şekilde düşük bir NÖTR değer (50) kullanılıyor — "ölçülemeyen veri = düşük
     // güven", büyütme değil.
-    const uygunlukForScoreEffective=uygunlukPctForScore!=null?uygunlukPctForScore:50;
+    // 2026.08.23 — Göksel talebi: düz NÖTR 50 yerine, ÖNCE sporcunun kendi geçmiş
+    // Hedef Uyumu ortalaması denenir (paceBaselines, bkz. fetchAthletePaceBaselines —
+    // Efor/Gerçek İş'teki "kendi geçmişine göre" ilkesiyle AYNI). Yeterli geçmişi
+    // yoksa (yeni sporcu / sürekli ölçülemeyen geçmiş) eski davranışa (nötr 50) düşülür.
+    // Bu, 08.12'de denenip geri alınan "tamamen çıkar + ağırlığı dağıt" yaklaşımından
+    // FARKLI — hiçbir bileşenin ağırlığı büyümüyor, sadece nötr değer sabit 50 yerine
+    // sporcuya özel, daha isabetli bir tahmine dönüşüyor.
+    const personalPaceBaseline=paceBaselines?.[r.ath.id];
+    const uygunlukForScoreEffective=uygunlukPctForScore!=null?uygunlukPctForScore:(personalPaceBaseline!=null?personalPaceBaseline:50);
+    const uygunlukKaynak=uygunlukPctForScore!=null?'ölçüldü':(personalPaceBaseline!=null?'kendi geçmişi':'nötr (veri yok)');
     const rawFinalScore=round1(uygunlukForScoreEffective*(w.hedefUyumu/100)+eforNorm*(w.efor/100)+isNorm*(w.gercekIs/100));
 
     // 2026.08.12 — Göksel onayı: "kendi geçmişine göre" normalizasyon, geçmişi
@@ -6512,7 +6554,7 @@ function finalizeLeaderboard(rows,paceScores,weights){
     const completenessMult=0.4+0.6*(completeness/100);
     const finalScore=round1(rawFinalScore*completenessMult);
 
-    return{...r,eforNorm,isNorm,isNormRelative,isNormAbsolute,gercekIsReferans,uygunlukPct,uygunlukPctForScore,uygunlukForScoreEffective,uygunlukNorm,rawFinalScore,completeness,completenessMult,finalScore};
+    return{...r,eforNorm,isNorm,isNormRelative,isNormAbsolute,gercekIsReferans,uygunlukPct,uygunlukPctForScore,uygunlukForScoreEffective,uygunlukKaynak,uygunlukNorm,rawFinalScore,completeness,completenessMult,finalScore};
   }).sort((a,b)=>b.finalScore-a.finalScore);
 }
 
@@ -6569,6 +6611,12 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races,leaderboardWeigh
   // geldiği için asenkron. Hem bu hafta hem önceki hafta (değişim oku için) getirilir.
   const [paceScores,setPaceScores]=useState({});
   const [prevPaceScores,setPrevPaceScores]=useState({});
+  // 2026.08.23 — Göksel talebi: bu hafta Hedef Uyumu ölçülemezse (yarış vb.) düz nötr
+  // 50 yerine sporcunun kendi geçmiş ortalaması kullanılır (bkz. fetchAthletePaceBaselines).
+  // prevPaceBaselines, ÖNCEKİ haftanın skorunu (değişim oku için) AYNI mantıkla hesaplamak
+  // içindir — o haftanın kendi referans penceresi weekOffset-1'den geriye bakar.
+  const [paceBaselines,setPaceBaselines]=useState({});
+  const [prevPaceBaselines,setPrevPaceBaselines]=useState({});
   const [paceLoading,setPaceLoading]=useState(true);
   const athKey=React.useMemo(()=>(athletes||[]).map(a=>a.id).join(','),[athletes]);
   React.useEffect(()=>{
@@ -6576,19 +6624,23 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races,leaderboardWeigh
     setPaceLoading(true);
     Promise.all([
       fetchWeekPaceScores(athletes,weekOffset),
-      fetchWeekPaceScores(athletes,weekOffset-1)
-    ]).then(([cur,prev])=>{
+      fetchWeekPaceScores(athletes,weekOffset-1),
+      fetchAthletePaceBaselines(athletes,weekOffset),
+      fetchAthletePaceBaselines(athletes,weekOffset-1)
+    ]).then(([cur,prev,curBase,prevBase])=>{
       if(cancelled)return;
       setPaceScores(cur);
       setPrevPaceScores(prev);
+      setPaceBaselines(curBase);
+      setPrevPaceBaselines(prevBase);
       setPaceLoading(false);
     });
     return()=>{cancelled=true;};
   },[athKey,weekOffset]);
 
-  const stats=React.useMemo(()=>finalizeLeaderboard(rawStats,paceScores,weightsDraft),[rawStats,paceScores,weightsDraft]);
+  const stats=React.useMemo(()=>finalizeLeaderboard(rawStats,paceScores,weightsDraft,paceBaselines),[rawStats,paceScores,weightsDraft,paceBaselines]);
   // Bir önceki haftanın sıralaması — değişim okları için
-  const prevStats=React.useMemo(()=>finalizeLeaderboard(rawPrevStats,prevPaceScores,weightsDraft),[rawPrevStats,prevPaceScores,weightsDraft]);
+  const prevStats=React.useMemo(()=>finalizeLeaderboard(rawPrevStats,prevPaceScores,weightsDraft,prevPaceBaselines),[rawPrevStats,prevPaceScores,weightsDraft,prevPaceBaselines]);
   const prevRankMap=React.useMemo(()=>{
     const m={};prevStats.forEach((r,i)=>{m[r.ath.id]=i+1;});return m;
   },[prevStats]);
@@ -6991,7 +7043,7 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races,leaderboardWeigh
               const rows=[
                 ['🎯 Hedef Uyumu',null],
                 ['  Gösterilen',row.uygunlukPct==null?'— (ölçülemedi)':row.uygunlukPct+'%'],
-                ['  Skorda kullanılan',row.uygunlukForScoreEffective+(row.uygunlukPctForScore==null?' (nötr, veri yok)':' (Bayes düzeltmeli)')],
+                ['  Skorda kullanılan',row.uygunlukForScoreEffective+' ('+row.uygunlukKaynak+')'],
                 ['  Katkı',row.uygunlukForScoreEffective+' × %'+w.hedefUyumu+' = '+katkiHU],
                 ['💪 Efor',null],
                 ['  Ham / Baseline',fmtN(row.sporSkoru)+' / '+(row.eforBaseline==null?'yetersiz geçmiş':fmtN(row.eforBaseline))],
@@ -28976,16 +29028,25 @@ function SporcuPlanView(){
   // prevStats/prevRankMap ile AYNI mantık (2026.08.04 — Göksel talebi: koç
   // panelindeki Lider sekmesiyle birebir aynı satır görünümü).
   const [miniPrevPaceScores,setMiniPrevPaceScores]=useState({});
+  // 2026.08.23 — Göksel talebi: LiderlikTab'daki paceBaselines/prevPaceBaselines ile
+  // AYNI fonksiyon+pencere (fetchAthletePaceBaselines) — panel paritesi. Ölçülemeyen
+  // haftalarda düz nötr 50 yerine sporcunun kendi geçmiş Hedef Uyumu ortalaması.
+  const [miniPaceBaselines,setMiniPaceBaselines]=useState({});
+  const [miniPrevPaceBaselines,setMiniPrevPaceBaselines]=useState({});
   useEffect(()=>{
     if(!allAthletes||!allAthletes.length)return;
     let cancelled=false;
     Promise.all([
       fetchWeekPaceScores(allAthletes,0),
-      fetchWeekPaceScores(allAthletes,-1)
-    ]).then(([cur,prev])=>{
+      fetchWeekPaceScores(allAthletes,-1),
+      fetchAthletePaceBaselines(allAthletes,0),
+      fetchAthletePaceBaselines(allAthletes,-1)
+    ]).then(([cur,prev,curBase,prevBase])=>{
       if(cancelled)return;
       setMiniPaceScores(cur);
       setMiniPrevPaceScores(prev);
+      setMiniPaceBaselines(curBase);
+      setMiniPrevPaceBaselines(prevBase);
     });
     return()=>{cancelled=true;};
   },[allAthletes]);
@@ -29729,8 +29790,8 @@ function SporcuPlanView(){
         // spor dağılımı, Hedef Uyumu %, yaklaşan yarış geri sayımı, mesafe/D+/skor
         // metrikleri, ilerleme çubuğu, sıra değişim oku) — indirme/paylaşım kontrolleri
         // ve üst KPI şeridi hariç (bu salt-okunur bir özet widget'ı, tam sekme değil).
-        const stats=finalizeLeaderboard(calcWeeklyStats(allWorkouts,allAthletes,0),miniPaceScores,lbWeights);
-        const prevStatsMini=finalizeLeaderboard(calcWeeklyStats(allWorkouts,allAthletes,-1),miniPrevPaceScores,lbWeights);
+        const stats=finalizeLeaderboard(calcWeeklyStats(allWorkouts,allAthletes,0),miniPaceScores,lbWeights,miniPaceBaselines);
+        const prevStatsMini=finalizeLeaderboard(calcWeeklyStats(allWorkouts,allAthletes,-1),miniPrevPaceScores,lbWeights,miniPrevPaceBaselines);
         const prevRankMapMini={};
         prevStatsMini.forEach((r,i)=>{prevRankMapMini[r.ath.id]=i+1;});
         const top=stats.slice(0,10);
