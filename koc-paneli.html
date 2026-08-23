@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.23-1920 --><!DOCTYPE html>
+<!-- Version: v2026.08.23-1932 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.23-1920';
+const APP_VERSION='v2026.08.23-1932';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -1509,7 +1509,8 @@ function extractFeedbackSignals(allSnapsObj, athlete){
             // tolerans payı (target) içindeki sapmalar sinyal üretmez — gürültü filtrelenir.
             // Üst/alt yön ayrı eşiklere sahip (asimetrik) — bkz. getBpmTol() yorumu.
             // durSec: sürekli bölgelerde (Z2–Z4) kısa segmentlerin lag payını hesaba katar.
-            const {targetUp,warnUp,dangerUp,targetDown,warnDown,dangerDown}=getBpmTol(hr,rowDurSec(row));
+            const durSec=rowDurSec(row);
+            const {targetUp,warnUp,dangerUp,targetDown,warnDown,dangerDown}=getBpmTol(hr,durSec);
             // KÖK NEDEN DÜZELTMESİ (2026.08.16 — aynı fazın nabız versiyonu): rest/walk
             // (toparlanma) fazlarında bpmValidation() rozeti YALNIZCA üst sınırı kontrol
             // eder — "ne kadar düşük nabızla toparlanırsan o kadar iyi, alt sınır diye bir
@@ -1519,14 +1520,25 @@ function extractFeedbackSignals(allSnapsObj, athlete){
             // (ki bu TAM İSTENEN şey), puanlama yanlışlıkla "Düşük Nabız" cezası veriyordu.
             // Çözüm: rest/walk fazlarında alt sınır kontrolü tamamen atlanır.
             const _isRecoveryPhase=row.type==='rest'||row.type==='walk';
+            // KÖK NEDEN DÜZELTMESİ (2026.08.23 — Göksel'in bildirdiği "rozet Hedef Nabız
+            // gösteriyor ama Hedef Uyumu 'düşük' sayıyor" çelişkisi, On-Off'taki 30sn'lik
+            // ON patlamaları örneği): bpmValidation/bpmValidationAralik'te KISA satırlarda
+            // (≤SHORT_ROW_MAX_SEC — "cardiac lag", nabız bu kadar kısa sürede hedef bölgeye
+            // fizyolojik olarak yetişemeyebilir) alt sınır kontrolü TAMAMEN ATLANIR, sadece
+            // üst sınıra bakılır (bkz. ~satır 9372 "Kısa satır" bloğu). Bu fonksiyon bu
+            // istisnayı HİÇ uygulamıyordu — rozet 151bpm'lik 30sn'lik bir ON patlamasını
+            // doğru şekilde "Hedef Nabız" sayarken, puanlama motoru aynı satırı "düşük"
+            // sayıp cezalandırıyordu; rozet ile puan aynı satır için TAMAMEN ZIT şeyler
+            // söylüyordu. Çözüm: rozetle BİREBİR aynı isShortRow istisnası eklendi.
+            const _isShortRow=durSec>0&&durSec<=SHORT_ROW_MAX_SEC;
             if(row.bpm > hr.hi_bpm){
               const over=row.bpm-hr.hi_bpm;
               if(over>targetUp){
                 hrDir='high';
                 hrWeight=over<=warnUp?BPM_SIGNAL_WEIGHT.warn:over<=dangerUp?BPM_SIGNAL_WEIGHT.danger:BPM_SIGNAL_WEIGHT.critical;
               } else hrOk=true; // nabız girildi ve tolerans payı içinde (Hedef Nabız)
-            } else if(_isRecoveryPhase){
-              hrOk=true; // toparlanma fazı: üst sınırın altındaysa (ne kadar düşük olursa olsun) uyumlu
+            } else if(_isRecoveryPhase||_isShortRow){
+              hrOk=true; // toparlanma fazı VEYA kısa satır (cardiac lag): üst sınırın altındaysa (ne kadar düşük olursa olsun) uyumlu
             } else if(row.bpm < hr.lo_bpm){
               const under=hr.lo_bpm-row.bpm;
               if(under>targetDown){
