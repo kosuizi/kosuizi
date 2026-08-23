@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.23-1803 --><!DOCTYPE html>
+<!-- Version: v2026.08.23-1836 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.23-1803';
+const APP_VERSION='v2026.08.23-1836';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -6512,7 +6512,7 @@ function finalizeLeaderboard(rows,paceScores,weights){
     const completenessMult=0.4+0.6*(completeness/100);
     const finalScore=round1(rawFinalScore*completenessMult);
 
-    return{...r,eforNorm,isNorm,isNormRelative,isNormAbsolute,uygunlukPct,uygunlukNorm,rawFinalScore,completeness,finalScore};
+    return{...r,eforNorm,isNorm,isNormRelative,isNormAbsolute,gercekIsReferans,uygunlukPct,uygunlukPctForScore,uygunlukForScoreEffective,uygunlukNorm,rawFinalScore,completeness,completenessMult,finalScore};
   }).sort((a,b)=>b.finalScore-a.finalScore);
 }
 
@@ -6520,6 +6520,12 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races,leaderboardWeigh
   const [weekOffset,setWeekOffset]=useState(0);
   const [downloading,setDownloading]=useState(false);
   const [sharing,setSharing]=useState(null); // athId being shared
+  // 2026.08.23 — Göksel talebi: ekran görüntüsünden final skoru tersine mühendislik
+  // yapmak sürdürülemez hale geldi ("neden bu skor" soruları). Sporcu satırına
+  // tıklayınca eforNorm/isNorm/isNormRelative/isNormAbsolute/uygunluk* gibi ara
+  // değerleri gösteren bir döküm açılır — data-no-export ile paylaşım kartından
+  // hariç tutulur (bkz. showWeightPanel benzeri, aşağıdaki satır render'ı).
+  const [expandedAthId,setExpandedAthId]=useState(null);
   const cardRef=React.useRef();
   const athCardRefs=React.useRef({});
 
@@ -6839,14 +6845,16 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races,leaderboardWeigh
           if(row.count===0&&i>=activeCount)return null;
           const pct=stats[0].finalScore>0?Math.round(row.finalScore/stats[0].finalScore*100):0;
           const sporList=Object.entries(row.sporDagilim).map(([k,v])=>(SPOR_MAP[k]?.emoji||'🏅')+' ×'+v).join(' ');
-          return React.createElement('div',{key:row.ath.id,
+          const isExpanded=expandedAthId===row.ath.id;
+          const mainRow=React.createElement('div',{key:row.ath.id,
             ref:el=>{if(el)athCardRefs.current[row.ath.id]=el;},
             style:{
             display:'flex',alignItems:'center',gap:12,
-            padding:'10px 12px',marginBottom:8,
+            padding:'10px 12px',marginBottom:isExpanded?0:8,
             background:i===0?'rgba(255,215,0,.08)':i===1?'rgba(192,192,192,.06)':i===2?'rgba(205,127,50,.06)':'rgba(255,255,255,.03)',
-            borderRadius:10,border:i<3?'1px solid '+(i===0?'rgba(255,215,0,.3)':i===1?'rgba(192,192,192,.2)':'rgba(205,127,50,.2)'):'1px solid rgba(255,255,255,.04)'
-          }},
+            borderRadius:isExpanded?'10px 10px 0 0':10,border:i<3?'1px solid '+(i===0?'rgba(255,215,0,.3)':i===1?'rgba(192,192,192,.2)':'rgba(205,127,50,.2)'):'1px solid rgba(255,255,255,.04)',
+            cursor:'pointer'
+          },onClick:()=>setExpandedAthId(isExpanded?null:row.ath.id)},
             // Sıra / madalya + değişim oku
             React.createElement('div',{style:{width:36,textAlign:'center',flexShrink:0}},
               React.createElement('div',{style:{fontSize:i<3?20:13,fontWeight:700,color:i<3?medalColors[i]:'#475569'}},
@@ -6936,6 +6944,17 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races,leaderboardWeigh
                 React.createElement('div',{style:{height:'100%',width:pct+'%',background:i===0?'#fbbf24':i===1?'#94a3b8':i===2?'#b45309':'#3b82f6',borderRadius:2}})
               )
             ),
+            // Detay dökümü aç/kapa
+            React.createElement('button',{
+              'data-no-export':true,
+              onClick:e=>{e.stopPropagation();setExpandedAthId(isExpanded?null:row.ath.id);},
+              style:{
+                background:isExpanded?'rgba(56,189,248,.15)':'rgba(255,255,255,.08)',border:'none',borderRadius:8,
+                padding:'6px 8px',cursor:'pointer',color:isExpanded?'#38bdf8':'#94a3b8',fontSize:14,
+                flexShrink:0,transition:'.15s'
+              },
+              title:'Skor dökümü'
+            },'📊'),
             // Paylaş butonu
             React.createElement('button',{
               'data-no-export':true,
@@ -6949,8 +6968,58 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races,leaderboardWeigh
               title:'Kartı paylaş'
             },sharing===row.ath.id?'◌':'↗')
           );
+          // ── Skor dökümü paneli (2026.08.23 — Göksel talebi) ────────────────────
+          // "Neden bu skor" sorusunu ekran görüntüsünden tersine mühendislik yapmak
+          // yerine gerçek ara değerleri gösterir. data-no-export → paylaşım kartı
+          // export'unda (html2canvas) otomatik gizlenir/silinir (bkz. shareFullCard/
+          // shareAthCard, querySelectorAll('[data-no-export]')).
+          const detailPanel=isExpanded&&React.createElement('div',{
+            key:row.ath.id+'-detay','data-no-export':true,
+            style:{
+              marginBottom:8,padding:'10px 14px',fontSize:11,color:'#94a3b8',
+              background:'rgba(0,0,0,.25)',borderRadius:'0 0 10px 10px',
+              border:'1px solid rgba(255,255,255,.06)',borderTop:'none',
+              fontFamily:'ui-monospace,monospace',lineHeight:1.7
+            }
+          },
+            (()=>{
+              const w=weightsDraft;
+              const fmtN=v=>v==null?'—':(Math.round(v*10)/10);
+              const katkiHU=round1(row.uygunlukForScoreEffective*(w.hedefUyumu/100));
+              const katkiEfor=round1(row.eforNorm*(w.efor/100));
+              const katkiIs=round1(row.isNorm*(w.gercekIs/100));
+              const rows=[
+                ['🎯 Hedef Uyumu',null],
+                ['  Gösterilen',row.uygunlukPct==null?'— (ölçülemedi)':row.uygunlukPct+'%'],
+                ['  Skorda kullanılan',row.uygunlukForScoreEffective+(row.uygunlukPctForScore==null?' (nötr, veri yok)':' (Bayes düzeltmeli)')],
+                ['  Katkı',row.uygunlukForScoreEffective+' × %'+w.hedefUyumu+' = '+katkiHU],
+                ['💪 Efor',null],
+                ['  Ham / Baseline',fmtN(row.sporSkoru)+' / '+(row.eforBaseline==null?'yetersiz geçmiş':fmtN(row.eforBaseline))],
+                ['  Norm',row.eforNorm],
+                ['  Katkı',row.eforNorm+' × %'+w.efor+' = '+katkiEfor],
+                ['⛰ Gerçek İş',null],
+                ['  Ham / Baseline',fmtN(row.gercekIs)+' eşd.km / '+(row.isBaseline==null?'yetersiz geçmiş':fmtN(row.isBaseline))],
+                ['  Kişisel-göreli / Mutlak (ref '+row.gercekIsReferans+'km)',row.isNormRelative+' / '+row.isNormAbsolute],
+                ['  Norm (ortalama)',row.isNorm],
+                ['  Katkı',row.isNorm+' × %'+w.gercekIs+' = '+katkiIs],
+                ['📐 Toplam',null],
+                ['  Ham Skor',katkiHU+'+'+katkiEfor+'+'+katkiIs+' = '+row.rawFinalScore],
+                ['  Veri Tamlığı çarpanı',fmtN(row.completeness)+'/100 → ×'+fmtN(row.completenessMult)],
+                ['  Final Skor',row.rawFinalScore+' × '+fmtN(row.completenessMult)+' = '+row.finalScore],
+              ];
+              return rows.map(([label,val],ri)=>React.createElement('div',{key:ri,style:val==null?{marginTop:ri>0?6:0,color:'#e2e8f0',fontWeight:700,fontFamily:'system-ui,sans-serif'}:{display:'flex',justifyContent:'space-between',gap:8}},
+                val==null?label:React.createElement(React.Fragment,null,
+                  React.createElement('span',null,label),
+                  React.createElement('span',{style:{color:'#cbd5e1'}},val)
+                )
+              ));
+            })()
+          );
+          return React.createElement(React.Fragment,{key:row.ath.id+'-frag'},mainRow,detailPanel);
         }).filter(Boolean)
       ),
+
+
 
       // Alt not
       React.createElement('div',{style:{marginTop:16,paddingTop:12,borderTop:'1px solid rgba(255,255,255,.06)',display:'flex',justifyContent:'space-between',alignItems:'center'}},
