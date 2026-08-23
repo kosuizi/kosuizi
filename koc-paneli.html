@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.19-1412 --><!DOCTYPE html>
+<!-- Version: v2026.08.23-1746 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.19-1412';
+const APP_VERSION='v2026.08.23-1746';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -6285,7 +6285,11 @@ const BASELINE_MIN_ACTIVE_WEEKS=2; // güvenilir referans için gereken min. akt
 // kaydedilir — hem Koç Paneli hem Koşu İzlerim aynı kayıtlı değeri okur
 // (panel paritesi). Bu sabit SADECE hiç kayıt yoksa (ilk kurulum / eski veri)
 // kullanılan varsayılan değerdir. Üç değer TOPLAMDA 100 olmalıdır.
-const DEFAULT_LEADERBOARD_WEIGHTS={hedefUyumu:50,efor:15,gercekIs:35};
+const DEFAULT_LEADERBOARD_WEIGHTS={hedefUyumu:50,efor:15,gercekIs:35,gercekIsReferans:65};
+// gercekIsReferans: Gerçek İş'in MUTLAK bileşeni için doygunma referansı (eşdeğer
+// km/hafta) — bkz. finalizeLeaderboard'daki 2026.08.23 notu. Göksel'in takım
+// değerlendirmesi: deneyimli bir sporcunun "dolu/iyi" haftası ~60-70km → 65
+// (orta nokta) varsayılan. Ağırlıklar panelinden ayarlanabilir.
 
 // Bir sporcunun, verilen haftadan ÖNCEKİ (o hafta hariç) son BASELINE_LOOKBACK_WEEKS
 // hafta içindeki, antrenman yaptığı haftaların Efor/Gerçek İş ortalamasını döndürür.
@@ -6431,7 +6435,26 @@ function finalizeLeaderboard(rows,paceScores,weights){
   // az veri = orta puan, tam puan DEĞİL.
   return rows.map(r=>{
     const eforNorm=r.eforBaseline>0?round1(Math.min(100,r.sporSkoru/r.eforBaseline*100)):(r.count>0?50:0);
-    const isNorm=r.isBaseline>0?round1(Math.min(100,r.gercekIs/r.isBaseline*100)):(r.count>0?50:0);
+    // 2026.08.23 — Göksel talebi: Gerçek İş'in SADECE kendi geçmişine göre (isBaseline)
+    // normalize edilmesi, mutlak hacim farkını siliyordu — haftalık 80 birimlik rutini
+    // olan biri kendi ortalamasını tutturunca da, 30 birimlik rutini olan biri kendi
+    // ortalamasını sadece %10 aşınca da AYNI 100 puanı alıyordu. Oysa Gerçek İş'in
+    // TASARIM AMACI (bkz. calcWeeklyStats'taki tanım notu) tam olarak efor puanından
+    // BAĞIMSIZ mutlak işi ödüllendirmekti — bu normalizasyon o amacı bozuyordu.
+    // ÇÖZÜM: kişisel-göreli bileşenin (isNormRelative) yanına, HİÇBİR sporcunun
+    // (ne kendisinin ne başkasının) verisine bakmayan sabit bir "mutlak" bileşen
+    // (isNormAbsolute) eklenip %50-%50 harmanlanıyor. Mutlak bileşen doygunma eğrisi
+    // kullanır: 100×iş/(iş+REFERANS). Bu eğri SERT bir tavana çarpmaz (min(100,...)
+    // değil) — bu yüzden REFERANS hafif bir takım haftası için büyük ya da 160km'lik
+    // bir ultra hafta için küçük kalsa bile formül "kırılmaz", sadece yumuşakça esner
+    // (bkz. örnek tablo: 10km→17p, 65km(referans)→50p, 160km→~71p, 250km→~79p —
+    // hiçbiri sert bir eşiğe çarpıp aniden tavana yapışmıyor). REFERANS
+    // (gercekIsReferans) Ağırlıklar panelinden ayarlanabilir; takımın tipik yük
+    // seviyesi zamanla değişirse kod değişikliği/redeploy gerekmez.
+    const isNormRelative=r.isBaseline>0?round1(Math.min(100,r.gercekIs/r.isBaseline*100)):(r.count>0?50:0);
+    const gercekIsReferans=w.gercekIsReferans||DEFAULT_LEADERBOARD_WEIGHTS.gercekIsReferans;
+    const isNormAbsolute=r.gercekIs>0?round1(100*r.gercekIs/(r.gercekIs+gercekIsReferans)):0;
+    const isNorm=round1((isNormRelative+isNormAbsolute)/2);
     const raw=paceScores?.[r.ath.id];
     // uygunlukPct: GÖSTERİLEN "🎯 Hedef Uyumu" — HER ZAMAN ham puan (2026.08.09 —
     // Göksel talebi: sporcu her şeyi tam yaptıysa %100 görmeli, istatistiksel
@@ -6481,7 +6504,7 @@ function finalizeLeaderboard(rows,paceScores,weights){
     const completenessMult=0.4+0.6*(completeness/100);
     const finalScore=round1(rawFinalScore*completenessMult);
 
-    return{...r,eforNorm,isNorm,uygunlukPct,uygunlukNorm,rawFinalScore,completeness,finalScore};
+    return{...r,eforNorm,isNorm,isNormRelative,isNormAbsolute,uygunlukPct,uygunlukNorm,rawFinalScore,completeness,finalScore};
   }).sort((a,b)=>b.finalScore-a.finalScore);
 }
 
@@ -6510,6 +6533,13 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races,leaderboardWeigh
   const updateWeightDraft=(key,val)=>{
     const n=val===''?0:Math.max(0,Math.min(100,parseInt(val,10)||0));
     setWeightsDraft(d=>({...d,[key]:n}));
+    setWeightsSaved(false);
+  };
+  // gercekIsReferans % değil, eşdeğer km cinsinden bir referans değeri — 0-100
+  // aralığına sıkıştırılmaz, ayrı bir güncelleme fonksiyonu kullanır.
+  const updateReferansDraft=val=>{
+    const n=val===''?0:Math.max(1,Math.min(500,parseInt(val,10)||0));
+    setWeightsDraft(d=>({...d,gercekIsReferans:n}));
     setWeightsSaved(false);
   };
   const saveWeights=()=>{
@@ -6729,6 +6759,22 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races,leaderboardWeigh
           )
         )
       ),
+      React.createElement('div',{style:{marginTop:12,paddingTop:12,borderTop:'1px solid var(--border,rgba(0,0,0,.08))'}},
+        React.createElement('div',{style:{fontSize:12,fontWeight:600,marginBottom:4}},'⛰ Gerçek İş — Mutlak Referans'),
+        React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:8}},
+          'Gerçek İş puanının yarısı, sporcunun kendi geçmişine göre; diğer yarısı bu SABİT referansa göre hesaplanır (hiçbir sporcunun verisine bağlı değildir — takım büyüklüğü/aktif sporcu sayısı etkilemez). "Deneyimli bir sporcunun dolu/iyi haftası kaç eşdeğer km?" sorusunun cevabı. Puan bu değere sert bir tavanda kilitlenmez, yumuşakça yaklaşır — bu yüzden çok hafif ya da çok ağır (ör. ultra) haftalarda formül bozulmaz.'
+        ),
+        React.createElement('div',{style:{display:'flex',alignItems:'center',gap:4}},
+          React.createElement('input',{
+            type:'number',min:1,max:500,step:1,
+            value:weightsDraft.gercekIsReferans??DEFAULT_LEADERBOARD_WEIGHTS.gercekIsReferans,
+            onChange:e=>updateReferansDraft(e.target.value),
+            style:{width:70,padding:'4px 6px',borderRadius:6,border:'1px solid var(--border,#cbd5e1)'}
+          }),
+          React.createElement('span',{style:{fontSize:12,color:'var(--text-tertiary)'}},'eşdeğer km/hafta')
+        )
+      ),
+
       React.createElement('div',{style:{display:'flex',alignItems:'center',gap:10,marginTop:10}},
         React.createElement('span',{style:{fontSize:12,fontWeight:600,color:weightsValid?'var(--success,#16a34a)':'var(--danger,#dc2626)'}},
           'Toplam: '+weightsTotal+'%'+(weightsValid?' ✓':' — 100 olmalı')
@@ -6738,7 +6784,7 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races,leaderboardWeigh
           disabled:!weightsValid||weightsSaved,
           onClick:saveWeights
         },weightsSaved?'Kaydedildi ✓':'Kaydet'),
-        React.createElement('button',{className:'btn btn-sm',onClick:resetWeightsToDefault},'Varsayılana Dön (50/15/35)')
+        React.createElement('button',{className:'btn btn-sm',onClick:resetWeightsToDefault},'Varsayılana Dön (50/15/35, 65km)')
       )
     ),
 
