@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.23-1901 --><!DOCTYPE html>
+<!-- Version: v2026.08.23-1920 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.23-1901';
+const APP_VERSION='v2026.08.23-1920';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -8444,14 +8444,20 @@ async function saveCueGlobal(label, text){
 }
 
 // Aralıklar editörü — tekrarlı antrenmanlarda her bir tekrarın koşu+dinlenme pace'lerini ayrı düzenler
-function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange, paceValidation, paceToZoneIdx, zones, readOnly, isWorkoutLogged}){
+function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange, paceValidation, paceToZoneIdx, zones, measureZones, readOnly, isWorkoutLogged}){
   const [editKey, setEditKey] = React.useState(null); // 'rep:type:field'
   const e = React.createElement;
+  // 2026.08.23 — KÖK NEDEN DÜZELTMESİ: ReceteTablosu'daki _mZones (measureZones||zones,
+  // athleteAtDate ile o GÜNÜN nabız bölgesine göre hesaplanır) deseniyle BİREBİR aynı —
+  // bu bileşen önceden measureZones'u hiç almıyordu, bpmValidationAralik CANLI (bugünkü)
+  // `zones`'u okuyordu. paceValidation (parent'tan closure olarak geliyor) zaten doğruydu;
+  // sadece nabız bu düzeltmeyi hiç almamıştı (bkz. bpmValidation'daki eşleşen not).
+  const _mZones=measureZones||zones;
 
   // Zone'dan önerilen ortalama nabız
   const suggestedBpmForZone=(zIdx)=>{
     if(zIdx==null) return null;
-    const hr=zones?.hrZones?.[zIdx];
+    const hr=_mZones?.hrZones?.[zIdx];
     if(!hr?.lo_bpm||!hr?.hi_bpm) return null;
     return Math.ceil((hr.lo_bpm+hr.hi_bpm)/2);
   };
@@ -8494,10 +8500,11 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
     if(ovBpm==null) return null;
     const zIdx=rowData._origZIdx;
     if(zIdx==null) return null;
-    // Donmuş sınırlar varsa (rowData daha önce düzenlenmiş) onları kullan — bkz. updateAralikCell
+    // Donmuş sınırlar varsa (rowData daha önce düzenlenmiş) onları kullan — bkz. updateAralikCell.
+    // 2026.08.23 — tarihe duyarlı _mZones (bkz. dosya başındaki not) — canlı zones değil.
     const hr=(rowData._origLoBpm&&rowData._origHiBpm)
-      ? {id:zones?.hrZones?.[zIdx]?.id, lo_bpm:rowData._origLoBpm, hi_bpm:rowData._origHiBpm}
-      : zones?.hrZones?.[zIdx];
+      ? {id:_mZones?.hrZones?.[zIdx]?.id, lo_bpm:rowData._origLoBpm, hi_bpm:rowData._origHiBpm}
+      : _mZones?.hrZones?.[zIdx];
     if(!hr?.lo_bpm||!hr?.hi_bpm) return null;
     const {lo_bpm,hi_bpm}=hr;
     // durSec: sürekli bölgelerde (Z2–Z4) kısa segmentlerin lag payını hesaba katar
@@ -8716,7 +8723,7 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
                   // Yürüyüş (walk) molaları: midpoint yerine Z1 alt sınırını göster
                   // → "bu değerin altına in" sinyali; S1-S4'te koşu ve yürü fazları artık farklı bpm gösterir
                   const val=ov!=null?ov:(restData.type==='walk'
-                    ?(zones?.hrZones?.[restData._origZIdx??0]?.lo_bpm??'—')
+                    ?(_mZones?.hrZones?.[restData._origZIdx??0]?.lo_bpm??'—')
                     :suggestedBpmForZone(restData._origZIdx)??'—');
                   const bpmHint='min';
                   return React.createElement('div',{style:{display:'flex',flexDirection:'column',alignItems:'center',gap:0}},
@@ -9264,7 +9271,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
   const suggestedBpm=(row)=>{
     const zi=row._origZIdx;
     if(zi==null) return null;
-    const hr=zones?.hrZones?.[zi];
+    const hr=_mZones?.hrZones?.[zi];
     if(!hr?.lo_bpm||!hr?.hi_bpm) return null;
     return Math.ceil((hr.lo_bpm+hr.hi_bpm)/2);
   };
@@ -9298,10 +9305,23 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     if(row.bpm==null) return null;
     const zi=row._origZIdx;
     if(zi==null) return null;
-    // Donmuş sınırlar varsa (satır daha önce düzenlenmiş) onları kullan — bkz. updateCell
+    // 2026.08.23 — KÖK NEDEN DÜZELTMESİ (Göksel'in bildirdiği "rozet uyumlu gösteriyor
+    // ama Hedef Uyumu düşük" tutarsızlığı): paceValidation 2026.08.11'de "geçmiş
+    // antrenman o GÜNÜN vLT'sine göre değerlendirilsin, koç bugün zone'u değiştirdiğinde
+    // eski rozetler sessizce kaymasın" diye _mZones'a (measureZones, athleteAtDate ile
+    // o GÜNÜN profiline göre hesaplanır) geçmişti — ama bu düzeltme NABIZ'a hiç
+    // uygulanmamıştı, bpmValidation hâlâ CANLI (bugünkü) `zones`'u okuyordu.
+    // extractFeedbackSignals (puanlama motoru) ise zonesForDate() ile ZATEN doğru
+    // (tarihe duyarlı) davranıyordu — yani rozet (yanlışlıkla canlı) ile puan (doğru,
+    // o günün bölgesi) SESSİZCE ayrışabiliyordu; sporcunun nabız bölgeleri sonradan
+    // değiştiyse geçmiş antrenmanların rozeti güncel (yanlış) bölgeye göre "uyumlu"
+    // görünüp puan "düşük/yüksek" çıkarabiliyordu. Çözüm: paceValidation ile BİREBİR
+    // aynı kaynağa (_mZones) geçildi — profileHistory zaten her nabız bölgesi
+    // değişikliğinde eski/yeni değerleri kaydediyor (bkz. athleteAtDate), sadece bu
+    // rozet ona hiç bakmıyordu.
     const hr=(row._origLoBpm&&row._origHiBpm)
-      ? {id:zones?.hrZones?.[zi]?.id, lo_bpm:row._origLoBpm, hi_bpm:row._origHiBpm}
-      : zones?.hrZones?.[zi];
+      ? {id:_mZones?.hrZones?.[zi]?.id, lo_bpm:row._origLoBpm, hi_bpm:row._origHiBpm}
+      : _mZones?.hrZones?.[zi];
     if(!hr?.lo_bpm||!hr?.hi_bpm) return null;
     const {lo_bpm,hi_bpm}=hr;
     // durSec: sürekli bölgelerde (Z2–Z4) kısa segmentlerin lag payını hesaba katar
@@ -10173,6 +10193,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
                     paceValidation,
                     paceToZoneIdx,
                     zones,
+                    measureZones,
                     readOnly,
                     isWorkoutLogged
                   })
@@ -10311,7 +10332,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
                 // Recovery walk satırları (yürüyüş araları): lo_bpm göster → "bu değerin altına in"
                 // Isınma/Soğuma yürüyüşü hariç (orada ortalama hedef)
                 const _isRecoveryWalk=(r.type==='walk')&&!(/[iı]sınma|isinma|soğuma|soguma/i.test(r.label||''));
-                const sugBpm=_isRecoveryWalk?(zones?.hrZones?.[r._origZIdx??0]?.lo_bpm??_sugBpmRaw):_sugBpmRaw;
+                const sugBpm=_isRecoveryWalk?(_mZones?.hrZones?.[r._origZIdx??0]?.lo_bpm??_sugBpmRaw):_sugBpmRaw;
                 // run/walk satırları: LTHR tanımlı olmasa da bpm girişi aktif (placeholder '—')
                 const alwaysEditable=r.type==='run'||r.type==='walk';
                 const displayVal=effectiveBpm!=null?effectiveBpm:(sugBpm!=null?sugBpm:(alwaysEditable?'—':null));
