@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.25-2124 --><!DOCTYPE html>
+<!-- Version: v2026.08.25-2305 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.25-2124';
+const APP_VERSION='v2026.08.25-2305';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -1541,7 +1541,17 @@ function extractFeedbackSignals(allSnapsObj, athlete){
               hrOk=true; // toparlanma fazı VEYA kısa satır (cardiac lag): üst sınırın altındaysa (ne kadar düşük olursa olsun) uyumlu
             } else if(row.bpm < hr.lo_bpm){
               const under=hr.lo_bpm-row.bpm;
-              if(under>targetDown){
+              // 2026.08.25 — Göksel talebi (antrenman bilimine uygunluk): pace HEDEF
+              // BÖLGEDEYSE (paceOk) VEYA hedeften HIZLIYSA (paceDir==='fast'), düşük nabız
+              // bir yetersizlik değil — sporcu istenen (hatta daha hızlı) pace'i daha düşük
+              // kardiyovasküler maliyetle üretebiliyor demektir; bu aerobik kapasite/verim
+              // artışının işaretidir ve cezalandırılmamalı. Yalnızca sporcu hedef pace'e
+              // YETİŞEMEDİYSE (paceDir==='slow') VE nabız da düşükse, bu gerçekten "yeterli
+              // yoğunluk sağlanamadı" demektir — o durumda ceza (hrDir='low') korunur. Pace
+              // hiç ölçülemediyse (bu satırda paceOk/paceDir yoksa — örn. sadece nabız
+              // girilmiş) eski (temkinli) davranış korunur, iyimser varsayım yapılmaz.
+              const _paceConfirmsEffort=paceOk||paceDir==='fast';
+              if(under>targetDown&&!_paceConfirmsEffort){
                 hrDir='low';
                 hrWeight=under<=warnDown?BPM_SIGNAL_WEIGHT.warn:under<=dangerDown?BPM_SIGNAL_WEIGHT.danger:BPM_SIGNAL_WEIGHT.critical;
               } else hrOk=true;
@@ -5404,18 +5414,35 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
             if(planWeekReal?._isNoRace&&planWeekReal?._maxYuksekKaliteli===0) sorunlar.push('📊 Düşük hacim ('+(planWeekReal._avg4km??'?')+'km/hafta ort.) — Yüksek Kaliteli (interval/hill sprint vb.) bu hafta engellendi (<15km eşiği), Orta Kaliteli (tempo/eşik/progressive) haftada 1 kez izinli');
             // 2026.08.25 — Göksel talebi (Düşük hacim vakasında "Orta Kaliteli izinli diyor
             // ama hiç gelmiyor" sorunu): quota'nın VAR OLMASI, o günün gerçekten tempo/eşik/
-            // progressive olarak üretileceği anlamına gelmez — plan üreticisinde (planDay,
-            // ~satır 15566/15579) HRV ve sakatlık, kaliteli günü sessizce (yalnızca o günün
-            // kendi uyari metninde, sorunlar listesinde DEĞİL) aerobik/kolaya indirebiliyor.
-            // Bu, aynı düşük-hacim haftasında STANDING bir uyarı olarak burada da gösterilir.
+            // progressive olarak üretileceği anlamına gelmez. Spekülasyon yerine GERÇEK plan
+            // üreticisini (generateTwoWeekPlan) bu hafta için çalıştırıp sonucu doğrudan
+            // doğruluyoruz — wkStats.kaliteliSayisi bu haftanın gerçekleşen kaliteli antrenman
+            // sayısı (bkz. plan üreticisi, ~satır 16297/16316). Kota>0 ama sonuç 0 ise, hangi
+            // mekanizmanın (HRV/sakatlık/mekanik-kardiyo/iskelet-bitişiklik kısıtı/art arda
+            // yoğun gün zinciri) engellediğini teker teker bilmemize gerek kalmadan, olguyu
+            // doğrudan tespit edip bildiriyoruz — daha önce bu sadece günün kendi uyari
+            // metninde görünüyordu, sorunlar listesine hiç yansımıyordu. Yalnızca düşük hacim
+            // haftalarında (zaten nadir bir alt küme) çalıştığından maliyeti sınırlı.
             if(planWeekReal?._isNoRace&&planWeekReal?._maxYuksekKaliteli===0){
-              const kaliteliEngelSebep=[];
-              const _sakInt=parseInt(ath.sakatlık)||1;
-              if(ath.hrv_durum==='düşük') kaliteliEngelSebep.push('HRV düşük → kaliteli gün otomatik Kolay Koşu\'ya iniyor');
-              else if(ath.hrv_durum==='dengesiz') kaliteliEngelSebep.push('HRV dengesiz → kaliteli gün otomatik Aerobik\'e iniyor');
-              if(_sakInt>=6) kaliteliEngelSebep.push('Sakatlık '+_sakInt+'/10 → kaliteli gün otomatik aerobik/kolaya iniyor');
-              else if(_sakInt>=4) kaliteliEngelSebep.push('Sakatlık '+_sakInt+'/10 → yoğun kaliteli türler (interval/piramit/hill) aerobiğe iniyor');
-              if(kaliteliEngelSebep.length) sorunlar.push('🚫 Haftanın tek izinli Orta Kaliteli günü muhtemelen düşecek — '+kaliteliEngelSebep.join(' · '));
+              let curWeekPlanReal=null;
+              try{
+                const _planActual=generateTwoWeekPlan(ath,history,races||[],athWks);
+                curWeekPlanReal=(_planActual?.weeks||[]).find(w=>w.weekOff===0)||null;
+              }catch(ePlanChk){/* plan üretilemediyse bu doğrulama atlanır, spekülasyona düşülmez */}
+              const gerceklesenKaliteli=curWeekPlanReal?.wkStats?.kaliteliSayisi||0;
+              if(curWeekPlanReal&&gerceklesenKaliteli===0){
+                const kaliteliEngelSebep=[];
+                const _sakInt=parseInt(ath.sakatlık)||1;
+                if(mechKardioDanger) kaliteliEngelSebep.push('mekanik/kardiyo dengesi zayıf');
+                if(ath.hrv_durum==='düşük') kaliteliEngelSebep.push('HRV düşük');
+                else if(ath.hrv_durum==='dengesiz') kaliteliEngelSebep.push('HRV dengesiz');
+                if(_sakInt>=4) kaliteliEngelSebep.push('sakatlık '+_sakInt+'/10');
+                if(sigs.level==='forceLow'||sigs.level==='forceEasy') kaliteliEngelSebep.push('zone/yük sinyali ('+sigs.level+')');
+                const sebepMetni=kaliteliEngelSebep.length
+                  ?kaliteliEngelSebep.join(', ')+' nedeniyle otomatik aerobik/kolaya indi'
+                  :'muhtemelen az koşu günü + uzun koşu/bitişiklik kısıtı nedeniyle iskelette hiç uygun gün kalmadı (yukarıdaki sinyallerin hiçbiri tetiklenmedi)';
+                sorunlar.push('🚫 Bu hafta hiç kaliteli (tempo/eşik/progressive) gün ÜRETİLMEDİ — kota (1) var ama gerçekleşmedi: '+sebepMetni+'.');
+              }
             }
             // NOT (Temmuz 2026 — Göksel'in kararıyla): "Yarış/Disiplin Uyumsuzluğu"
             // (trail etiketli ama D+ düşük) kontrolü tamamen kaldırıldı. Önce
@@ -8614,6 +8641,11 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
       return                     {label:dangerHighLabel(hr),  color:'#ef4444',bg:'#fef2f2',icon:'⚠'};
     }
     const under=lo_bpm-ovBpm;
+    // 2026.08.25 — bkz. bpmValidation'daki (~satır 9476) BİREBİR aynı tarihli not: pace
+    // hedefte veya hedeften hızlıysa, düşük nabız cezalandırılmaz — "Hedef Nabız" gösterilir.
+    const _paceLblForHrAralik=paceValidation(rowData)?.label;
+    const _paceConfirmsEffortAralik=_paceLblForHrAralik==='Hedef Bölge'||_paceLblForHrAralik==='Biraz Hızlı'||_paceLblForHrAralik==='Çok Hızlı';
+    if(_paceConfirmsEffortAralik) return{label:'Hedef Nabız',color:'#22c55e',bg:'#f0fdf4',icon:'♥'};
     if(under<=targetDown)  return{label:'Hedef Nabız',     color:'#22c55e',bg:'#f0fdf4',icon:'♥'};
     if(under<=warnDown)    return{label:'Biraz Düşük Nabız',color:'#f59e0b',bg:'#fffbeb',icon:'↓'};
     if(under<=dangerDown)  return{label:'Çok Düşük Nabız',  color:'#f97316',bg:'#fff7ed',icon:'↓↓'};
@@ -9447,6 +9479,18 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
       return                     {label:dangerHighLabel(hr),  color:'#ef4444',bg:'#fef2f2',icon:'⚠'};
     }
     const under=lo_bpm-bpm;
+    // 2026.08.25 — Göksel talebi (antrenman bilimine uygunluk — puanlama motorundaki
+    // (extractFeedbackSignals, ~satır 1542) karşılığıyla BİREBİR aynı mantık): pace HEDEF
+    // BÖLGEDEYSE ('Hedef Bölge') veya hedeften HIZLIYSA ('Biraz/Çok Hızlı'), düşük nabız bir
+    // yetersizlik değil — sporcu istenen (hatta daha hızlı) pace'i daha düşük kardiyovasküler
+    // maliyetle üretebiliyor demektir, bu aerobik kapasite/verim artışının işaretidir. Rozet
+    // bu durumda "Düşük/Yetersiz" yerine "Hedef Nabız" gösterir — aksi halde rozet ile puan
+    // (artık cezalandırmıyor) birbiriyle çelişirdi. Yalnızca pace de hedefin YAVAŞINDAYSA
+    // ('Biraz/Çok Yavaş') düşük nabız gerçekten "yetersiz yoğunluk" anlamına gelir, eski
+    // kademeli rozetler (Biraz/Çok Düşük, Yetersiz Yoğunluk) o durumda korunur.
+    const _paceLblForHr=paceValidation(row)?.label;
+    const _paceConfirmsEffort=_paceLblForHr==='Hedef Bölge'||_paceLblForHr==='Biraz Hızlı'||_paceLblForHr==='Çok Hızlı';
+    if(_paceConfirmsEffort) return{label:'Hedef Nabız',color:'#22c55e',bg:'#f0fdf4',icon:'♥'};
     if(under<=targetDown)  return{label:'Hedef Nabız',     color:'#22c55e',bg:'#f0fdf4',icon:'♥'};
     if(under<=warnDown)    return{label:'Biraz Düşük Nabız',color:'#f59e0b',bg:'#fffbeb',icon:'↓'};
     if(under<=dangerDown)  return{label:'Çok Düşük Nabız',  color:'#f97316',bg:'#fff7ed',icon:'↓↓'};
