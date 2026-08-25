@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.24-2257 --><!DOCTYPE html>
+<!-- Version: v2026.08.25-2107 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.24-2257';
+const APP_VERSION='v2026.08.25-2107';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -20210,7 +20210,13 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     })(),
     plan.weeks.filter(week=>week.weekOff===0||(week.weekOff===1&&showNextWeek)).map(week=>{
       const haftalikReceteRef=React.createRef();
-      const antrenmanGunleri=week.days.filter(d=>d.tip!=='dinlenme'&&d.yapilar?.length>0);
+      // 2026.08.25 — Göksel talebi (panel paritesi): dinlenme günleri bu listeden ÖNCEDEN
+      // tamamen dışlanıyordu (antrenman reçetesi gerektirmedikleri için) — ama bu, Koşu
+      // İzlerim'de sporcuya görünen "✨ Dinlenme Günü" kartının koç panelindeki bu
+      // (antrenman reçetelerinin gösterildiği) listede hiç karşılığı olmaması demekti.
+      // Artık dinlenme günleri de listeye dahil — aşağıdaki map() içinde kompakt, salt-okunur
+      // bir kart olarak (swap/onay-kutusu/reçete mantığına DAHİL EDİLMEDEN) gösteriliyor.
+      const antrenmanGunleri=week.days.filter(d=>(d.tip!=='dinlenme'&&d.yapilar?.length>0)||d.tip==='dinlenme');
       // Haftanın uzunu için band/zones — gerçek gün üretimiyle aynı kaynak
       // (ctlBand(history sonu), weekOff 0/1 ayrımı yapmadan aynı band kullanılır;
       // gün üretiminde de band tek seferde, hafta dışında hesaplanır).
@@ -20649,6 +20655,30 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         // Her antrenman günü
         React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:12}},
           antrenmanGunleri.map((day,di)=>{
+            // 2026.08.25 — Dinlenme günleri için kompakt, salt-okunur kart (bkz. yukarıdaki
+            // antrenmanGunleri tanımındaki not). Swap/onay-kutusu/reçete akışına GİRMEZ —
+            // düzenleme (not + onay) zaten aşağıdaki "7 gün grid" bölümünde mevcut; burası
+            // sadece haftanın akışını eksiksiz göstermek için bilgi amaçlıdır.
+            if(day.tip==='dinlenme'){
+              const ovDinList=planSnap?.overrideMap?.[day.date];
+              const dinNoteList=ovDinList?.restNote||'';
+              const dinApprovedList=ovDinList?.approved===true;
+              return React.createElement('div',{key:day.date,style:{
+                borderLeft:'3px solid #a78bfa',
+                paddingLeft:10,paddingTop:6,paddingBottom:6
+              }},
+                React.createElement('div',{style:{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}},
+                  React.createElement('span',{style:{fontSize:16}},'✨'),
+                  React.createElement('span',{style:{fontWeight:700,fontSize:12,color:'#7c3aed'}},day.dayTR+' — Dinlenme Günü'),
+                  !day.isPast&&React.createElement('span',{style:{
+                    fontSize:9,fontWeight:700,padding:'1px 6px',borderRadius:99,
+                    background:dinApprovedList?'var(--success-bg)':'var(--bg-tertiary)',
+                    color:dinApprovedList?'var(--success)':'var(--text-tertiary)'
+                  }},dinApprovedList?'✓ Onaylı':'Onay bekliyor')
+                ),
+                dinNoteList&&React.createElement('div',{style:{fontSize:11,color:'#9333ea',marginTop:2,paddingLeft:22,fontStyle:'italic'}},dinNoteList)
+              );
+            }
             const zones=calcZones(athlete);
             const split=splitDayActivities(day,day.actual||[]);
             const hasAnyActual=(day.actual&&day.actual.length>0);
@@ -20743,7 +20773,11 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   dualMode&&React.createElement('div',{style:{display:'flex',alignItems:'center',gap:6,fontSize:11,fontWeight:700,marginBottom:4,color:'var(--text-secondary)'}},
                     React.createElement('span',null,'🏃 Koşu'),
                     split.kosuDone&&React.createElement('span',{style:{color:'var(--success)',fontSize:14,fontWeight:900,lineHeight:1}},'✓'),
-                    !split.kosuDone&&day.isPast&&React.createElement('span',{style:{color:'var(--text-tertiary)',fontSize:10,fontStyle:'italic'}},'(yapılmadı)'),
+                    // 2026.08.25 — Göksel talebi: geçmiş bir günde plan var ama gerçekleşen kaydı
+                    // yoksa (ör. koşu atlanıp yalnızca kuvvet yapıldığında) artık soluk italik
+                    // "(yapılmadı)" yerine kırmızı ❌ rozeti — panel paritesi için Koşu İzlerim'deki
+                    // subBaslik ile AYNI stil (bkz. ~satır 29532).
+                    !split.kosuDone&&day.isPast&&React.createElement('span',{style:{color:'var(--danger)',fontSize:11,fontWeight:800,lineHeight:1}},'❌ Yapılmadı'),
                     !split.kosuDone&&!day.isPast&&React.createElement('span',{style:{color:'var(--text-tertiary)',fontSize:10,fontStyle:'italic'}},'(bekliyor)')
                   ),
                   // Gün planda koşu tipinde değilse (ör. "Çapraz Antrenman") kart başlığı
@@ -20922,7 +20956,9 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   React.createElement('div',{style:{display:'flex',alignItems:'center',gap:6,fontSize:11,fontWeight:700,marginBottom:4,color:'var(--text-secondary)'}},
                     React.createElement('span',null,'💪 Çapraz Antrenman'),
                     split.caprazDone&&React.createElement('span',{style:{color:'var(--success)',fontSize:14,fontWeight:900,lineHeight:1}},'✓'),
-                    !split.caprazDone&&day.isPast&&React.createElement('span',{style:{color:'var(--text-tertiary)',fontSize:10,fontStyle:'italic'}},'(yapılmadı)'),
+                    // 2026.08.25 — bkz. kosuBolum'daki aynı tarihli not (~satır 20745): kırmızı ❌
+                    // rozeti, soluk italik "(yapılmadı)" yerine.
+                    !split.caprazDone&&day.isPast&&React.createElement('span',{style:{color:'var(--danger)',fontSize:11,fontWeight:800,lineHeight:1}},'❌ Yapılmadı'),
                     !split.caprazDone&&!day.isPast&&React.createElement('span',{style:{color:'var(--text-tertiary)',fontSize:10,fontStyle:'italic'}},'(bekliyor)')
                   ),
                   React.createElement('div',{style:{fontSize:12,paddingLeft:4,color:split.caprazDone?'var(--success)':'var(--text-secondary)'}},
@@ -29217,6 +29253,13 @@ function SporcuPlanView(){
       } else if(ov&&ov.tip==='yaris'){
         // Yapılmamış yarış (kayıt yok ama planda var) — yine de göster
         dayInfos.push({date,status:'completed',ov,actuals:[]});
+      } else if(hasNonRestPlan&&isApproved){
+        // 2026.08.25 — Göksel talebi: önceden geçmiş bir günde onaylı plan vardı ama
+        // hiçbir kayıt (ne koşu ne çapraz) girilmediyse, gün "Antrenmanlarım" listesinden
+        // TAMAMEN gizleniyordu — sporcu o günü hiç görmüyordu, kaçırdığının farkına
+        // varamıyordu. Artık kırmızı "❌ KAÇIRILDI" kartı olarak gösteriliyor (bkz.
+        // renderDayCard'daki 'missed' status dalı).
+        dayInfos.push({date,status:'missed',ov,actuals:[]});
       }
     } else if(isToday){
       // Bugün: tamamlanan her zaman gösterilir; tamamlanmamışsa sadece onaylı göster
@@ -29300,6 +29343,8 @@ function SporcuPlanView(){
     const isToday=info.status==='today'||info.status==='today_done';
     const isNext=info.status==='next';
     const isRaceUpcoming=info.status==='race_upcoming';
+    // 2026.08.25 — Göksel talebi: geçmiş, onaylı ama hiç kayıt girilmemiş plan günü.
+    const isMissed=info.status==='missed';
     // Gerçekleşen antrenman varken plan "dinlenme" ise ov'u görsel olarak yok say
     const ovDinlenmeEzildi=ovRaw?.tip==='dinlenme'&&info.actuals.length>0;
     const ov=ovDinlenmeEzildi?null:ovRaw;
@@ -29327,14 +29372,15 @@ function SporcuPlanView(){
       title='Antrenman';emoji='🏃';titleColor='var(--text-primary)';
     }
 
-    // Sol kenar rengi — yarış kırmızı, tam tamamlanan yeşil, kısmi sarı, bugün/sıradaki mavi
+    // Sol kenar rengi — yarış/kaçırılan kırmızı, tam tamamlanan yeşil, kısmi sarı, bugün/sıradaki mavi
     const isPartial=isCompleted&&!split.fullyCompleted;
-    const borderColor=isRace?'var(--danger)':fullyDone?'var(--success)':isPartial?'var(--warn)':isToday?'var(--info)':isNext?'var(--info)':(ov?tipColor(ov.tip):'var(--border)');
+    const borderColor=isRace?'var(--danger)':isMissed?'var(--danger)':fullyDone?'var(--success)':isPartial?'var(--warn)':isToday?'var(--info)':isNext?'var(--info)':(ov?tipColor(ov.tip):'var(--border)');
 
     // Durum rozeti
     let statusLabel,statusBg,statusFg;
     if(isRace&&isCompleted){statusLabel='YARIŞ · TAMAMLANDI';statusBg='var(--danger-bg)';statusFg='var(--danger)';}
     else if(isRaceUpcoming){statusLabel='YARIŞ';statusBg='var(--danger-bg)';statusFg='var(--danger)';}
+    else if(isMissed){statusLabel='❌ KAÇIRILDI';statusBg='var(--danger-bg)';statusFg='var(--danger)';}
     else if(info.status==='completed'){statusLabel='TAMAMLANDI';statusBg='var(--success-bg)';statusFg='var(--success)';}
     else if(info.status==='today_done'){statusLabel='BUGÜN · TAMAMLANDI';statusBg='var(--success-bg)';statusFg='var(--success)';}
     else if(info.status==='today'){statusLabel='BUGÜN';statusBg='var(--info-bg)';statusFg='var(--info)';}
@@ -29524,25 +29570,43 @@ function SporcuPlanView(){
     };
 
     // Sub-bölüm başlık + tickle (sadece dualMode'da gösterilir)
+    // 2026.08.25 — Göksel talebi: geçmiş bir günde plan var ama gerçekleşen kaydı yoksa
+    // (ör. koşu atlanıp yalnızca kuvvet yapıldığında) artık soluk italik "(yapılmadı)" yerine
+    // kırmızı ❌ rozeti — panel paritesi için Koç Panelindeki HaftalikPlanTab (kosuBolum/
+    // caprazBolum, ~satır 20746/20925) ile AYNI stil.
     const subBaslik=(emoji,label,done,past)=>React.createElement('div',{style:{
       display:'flex',alignItems:'center',gap:6,fontSize:11,fontWeight:700,marginBottom:4,color:'var(--text-secondary)',paddingLeft:26
     }},
       React.createElement('span',null,emoji+' '+label),
       done?React.createElement('span',{style:{color:'var(--success)',fontSize:14,fontWeight:900,lineHeight:1}},'✓')
-        :React.createElement('span',{style:{color:'var(--text-tertiary)',fontSize:10,fontStyle:'italic'}},past?'(yapılmadı)':'(bekliyor)')
+        :past
+          ?React.createElement('span',{style:{color:'var(--danger)',fontSize:11,fontWeight:800,lineHeight:1}},'❌ Yapılmadı')
+          :React.createElement('span',{style:{color:'var(--text-tertiary)',fontSize:10,fontStyle:'italic'}},'(bekliyor)')
     );
 
     // Koşu/çapraz bölüm bloklarını oluştur
+    // 'missed' günlerde de past=true geçilmeli, yoksa dualMode alt-başlıkları
+    // (bkz. subBaslik) yanlışlıkla "(bekliyor)" gösterip üstteki kırmızı missedBanner
+    // ile çelişir.
+    const _subBaslikPast=info.status==='completed'||isMissed;
     const kosuBlok=showKosu?React.createElement('div',{key:'k',style:{marginBottom:dualMode?10:0}},
-      dualMode&&subBaslik('🏃','Koşu',split.kosuDone,info.status==='completed'),
+      dualMode&&subBaslik('🏃','Koşu',split.kosuDone,_subBaslikPast),
       buildKosuIcerik()
     ):null;
     const caprazBlok=showCapraz?React.createElement('div',{key:'c',style:{marginBottom:0}},
-      dualMode&&subBaslik('💪','Çapraz Antrenman',split.caprazDone,info.status==='completed'),
+      dualMode&&subBaslik('💪','Çapraz Antrenman',split.caprazDone,_subBaslikPast),
       buildCaprazIcerik()
     ):null;
     // Sıralama: tamamlanan üste (w.time'a göre)
     const bloklar=split.kosuFirst?[kosuBlok,caprazBlok]:[caprazBlok,kosuBlok];
+    // 2026.08.25 — Göksel talebi: 'missed' kartlarında (dualMode olmayan tek-tip günler
+    // subBaslik'in ✓/❌ satırını hiç göstermediği için) belirgin bir kırmızı uyarı satırı —
+    // altındaki plan içeriği (bloklar) sadece REÇETE olarak kalır, ne yapılması gerektiğini
+    // gösterir ama tamamlandı izlenimi vermez.
+    const missedBanner=isMissed?React.createElement('div',{style:{
+      display:'flex',alignItems:'center',gap:6,fontSize:12,fontWeight:800,color:'var(--danger)',
+      background:'var(--danger-bg)',padding:'6px 10px',borderRadius:8,marginBottom:8
+    }},'❌ Bu antrenman yapılmadı — hiç kayıt girilmedi'):null;
 
     return React.createElement('div',{
       key:info.date+'_'+idx,
@@ -29586,6 +29650,7 @@ function SporcuPlanView(){
           })()
         )
       ),
+      missedBanner,
       // İçerik: yarış ise eski tek-blok davranış, değilse koşu/çapraz sıralı bloklar
       isRace
         ?(()=>{
@@ -29857,7 +29922,17 @@ function SporcuPlanView(){
         // spor dağılımı, Hedef Uyumu %, yaklaşan yarış geri sayımı, mesafe/D+/skor
         // metrikleri, ilerleme çubuğu, sıra değişim oku) — indirme/paylaşım kontrolleri
         // ve üst KPI şeridi hariç (bu salt-okunur bir özet widget'ı, tam sekme değil).
-        const stats=finalizeLeaderboard(calcWeeklyStats(allWorkouts,allAthletes,0),miniPaceScores,lbWeights,miniPaceBaselines);
+        // 2026.08.25 — KÖK NEDEN DÜZELTMESİ (panel paritesi, Göksel'in bildirdiği "bu hafta
+        // hiç antrenman yapmamış sporcu Koşu İzlerim'deki mini Liderlik'te görünüyor" sorunu):
+        // LiderlikTab (Koç Paneli, ~satır 6936) count===0 satırları MUTLAK olarak render'da
+        // gizler ("o hafta hiç antrenman girilmemiş sporcu HER ZAMAN gizlenir" — 2026.08.24
+        // notu). Bu mini widget aynı calcWeeklyStats+finalizeLeaderboard çiftini kullanmasına
+        // rağmen bu filtreyi UYGULAMIYORDU — stats doğrudan slice(0,10) ile kesiliyordu, bu
+        // yüzden count=0 sporcular (bazen Hedef Uyumu'nun kendi geçmiş ortalaması fallback'i
+        // yüzünden üst sıralarda bile) listede görünebiliyordu. Çözüm: LiderlikTab'daki AYNI
+        // mutlak filtre (row.count>0) burada da, top-10'a kesmeden ÖNCE uygulanır.
+        const statsAllMini=finalizeLeaderboard(calcWeeklyStats(allWorkouts,allAthletes,0),miniPaceScores,lbWeights,miniPaceBaselines);
+        const stats=statsAllMini.filter(r=>r.count>0);
         const prevStatsMini=finalizeLeaderboard(calcWeeklyStats(allWorkouts,allAthletes,-1),miniPrevPaceScores,lbWeights,miniPrevPaceBaselines);
         const prevRankMapMini={};
         prevStatsMini.forEach((r,i)=>{prevRankMapMini[r.ath.id]=i+1;});
