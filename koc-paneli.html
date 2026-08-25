@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.25-2107 --><!DOCTYPE html>
+<!-- Version: v2026.08.25-2124 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.25-2107';
+const APP_VERSION='v2026.08.25-2124';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -5357,6 +5357,21 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
             const highPct=zoneDist?.highPct??null;
             const anaPct=zoneDist?.anaPct??null;
             const mechAtl=last?.mechAtl||0; const mechCtl=last?.mechCtl||0;
+            // 2026.08.25 — KÖK NEDEN DÜZELTMESİ (Göksel'in bildirdiği "<15km eşiğinde Orta
+            // Kaliteli izinli diyor ama hiçbir koşu gününe tempo/eşik/progressive gelmiyor"
+            // vakası): mechKardioRatio/mechKardioDanger aşağıda (eskiden ~satır 5417'de)
+            // SADECE tablo sütunu için hesaplanıyordu; evaluateSignals'a (bu bloktaki `sigs`)
+            // hep mechKardioDanger:false SABİT geçiliyordu. Ama gerçek plan üreticisi
+            // (generateTwoWeekPlan, ~satır 16105/16117 — planSigs) AYNI oranı doğru hesaplayıp
+            // forceLow tetikliyor ve kaliteli günü sessizce Aerobik'e çeviriyordu (planned.uyari
+            // olarak günün İÇİNE yazılıyordu, Tanı sekmesi sorunlar listesine hiç yansımıyordu).
+            // Çözüm: aynı oran burada da (evaluateSignals çağrısından ÖNCE) hesaplanıp gerçek
+            // değer geçiliyor — artık bu blokla tutarlı bir engelleme varsa sorunlar listesinde
+            // görünür (bkz. aşağıdaki sigs.level==='forceLow' satırı ve evaluateSignals'daki
+            // yeni mechKardioDanger zoneReasons notu).
+            const mechKardioRatio=ctl>5?((last?.mechCtl||0)*MECH_SCALE/ctl):null;
+            const mechKardioDanger=mechKardioRatio!==null&&mechKardioRatio<0.35;
+            const mechKardioWarn=mechKardioRatio!==null&&mechKardioRatio<0.6;
             // Yükleme Planı'ndan bu haftanın (ve bir öncekinin) gerçek durumunu al —
             // Koç Panelindeki plan üreticisiyle aynı planWeek/prevWeek kaynağı olmalı
             // (paritesizlik: bu olmadan planlı-dinlenme-haftası sinyali burada hiç görünmez)
@@ -5370,7 +5385,7 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
               acwr:acwr||1.0,tsb,inj:parseInt(ath.sakatlık)||1,
               ifOverloaded:false,mechOverload:false,
               mechAclOverload:mechAtl>(mechCtl||1)*1.3,
-              powerOverload:false,wkSessions:0,mechKardioDanger:false,
+              powerOverload:false,wkSessions:0,mechKardioDanger,
               zoneDist4w:zoneDist,zoneDist2w:zoneDist2,zoneDist4wPrevWeek:zoneDistPrevWeek,kaliteliYapildi:false,
               planWeek:planWeekReal,prevWeek:prevWeekReal,
               hrv:ath.hrv_durum||'',
@@ -5384,9 +5399,24 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
             // katmanlarından (plan/forceEasy) ilgisiz notlar da karışabilir, ama pratikte
             // asıl tetikleyici(ler) neredeyse her zaman en belirleyici olanlardır.
             if(sigs.level==='forceEasy') sorunlar.push((sigs.planForceEasy?'❌ Sadece kolay öneri (planlı dinlenme haftası)':'❌ Sadece kolay öneri (ACWR/zona tehlikeli yüksek)')+(sigs.zoneReasons?.length?' — '+sigs.zoneReasons.join(' · '):''));
-            if(sigs.level==='forceLow') sorunlar.push('⚠ Aerobik zorunlu (zone dengesi bozuk — kaliteli bloke)'+(sigs.zoneReasons?.length?' — '+sigs.zoneReasons.join(' · '):''));
+            if(sigs.level==='forceLow') sorunlar.push('⚠ Aerobik zorunlu (kaliteli antrenman bloke)'+(sigs.zoneReasons?.length?' — '+sigs.zoneReasons.join(' · '):''));
             if(sigs.level==='preferLow') sorunlar.push((sigs.planPreferLow?'💡 Aerobik tercih (planlı dinlenme haftası)':'💡 Aerobik tercih (hafif zone uyarısı)')+(sigs.zoneReasons?.length?' — '+sigs.zoneReasons.join(' · '):''));
             if(planWeekReal?._isNoRace&&planWeekReal?._maxYuksekKaliteli===0) sorunlar.push('📊 Düşük hacim ('+(planWeekReal._avg4km??'?')+'km/hafta ort.) — Yüksek Kaliteli (interval/hill sprint vb.) bu hafta engellendi (<15km eşiği), Orta Kaliteli (tempo/eşik/progressive) haftada 1 kez izinli');
+            // 2026.08.25 — Göksel talebi (Düşük hacim vakasında "Orta Kaliteli izinli diyor
+            // ama hiç gelmiyor" sorunu): quota'nın VAR OLMASI, o günün gerçekten tempo/eşik/
+            // progressive olarak üretileceği anlamına gelmez — plan üreticisinde (planDay,
+            // ~satır 15566/15579) HRV ve sakatlık, kaliteli günü sessizce (yalnızca o günün
+            // kendi uyari metninde, sorunlar listesinde DEĞİL) aerobik/kolaya indirebiliyor.
+            // Bu, aynı düşük-hacim haftasında STANDING bir uyarı olarak burada da gösterilir.
+            if(planWeekReal?._isNoRace&&planWeekReal?._maxYuksekKaliteli===0){
+              const kaliteliEngelSebep=[];
+              const _sakInt=parseInt(ath.sakatlık)||1;
+              if(ath.hrv_durum==='düşük') kaliteliEngelSebep.push('HRV düşük → kaliteli gün otomatik Kolay Koşu\'ya iniyor');
+              else if(ath.hrv_durum==='dengesiz') kaliteliEngelSebep.push('HRV dengesiz → kaliteli gün otomatik Aerobik\'e iniyor');
+              if(_sakInt>=6) kaliteliEngelSebep.push('Sakatlık '+_sakInt+'/10 → kaliteli gün otomatik aerobik/kolaya iniyor');
+              else if(_sakInt>=4) kaliteliEngelSebep.push('Sakatlık '+_sakInt+'/10 → yoğun kaliteli türler (interval/piramit/hill) aerobiğe iniyor');
+              if(kaliteliEngelSebep.length) sorunlar.push('🚫 Haftanın tek izinli Orta Kaliteli günü muhtemelen düşecek — '+kaliteliEngelSebep.join(' · '));
+            }
             // NOT (Temmuz 2026 — Göksel'in kararıyla): "Yarış/Disiplin Uyumsuzluğu"
             // (trail etiketli ama D+ düşük) kontrolü tamamen kaldırıldı. Önce
             // (_canHillSprint&&_raceDp<=300) matematiksel olarak anlamsızdı, sonra
@@ -5414,9 +5444,9 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
             if(sigs.level!=='forceLow'&&lowPct!==null&&lowPct<50) sorunlar.push('📉 Z1-2 kritik az ('+lowPct+'%, hedef %75-85) — kolay koşu hacmi artırılmalı');
             if(sigs.level!=='forceLow'&&highPct!==null&&highPct>40) sorunlar.push('📈 Z3-4 çok fazla ('+highPct+'%, hedef %10-15) — tempo/eşik yük azaltılmalı');
             const band=ctlBand(ctl);
-            const mechKardioRatio=ctl>5?((last?.mechCtl||0)*MECH_SCALE/ctl):null;
-            const mechKardioDanger=mechKardioRatio!==null&&mechKardioRatio<0.35;
-            const mechKardioWarn=mechKardioRatio!==null&&mechKardioRatio<0.6;
+            // mechKardioRatio/mechKardioDanger/mechKardioWarn artık yukarıda (evaluateSignals
+            // çağrısından önce) hesaplanıyor — burada tekrar hesaplanmıyor, aynı değerler
+            // hem `sigs`'i hem aşağıdaki tablo sütununu besliyor (tek kaynak).
             const mechAclOvl=mechAtl>(mechCtl||1)*1.3;
             const weekStart=new Date(today); weekStart.setDate(today.getDate()-today.getDay()+1);
             const weekStartStr=localDateStr(weekStart);
@@ -14034,7 +14064,12 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
   // ve aerEffDecline (aşağıda) kasıtlı olarak ayrı tutuldu — onlar zone yüzdelerine
   // değil farklı sinyallere (mekanik/kardiyo oranı, aynı nabızda tempo) dayanıyor.
   if(!forceEasy){
-    if(mechKardioDanger){ forceLow=true; }
+    // 2026.08.25 — Göksel talebi: mechKardioDanger forceLow'u tetikliyordu ama HİÇBİR
+    // zoneReasons mesajı bırakmıyordu — Tanı sekmesindeki '⚠ Aerobik zorunlu' satırı bu
+    // durumda sebepsiz/boş görünüyordu (koç gerçek nedeni — mekanik/kardiyo dengesizliği —
+    // hiç göremiyordu). Artık diğer forceLow tetikleyicileriyle (zone sıralaması, ciddi
+    // ihlal, aerEffDecline) aynı şekilde açıklayıcı bir mesaj bırakıyor.
+    if(mechKardioDanger){ forceLow=true; zoneReasons.push('🫀 Mekanik/kardiyo dengesi zayıf — kardiyovasküler kondisyon, koşuya özgü (mekanik) kondisyonu belirgin şekilde geride bırakıyor; tempo/eşik/progressive antrenman ertelendi, aerobik öncelikli.'); }
 
     if(!forceLow&&hasZone&&zone4wPartial){
       const siralamaBozuk=!(lowPct>highPct&&highPct>anaPct);
