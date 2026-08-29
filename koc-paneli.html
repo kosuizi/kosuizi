@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.27-2147 --><!DOCTYPE html>
+<!-- Version: v2026.08.29-1744 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.27-2147';
+const APP_VERSION='v2026.08.29-1744';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -18276,7 +18276,12 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       const kmDown=cwWt.targetKm>0?Math.max(0,cwWt.targetKm-cappedEffKmFinal)/cwWt.targetKm:0;
       const dpDown=cwWt.targetDp>0?Math.max(0,cwWt.targetDp-cappedEffDp)/cwWt.targetDp:0;
       const isRevised=kmDown>0.05||dpDown>0.10||cwWt.isRaceWeek;
-      return{origKm:cwWt.targetKm,origDp:cwWt.targetDp,effKm:cappedEffKmFinal,effDp:cappedEffDp,isRevised};
+      // raceId: hangi hedef yarışın periyotlamasına göre hesaplandığı (29.08.2026
+      // sohbeti — 160K DNF sonrası Merrell 60K'ya geçiş vakası). plan.primary
+      // haftanın ortasında değişebilir (selectRaces() otomatik, koç aksiyonu
+      // gerekmez) — bu etiket, dondurma/okuma taraflarının eski yarış bağlamında
+      // hesaplanmış bir değeri fark edip geçersiz sayabilmesini sağlar.
+      return{origKm:cwWt.targetKm,origDp:cwWt.targetDp,effKm:cappedEffKmFinal,effDp:cappedEffDp,isRevised,raceId:plan?.primary?.id??null};
     }catch(e){return null;}
   },[athlete,plan,weekTargets,workouts,races,rampModeOn,rampRatePct]);
 
@@ -18311,10 +18316,18 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     const snap=planSnapRef.current;
     if(!snap)return;
     const ex=snap.weekEff;
-    // Dondurma koşulu: aynı hafta VE yeni hesap daha yüksek DEĞİLSE dokunma.
-    if(ex&&ex._weekKey===weekKey&&curWeekEffective.effKm<=ex.effKm) return;
-    // İlk yazım, yeni hafta VEYA iyileştirici yukarı düzeltme → yaz/dondur
-    const newWeekEff={...curWeekEffective,_v:WEEK_EFF_VERSION,_weekKey:weekKey};
+    // DÜZELTME (29.08.2026 sohbeti — 160K DNF sonrası Merrell 60K'ya geçiş):
+    // plan.primary haftanın ortasında değişebilir. Eski hedef yarışın
+    // periyotlamasıyla dondurulmuş bir effKm, yeni yarışın fazına (ör. Taper)
+    // göre anlamsız/aşırı yüksek kalabilir (bkz. H22 vakası — 79.6km hedefe
+    // karşı donmuş 168.7km). Yarış değiştiyse eski donma bu haftayı bir daha
+    // bloklamaz; taze hesap üzerine yazılabilir.
+    const curRaceId=curWeekEffective.raceId??null;
+    const raceChanged=ex&&ex._raceId!=null&&ex._raceId!==curRaceId;
+    // Dondurma koşulu: aynı hafta VE aynı yarış VE yeni hesap daha yüksek DEĞİLSE dokunma.
+    if(ex&&ex._weekKey===weekKey&&!raceChanged&&curWeekEffective.effKm<=ex.effKm) return;
+    // İlk yazım, yeni hafta, yarış değişimi VEYA iyileştirici yukarı düzeltme → yaz/dondur
+    const newWeekEff={...curWeekEffective,_v:WEEK_EFF_VERSION,_weekKey:weekKey,_raceId:curRaceId};
     const updated={...snap,weekEff:newWeekEff};
     
     // NOT: frozenTargets artık otomatik değil, koç "Gelecek Hafta Planı" butonuna bastığında kaydedilir
@@ -18392,7 +18405,13 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     // snapReady olmadan gösterme — async yükleme titremesini önler
     if(!snapReady) return null;
     const frozen=planSnap?.weekEff;
-    if(frozen&&frozen._weekKey===weekKey) return frozen;
+    // DÜZELTME (29.08.2026): donmuş değer başka bir hedef yarış bağlamında
+    // yazılmışsa (_raceId uyuşmuyorsa) geçersiz sayılır, canlı hesaba düşülür.
+    // Etiketsiz (bu düzeltmeden önce yazılmış) kayıtlar geriye dönük uyumluluk
+    // için hâlâ güvenilir kabul edilir.
+    const curRaceIdRead=curWeekEffective?.raceId??null;
+    const frozenStale=frozen&&frozen._raceId!=null&&frozen._raceId!==curRaceIdRead;
+    if(frozen&&frozen._weekKey===weekKey&&!frozenStale) return frozen;
     return curWeekEffective;
   },[snapReady,planSnap,curWeekEffective,weekKey]);
 
@@ -19772,17 +19791,25 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               // Mevcut hafta: curWeekEffective (yoğunluk düzeltmeli versiyonu — ayrı hesap gereksiz)
               const isCurEff=wt.isCurrent&&displayCurWeekEff;
               // Geçmiş hafta: Firebase'de kayıtlı weekEff (o hafta mevcut haftayken yazıldı)
-              const isPastEff=wt.isPast&&!!pastWeekEffs[wtWeekKey];
+              // DÜZELTME (29.08.2026 sohbeti — 160K DNF sonrası Merrell 60K'ya geçiş):
+              // kayıt başka bir hedef yarış bağlamında donmuşsa (_raceId uyuşmuyorsa)
+              // geçersiz sayılır, orijinal hedefe düşülür. Etiketsiz (bu düzeltmeden
+              // önce yazılmış) kayıtlar geriye dönük uyumluluk için güvenilir kabul
+              // edilir — aksi halde mevcut meşru geçmiş-hafta revizeleri de kaybolurdu.
+              const _pwEffRaw=pastWeekEffs[wtWeekKey]||null;
+              const _pwEffStale=!!(_pwEffRaw&&_pwEffRaw._raceId!=null&&_pwEffRaw._raceId!==(plan?.primary?.id??null));
+              const pwEff=_pwEffStale?null:_pwEffRaw;
+              const isPastEff=wt.isPast&&!!pwEff;
               // Revize km/D+ — her ikisi de yoksa orijinal hedefe fallback
               const effKm=isCurEff
                 ?displayCurWeekEff.effKm
                 :isPastEff
-                  ?(pastWeekEffs[wtWeekKey].effKm??wt.targetKm)
+                  ?(pwEff.effKm??wt.targetKm)
                   :wt.targetKm;
               const effDp=isCurEff
                 ?displayCurWeekEff.effDp
                 :isPastEff
-                  ?(pastWeekEffs[wtWeekKey].effDp??wt.targetDp)
+                  ?(pwEff.effDp??wt.targetDp)
                   :wt.targetDp;
               // Revizyon göstergesi: hedefin ALTINDA kalındığında gösterilir
               const kmDown=wt.targetKm>0?Math.max(0,wt.targetKm-effKm)/wt.targetKm:0;
