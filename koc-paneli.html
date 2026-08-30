@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.30-1503 --><!DOCTYPE html>
+<!-- Version: v2026.08.30-1524 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.30-1503';
+const APP_VERSION='v2026.08.30-1524';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -25917,6 +25917,93 @@ function drawGpxChart(canvas,points,phases){
   });
 }
 
+// ── GPX grafiğini KALICI hale getirme (Göksel talebi — Geçmiş sekmesinde görüntülenip
+//    paylaşılabilsin) ────────────────────────────────────────────────────────────────
+// Ham GPX noktaları (tipik bir koşuda 1000-5000+ nokta) doğrudan antrenman kaydına
+// yazılırsa Firebase depolamasını gereksiz şişirir (bkz. depo doluluğu uyarısı,
+// 2026.08.30-0955 düzeltmesi). Bunun yerine SADECE grafiği yeniden çizmeye yetecek
+// küçük bir örnekleme (t+hr, ~250 nokta) ve faz sınırları (kind+t0+t1) saklanır —
+// tam GPX verisi değil, grafiğin görsel eşdeğeri. 250 nokta, 700px genişliğinde bir
+// grafik için görsel kayıpsız yeterlidir (pikselden daha sık örnekleme fark etmez).
+function gpxDownsamplePoints(points,maxPoints){
+  maxPoints=maxPoints||250;
+  if(!points||!points.length) return [];
+  if(points.length<=maxPoints) return points.map(p=>({t:Math.round(p.t),hr:p.hr!=null?Math.round(p.hr):null}));
+  const step=points.length/maxPoints;
+  const out=[];
+  for(let i=0;i<maxPoints;i++){
+    const idx=Math.min(points.length-1,Math.round(i*step));
+    const p=points[idx];
+    out.push({t:Math.round(p.t),hr:p.hr!=null?Math.round(p.hr):null});
+  }
+  const last=points[points.length-1];
+  if(out[out.length-1].t!==Math.round(last.t)) out.push({t:Math.round(last.t),hr:last.hr!=null?Math.round(last.hr):null});
+  return out;
+}
+// GPX analizi sonrası antrenman kaydına yazılacak kompakt grafik verisi.
+function gpxBuildChartData(points,phaseRows,fileName){
+  return{
+    points:gpxDownsamplePoints(points,250),
+    phases:(phaseRows||[]).map(p=>({name:p.name,kind:p.kind,t0:Math.round(p.t0),t1:Math.round(p.t1)})),
+    totalEndT:Math.round(points&&points.length?points[points.length-1].t:0),
+    fileName:fileName||'',
+    analyzedAt:new Date().toISOString()
+  };
+}
+// Canvas'ı PNG olarak paylaş (Web Share API destekliyorsa dosya paylaşımı — WhatsApp,
+// e-posta vb.) veya indirme linkine düş. Ham veri hiçbir zaman sunucuya gitmez, PNG
+// tamamen istemci tarafında, gösterim anında üretilir.
+async function gpxShareChart(canvas,athleteName,dateStr){
+  return new Promise(resolve=>{
+    canvas.toBlob(async(blob)=>{
+      if(!blob){resolve(false);return;}
+      const safeAth=(athleteName||'sporcu').replace(/\s+/g,'-');
+      const fileName=`gpx-analiz-${safeAth}-${dateStr||''}.png`;
+      try{
+        const file=new File([blob],fileName,{type:'image/png'});
+        if(navigator.share&&navigator.canShare&&navigator.canShare({files:[file]})){
+          await navigator.share({files:[file],title:'GPX Analiz Grafiği',text:(athleteName||'')+' — '+(dateStr||'')});
+          resolve(true);return;
+        }
+      }catch(e){ /* kullanıcı paylaşımı iptal etti veya API yok — indirmeye düş */ }
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a');
+      a.href=url;a.download=fileName;a.click();
+      setTimeout(()=>URL.revokeObjectURL(url),1000);
+      resolve(true);
+    },'image/png');
+  });
+}
+// Geçmiş sekmesinde bir antrenmanın altında, kaydedilmiş kompakt veriden grafiği
+// yeniden çizen ve paylaşma/indirme butonu sunan bileşen.
+function GpxChartViewer({chartData,athleteName,dateStr}){
+  const canvasRef=useRef(null);
+  const [sharing,setSharing]=useState(false);
+  useEffect(()=>{
+    if(!chartData||!canvasRef.current) return;
+    try{drawGpxChart(canvasRef.current,chartData.points||[],chartData.phases||[]);}catch(e){console.warn('GPX grafik çizim hatası:',e);}
+  },[chartData]);
+  if(!chartData) return null;
+  const handleShare=async()=>{
+    if(!canvasRef.current||sharing) return;
+    setSharing(true);
+    try{await gpxShareChart(canvasRef.current,athleteName,dateStr);}
+    finally{setSharing(false);}
+  };
+  return React.createElement('div',{style:{marginBottom:14,padding:'10px 12px',background:'var(--bg-primary)',border:'1px solid var(--border)',borderRadius:'var(--radius)'}},
+    React.createElement('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8,flexWrap:'wrap',gap:8}},
+      React.createElement('span',{style:{fontSize:12,fontWeight:700,color:'var(--info)'}},
+        '📈 GPX Analiz Grafiği'+(chartData.fileName?' — '+chartData.fileName:'')
+      ),
+      React.createElement('button',{className:'btn btn-sm',disabled:sharing,onClick:handleShare},sharing?'Hazırlanıyor…':'📤 Paylaş / İndir')
+    ),
+    React.createElement('canvas',{ref:canvasRef,style:{width:'100%',height:200,display:'block'}}),
+    React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',marginTop:4}},
+      'Toplam süre: '+gpxFmtMin(chartData.totalEndT||0)
+    )
+  );
+}
+
 // ── O günün reçetesini çöz (override varsa onu, yoksa algoritmik planı kullan) ──
 // NOT (bilinçli sadeleştirme): HaftalikPlanTab'ın gelecek/bugün gününe özgü
 // ACWR-engelleme, bayat-override-fallback gibi son derece uç durumları burada
@@ -26405,6 +26492,10 @@ function GpxAnalizModal({athlete, initialDate, workouts, allHistory, races, test
         const patch={};
         if(__zoneDist) patch._rowZoneDist=__zoneDist;
         if(__gapData) patch._rowGapData=__gapData;
+        // Göksel talebi (2026.08.30) — grafik Geçmiş sekmesinde ilgili antrenmanın
+        // altında görüntülenebilsin/paylaşılabilsin diye kompakt (indirgenmiş) hâliyle
+        // kaydediliyor; ham GPX verisi hiçbir zaman Firebase'e yazılmıyor.
+        patch._gpxChartData=gpxBuildChartData(points,phaseResult.rows,fileName);
         if(updateAggregate&&!isNewWorkout){
           patch.mesafe=totalDistKm?totalDistKm.toFixed(2):planInfo.existingKosuActual.mesafe;
           patch.sure_sa=String(hms.h);patch.sure_dk=String(hms.m);patch.sure_sn=String(hms.s);
@@ -27550,6 +27641,11 @@ function Gecmis({workouts,athletes,races,onDelete,onBulkDelete,onUpdate}){
               const recipeRow=isExpanded&&React.createElement('tr',{key:w.id+'_recipe'},
                 React.createElement('td',{colSpan:colCount,style:{padding:'0',background:'var(--bg-secondary)',borderBottom:'2px solid var(--info)'}},
                   React.createElement('div',{style:{padding:'14px 18px'}},
+                    w._gpxChartData&&React.createElement(GpxChartViewer,{
+                      chartData:w._gpxChartData,
+                      athleteName:ath?((ath.ad||'')+' '+(ath.soyad||'')):'',
+                      dateStr:fmtDate(w.date)
+                    }),
                     isSnapLoading
                       ? React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',padding:'8px 0'}},'⏳ Reçete yükleniyor...')
                       : !planDay
