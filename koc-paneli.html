@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.30-2314 --><!DOCTYPE html>
+<!-- Version: v2026.08.30-2334 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.30-2314';
+const APP_VERSION='v2026.08.30-2334';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -22029,6 +22029,16 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
   // bölge başına veri yoğunluğu (özellikle Z5 grubunda) çok daha düşük.
   const BC_SCAN_WEEKS_FETCH=12; // ≈84 gün — HR_BOUNDARY_SCAN_WINDOW_DAYS'i (70) her takvim hizalamasında güvenle kapsar
 
+  // ── "Ne Zaman Tara" Hatırlatıcısı (2026.08.30 — Göksel'in isteği) ────────────
+  // Rozet (🟢/🟡) tarama SONRASI "uygula mı bekle mi" sorusuna cevap veriyordu —
+  // "tara'ya basma zamanı geldi mi" sorusuna cevap veren ayrı bir mekanizma yoktu.
+  // Bu sabitler o boşluğu dolduruyor: son BAŞARILI taramadan (uygulamadan değil)
+  // bu yana kaç gün geçtiğini izleyip, hiçbir butona basılmadan görünen bir 🔔
+  // hatırlatıcı üretiyor. Kademeler önceki mesajdaki tavsiyeyle birebir: Çıpa
+  // haftalık ritim, Sınır 3-4 haftalık ritim.
+  const FB_SCAN_REMIND_DAYS=7;
+  const BC_SCAN_REMIND_DAYS=28;
+
   // Hedefte/zone dışı sayılarını HER ZAMAN birlikte gösterir — biri diğerini gizlemez
   const fmtOkOff=(off,ok)=>{
     if(!off&&!ok) return '—';
@@ -22047,6 +22057,11 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       const weekSnaps=await Promise.all(weekKeys.map(wk=>fbGet('plan_snapshots/'+athlete.id+'/'+wk)));
       const allSnaps={};
       weekKeys.forEach((wk,i)=>{ if(weekSnaps[i]) allSnaps[wk]=weekSnaps[i]; });
+
+      // 2026.08.30 — "Ne Zaman Tara" hatırlatıcısı: sonuç ne olursa olsun (sinyal
+      // bulunsa da bulunmasa da) bu an "kontrol edildi" sayılır. PROFILE_FIELDS'te
+      // değil (fbLastCalib gibi metadata) — profileHistory snapshot'ı tetiklemez.
+      onUpdateAthlete({...athlete,fbLastScan:new Date().toISOString()});
 
       let cutoffStr=localDateStr(new Date(Date.now()-FB_SCAN_WINDOW_DAYS*864e5));
       // ── Çapraz Farkındalık — Pencere Temizliği (2026.08.30) ──────────────────
@@ -22116,6 +22131,9 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       const weekSnaps=await Promise.all(weekKeys.map(wk=>fbGet('plan_snapshots/'+athlete.id+'/'+wk)));
       const allSnaps={};
       weekKeys.forEach((wk,i)=>{ if(weekSnaps[i]) allSnaps[wk]=weekSnaps[i]; });
+
+      // 2026.08.30 — "Ne Zaman Tara" hatırlatıcısı (bkz. runFbScan'daki fbLastScan notu)
+      onUpdateAthlete({...athlete,boundaryLastScan:new Date().toISOString()});
 
       let cutoffStr=localDateStr(new Date(Date.now()-HR_BOUNDARY_SCAN_WINDOW_DAYS*864e5));
       // ── Çapraz Farkındalık — Pencere Temizliği (2026.08.30) ──────────────────
@@ -22190,6 +22208,16 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       background:g?'var(--success-bg)':'var(--warn-bg)',color:g?'var(--success)':'var(--warn)'
     }},g?'🟢 Şimdi Uygula':'🟡 Bekle');
   };
+  // ── "Ne Zaman Tara" Hatırlatıcısı (2026.08.30) ────────────────────────────────
+  // renderCalibBadge'den TAMAMEN AYRI bir soru cevaplıyor: "tara'ya basma zamanı
+  // geldi mi" — bu, herhangi bir tara butonuna basmadan, kart açılır açılmaz görünür.
+  // lastScanISO yoksa (hiç taranmamış) ya da cadenceDays'i aştıysa 🔔 gösterir.
+  const renderScanReminder=(lastScanISO,cadenceDays)=>{
+    if(!lastScanISO) return React.createElement('span',{style:{fontSize:11,color:'var(--info)',fontWeight:600}},'🔔 Hiç taranmadı');
+    const days=Math.floor((Date.now()-new Date(lastScanISO).getTime())/864e5);
+    if(days>=cadenceDays) return React.createElement('span',{style:{fontSize:11,color:'var(--info)',fontWeight:600}},'🔔 Taramanın zamanı geldi ('+days+' gün önce)');
+    return React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)'}},'Son tarama: '+days+' gün önce');
+  };
   const vlt=zones.vlt;
   const vltDetail=calcVltDetail(athlete);
   const vltSource=vltDetail.label;
@@ -22237,7 +22265,8 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
             athlete.fbLastCalib
               ?'Son kalibrasyon: '+localDateStr(new Date(athlete.fbLastCalib))
               :'Tamamlanan antrenman fazlarındaki gerçek pace ve nabız verilerinden sinyal üretir.'
-          )
+          ),
+          React.createElement('div',{style:{marginTop:2}},renderScanReminder(athlete.fbLastScan,FB_SCAN_REMIND_DAYS))
         ),
         React.createElement('button',{
           className:'btn btn-sm btn-primary',
@@ -22447,7 +22476,8 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
             athlete.boundaryLastCalib
               ?'Son kalibrasyon: '+localDateStr(new Date(athlete.boundaryLastCalib))
               :'Her nabız bölgesi sınırını (Z1/Z2…Z5b/Z5c) sporcuya özel ince ayarlar — Çıpa\'dan bağımsız, çok daha geniş bir pencerede çalışır.'
-          )
+          ),
+          React.createElement('div',{style:{marginTop:2}},renderScanReminder(athlete.boundaryLastScan,BC_SCAN_REMIND_DAYS))
         ),
         React.createElement('button',{
           className:'btn btn-sm btn-primary',
