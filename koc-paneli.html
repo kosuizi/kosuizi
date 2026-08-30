@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.30-2107 --><!DOCTYPE html>
+<!-- Version: v2026.08.30-2314 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.30-2107';
+const APP_VERSION='v2026.08.30-2314';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -22013,13 +22013,14 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
   const [bcNoNewData,setBcNoNewData]=useState(false);
   const [bcConfirmPending,setBcConfirmPending]=useState(false);
   const [bcClippedNote,setBcClippedNote]=useState(null); // Çıpa yakın zamanda uygulandıysa bilgi notu
+  const [bcBreakdown,setBcBreakdown]=useState(null); // Tanı Kırılımı (2026.08.30 — Sınır kartına özel, 70 günlük pencerede)
 
   // Sporcu değişince tüm tarama state'lerini sıfırla (her iki mekanizma)
   React.useEffect(()=>{
     setFbAnalysis(null);setFbRawCount(null);setFbApplied(null);
     setFbError(null);setFbBreakdown(null);setFbTelkin(null);setFbNoNewData(false);setFbConfirmPending(false);
     setBcAnalysis(null);setBcRawCount(null);setBcApplied(null);setBcError(null);
-    setBcNoNewData(false);setBcConfirmPending(false);setBcClippedNote(null);
+    setBcNoNewData(false);setBcConfirmPending(false);setBcClippedNote(null);setBcBreakdown(null);
   },[athlete?.id]);
 
   const FB_SCAN_WINDOW_DAYS=21; // Son 21 gün (≈1 mezosiklus) — eski form verisi karışmasın
@@ -22109,7 +22110,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
   // ── Sınır Kalibrasyonu — Tarama (2026.08.30) ──────────────────────────────────
   const runBoundaryScan=async()=>{
     if(!athlete?.id) return;
-    setBcScanLoading(true);setBcAnalysis(null);setBcRawCount(null);setBcApplied(null);setBcError(null);setBcNoNewData(false);setBcConfirmPending(false);setBcClippedNote(null);
+    setBcScanLoading(true);setBcAnalysis(null);setBcRawCount(null);setBcApplied(null);setBcError(null);setBcNoNewData(false);setBcConfirmPending(false);setBcClippedNote(null);setBcBreakdown(null);
     try{
       const weekKeys=Array.from({length:BC_SCAN_WEEKS_FETCH},(_,i)=>getWeekKey(-i));
       const weekSnaps=await Promise.all(weekKeys.map(wk=>fbGet('plan_snapshots/'+athlete.id+'/'+wk)));
@@ -22142,6 +22143,11 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       setBcRawCount({hr:sigs.filter(s=>s.hrDir).length,hrOk:sigs.filter(s=>s.hrOk).length});
       const analysis=analyzeBoundarySignals(sigs);
       setBcAnalysis(analysis);
+      // 2026.08.30 — Sınır kartına özel Tanı Kırılımı: Çıpa'nınkiyle AYNI fonksiyon
+      // (summarizeFeedbackBreakdown) ama Sınır'ın kendi (70 günlük, kırpılmış) sinyal
+      // kümesi üzerinde. "Pace" sütunu boşsa (—) o zonun nabız sapmaları hiçbir zaman
+      // yöne çevrilemez — bkz. toVltDir'in paceDir/paceOk şartı.
+      setBcBreakdown(summarizeFeedbackBreakdown(sigs));
     }catch(e){
       setBcError('Veri okunamadı: '+e.message);
     }finally{
@@ -22488,6 +22494,76 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
                 )
               );
             })
+          )
+        )
+      ),
+      // ── Tanı Kırılımı (2026.08.30 — Göksel'in isteği üzerine eklendi) ───────────
+      // Çıpa kartındaki AYNI fonksiyon (summarizeFeedbackBreakdown), ama Sınır'ın
+      // kendi (≈10 haftalık, kırpılmış) sinyal kümesi üzerinde. Bu tablo, bir sınırın
+      // neden "0 gün" kaldığını (nabız sapması var ama eşlik eden pace verisi/uyumu
+      // yok mu, yoksa gerçekten hiç sapma mı yok) tek bakışta ayırt etmeyi sağlar.
+      // Pencere Çıpa'dan (21 gün) FARKLI (70 gün) — bu yüzden iki karttaki Tanı
+      // Kırılımı sayıları kasıtlı olarak birbirini tutmaz, farklı zaman dilimlerine bakar.
+      bcBreakdown&&(bcBreakdown.conflict.fastHigh+bcBreakdown.conflict.slowLow>0||bcBreakdown.zones.length>0)&&
+      React.createElement('div',{style:{marginBottom:8,paddingTop:8,borderTop:'1px solid var(--border)'}},
+        React.createElement('div',{style:{fontSize:11,fontWeight:600,color:'var(--text-secondary)',marginBottom:2}},'Tanı Kırılımı'),
+        React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',marginBottom:6}},
+          '(Sınır\'ın ≈10 haftalık penceresi — Çıpa kartındaki Tanı Kırılımı\'ndan farklı zaman dilimi)'
+        ),
+        (bcBreakdown.conflict.fastHigh+bcBreakdown.conflict.slowLow>0)&&React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:8}},
+          'Çakışma yönü: ',
+          React.createElement('span',{style:{color:'var(--text-secondary)'}},'Hızlı+Yüksek Nabız '+bcBreakdown.conflict.fastHigh),
+          '  ·  ',
+          React.createElement('span',{style:{color:'var(--text-secondary)'}},'Yavaş+Düşük Nabız '+bcBreakdown.conflict.slowLow)
+        ),
+        bcBreakdown.zones.length>0&&React.createElement('div',{className:'table-wrap'},
+          React.createElement('table',{className:'table',style:{fontSize:11}},
+            React.createElement('thead',null,
+              React.createElement('tr',null,
+                React.createElement('th',null,'Bölge'),
+                React.createElement('th',null,'Pace'),
+                React.createElement('th',null,'Nabız'),
+                React.createElement('th',null,'Çakışma'),
+                React.createElement('th',null,'Tarihler')
+              )
+            ),
+            React.createElement('tbody',null,
+              bcBreakdown.zones.map(z=>React.createElement('tr',{key:z.zoneId},
+                React.createElement('td',null,z.zoneId),
+                React.createElement('td',null,z.paceOff||'—'),
+                React.createElement('td',null,z.hrOff||'—'),
+                React.createElement('td',null,z.conflict||'—'),
+                React.createElement('td',{style:{whiteSpace:'normal'}},
+                  (z.dates&&z.dates.length)
+                    ?z.dates.map(({date,type})=>{
+                        const p=date.split('-');
+                        const lbl=p.length===3?(p[2]+'.'+p[1]):date;
+                        const c=FB_DATE_TYPE_COLOR[type];
+                        return React.createElement('span',{
+                          key:date,
+                          title:type==='both'?'Pace + Nabız':(type==='pace'?'Pace':'Nabız'),
+                          style:{display:'inline-block',margin:'1px 3px 1px 0',padding:'1px 5px',borderRadius:4,
+                            background:c.bg,color:c.fg,fontWeight:600,fontSize:10,whiteSpace:'nowrap'}
+                        },lbl);
+                      })
+                    :React.createElement('span',{style:{color:'var(--text-tertiary)'}},'—')
+                )
+              ))
+            )
+          ),
+          React.createElement('div',{style:{display:'flex',gap:10,marginTop:6,fontSize:10,color:'var(--text-tertiary)',flexWrap:'wrap'}},
+            React.createElement('span',null,
+              React.createElement('span',{style:{display:'inline-block',width:8,height:8,borderRadius:2,background:FB_DATE_TYPE_COLOR.pace.bg,marginRight:4,verticalAlign:'middle'}}),
+              'Sadece Pace'
+            ),
+            React.createElement('span',null,
+              React.createElement('span',{style:{display:'inline-block',width:8,height:8,borderRadius:2,background:FB_DATE_TYPE_COLOR.hr.bg,marginRight:4,verticalAlign:'middle'}}),
+              'Sadece Nabız'
+            ),
+            React.createElement('span',null,
+              React.createElement('span',{style:{display:'inline-block',width:8,height:8,borderRadius:2,background:FB_DATE_TYPE_COLOR.both.bg,marginRight:4,verticalAlign:'middle'}}),
+              'Pace + Nabız'
+            )
           )
         )
       ),
