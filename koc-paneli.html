@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.30-1620 --><!DOCTYPE html>
+<!-- Version: v2026.08.30-1637 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.30-1620';
+const APP_VERSION='v2026.08.30-1637';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -6400,7 +6400,9 @@ const DEFAULT_LEADERBOARD_WEIGHTS={hedefUyumu:50,efor:15,gercekIs:35,gercekIsRef
 // tutarlı. paceFallbackGuven=1 ve weeksCount=6 eski davranışla birebir aynıdır.
 
 // Bir sporcunun, verilen haftadan ÖNCEKİ (o hafta hariç) son BASELINE_LOOKBACK_WEEKS
-// hafta içindeki, antrenman yaptığı haftaların Efor/Gerçek İş ortalamasını döndürür.
+// hafta içindeki, antrenman yaptığı haftaların Efor/Gerçek İş ortalamasını döndürür
+// (2026.08.30'dan itibaren: trimmed mean — bkz. aşağıdaki not). MEVCUT hafta bu
+// hesaba HİÇBİR ZAMAN girmez (döngü i=1'den başlar, weekOffset-i kullanır).
 // Yeterli aktif hafta yoksa (yeni sporcu / kısa geçmiş) null döner — bu durumda
 // finalizeLeaderboard nötr (antrenman varsa 100, yoksa 0) mantığa düşer.
 function calcAthleteBaseline(workouts,athlete,weekOffset){
@@ -6429,10 +6431,35 @@ function calcAthleteBaseline(workouts,athlete,weekOffset){
   }
   // activeWeeks: eforVals.length ile aynı (her ikisi de sadece antrenman yapılan
   // haftalarda push edilir) — veri tamlığı puanı için ayrıca dışa veriliyor.
+  // BU SAYI trimleme'den ETKİLENMEZ — "veri tamlığı" gerçek antrenman geçmişinin
+  // derinliğini ölçer, baseline'ın nasıl hesaplandığını değil.
   const activeWeeks=eforVals.length;
   if(eforVals.length<BASELINE_MIN_ACTIVE_WEEKS)return{eforBaseline:null,isBaseline:null,activeWeeks};
-  const avg=arr=>arr.reduce((s,v)=>s+v,0)/arr.length;
-  return{eforBaseline:round1(avg(eforVals)),isBaseline:round1(avg(isVals)),activeWeeks};
+  // 2026.08.30 — Göksel talebi/onayı: düz ortalama (mean), geçmiş 6 haftalık
+  // pencerede TEK bir aşırı hafta (ör. bir ultra yarış) varsa, o haftanın etkisi
+  // pencerede kaldığı SÜRECE (6 haftaya kadar) sonraki NORMAL haftaları "düşük"
+  // gösteriyordu (bkz. Göksel'in bildirdiği "Efor 1465.3 baseline" örneği).
+  // ÇÖZÜM — trimmed mean: 4+ aktif hafta varsa (trimden sonra hâlâ ≥3 hafta
+  // kalsın diye), pencere içindeki EN YÜKSEK haftayı ortalamadan çıkar. ÖNEMLİ:
+  // bu, MEVCUT haftayı ASLA etkilemez — döngü zaten weekOffset-1..weekOffset-6
+  // arasında dolaşır (mevcut hafta hiç havuza girmez, yukarıdaki fonksiyon
+  // yorumuna bkz.); trimleme SADECE geçmiş referans haftaları arasından en
+  // yükseğini eler, mevcut haftanın ham skoru/gerçek işi HER ZAMAN tam olarak
+  // kullanılır ve bu (artık daha temsili) baseline'a karşı kıyaslanır. 4'ten
+  // az aktif hafta varsa (2-3), trimleme YAPILMAZ — zaten az olan veriyi daha
+  // da azaltmak güvenilirliği düşürür, düz ortalamaya devam edilir. Median
+  // DEĞİL trimmed-mean seçildi: median, gerçek/sürdürülen bir hacim artışına
+  // (birden fazla yüksek hafta) medyandan daha hızlı tepki verir — sadece TEK
+  // uç noktayı disipline eder.
+  const trimmedAvg=arr=>{
+    if(arr.length>=4){
+      const sorted=[...arr].sort((a,b)=>a-b);
+      const trimmed=sorted.slice(0,-1); // en yüksek haftayı çıkar
+      return trimmed.reduce((s,v)=>s+v,0)/trimmed.length;
+    }
+    return arr.reduce((s,v)=>s+v,0)/arr.length;
+  };
+  return{eforBaseline:round1(trimmedAvg(eforVals)),isBaseline:round1(trimmedAvg(isVals)),activeWeeks};
 }
 
 function calcWeeklyStats(workouts,athletes,weekOffset=0){
