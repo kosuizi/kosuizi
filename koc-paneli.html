@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.30-0955 --><!DOCTYPE html>
+<!-- Version: v2026.08.30-1405 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.30-0955';
+const APP_VERSION='v2026.08.30-1405';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -25972,62 +25972,76 @@ function gpxPrefillFromStructure(structure){
     noRecete:true};
 }
 
+// ── Bir fazı ilerlet: lenSpec={value,unit} — unit='time' ise value saniye olarak
+//    doğrudan eklenir, unit='distance' ise value metre olarak yorumlanır ve o kadar
+//    mesafenin dosyada ne kadar sürdüğü KÜMÜLATİF mesafeye göre ANKORLANARAK
+//    (mutlak sıfırdan değil, o ana kadar kat edilen mesafeye eklenerek) bulunur.
+//    Böylece aynı reçetede ısınma süre, koşu mesafe, soğuma yine süre gibi KARIŞIK
+//    birimler bir arada, tutarlı biçimde zincirlenebilir.
+function gpxAdvance(points,curT,lenSpec){
+  if(!lenSpec||!lenSpec.value) return curT;
+  if(lenSpec.unit==='distance'){
+    const curD=gpxDistAtTime(points,curT);
+    return gpxTimeAtDist(points,curD+lenSpec.value);
+  }
+  return curT+lenSpec.value;
+}
 // ── GPX/TCX noktalarından faz bazlı sonuç üret (antrenman-analiz.html'in analiz
-//    mantığıyla birebir aynı — sadece closure yerine parametre alan saf fonksiyon) ──
+//    mantığıyla aynı temel algoritma — ama artık HER FAZ kendi birimini taşıyor,
+//    tek bir global "unit" yok. cfg şekli: warmup/work/rest/mainMin/cooldown için
+//    her biri {value,unit:'time'|'distance'} (cooldown boş/null → dosya sonuna kadar).
+//    Konum ekseni HER ZAMAN zaman (saniye) üzerinden ilerletilir — mesafe bazlı bir
+//    faz, o mesafenin dosyada ne kadar sürdüğü hesaplanarak zamana çevrilir
+//    (gpxAdvance). Bu yüzden "cfg.unit==='time'?...:..." dallanması yerine tek tip
+//    zaman ekseni + gpxAdvance kullanılıyor; test edilmiş: süre ve eşdeğer mesafe
+//    girişleri BİREBİR aynı faz sınırlarını üretiyor (bkz. proje notu).
 function gpxComputePhases(points,cfg){
   if(!points||points.length<2) return null;
   const totalEndT=points[points.length-1].t;
   const totalEndD=points[points.length-1].d;
-  let reps,workRaw,restRaw;
+  let reps,workSpec,restSpec;
   if(cfg.mode==='simple'){
     reps=1;
-    workRaw=cfg.unit==='time'?(cfg.mainMin||0)*60:(cfg.mainMin||0);
-    restRaw=0;
+    workSpec=cfg.mainMin;
+    restSpec={value:0,unit:'time'};
   } else {
     reps=Math.max(1,parseInt(cfg.reps)||1);
-    workRaw=cfg.work||0;
-    restRaw=cfg.rest||0;
+    workSpec=cfg.work;
+    restSpec=cfg.rest;
   }
-  const warmupRaw=cfg.warmup||0;
-  const singlePhase=(reps===1&&restRaw===0);
+  const singlePhase=(reps===1&&!(restSpec&&restSpec.value>0));
   const native=[];
-  let v=0;
-  const warmupEnd=cfg.unit==='time'?warmupRaw*60:warmupRaw;
-  native.push({name:'Isınma',kind:'edge',v0:0,v1:warmupEnd});
-  v=warmupEnd;
+  let t=0;
+  const warmupEndT=gpxAdvance(points,0,cfg.warmup);
+  native.push({name:'Isınma',kind:'edge',t0:0,t1:warmupEndT});
+  t=warmupEndT;
   for(let i=1;i<=reps;i++){
     const workName=singlePhase?'Ana Bölüm':`Koşu ${i}`;
-    native.push({name:workName,kind:'run',v0:v,v1:v+workRaw});
-    v+=workRaw;
-    if(restRaw>0){
-      native.push({name:`Yürüyüş ${i}`,kind:'walk',v0:v,v1:v+restRaw});
-      v+=restRaw;
+    const workEndT=gpxAdvance(points,t,workSpec);
+    native.push({name:workName,kind:'run',t0:t,t1:workEndT});
+    t=workEndT;
+    if(restSpec&&restSpec.value>0){
+      const restEndT=gpxAdvance(points,t,restSpec);
+      native.push({name:`Yürüyüş ${i}`,kind:'walk',t0:t,t1:restEndT});
+      t=restEndT;
     }
   }
-  const totalNativeEnd=cfg.unit==='time'?totalEndT:totalEndD;
-  let cooldownEndNative;
-  if(cfg.cooldown!==''&&cfg.cooldown!=null){
-    cooldownEndNative=v+(cfg.unit==='time'?parseFloat(cfg.cooldown)*60:parseFloat(cfg.cooldown));
+  let cooldownEndT;
+  if(cfg.cooldown&&cfg.cooldown.value){
+    cooldownEndT=gpxAdvance(points,t,cfg.cooldown);
   } else {
-    cooldownEndNative=totalNativeEnd;
+    cooldownEndT=totalEndT;
   }
-  native.push({name:'Soğuma',kind:'edge',v0:v,v1:Math.min(cooldownEndNative,totalNativeEnd)});
-  native.forEach(p=>{p.v1=Math.min(p.v1,totalNativeEnd);});
+  native.push({name:'Soğuma',kind:'edge',t0:t,t1:Math.min(cooldownEndT,totalEndT)});
+  native.forEach(p=>{p.t1=Math.min(p.t1,totalEndT);p.t0=Math.min(p.t0,p.t1);});
 
   const rows=native.map(p=>{
-    let t0,t1,distKm;
-    if(cfg.unit==='time'){
-      t0=p.v0;t1=p.v1;
-      distKm=(gpxDistAtTime(points,t1)-gpxDistAtTime(points,t0))/1000;
-    } else {
-      t0=gpxTimeAtDist(points,p.v0);t1=gpxTimeAtDist(points,p.v1);
-      distKm=(p.v1-p.v0)/1000;
-    }
-    const durSec=t1-t0;
+    const durSec=p.t1-p.t0;
+    const distKm=(gpxDistAtTime(points,p.t1)-gpxDistAtTime(points,p.t0))/1000;
     const pace=durSec>0&&distKm>0?(durSec/distKm):null;
-    const hr=gpxHrStatsWindow(points,t0,t1);
-    const hrEdge=gpxHrEdgeStats(points,t0,t1);
-    return {name:p.name,kind:p.kind,t0,t1,distKm,durSec,pace,hr,hrEdge};
+    const hr=gpxHrStatsWindow(points,p.t0,p.t1);
+    const hrEdge=gpxHrEdgeStats(points,p.t0,p.t1);
+    return {name:p.name,kind:p.kind,t0:p.t0,t1:p.t1,distKm,durSec,pace,hr,hrEdge};
   });
   return {rows,totalEndT,totalEndD};
 }
@@ -26154,13 +26168,17 @@ function GpxAnalizModal({athlete, initialDate, workouts, allHistory, races, test
   const [structure,setStructure]=useState(null);
   const [noRecete,setNoRecete]=useState(false);
   const [mode,setMode]=useState('interval');
-  const [unit,setUnit]=useState('time');
   const [warmup,setWarmup]=useState(5);
+  const [warmupUnit,setWarmupUnit]=useState('time');
   const [reps,setReps]=useState(6);
   const [work,setWork]=useState(150);
+  const [workUnit,setWorkUnit]=useState('time');
   const [rest,setRest]=useState(90);
+  const [restUnit,setRestUnit]=useState('time');
   const [mainMin,setMainMin]=useState(40);
+  const [mainUnit,setMainUnit]=useState('time');
   const [cooldown,setCooldown]=useState('');
+  const [cooldownUnit,setCooldownUnit]=useState('time');
   const [knownDist,setKnownDist]=useState('');
   const [hint,setHint]=useState(null);
   const [dragActive,setDragActive]=useState(false);
@@ -26185,7 +26203,11 @@ function GpxAnalizModal({athlete, initialDate, workouts, allHistory, races, test
       const st=info?.baseRows?.length?gpxDetectStructure(info.baseRows):null;
       setStructure(st);
       const pf=gpxPrefillFromStructure(st);
-      setMode(pf.mode);setUnit('time');
+      setMode(pf.mode);
+      // Reçeteden gelen öneri değerleri her zaman SÜRE birimiyle doldurulur (kaynak
+      // veri süre/mesafeyi birlikte taşıdığı için hangisinin "asıl" niyet olduğu
+      // belirsiz — süre varsayılan, koç isterse aşağıdan faz bazında mesafeye çevirir).
+      setWarmupUnit('time');setWorkUnit('time');setRestUnit('time');setMainUnit('time');setCooldownUnit('time');
       setWarmup(pf.warmup);setReps(pf.reps);setWork(pf.work);setRest(pf.rest);
       setMainMin(pf.mainMin);setCooldown(pf.cooldown);setHint(pf.hint);
       setNoRecete(!!pf.noRecete);
@@ -26194,11 +26216,32 @@ function GpxAnalizModal({athlete, initialDate, workouts, allHistory, races, test
     return ()=>{cancelled=true;};
   },[athlete?.id,date]);
 
-  const applyUnitDefaults=(u)=>{
-    if(u==='distance'){ setWarmup(1000);setWork(400);setRest(200);setMainMin(5000); }
-    else { setWarmup(5);setWork(150);setRest(90);setMainMin(40); }
-    setCooldown('');
+  // Bir fazın biriminî değiştir — yeni birime uygun makul bir varsayılan değere sıfırla
+  // (örn. "150 sn" → mesafeye geçince "1000 m" gibi anlamlı bir başlangıç, ters yönde de öyle).
+  const FIELD_UNIT_DEFAULTS={
+    warmup:{time:5,distance:1000},
+    work:{time:150,distance:1000},
+    rest:{time:90,distance:200},
+    mainMin:{time:40,distance:5000},
+    cooldown:{time:'',distance:''}
   };
+  const toggleFieldUnit=(field,newUnit,setVal,setUnitFn)=>{
+    setUnitFn(newUnit);
+    setVal(FIELD_UNIT_DEFAULTS[field][newUnit]);
+  };
+  // Her faz alanının yanında gösterilen küçük süre/mesafe seçici — her faz
+  // bağımsız birim taşıdığı için (Göksel talebi) global tek bir anahtar yerine
+  // alan başına bu pil kullanılıyor.
+  const unitPill=(field,curUnit,setVal,setUnitFn,timeLabel,distLabel)=>React.createElement('div',{style:{display:'inline-flex',border:'1px solid var(--border)',borderRadius:5,overflow:'hidden'}},
+    [['time',timeLabel],['distance',distLabel]].map(([u,lbl])=>React.createElement('button',{
+      key:u,type:'button',
+      onClick:()=>toggleFieldUnit(field,u,setVal,setUnitFn),
+      style:{padding:'1px 6px',fontSize:9,border:'none',cursor:'pointer',lineHeight:'16px',
+        background:curUnit===u?'var(--info)':'var(--bg-secondary)',
+        color:curUnit===u?'#fff':'var(--text-tertiary)',
+        fontWeight:curUnit===u?600:400}
+    },lbl))
+  );
 
   const handleFile=(file)=>{
     setFileName(file.name);
@@ -26234,13 +26277,14 @@ function GpxAnalizModal({athlete, initialDate, workouts, allHistory, races, test
   const runAnalysis=()=>{
     if(!points) return;
     const cfg={
-      mode,unit,
-      warmup:parseFloat(warmup)||0,
+      mode,
       reps:parseInt(reps)||1,
-      work:parseFloat(work)||0,
-      rest:parseFloat(rest)||0,
-      mainMin:parseFloat(mainMin)||0,
-      cooldown,knownDist
+      warmup:{value:(parseFloat(warmup)||0)*(warmupUnit==='time'?60:1),unit:warmupUnit},
+      work:{value:parseFloat(work)||0,unit:workUnit},
+      rest:{value:parseFloat(rest)||0,unit:restUnit},
+      mainMin:{value:(parseFloat(mainMin)||0)*(mainUnit==='time'?60:1),unit:mainUnit},
+      cooldown:(cooldown!==''&&cooldown!=null)?{value:(parseFloat(cooldown)||0)*(cooldownUnit==='time'?60:1),unit:cooldownUnit}:null,
+      knownDist
     };
     const result=gpxComputePhases(points,cfg);
     setPhaseResult(result);
@@ -26350,11 +26394,6 @@ function GpxAnalizModal({athlete, initialDate, workouts, allHistory, races, test
 
   if(!athlete) return null;
 
-  const unitLabel=(base)=>{
-    if(base==='minSec') return unit==='time'?'dk':'m';
-    return unit==='time'?'sn':'m';
-  };
-
   return React.createElement('div',{className:'modal-bg',onClick:e=>{if(e.target.className==='modal-bg')onClose();}},
     React.createElement('div',{className:'modal',style:{maxWidth:720,maxHeight:'92vh',overflowY:'auto'}},
       React.createElement('div',{className:'modal-title'},
@@ -26388,31 +26427,50 @@ function GpxAnalizModal({athlete, initialDate, workouts, allHistory, races, test
 
       React.createElement('div',{className:'card'},
         React.createElement('div',{className:'card-title'},'2 — Antrenman Reçetesi'),
-        React.createElement('div',{style:{display:'flex',gap:6,marginBottom:10}},
+        React.createElement('div',{style:{display:'flex',gap:6,marginBottom:12}},
           ['interval','simple'].map(m=>React.createElement('button',{
             key:m,type:'button',onClick:()=>setMode(m),
             style:{flex:1,padding:'7px 8px',fontSize:11,borderRadius:'var(--radius)',border:'1px solid '+(mode===m?'var(--info)':'var(--border)'),background:mode===m?'var(--info-bg)':'transparent',color:'var(--text-primary)',cursor:'pointer',fontWeight:mode===m?600:400}
           },m==='interval'?'Tekrarlı (interval)':'Basit — Isınma+Ana Bölüm+Soğuma'))
         ),
-        React.createElement('div',{style:{display:'flex',gap:6,marginBottom:12}},
-          ['time','distance'].map(u=>React.createElement('button',{
-            key:u,type:'button',onClick:()=>{setUnit(u);applyUnitDefaults(u);},
-            style:{flex:1,padding:'7px 8px',fontSize:11,borderRadius:'var(--radius)',border:'1px solid '+(unit===u?'var(--info)':'var(--border)'),background:unit===u?'var(--info-bg)':'transparent',color:'var(--text-primary)',cursor:'pointer',fontWeight:unit===u?600:400}
-          },u==='time'?'Süre bazlı':'Mesafe bazlı (m)'))
-        ),
+        React.createElement('div',{style:{fontSize:10.5,color:'var(--text-tertiary)',marginBottom:10}},'Her aşamayı istersen ayrı ayrı süre ya da mesafe olarak tanımlayabilirsin (örn. koşu kısmı "1000 m", yürüyüş "90 sn").'),
         React.createElement('div',{className:'form-grid'},
           React.createElement('div',{className:'form-group'},
-            React.createElement('label',null,'Isınma ('+unitLabel('minSec')+')'),
-            React.createElement('input',{type:'number',value:warmup,min:0,step:unit==='time'?0.5:50,onChange:e=>setWarmup(e.target.value)})
+            React.createElement('label',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:6}},
+              React.createElement('span',null,'Isınma ('+(warmupUnit==='time'?'dk':'m')+')'),
+              unitPill('warmup',warmupUnit,setWarmup,setWarmupUnit,'dk','m')
+            ),
+            React.createElement('input',{type:'number',value:warmup,min:0,step:warmupUnit==='time'?0.5:50,onChange:e=>setWarmup(e.target.value)})
           ),
           mode==='interval'?React.createElement(React.Fragment,null,
             React.createElement('div',{className:'form-group'},React.createElement('label',null,'Tekrar sayısı'),React.createElement('input',{type:'number',value:reps,min:1,step:1,onChange:e=>setReps(e.target.value)})),
-            React.createElement('div',{className:'form-group'},React.createElement('label',null,'Koşu ('+unitLabel('secM')+')'),React.createElement('input',{type:'number',value:work,min:1,step:unit==='time'?5:50,onChange:e=>setWork(e.target.value)})),
-            React.createElement('div',{className:'form-group'},React.createElement('label',null,'Yürüyüş ('+unitLabel('secM')+')'),React.createElement('input',{type:'number',value:rest,min:0,step:unit==='time'?5:50,onChange:e=>setRest(e.target.value)}))
-          ):React.createElement('div',{className:'form-group'},React.createElement('label',null,'Ana Bölüm ('+unitLabel('minSec')+')'),React.createElement('input',{type:'number',value:mainMin,min:1,step:1,onChange:e=>setMainMin(e.target.value)})),
+            React.createElement('div',{className:'form-group'},
+              React.createElement('label',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:6}},
+                React.createElement('span',null,'Koşu ('+(workUnit==='time'?'sn':'m')+')'),
+                unitPill('work',workUnit,setWork,setWorkUnit,'sn','m')
+              ),
+              React.createElement('input',{type:'number',value:work,min:1,step:workUnit==='time'?5:50,onChange:e=>setWork(e.target.value)})
+            ),
+            React.createElement('div',{className:'form-group'},
+              React.createElement('label',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:6}},
+                React.createElement('span',null,'Yürüyüş ('+(restUnit==='time'?'sn':'m')+')'),
+                unitPill('rest',restUnit,setRest,setRestUnit,'sn','m')
+              ),
+              React.createElement('input',{type:'number',value:rest,min:0,step:restUnit==='time'?5:50,onChange:e=>setRest(e.target.value)})
+            )
+          ):React.createElement('div',{className:'form-group'},
+            React.createElement('label',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:6}},
+              React.createElement('span',null,'Ana Bölüm ('+(mainUnit==='time'?'dk':'m')+')'),
+              unitPill('mainMin',mainUnit,setMainMin,setMainUnit,'dk','m')
+            ),
+            React.createElement('input',{type:'number',value:mainMin,min:1,step:mainUnit==='time'?1:100,onChange:e=>setMainMin(e.target.value)})
+          ),
           React.createElement('div',{className:'form-group'},
-            React.createElement('label',null,'Soğuma ('+unitLabel('minSec')+') — boş: dosya sonuna kadar'),
-            React.createElement('input',{type:'number',value:cooldown,min:0,step:unit==='time'?0.5:50,placeholder:'dosya sonu',onChange:e=>setCooldown(e.target.value)})
+            React.createElement('label',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:6}},
+              React.createElement('span',null,'Soğuma ('+(cooldownUnit==='time'?'dk':'m')+') — boş: dosya sonuna kadar'),
+              unitPill('cooldown',cooldownUnit,setCooldown,setCooldownUnit,'dk','m')
+            ),
+            React.createElement('input',{type:'number',value:cooldown,min:0,step:cooldownUnit==='time'?0.5:50,placeholder:'dosya sonu',onChange:e=>setCooldown(e.target.value)})
           ),
           React.createElement('div',{className:'form-group'},
             React.createElement('label',null,"Bilinen toplam mesafe (km) — opsiyonel"),
