@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.30-1524 --><!DOCTYPE html>
+<!-- Version: v2026.08.30-1620 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.30-1524';
+const APP_VERSION='v2026.08.30-1620';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -6367,11 +6367,37 @@ const BASELINE_MIN_ACTIVE_WEEKS=2; // güvenilir referans için gereken min. akt
 // kaydedilir — hem Koç Paneli hem Koşu İzlerim aynı kayıtlı değeri okur
 // (panel paritesi). Bu sabit SADECE hiç kayıt yoksa (ilk kurulum / eski veri)
 // kullanılan varsayılan değerdir. Üç değer TOPLAMDA 100 olmalıdır.
-const DEFAULT_LEADERBOARD_WEIGHTS={hedefUyumu:50,efor:15,gercekIs:35,gercekIsReferans:65};
+const DEFAULT_LEADERBOARD_WEIGHTS={hedefUyumu:50,efor:15,gercekIs:35,gercekIsReferans:65,eforReferans:120,paceFallbackGuven:0.5};
 // gercekIsReferans: Gerçek İş'in MUTLAK bileşeni için doygunma referansı (eşdeğer
 // km/hafta) — bkz. finalizeLeaderboard'daki 2026.08.23 notu. Göksel'in takım
 // değerlendirmesi: deneyimli bir sporcunun "dolu/iyi" haftası ~60-70km → 65
 // (orta nokta) varsayılan. Ağırlıklar panelinden ayarlanabilir.
+//
+// eforReferans: Efor'un MUTLAK bileşeni için doygunma referansı (yük birimi,
+// hrTSS/TRIMP/RPE-bazlı ölçekte) — bkz. finalizeLeaderboard'daki 2026.08.30
+// notu. "Sağlam, odaklı bir hafta" ölçütü olarak 120 varsayılan (Göksel'in
+// bu haftaki ~118 birimlik gerçek haftasına yakın bir başlangıç noktası).
+// Takımın tipik yük seviyesi zamanla değişirse panelden ayarlanabilir.
+//
+// paceFallbackGuven (0-1): 2026.08.30 — Göksel talebi/onayı. Hedef Uyumu bu
+// hafta ölçülemediğinde kullanılan "kendi geçmişi" fallback'i (personalPaceBaseline,
+// bkz. fetchAthletePaceBaselines) bir ÖLÇÜM değil bir TAHMİNdir; önceden ham
+// haliyle sanki ölçülmüş gibi %100 güvenle kullanılıyordu. Bu, o hafta hedefle
+// ilgisiz/hiç antrenman yapmayan ama geçmişi güçlü bir sporcunun, o hafta
+// gerçekten çok iş yapan başka bir sporcuyu geçmesine yol açabiliyordu (örn.
+// 2 kuvvet seansı + yüksek geçmiş ortalaması vs. gerçek 20km+ koşu+bisiklet).
+// ÇÖZÜM: fallback değeri artık nötr 50'ye doğru kısmen çekilir:
+//   effective = 50 + (personalPaceBaseline - 50) × paceFallbackGuven
+// Bu sabit değer (panelden ayarlanır, varsayılan 0.5) artık SABİT bir güven
+// DEĞİL, bir TAVAN güvendir — Göksel'in 2. talebiyle (aynı gün) güven ayrıca
+// geçmişin DERİNLİĞİNE göre ölçeklenir (bkz. finalizeLeaderboard):
+//   guven_etkin = paceFallbackGuven × min(1, weeksCount/BASELINE_LOOKBACK_WEEKS)
+// weeksCount, personalPaceBaseline'ın kaç haftalık gerçek ölçüme dayandığıdır
+// (fetchAthletePaceBaselines'tan gelir). 6 haftanın tamamı ölçülmüşse tavana
+// (panel değerine) ulaşılır; sadece BASELINE_MIN_ACTIVE_WEEKS(2) haftayla zar
+// zor oluşmuş bir tahmin ise güven orantılı olarak daha da nötre çekilir —
+// "az veri = az güven" ilkesi, sistemin geri kalanıyla (completenessMult)
+// tutarlı. paceFallbackGuven=1 ve weeksCount=6 eski davranışla birebir aynıdır.
 
 // Bir sporcunun, verilen haftadan ÖNCEKİ (o hafta hariç) son BASELINE_LOOKBACK_WEEKS
 // hafta içindeki, antrenman yaptığı haftaların Efor/Gerçek İş ortalamasını döndürür.
@@ -6511,6 +6537,9 @@ async function fetchWeekPaceScores(athletes,weekOffset){
 // düşer, haksız yere ödüllenmez. Yeterli ölçülebilir hafta yoksa (yeni sporcu / sürekli
 // ölçülemeyen geçmiş) null döner — finalizeLeaderboard bu durumda eski davranışa
 // (nötr 50) düşer. HİÇBİR başka sporcunun verisine bakılmaz — sadece kendi geçmişi.
+// 2026.08.30 — Göksel talebi: dönen değer artık çıplak sayı değil {value,
+// weeksCount} — weeksCount, finalizeLeaderboard'un fallback güvenini geçmişin
+// derinliğine göre ölçeklemesi (paceFallbackGuven notu) için gereklidir.
 async function fetchAthletePaceBaselines(athletes,weekOffset){
   const out={};
   await Promise.all((athletes||[]).map(async a=>{
@@ -6525,7 +6554,7 @@ async function fetchAthletePaceBaselines(athletes,weekOffset){
         if(score?.puanForScore!=null) vals.push(score.puanForScore);
       }catch(e){/* okunamadı — atla */}
     }
-    out[a.id]=vals.length>=BASELINE_MIN_ACTIVE_WEEKS?round1(vals.reduce((s,v)=>s+v,0)/vals.length):null;
+    out[a.id]=vals.length>=BASELINE_MIN_ACTIVE_WEEKS?{value:round1(vals.reduce((s,v)=>s+v,0)/vals.length),weeksCount:vals.length}:null;
   }));
   return out;
 }
@@ -6535,8 +6564,9 @@ async function fetchAthletePaceBaselines(athletes,weekOffset){
 // {puan,puanForScore}|null} — fetchWeekPaceScores'tan gelir. weights:
 // {hedefUyumu,efor,gercekIs} (yüzde, toplamı 100) — verilmezse
 // DEFAULT_LEADERBOARD_WEIGHTS kullanılır (bkz. yukarıdaki not, 2026.08.19).
-// paceBaselines: {athleteId: number|null} — fetchAthletePaceBaselines'tan gelir,
-// bu hafta Hedef Uyumu ölçülemediğinde nötr 50 yerine kullanılır (bkz. 2026.08.23 notu).
+// paceBaselines: {athleteId: {value,weeksCount}|null} — fetchAthletePaceBaselines'tan
+// gelir, bu hafta Hedef Uyumu ölçülemediğinde nötr 50 yerine kullanılır (bkz.
+// 2026.08.23 notu; weeksCount ile güven ölçeklemesi için bkz. 2026.08.30 notu).
 function finalizeLeaderboard(rows,paceScores,weights,paceBaselines){
   const w=weights||DEFAULT_LEADERBOARD_WEIGHTS;
   // 2026.08.11 — Göksel onayı: Efor ve Gerçek İş artık TAKIM İÇİ en yüksek değere
@@ -6557,7 +6587,21 @@ function finalizeLeaderboard(rows,paceScores,weights,paceBaselines){
   // baseline yoksa nötr değer 100 değil 50 (antrenman yapılmadıysa hâlâ 0) —
   // az veri = orta puan, tam puan DEĞİL.
   return rows.map(r=>{
-    const eforNorm=r.eforBaseline>0?round1(Math.min(100,r.sporSkoru/r.eforBaseline*100)):(r.count>0?50:0);
+    const eforNormRelative=r.eforBaseline>0?round1(Math.min(100,r.sporSkoru/r.eforBaseline*100)):(r.count>0?50:0);
+    // 2026.08.30 — Göksel talebi: Efor da AYNI kökten sorunu yaşıyordu (Gerçek
+    // İş'in 2026.08.23'te düzeltilen sorunu) — SADECE kendi geçmişine göre
+    // normalize edilmesi mutlak farkı siliyordu. Üstelik Efor baseline'ı
+    // ORTALAMA kullandığından (calcAthleteBaseline), geçmiş pencerede TEK bir
+    // aşırı hafta (örn. bir ultra yarış) 6 hafta boyunca sonraki NORMAL
+    // haftaları eziyordu — Gerçek İş'te bu etki mutlak bileşen sayesinde yarı
+    // yarıya yumuşuyordu, Efor'da hiç yumuşatıcı yoktu. ÇÖZÜM: Gerçek İş'teki
+    // AYNI desen — kişisel-göreli bileşenin yanına, hiçbir sporcunun verisine
+    // bakmayan sabit bir "mutlak" bileşen (eforNormAbsolute) eklenip %50-%50
+    // harmanlanıyor. REFERANS (eforReferans) Ağırlıklar panelinden ayarlanabilir,
+    // varsayılan 120 (yük birimi) — Göksel'in onayladığı başlangıç değeri.
+    const eforReferans=w.eforReferans||DEFAULT_LEADERBOARD_WEIGHTS.eforReferans;
+    const eforNormAbsolute=r.sporSkoru>0?round1(100*r.sporSkoru/(r.sporSkoru+eforReferans)):0;
+    const eforNorm=round1((eforNormRelative+eforNormAbsolute)/2);
     // 2026.08.23 — Göksel talebi: Gerçek İş'in SADECE kendi geçmişine göre (isBaseline)
     // normalize edilmesi, mutlak hacim farkını siliyordu — haftalık 80 birimlik rutini
     // olan biri kendi ortalamasını tutturunca da, 30 birimlik rutini olan biri kendi
@@ -6614,9 +6658,20 @@ function finalizeLeaderboard(rows,paceScores,weights,paceBaselines){
     // Bu, 08.12'de denenip geri alınan "tamamen çıkar + ağırlığı dağıt" yaklaşımından
     // FARKLI — hiçbir bileşenin ağırlığı büyümüyor, sadece nötr değer sabit 50 yerine
     // sporcuya özel, daha isabetli bir tahmine dönüşüyor.
-    const personalPaceBaseline=paceBaselines?.[r.ath.id];
-    const uygunlukForScoreEffective=uygunlukPctForScore!=null?uygunlukPctForScore:(personalPaceBaseline!=null?personalPaceBaseline:50);
-    const uygunlukKaynak=uygunlukPctForScore!=null?'ölçüldü':(personalPaceBaseline!=null?'kendi geçmişi':'nötr (veri yok)');
+    const personalPaceBaselineInfo=paceBaselines?.[r.ath.id];
+    const personalPaceBaseline=personalPaceBaselineInfo?.value??null;
+    const personalPaceBaselineWeeks=personalPaceBaselineInfo?.weeksCount??0;
+    // 2026.08.30 notu (yukarıda DEFAULT_LEADERBOARD_WEIGHTS'te): fallback ham
+    // değeriyle değil, nötre doğru kısmen çekilmiş (güven-ağırlıklı) haliyle
+    // kullanılır. Güven, panel tavanının (paceFallbackGuvenBase), geçmişin
+    // derinliğiyle (personalPaceBaselineWeeks/BASELINE_LOOKBACK_WEEKS) ölçeklenmiş
+    // halidir — 6 haftası da ölçülmüş bir sporcu tavana ulaşır, 2 haftayla zar
+    // zor oluşmuş bir tahmin daha da nötre çekilir.
+    const paceFallbackGuvenBase=w.paceFallbackGuven!=null?w.paceFallbackGuven:DEFAULT_LEADERBOARD_WEIGHTS.paceFallbackGuven;
+    const paceFallbackGuven=personalPaceBaselineWeeks>0?paceFallbackGuvenBase*Math.min(1,personalPaceBaselineWeeks/BASELINE_LOOKBACK_WEEKS):paceFallbackGuvenBase;
+    const personalPaceBaselineEffective=personalPaceBaseline!=null?round1(50+(personalPaceBaseline-50)*paceFallbackGuven):null;
+    const uygunlukForScoreEffective=uygunlukPctForScore!=null?uygunlukPctForScore:(personalPaceBaselineEffective!=null?personalPaceBaselineEffective:50);
+    const uygunlukKaynak=uygunlukPctForScore!=null?'ölçüldü':(personalPaceBaselineEffective!=null?'kendi geçmişi×güven':'nötr (veri yok)');
     const rawFinalScore=round1(uygunlukForScoreEffective*(w.hedefUyumu/100)+eforNorm*(w.efor/100)+isNorm*(w.gercekIs/100));
 
     // 2026.08.12 — Göksel onayı: "kendi geçmişine göre" normalizasyon, geçmişi
@@ -6640,7 +6695,7 @@ function finalizeLeaderboard(rows,paceScores,weights,paceBaselines){
     const completenessMult=0.4+0.6*(completeness/100);
     const finalScore=round1(rawFinalScore*completenessMult);
 
-    return{...r,eforNorm,isNorm,isNormRelative,isNormAbsolute,gercekIsReferans,uygunlukPct,uygunlukPctForScore,uygunlukForScoreEffective,uygunlukKaynak,uygunlukNorm,paceTotal,paceUyum,paceHizli,paceYavas,hrTotal,hrUyum,hrYuksek,hrDusuk,mesafeTotal,mesUyum,mesAz,mesFazla,rawFinalScore,completeness,completenessMult,finalScore};
+    return{...r,eforNorm,eforNormRelative,eforNormAbsolute,eforReferans,isNorm,isNormRelative,isNormAbsolute,gercekIsReferans,uygunlukPct,uygunlukPctForScore,personalPaceBaseline,personalPaceBaselineWeeks,paceFallbackGuvenBase,paceFallbackGuven,uygunlukForScoreEffective,uygunlukKaynak,uygunlukNorm,paceTotal,paceUyum,paceHizli,paceYavas,hrTotal,hrUyum,hrYuksek,hrDusuk,mesafeTotal,mesUyum,mesAz,mesFazla,rawFinalScore,completeness,completenessMult,finalScore};
   }).sort((a,b)=>b.finalScore-a.finalScore);
 }
 
@@ -6682,6 +6737,20 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races,leaderboardWeigh
   const updateReferansDraft=val=>{
     const n=val===''?0:Math.max(1,Math.min(500,parseInt(val,10)||0));
     setWeightsDraft(d=>({...d,gercekIsReferans:n}));
+    setWeightsSaved(false);
+  };
+  // eforReferans: Gerçek İş'teki gercekIsReferans ile AYNI mantık, ama Efor'un
+  // kendi ölçeğinde (yük birimi) — bkz. DEFAULT_LEADERBOARD_WEIGHTS'teki 2026.08.30 notu.
+  const updateEforReferansDraft=val=>{
+    const n=val===''?0:Math.max(1,Math.min(3000,parseInt(val,10)||0));
+    setWeightsDraft(d=>({...d,eforReferans:n}));
+    setWeightsSaved(false);
+  };
+  // paceFallbackGuven: 0-1 arası, % olarak girilir (0-100) ve dahili olarak
+  // 0-1'e çevrilir — bkz. DEFAULT_LEADERBOARD_WEIGHTS'teki 2026.08.30 notu.
+  const updateGuvenDraft=val=>{
+    const n=val===''?0:Math.max(0,Math.min(100,parseInt(val,10)||0));
+    setWeightsDraft(d=>({...d,paceFallbackGuven:round1(n/100)}));
     setWeightsSaved(false);
   };
   const saveWeights=()=>{
@@ -6927,6 +6996,38 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races,leaderboardWeigh
         )
       ),
 
+      React.createElement('div',{style:{marginTop:12,paddingTop:12,borderTop:'1px solid var(--border,rgba(0,0,0,.08))'}},
+        React.createElement('div',{style:{fontSize:12,fontWeight:600,marginBottom:4}},'💪 Efor — Mutlak Referans'),
+        React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:8}},
+          'Gerçek İş\'teki AYNI mantık, Efor\'un kendi ölçeğinde (yük birimi). Efor puanının yarısı sporcunun kendi geçmiş ortalamasına göre; diğer yarısı bu SABİT referansa göre hesaplanır. Bunsuz, geçmişte TEK bir aşırı hafta (ör. bir ultra yarış) sporcunun sonraki NORMAL haftalarını yıllarca "düşük" gösterebilir — mutlak bileşen bu etkiyi yumuşatır.'
+        ),
+        React.createElement('div',{style:{display:'flex',alignItems:'center',gap:4}},
+          React.createElement('input',{
+            type:'number',min:1,max:3000,step:5,
+            value:weightsDraft.eforReferans??DEFAULT_LEADERBOARD_WEIGHTS.eforReferans,
+            onChange:e=>updateEforReferansDraft(e.target.value),
+            style:{width:70,padding:'4px 6px',borderRadius:6,border:'1px solid var(--border,#cbd5e1)'}
+          }),
+          React.createElement('span',{style:{fontSize:12,color:'var(--text-tertiary)'}},'yük birimi/hafta')
+        )
+      ),
+
+      React.createElement('div',{style:{marginTop:12,paddingTop:12,borderTop:'1px solid var(--border,rgba(0,0,0,.08))'}},
+        React.createElement('div',{style:{fontSize:12,fontWeight:600,marginBottom:4}},'🎯 Hedef Uyumu — Fallback Güveni (tavan)'),
+        React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:8}},
+          'Bu hafta Hedef Uyumu ölçülemediğinde (yarış, koşu-dışı spor, plansız giriş vb.) sporcunun kendi geçmiş ortalaması kullanılır — ama bu bir TAHMİNdir, ölçüm değil. Bu değer bir TAVANdır: gerçek güven ayrıca geçmişin derinliğine göre ölçeklenir (6 haftanın tamamı ölçülmüşse bu tavana ulaşılır; sadece 2 haftalık zayıf bir geçmişle oluşmuşsa nötre daha da çekilir). %100 = tavanda hiç kısıtlama yok (eski davranış), %0 = fallback her zaman nötr 50. Varsayılan %50.'
+        ),
+        React.createElement('div',{style:{display:'flex',alignItems:'center',gap:4}},
+          React.createElement('input',{
+            type:'number',min:0,max:100,step:5,
+            value:Math.round((weightsDraft.paceFallbackGuven??DEFAULT_LEADERBOARD_WEIGHTS.paceFallbackGuven)*100),
+            onChange:e=>updateGuvenDraft(e.target.value),
+            style:{width:60,padding:'4px 6px',borderRadius:6,border:'1px solid var(--border,#cbd5e1)'}
+          }),
+          React.createElement('span',{style:{fontSize:12,color:'var(--text-tertiary)'}},'% tavan güven')
+        )
+      ),
+
       React.createElement('div',{style:{display:'flex',alignItems:'center',gap:10,marginTop:10}},
         React.createElement('span',{style:{fontSize:12,fontWeight:600,color:weightsValid?'var(--success,#16a34a)':'var(--danger,#dc2626)'}},
           'Toplam: '+weightsTotal+'%'+(weightsValid?' ✓':' — 100 olmalı')
@@ -7160,14 +7261,15 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races,leaderboardWeigh
               const rows=[
                 ['🎯 Hedef Uyumu',null],
                 ['  Gösterilen',row.uygunlukPct==null?'— (ölçülemedi)':row.uygunlukPct+'%'],
-                ['  Skorda kullanılan',row.uygunlukForScoreEffective+' ('+row.uygunlukKaynak+')'],
+                ['  Skorda kullanılan',row.uygunlukForScoreEffective+' ('+row.uygunlukKaynak+(row.uygunlukKaynak==='kendi geçmişi×güven'?', ham geçmiş: '+fmtN(row.personalPaceBaseline)+' ('+row.personalPaceBaselineWeeks+'/'+BASELINE_LOOKBACK_WEEKS+' hafta), güven: ×'+round1(row.paceFallbackGuven):'')+')'],
                 ['  Pace fazı',fazTxt(row.paceUyum,row.paceTotal,paceEkler)],
                 ['  Nabız fazı',fazTxt(row.hrUyum,row.hrTotal,hrEkler)],
                 row.mesafeTotal>0?['  Mesafe fazı',fazTxt(row.mesUyum,row.mesafeTotal,mesEkler)]:null,
                 ['  Katkı',row.uygunlukForScoreEffective+' × %'+w.hedefUyumu+' = '+katkiHU],
                 ['💪 Efor',null],
                 ['  Ham / Baseline',fmtN(row.sporSkoru)+' / '+(row.eforBaseline==null?'yetersiz geçmiş':fmtN(row.eforBaseline))],
-                ['  Norm',row.eforNorm],
+                ['  Kişisel-göreli / Mutlak (ref '+row.eforReferans+')',row.eforNormRelative+' / '+row.eforNormAbsolute],
+                ['  Norm (ortalama)',row.eforNorm],
                 ['  Katkı',row.eforNorm+' × %'+w.efor+' = '+katkiEfor],
                 ['⛰ Gerçek İş',null],
                 ['  Ham / Baseline',fmtN(row.gercekIs)+' eşd.km / '+(row.isBaseline==null?'yetersiz geçmiş':fmtN(row.isBaseline))],
