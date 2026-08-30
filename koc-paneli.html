@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.29-1744 --><!DOCTYPE html>
+<!-- Version: v2026.08.29-2229 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.29-1744';
+const APP_VERSION='v2026.08.29-2229';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -9053,6 +9053,51 @@ const WARMUP_UP_TOL={targetUp:5, warnUp:9, dangerUp:14};
 // olarak gösterilir; ciddi bir sapma ama Z5c'deki kadar acil bir uyarı değildir.
 function dangerHighLabel(hr){
   return hr?.id==='Z5c' ? 'Tehlikeli Nabız' : 'Aşırı Yüksek Nabız';
+}
+
+// ── PAYLAŞILAN: reçete temel satırlarını üret (GPX Analiz özelliği için) ──────────
+// ReceteTablosu'nun kendi içindeki baseRows üretimiyle (çapraz/kuvvet/öneri filtresi
+// + adimToRows genişletmesi, ~satır 9221-9245) BİREBİR AYNI algoritmayı izler — GPX
+// Analiz (Ekle sekmesi) bir günün reçetesini ReceteTablosu'nun EKRANDA ürettiği/
+// puanlamanın okuduğu satır kimlikleriyle (_origZIdx/_origPaceSec) aynı üretmek
+// zorunda, yoksa yazılan override'lar "yabancı/kalıntı" sayılıp sessizce reddedilir
+// (bkz. rows.map → _zMatch/_pMatch/_ovStale güvenlik kilidi). ReceteTablosu'nun
+// KENDİSİ bilinçli olarak değiştirilmedi (zaten çalışıyor, riske atmaya gerek yok) —
+// bu yüzden burada AYRI ama sadık bir kopya var. ReceteTablosu'nun bu bloğu
+// değişirse burası da güncellenmeli.
+function buildBaseReceteRows(yapilarInput, zones){
+  const caprazNotlar=(yapilarInput||[]).filter(y=>y._caprazNot);
+  const yapilar=(yapilarInput||[]).filter(y=>{
+    if(y._caprazNot) return false;
+    const b=(y.baslik||'');
+    if(b.startsWith('🚴')||b.startsWith('➕')) return false;
+    const bL=b.trim().toLocaleLowerCase('tr');
+    if(bL==='kuvvet çalışması'||bL==='çapraz antrenman') return false;
+    return true;
+  });
+  const oneriYapilar=(yapilar||[]).filter(y=>(y.baslik||'').startsWith('💡'));
+  const normalYapilar=(yapilar||[]).filter(y=>{
+    if((y.baslik||'').startsWith('💡')) return false;
+    if(!y._rows&&!y._yaris&&!y._caprazNot){
+      const b=(y.baslik||'').trim().toLocaleLowerCase('tr');
+      if(b==='dinlenme'||b==='blok arası dinlenme') return false;
+    }
+    return true;
+  });
+  const baseRows=normalYapilar.flatMap(y=>{try{return adimToRows(y,zones).map(r=>({...r,_srcBaslik:y.baslik}));}catch(e){console.warn('adimToRows error:',e,y);return[];};});
+  return {baseRows,oneriYapilar,caprazNotlar};
+}
+// Pace (sn/km) → zone index. ReceteTablosu içindeki paceToZoneIdx (canlı zones) ile
+// birebir aynı mantık — GPX Analiz'in yazdığı satırların rengi/kimliği koç panelinin
+// canlı düzenleme (updateCell) davranışıyla tutarlı olsun diye burada da kullanılır.
+function paceSecToZoneIdx(paceSec, zonesObj){
+  if(!zonesObj?.paceZones||!paceSec) return null;
+  const paceMs=1000/paceSec;
+  for(let i=zonesObj.paceZones.length-1;i>=0;i--){
+    const z=zonesObj.paceZones[i];
+    if(z&&z.lo_ms&&paceMs>=z.lo_ms) return i;
+  }
+  return 0;
 }
 
 function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverrides, onSaveOverrides, onSaveDetay, readOnly, originalCueOnly, savedCuePatches, actualOrtNabiz, isWorkoutLogged}){
@@ -18276,12 +18321,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       const kmDown=cwWt.targetKm>0?Math.max(0,cwWt.targetKm-cappedEffKmFinal)/cwWt.targetKm:0;
       const dpDown=cwWt.targetDp>0?Math.max(0,cwWt.targetDp-cappedEffDp)/cwWt.targetDp:0;
       const isRevised=kmDown>0.05||dpDown>0.10||cwWt.isRaceWeek;
-      // raceId: hangi hedef yarışın periyotlamasına göre hesaplandığı (29.08.2026
-      // sohbeti — 160K DNF sonrası Merrell 60K'ya geçiş vakası). plan.primary
-      // haftanın ortasında değişebilir (selectRaces() otomatik, koç aksiyonu
-      // gerekmez) — bu etiket, dondurma/okuma taraflarının eski yarış bağlamında
-      // hesaplanmış bir değeri fark edip geçersiz sayabilmesini sağlar.
-      return{origKm:cwWt.targetKm,origDp:cwWt.targetDp,effKm:cappedEffKmFinal,effDp:cappedEffDp,isRevised,raceId:plan?.primary?.id??null};
+      return{origKm:cwWt.targetKm,origDp:cwWt.targetDp,effKm:cappedEffKmFinal,effDp:cappedEffDp,isRevised};
     }catch(e){return null;}
   },[athlete,plan,weekTargets,workouts,races,rampModeOn,rampRatePct]);
 
@@ -18316,18 +18356,10 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     const snap=planSnapRef.current;
     if(!snap)return;
     const ex=snap.weekEff;
-    // DÜZELTME (29.08.2026 sohbeti — 160K DNF sonrası Merrell 60K'ya geçiş):
-    // plan.primary haftanın ortasında değişebilir. Eski hedef yarışın
-    // periyotlamasıyla dondurulmuş bir effKm, yeni yarışın fazına (ör. Taper)
-    // göre anlamsız/aşırı yüksek kalabilir (bkz. H22 vakası — 79.6km hedefe
-    // karşı donmuş 168.7km). Yarış değiştiyse eski donma bu haftayı bir daha
-    // bloklamaz; taze hesap üzerine yazılabilir.
-    const curRaceId=curWeekEffective.raceId??null;
-    const raceChanged=ex&&ex._raceId!=null&&ex._raceId!==curRaceId;
-    // Dondurma koşulu: aynı hafta VE aynı yarış VE yeni hesap daha yüksek DEĞİLSE dokunma.
-    if(ex&&ex._weekKey===weekKey&&!raceChanged&&curWeekEffective.effKm<=ex.effKm) return;
-    // İlk yazım, yeni hafta, yarış değişimi VEYA iyileştirici yukarı düzeltme → yaz/dondur
-    const newWeekEff={...curWeekEffective,_v:WEEK_EFF_VERSION,_weekKey:weekKey,_raceId:curRaceId};
+    // Dondurma koşulu: aynı hafta VE yeni hesap daha yüksek DEĞİLSE dokunma.
+    if(ex&&ex._weekKey===weekKey&&curWeekEffective.effKm<=ex.effKm) return;
+    // İlk yazım, yeni hafta VEYA iyileştirici yukarı düzeltme → yaz/dondur
+    const newWeekEff={...curWeekEffective,_v:WEEK_EFF_VERSION,_weekKey:weekKey};
     const updated={...snap,weekEff:newWeekEff};
     
     // NOT: frozenTargets artık otomatik değil, koç "Gelecek Hafta Planı" butonuna bastığında kaydedilir
@@ -18405,13 +18437,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     // snapReady olmadan gösterme — async yükleme titremesini önler
     if(!snapReady) return null;
     const frozen=planSnap?.weekEff;
-    // DÜZELTME (29.08.2026): donmuş değer başka bir hedef yarış bağlamında
-    // yazılmışsa (_raceId uyuşmuyorsa) geçersiz sayılır, canlı hesaba düşülür.
-    // Etiketsiz (bu düzeltmeden önce yazılmış) kayıtlar geriye dönük uyumluluk
-    // için hâlâ güvenilir kabul edilir.
-    const curRaceIdRead=curWeekEffective?.raceId??null;
-    const frozenStale=frozen&&frozen._raceId!=null&&frozen._raceId!==curRaceIdRead;
-    if(frozen&&frozen._weekKey===weekKey&&!frozenStale) return frozen;
+    if(frozen&&frozen._weekKey===weekKey) return frozen;
     return curWeekEffective;
   },[snapReady,planSnap,curWeekEffective,weekKey]);
 
@@ -19791,25 +19817,17 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               // Mevcut hafta: curWeekEffective (yoğunluk düzeltmeli versiyonu — ayrı hesap gereksiz)
               const isCurEff=wt.isCurrent&&displayCurWeekEff;
               // Geçmiş hafta: Firebase'de kayıtlı weekEff (o hafta mevcut haftayken yazıldı)
-              // DÜZELTME (29.08.2026 sohbeti — 160K DNF sonrası Merrell 60K'ya geçiş):
-              // kayıt başka bir hedef yarış bağlamında donmuşsa (_raceId uyuşmuyorsa)
-              // geçersiz sayılır, orijinal hedefe düşülür. Etiketsiz (bu düzeltmeden
-              // önce yazılmış) kayıtlar geriye dönük uyumluluk için güvenilir kabul
-              // edilir — aksi halde mevcut meşru geçmiş-hafta revizeleri de kaybolurdu.
-              const _pwEffRaw=pastWeekEffs[wtWeekKey]||null;
-              const _pwEffStale=!!(_pwEffRaw&&_pwEffRaw._raceId!=null&&_pwEffRaw._raceId!==(plan?.primary?.id??null));
-              const pwEff=_pwEffStale?null:_pwEffRaw;
-              const isPastEff=wt.isPast&&!!pwEff;
+              const isPastEff=wt.isPast&&!!pastWeekEffs[wtWeekKey];
               // Revize km/D+ — her ikisi de yoksa orijinal hedefe fallback
               const effKm=isCurEff
                 ?displayCurWeekEff.effKm
                 :isPastEff
-                  ?(pwEff.effKm??wt.targetKm)
+                  ?(pastWeekEffs[wtWeekKey].effKm??wt.targetKm)
                   :wt.targetKm;
               const effDp=isCurEff
                 ?displayCurWeekEff.effDp
                 :isPastEff
-                  ?(pwEff.effDp??wt.targetDp)
+                  ?(pastWeekEffs[wtWeekKey].effDp??wt.targetDp)
                   :wt.targetDp;
               // Revizyon göstergesi: hedefin ALTINDA kalındığında gösterilir
               const kmDown=wt.targetKm>0?Math.max(0,wt.targetKm-effKm)/wt.targetKm:0;
@@ -25663,13 +25681,792 @@ function planDayToForm(day){
   return{tur,yapi_notu};
 }
 
-function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,workouts,races,testPlanlar}){
+// ══════════════════════════════════════════════════════════════════════════
+// ── GPX ANALİZ — Ekle sekmesi entegrasyonu (Göksel talebi) ──────────────────
+// Ayrı bir "antrenman-analiz.html" aracının GPX/TCX faz analiz mantığını Ekle
+// sekmesine gömer: reçete (mode/reps/work/rest/warmup/cooldown) o günün PLANINDAN
+// otomatik doldurulur, coach sadece dosyayı ekler, "Analiz Et" aynı hesaplamayı
+// yapar, "Reçeteye Ekle" sonuçları ReceteTablosu'nun okuduğu AYNI Firebase yoluna
+// (plan_snapshots/{athId}/{weekKey}/rowOverrides/{date}) yazar — bu sayede koç
+// panelindeki VE Koşu İzlerim'deki (SporcuPlanView) ReceteTablosu, ikisi de AYNI
+// veriyi okuduğu için, rozet/skor otomatik oluşur; ayrı bir badge/skor kodu YOK.
+// ══════════════════════════════════════════════════════════════════════════
+
+// ── GPX/TCX ayrıştırma (antrenman-analiz.html ile birebir aynı algoritma,
+//    isim çakışmasını önlemek için gpx* önekiyle, global mutable state OLMADAN —
+//    tüm veri React state'inde tutulur, bu fonksiyonlar saf/stateless kalır) ──
+function gpxHaversineM(lat1,lon1,lat2,lon2){
+  const R=6371000;
+  const toRad=x=>x*Math.PI/180;
+  const dLat=toRad(lat2-lat1),dLon=toRad(lon2-lon1);
+  const a=Math.sin(dLat/2)**2+Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(a));
+}
+function gpxFindHR(el){
+  const candidates=['hr','Value'];
+  for(const tagName of candidates){
+    const found=el.getElementsByTagName(tagName)[0]||(el.getElementsByTagNameNS?el.getElementsByTagNameNS('*',tagName)[0]:null);
+    if(found&&found.textContent){
+      const v=parseFloat(found.textContent);
+      if(!isNaN(v)) return v;
+    }
+  }
+  return null;
+}
+function gpxParseGPXText(text){
+  const doc=new DOMParser().parseFromString(text,'text/xml');
+  if(doc.getElementsByTagName('parsererror').length) throw new Error('XML ayrıştırılamadı');
+  const trkpts=Array.from(doc.getElementsByTagName('trkpt'));
+  if(trkpts.length===0) throw new Error('trkpt bulunamadı — GPX formatı desteklenmiyor olabilir');
+  const out=[];
+  let prevLat=null,prevLon=null,cum=0;
+  for(const pt of trkpts){
+    const lat=parseFloat(pt.getAttribute('lat'));
+    const lon=parseFloat(pt.getAttribute('lon'));
+    const timeEl=pt.getElementsByTagName('time')[0];
+    const time=timeEl?new Date(timeEl.textContent):null;
+    const hr=gpxFindHR(pt);
+    if(prevLat!=null&&!isNaN(lat)&&!isNaN(lon)){
+      cum+=gpxHaversineM(prevLat,prevLon,lat,lon);
+    }
+    prevLat=lat;prevLon=lon;
+    out.push({time,dist:cum,hr});
+  }
+  return out;
+}
+function gpxParseTCXText(text){
+  const doc=new DOMParser().parseFromString(text,'text/xml');
+  if(doc.getElementsByTagName('parsererror').length) throw new Error('XML ayrıştırılamadı');
+  const tps=Array.from(doc.getElementsByTagName('Trackpoint'));
+  if(tps.length===0) throw new Error('Trackpoint bulunamadı — TCX formatı desteklenmiyor olabilir');
+  const out=[];
+  for(const tp of tps){
+    const timeEl=tp.getElementsByTagName('Time')[0];
+    const distEl=tp.getElementsByTagName('DistanceMeters')[0];
+    const hrParent=tp.getElementsByTagName('HeartRateBpm')[0];
+    let hr=null;
+    if(hrParent){
+      const v=hrParent.getElementsByTagName('Value')[0];
+      if(v) hr=parseFloat(v.textContent);
+    }
+    out.push({time:timeEl?new Date(timeEl.textContent):null,dist:distEl?parseFloat(distEl.textContent):null,hr});
+  }
+  return out;
+}
+function gpxNormalizePoints(raw){
+  const withTime=raw.filter(p=>p.time instanceof Date&&!isNaN(p.time));
+  if(withTime.length<5) throw new Error('Zaman damgaları okunamadı');
+  const t0=withTime[0].time.getTime();
+  let lastDist=0;
+  const pts=withTime.map(p=>{
+    const t=(p.time.getTime()-t0)/1000;
+    let d=p.dist;
+    if(d==null||isNaN(d)) d=lastDist; else lastDist=d;
+    return {t,d,hr:(p.hr!=null&&!isNaN(p.hr))?p.hr:null};
+  });
+  pts.sort((a,b)=>a.t-b.t);
+  let running=-Infinity;
+  for(const p of pts){ if(p.d<running) p.d=running; else running=p.d; }
+  return pts;
+}
+function gpxDistAtTime(points,tSec){
+  if(!points||!points.length) return 0;
+  if(tSec<=points[0].t) return points[0].d;
+  if(tSec>=points[points.length-1].t) return points[points.length-1].d;
+  let lo=0,hi=points.length-1;
+  while(hi-lo>1){
+    const mid=(lo+hi)>>1;
+    if(points[mid].t<=tSec) lo=mid; else hi=mid;
+  }
+  const a=points[lo],b=points[hi];
+  const frac=(tSec-a.t)/(b.t-a.t||1);
+  return a.d+frac*(b.d-a.d);
+}
+function gpxTimeAtDist(points,dTarget){
+  if(!points||!points.length) return 0;
+  if(dTarget<=points[0].d) return points[0].t;
+  if(dTarget>=points[points.length-1].d) return points[points.length-1].t;
+  let lo=0,hi=points.length-1;
+  while(hi-lo>1){
+    const mid=(lo+hi)>>1;
+    if(points[mid].d<=dTarget) lo=mid; else hi=mid;
+  }
+  const a=points[lo],b=points[hi];
+  const frac=(dTarget-a.d)/(b.d-a.d||1);
+  return a.t+frac*(b.t-a.t);
+}
+function gpxHrStatsWindow(points,t0,t1){
+  const vals=points.filter(p=>p.t>=t0&&p.t<t1&&p.hr!=null).map(p=>p.hr);
+  if(vals.length===0) return {avg:null,max:null,min:null};
+  return {avg:vals.reduce((a,b)=>a+b,0)/vals.length,max:Math.max(...vals),min:Math.min(...vals)};
+}
+// Faz başı/sonu nabız — Soğuma satırının bpmStart/bpmEnd trend rozeti için
+// (bkz. detectCooldownTrend). Gürültüye karşı ilk/son ~30sn'nin ortalaması alınır
+// (kısa fazlarda faz süresinin yarısına kadar daralır).
+function gpxHrEdgeStats(points,t0,t1,edgeSec){
+  edgeSec=edgeSec||30;
+  const dur=t1-t0;
+  const win=Math.max(5,Math.min(edgeSec,dur/2));
+  const startVals=points.filter(p=>p.t>=t0&&p.t<t0+win&&p.hr!=null).map(p=>p.hr);
+  const endVals=points.filter(p=>p.t>=t1-win&&p.t<t1&&p.hr!=null).map(p=>p.hr);
+  return {
+    start:startVals.length?startVals.reduce((a,b)=>a+b,0)/startVals.length:null,
+    end:endVals.length?endVals.reduce((a,b)=>a+b,0)/endVals.length:null
+  };
+}
+function gpxFmtPace(secPerKm){
+  if(!isFinite(secPerKm)||secPerKm<=0) return '—';
+  let m=Math.floor(secPerKm/60),s=Math.round(secPerKm%60);
+  if(s===60){m+=1;s=0;}
+  return `${m}:${s.toString().padStart(2,'0')}/km`;
+}
+function gpxFmtMin(sec){
+  const m=Math.floor(sec/60),s=Math.round(sec%60);
+  return s===0?`${m} dk`:`${m}:${s.toString().padStart(2,'0')}`;
+}
+// HR eğrisi + faz şeritleri — antrenman-analiz.html'deki drawChart ile aynı çizim,
+// closure yerine açık parametre alır (React component'ten canvas ref ile çağrılır).
+function drawGpxChart(canvas,points,phases){
+  const dpr=window.devicePixelRatio||1;
+  const w=canvas.clientWidth,h=220;
+  canvas.width=w*dpr;canvas.height=h*dpr;
+  const ctx=canvas.getContext('2d');
+  ctx.scale(dpr,dpr);
+  ctx.clearRect(0,0,w,h);
+  const hrPts=points.filter(p=>p.hr!=null);
+  if(hrPts.length===0) return;
+  const tMax=points[points.length-1].t||1;
+  const hrMin=Math.min(...hrPts.map(p=>p.hr))-5;
+  const hrMax=Math.max(...hrPts.map(p=>p.hr))+5;
+  const padL=38,padR=10,padT=10,padB=18;
+  const plotW=w-padL-padR,plotH=h-padT-padB;
+  const xOf=t=>padL+(t/tMax)*plotW;
+  const yOf=hr=>padT+(1-(hr-hrMin)/(hrMax-hrMin))*plotH;
+  phases.forEach(p=>{
+    if(p.kind==='run') ctx.fillStyle='rgba(240,217,168,0.55)';
+    else if(p.kind==='walk') ctx.fillStyle='rgba(219,230,240,0.55)';
+    else ctx.fillStyle='rgba(120,120,120,0.08)';
+    ctx.fillRect(xOf(p.t0),padT,Math.max(0,xOf(p.t1)-xOf(p.t0)),plotH);
+  });
+  ctx.strokeStyle='#c94f33';
+  ctx.lineWidth=1.6;
+  ctx.beginPath();
+  hrPts.forEach((p,i)=>{
+    const x=xOf(p.t),y=yOf(p.hr);
+    if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+  });
+  ctx.stroke();
+  ctx.fillStyle='#8a8375';
+  ctx.font='11px monospace';
+  ctx.textAlign='right';
+  [hrMin+5,Math.round((hrMin+hrMax)/2),hrMax-5].forEach(v=>{
+    ctx.fillText(String(Math.round(v)),padL-6,yOf(v)+3);
+  });
+}
+
+// ── O günün reçetesini çöz (override varsa onu, yoksa algoritmik planı kullan) ──
+// NOT (bilinçli sadeleştirme): HaftalikPlanTab'ın gelecek/bugün gününe özgü
+// ACWR-engelleme, bayat-override-fallback gibi son derece uç durumları burada
+// TEKRARLANMADI — GPX Analiz her zaman GEÇMİŞ/TAMAMLANMIŞ bir antrenmanı analiz
+// eder, bu yüzden "o gün için ne atanmıştı" sorusunun cevabı neredeyse her zaman
+// overrideMap[date]'te zaten sabittir. Son aşamalar (buildEffectiveKosuYapilar,
+// injectRowsFromTpl, buildBaseReceteRows) koç paneliyle AYNI paylaşılan
+// fonksiyonlardır — parite sadece "günün planını bulma" adımında basitleştirildi.
+async function gpxResolveDayPlan(athlete,dateStr,allHistory,races,workouts,testPlanlar){
+  if(!athlete?.id||!dateStr) return {ok:false,reason:'Sporcu veya tarih seçilmedi.'};
+  const weekKey=getWeekKeyForDate(dateStr);
+  const snap=await fbGet(`plan_snapshots/${athlete.id}/${weekKey}`).catch(()=>null);
+  const ov=snap?.overrideMap?.[dateStr];
+  let dayLike=null;
+  if(ov&&ov.yapilar&&ov.yapilar.length>0&&ov.tip!=='dinlenme'){
+    dayLike={date:dateStr,tip:ov.tip,baslik:ov.baslik,yapi_notu:ov.yapi_notu||'',sure_dk:ov.sure_dk||45,yapilar:ov.yapilar,isKosuCapraz:ov.isKosuCapraz||false};
+  } else {
+    try{
+      const athHistory=(allHistory&&allHistory[athlete.id])||[];
+      const athRaceIds=(athlete.yarıslar||[]).map(x=>typeof x==='string'?x:x?.id).filter(Boolean);
+      const athRaces=(races||[]).filter(r=>athRaceIds.includes(r.id));
+      const athWorkouts=(workouts||[]).filter(w=>w.athleteId===athlete.id);
+      const plan=generateTwoWeekPlan(athlete,athHistory,athRaces,athWorkouts,testPlanlar||[]);
+      const allDays=plan?.weeks?.flatMap(w=>w.days)||[];
+      const gunPlan=allDays.find(d=>d.date===dateStr);
+      if(gunPlan&&gunPlan.tip!=='dinlenme'&&gunPlan.yapilar?.length>0){
+        dayLike={date:dateStr,tip:gunPlan.tip,baslik:gunPlan.baslik,yapi_notu:gunPlan.yapi_notu||'',sure_dk:gunPlan.sure_dk||45,yapilar:gunPlan.yapilar,isKosuCapraz:gunPlan.isKosuCapraz||false};
+      }
+    }catch(e){console.warn('GPX Analiz — plan çözümleme hatası:',e);}
+  }
+  const existingKosuActual=(workouts||[]).find(w=>w.athleteId===athlete.id&&w.date===dateStr&&(w.spor||'kosu')==='kosu')||null;
+  const liveZones=calcZones(athlete);
+  let baseRows=[],displayTip='aerobik';
+  if(dayLike){
+    try{
+      const kosuGorunum=buildEffectiveKosuYapilar(dayLike,existingKosuActual,liveZones,athlete?.disiplin,athlete);
+      const finalYapilar=injectRowsFromTpl(kosuGorunum.displayYapilar,kosuGorunum.displayTip,dayLike.yapi_notu,dayLike.sure_dk,liveZones,athlete?.disiplin);
+      displayTip=kosuGorunum.displayTip;
+      baseRows=buildBaseReceteRows(finalYapilar,liveZones).baseRows||[];
+    }catch(e){console.warn('GPX Analiz — reçete satırı üretme hatası:',e);}
+  }
+  return {ok:true,dayLike,displayTip,baseRows,weekKey,snap,existingKosuActual};
+}
+
+// ── Bir günün baseRows'undan Isınma/Tekrar-bloğu/Ana-Bölüm/Soğuma yapısını tespit et ──
+function gpxDetectStructure(baseRows){
+  if(!baseRows||!baseRows.length) return null;
+  const rowDurSecOf=(r)=>(r?.h||0)*3600+(r?.m||0)*60+(r?.s||0);
+  const warmupIdx=baseRows.findIndex(r=>/[iı]sınma|isinma/i.test(r.label||''));
+  let cooldownIdx=-1;
+  for(let i=baseRows.length-1;i>=0;i--){ if(/soğuma|soguma/i.test(baseRows[i].label||'')){cooldownIdx=i;break;} }
+  const headerIdx=baseRows.findIndex(r=>r.type==='header');
+  let workRowIdx=-1,restRowIdx=-1,hasRest=false,repCount=0;
+  if(headerIdx>=0){
+    repCount=baseRows[headerIdx].repeatCount||1;
+    workRowIdx=headerIdx+1;
+    const maybeRest=headerIdx+2;
+    if(baseRows[maybeRest]&&baseRows[maybeRest].type!=='header'&&maybeRest!==cooldownIdx&&(baseRows[maybeRest].type==='walk'||baseRows[maybeRest].type==='rest')){
+      restRowIdx=maybeRest;hasRest=true;
+    }
+  }
+  const usedIdx=new Set([warmupIdx,cooldownIdx,headerIdx,workRowIdx,restRowIdx].filter(i=>i!=null&&i>=0));
+  const mainRowIdxs=[];
+  baseRows.forEach((r,i)=>{ if(r.type!=='header'&&!usedIdx.has(i)) mainRowIdxs.push(i); });
+  const headerCount=baseRows.filter(r=>r.type==='header').length;
+  return {
+    warmupIdx,cooldownIdx,headerIdx,workRowIdx,restRowIdx,hasRest,repCount,mainRowIdxs,
+    warmupSec:warmupIdx>=0?rowDurSecOf(baseRows[warmupIdx]):0,
+    cooldownSec:cooldownIdx>=0?rowDurSecOf(baseRows[cooldownIdx]):0,
+    workSec:workRowIdx>=0?rowDurSecOf(baseRows[workRowIdx]):0,
+    restSec:restRowIdx>=0?rowDurSecOf(baseRows[restRowIdx]):0,
+    mainSec:mainRowIdxs.reduce((a,i)=>a+rowDurSecOf(baseRows[i]),0),
+    isComplex:headerCount>1||mainRowIdxs.length>1
+  };
+}
+
+// ── Yapıdan "2 — Antrenman Reçetesi" form alanlarını öner (hâlâ düzenlenebilir) ──
+function gpxPrefillFromStructure(structure){
+  const warmupMin=(structure&&structure.warmupSec>0)?Math.round(structure.warmupSec/30)/2:5;
+  if(structure&&structure.headerIdx>=0&&structure.repCount>0){
+    return {
+      mode:'interval',warmup:warmupMin,reps:structure.repCount,
+      work:Math.round(structure.workSec/5)*5||150,
+      rest:structure.hasRest?Math.round(structure.restSec/5)*5:0,
+      mainMin:40,cooldown:'',
+      hint:structure.isComplex?'Bu gün için birden fazla antrenman bloğu tespit edildi — sadece ilk blok otomatik dolduruldu, gerekirse elle düzenle.':null,
+      noRecete:false
+    };
+  }
+  if(structure&&structure.mainRowIdxs.length>0){
+    return {
+      mode:'simple',warmup:warmupMin,reps:6,work:150,rest:90,
+      mainMin:Math.max(1,Math.round(structure.mainSec/60))||40,
+      cooldown:'',
+      hint:structure.isComplex?'Bu gün için birden fazla bölüm tespit edildi — toplam süre tek Ana Bölüm olarak dolduruldu, gerekirse elle düzenle.':null,
+      noRecete:false
+    };
+  }
+  return {mode:'interval',warmup:5,reps:6,work:150,rest:90,mainMin:40,cooldown:'',
+    hint:'Bu tarih için tanınan bir reçete yapısı bulunamadı — varsayılan değerler kullanılıyor, reçete alanlarını elle düzenle.',
+    noRecete:true};
+}
+
+// ── GPX/TCX noktalarından faz bazlı sonuç üret (antrenman-analiz.html'in analiz
+//    mantığıyla birebir aynı — sadece closure yerine parametre alan saf fonksiyon) ──
+function gpxComputePhases(points,cfg){
+  if(!points||points.length<2) return null;
+  const totalEndT=points[points.length-1].t;
+  const totalEndD=points[points.length-1].d;
+  let reps,workRaw,restRaw;
+  if(cfg.mode==='simple'){
+    reps=1;
+    workRaw=cfg.unit==='time'?(cfg.mainMin||0)*60:(cfg.mainMin||0);
+    restRaw=0;
+  } else {
+    reps=Math.max(1,parseInt(cfg.reps)||1);
+    workRaw=cfg.work||0;
+    restRaw=cfg.rest||0;
+  }
+  const warmupRaw=cfg.warmup||0;
+  const singlePhase=(reps===1&&restRaw===0);
+  const native=[];
+  let v=0;
+  const warmupEnd=cfg.unit==='time'?warmupRaw*60:warmupRaw;
+  native.push({name:'Isınma',kind:'edge',v0:0,v1:warmupEnd});
+  v=warmupEnd;
+  for(let i=1;i<=reps;i++){
+    const workName=singlePhase?'Ana Bölüm':`Koşu ${i}`;
+    native.push({name:workName,kind:'run',v0:v,v1:v+workRaw});
+    v+=workRaw;
+    if(restRaw>0){
+      native.push({name:`Yürüyüş ${i}`,kind:'walk',v0:v,v1:v+restRaw});
+      v+=restRaw;
+    }
+  }
+  const totalNativeEnd=cfg.unit==='time'?totalEndT:totalEndD;
+  let cooldownEndNative;
+  if(cfg.cooldown!==''&&cfg.cooldown!=null){
+    cooldownEndNative=v+(cfg.unit==='time'?parseFloat(cfg.cooldown)*60:parseFloat(cfg.cooldown));
+  } else {
+    cooldownEndNative=totalNativeEnd;
+  }
+  native.push({name:'Soğuma',kind:'edge',v0:v,v1:Math.min(cooldownEndNative,totalNativeEnd)});
+  native.forEach(p=>{p.v1=Math.min(p.v1,totalNativeEnd);});
+
+  const rows=native.map(p=>{
+    let t0,t1,distKm;
+    if(cfg.unit==='time'){
+      t0=p.v0;t1=p.v1;
+      distKm=(gpxDistAtTime(points,t1)-gpxDistAtTime(points,t0))/1000;
+    } else {
+      t0=gpxTimeAtDist(points,p.v0);t1=gpxTimeAtDist(points,p.v1);
+      distKm=(p.v1-p.v0)/1000;
+    }
+    const durSec=t1-t0;
+    const pace=durSec>0&&distKm>0?(durSec/distKm):null;
+    const hr=gpxHrStatsWindow(points,t0,t1);
+    const hrEdge=gpxHrEdgeStats(points,t0,t1);
+    return {name:p.name,kind:p.kind,t0,t1,distKm,durSec,pace,hr,hrEdge};
+  });
+  return {rows,totalEndT,totalEndD};
+}
+
+// ── Bir faz sonucunu ReceteTablosu'nun rowOverrides satır şemasına çevir ──────────
+// isAralikLeg=true → tekrar (interval) bacağı: extractFeedbackSignals bu bacaklarda
+// _targetZIdx/_targetPaceSec/_origLoBpm/_origHiBpm alanlarını BİLEREK yok sayar
+// (bkz. _cleanLeg, proje notu) — bu yüzden burada eklenmiyor, gereksiz.
+function gpxBuildLegPayload(baseRow,phase,liveZones,isAralikLeg){
+  if(!baseRow||!phase) return null;
+  const distKm=phase.distKm||0;
+  const durSec=Math.max(0,Math.round(phase.durSec||0));
+  const hms=secToHMS(durSec);
+  const out={mesafe:Math.round(distKm*1000),h:hms.h,m:hms.m,s:hms.s};
+  const paceSecRaw=(durSec>0&&distKm>0)?(durSec/distKm):null;
+  if(paceSecRaw!=null){
+    const pm0=Math.floor(paceSecRaw/60);
+    const ps0=Math.round(paceSecRaw%60);
+    out.pm=(ps0===60)?pm0+1:pm0;
+    out.ps=(ps0===60)?0:ps0;
+    const paceZi=paceSecToZoneIdx(out.pm*60+out.ps,liveZones);
+    if(paceZi!=null){ out.color=ZONE_COLORS_INLINE[paceZi]; out.textColor=ZONE_TEXT_COLOR[paceZi]; }
+  }
+  const label=baseRow.label||'';
+  const isWarmup=/[iı]sınma|isinma/i.test(label);
+  const isCooldown=/soğuma|soguma/i.test(label);
+  const isRecovery=(baseRow.type==='rest'||baseRow.type==='walk')&&!isWarmup&&!isCooldown;
+  const rowDur=(baseRow.h||0)*3600+(baseRow.m||0)*60+(baseRow.s||0);
+  const isShort=!baseRow.rpe&&!baseRow._isSprint&&rowDur>0&&rowDur<=SHORT_ROW_MAX_SEC;
+  const hr=phase.hr||{};
+  if(isCooldown){
+    if(hr.avg!=null) out.bpmAvg=Math.round(hr.avg);
+    if(phase.hrEdge?.start!=null) out.bpmStart=Math.round(phase.hrEdge.start);
+    if(phase.hrEdge?.end!=null) out.bpmEnd=Math.round(phase.hrEdge.end);
+    if(out.bpmAvg!=null) out.bpm=out.bpmAvg;
+  } else if(isRecovery){
+    if(hr.min!=null) out.bpm=Math.round(hr.min);
+  } else if(isShort){
+    if(hr.max!=null) out.bpm=Math.round(hr.max);
+  } else if(hr.avg!=null){
+    out.bpm=Math.round(hr.avg);
+  }
+  // Kimlik parmak izi — updateCell'in origFields'ıyla birebir aynı alanlar.
+  if(baseRow._origPaceSec>0) out._origPaceSec=baseRow._origPaceSec;
+  if(baseRow._origZIdx!=null) out._origZIdx=baseRow._origZIdx;
+  if(baseRow._isSprint) out._isSprint=true;
+  if(baseRow.rpe) out.rpe=baseRow.rpe;
+  if(baseRow._isGapRow) out._isGapRow=true;
+  if(out.mesafe>0) out._origMesafe=out.mesafe;
+  if(!isAralikLeg){
+    if(baseRow._origPaceSec>0) out._targetPaceSec=baseRow._origPaceSec;
+    if(baseRow._origZIdx!=null) out._targetZIdx=baseRow._origZIdx;
+    const ohr=baseRow._origZIdx!=null?liveZones?.hrZones?.[baseRow._origZIdx]:null;
+    if(ohr?.lo_bpm) out._origLoBpm=ohr.lo_bpm;
+    if(ohr?.hi_bpm) out._origHiBpm=ohr.hi_bpm;
+  }
+  return out;
+}
+
+// ── Analiz sonuçlarını (gpxComputePhases çıktısı) reçete override'larına eşle ──────
+function gpxMapPhasesToOverrides(baseRows,structure,phaseRows,liveZones){
+  const flatOverrides={};
+  const aralikOverrides={};
+  const byName=(n)=>phaseRows.find(p=>p.name===n);
+  const warmupPhase=byName('Isınma');
+  const cooldownPhase=byName('Soğuma');
+  if(structure.warmupIdx>=0&&warmupPhase){
+    const payload=gpxBuildLegPayload(baseRows[structure.warmupIdx],warmupPhase,liveZones,false);
+    if(payload) flatOverrides[structure.warmupIdx]=payload;
+  }
+  if(structure.cooldownIdx>=0&&cooldownPhase){
+    const payload=gpxBuildLegPayload(baseRows[structure.cooldownIdx],cooldownPhase,liveZones,false);
+    if(payload) flatOverrides[structure.cooldownIdx]=payload;
+  }
+  if(structure.headerIdx>=0&&structure.workRowIdx>=0){
+    const repMap={};
+    for(let i=1;i<=structure.repCount;i++){
+      const runPhase=byName(`Koşu ${i}`)||(structure.repCount===1?byName('Ana Bölüm'):null);
+      const restPhase=byName(`Yürüyüş ${i}`);
+      const legs={};
+      if(runPhase){ const p=gpxBuildLegPayload(baseRows[structure.workRowIdx],runPhase,liveZones,true); if(p) legs.run=p; }
+      if(structure.hasRest&&restPhase&&structure.restRowIdx>=0){ const p=gpxBuildLegPayload(baseRows[structure.restRowIdx],restPhase,liveZones,true); if(p) legs.rest=p; }
+      if(legs.run||legs.rest) repMap[i]=legs;
+    }
+    if(Object.keys(repMap).length) aralikOverrides[structure.headerIdx]=repMap;
+  } else if(structure.mainRowIdxs.length){
+    const mainPhase=byName('Ana Bölüm');
+    if(mainPhase){
+      structure.mainRowIdxs.forEach(idx=>{
+        const payload=gpxBuildLegPayload(baseRows[idx],mainPhase,liveZones,false);
+        if(payload) flatOverrides[idx]=payload;
+      });
+    }
+  }
+  return {flatOverrides,aralikOverrides};
+}
+
+// ── Firebase'e yaz: mevcut rowOverrides ile GÜVENLİ birleştir (üzerine yazma) ─────
+// __workoutLogged:true — extractFeedbackSignals bu bayrak olmadan tarihi tamamen
+// atlar (bkz. proje notu — "Ekle'den ÖNCE" salt reçete düzenlemesiyle karıştırmama
+// güvenlik kilidi). GPX Analiz'in bu bayrağı basması BİLEREK yapılır: bu özellik
+// sadece GERÇEKTEN koşulmuş bir antrenmanın GPS/HR verisini işler.
+async function gpxPersistToRecete({athleteId,dateStr,weekKey,baseRows,measureZones,flatOverridesNew,aralikOverridesNew,displayTip}){
+  const freshSnap=await fbGet(`plan_snapshots/${athleteId}/${weekKey}`).catch(()=>null);
+  const existingDateOv=freshSnap?.rowOverrides?.[dateStr]||{};
+  const {__aralik:existingAralik,__workoutLogged:_wl,__tip:_t,...existingFlat}=existingDateOv;
+  const mergedFlat={...existingFlat,...flatOverridesNew};
+  const mergedAralik={...(existingAralik||{})};
+  Object.entries(aralikOverridesNew||{}).forEach(([hIdx,repMap])=>{
+    mergedAralik[hIdx]={...(mergedAralik[hIdx]||{}),...repMap};
+  });
+  const __zd=computeZoneDistFromRows(baseRows,mergedFlat,measureZones,mergedAralik);
+  const __gd=computeGapDataFromRows(baseRows,mergedFlat);
+  const dateOvToWrite={...mergedFlat,__aralik:mergedAralik,__workoutLogged:true,__tip:displayTip};
+  await fbUpdate(`plan_snapshots/${athleteId}/${weekKey}`,{['rowOverrides/'+dateStr]:dateOvToWrite,lastSavedAt:new Date().toISOString()});
+  return {__zoneDist:__zd,__gapData:__gd};
+}
+
+// ── GPX Analiz modalı — Ekle sekmesinden açılır ────────────────────────────────
+function GpxAnalizModal({athlete, initialDate, workouts, allHistory, races, testPlanlar, onUpdateWorkout, onSaveWorkout, onClose}){
+  const [date,setDate]=useState(initialDate||localDateStr(new Date()));
+  const [loadingPlan,setLoadingPlan]=useState(true);
+  const [planInfo,setPlanInfo]=useState(null);
+  const [structure,setStructure]=useState(null);
+  const [noRecete,setNoRecete]=useState(false);
+  const [mode,setMode]=useState('interval');
+  const [unit,setUnit]=useState('time');
+  const [warmup,setWarmup]=useState(5);
+  const [reps,setReps]=useState(6);
+  const [work,setWork]=useState(150);
+  const [rest,setRest]=useState(90);
+  const [mainMin,setMainMin]=useState(40);
+  const [cooldown,setCooldown]=useState('');
+  const [knownDist,setKnownDist]=useState('');
+  const [hint,setHint]=useState(null);
+  const [dragActive,setDragActive]=useState(false);
+  const [fileName,setFileName]=useState('');
+  const [points,setPoints]=useState(null);
+  const [status,setStatus]=useState(null);
+  const [phaseResult,setPhaseResult]=useState(null);
+  const [applying,setApplying]=useState(false);
+  const [applyMsg,setApplyMsg]=useState(null);
+  const [updateAggregate,setUpdateAggregate]=useState(false);
+  const chartRef=useRef(null);
+  const fileInputRef=useRef(null);
+
+  useEffect(()=>{
+    let cancelled=false;
+    setLoadingPlan(true);
+    setPhaseResult(null);
+    setApplyMsg(null);
+    gpxResolveDayPlan(athlete,date,allHistory,races,workouts,testPlanlar).then(info=>{
+      if(cancelled) return;
+      setPlanInfo(info);
+      const st=info?.baseRows?.length?gpxDetectStructure(info.baseRows):null;
+      setStructure(st);
+      const pf=gpxPrefillFromStructure(st);
+      setMode(pf.mode);setUnit('time');
+      setWarmup(pf.warmup);setReps(pf.reps);setWork(pf.work);setRest(pf.rest);
+      setMainMin(pf.mainMin);setCooldown(pf.cooldown);setHint(pf.hint);
+      setNoRecete(!!pf.noRecete);
+      setLoadingPlan(false);
+    });
+    return ()=>{cancelled=true;};
+  },[athlete?.id,date]);
+
+  const applyUnitDefaults=(u)=>{
+    if(u==='distance'){ setWarmup(1000);setWork(400);setRest(200);setMainMin(5000); }
+    else { setWarmup(5);setWork(150);setRest(90);setMainMin(40); }
+    setCooldown('');
+  };
+
+  const handleFile=(file)=>{
+    setFileName(file.name);
+    setStatus({msg:'Okunuyor…',type:''});
+    setPhaseResult(null);
+    setApplyMsg(null);
+    const reader=new FileReader();
+    reader.onload=(ev)=>{
+      try{
+        const text=ev.target.result;
+        const lower=file.name.toLowerCase();
+        const parsed=lower.endsWith('.tcx')?gpxParseTCXText(text):gpxParseGPXText(text);
+        if(!parsed||parsed.length<5){
+          setStatus({msg:'Dosyada yeterli veri bulunamadı (nokta sayısı çok az).',type:'err'});
+          setPoints(null);
+          return;
+        }
+        const norm=gpxNormalizePoints(parsed);
+        setPoints(norm);
+        const hrCount=norm.filter(p=>p.hr!=null).length;
+        const totalMin=(norm[norm.length-1].t/60).toFixed(1);
+        const totalKm=(norm[norm.length-1].d/1000).toFixed(2);
+        setStatus({msg:`✓ ${norm.length} nokta okundu — toplam ${totalMin} dk, ${totalKm} km, ${hrCount} nabız örneği.`,type:'ok'});
+      }catch(err){
+        console.error(err);
+        setStatus({msg:'Dosya okunamadı: '+err.message,type:'err'});
+        setPoints(null);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const runAnalysis=()=>{
+    if(!points) return;
+    const cfg={
+      mode,unit,
+      warmup:parseFloat(warmup)||0,
+      reps:parseInt(reps)||1,
+      work:parseFloat(work)||0,
+      rest:parseFloat(rest)||0,
+      mainMin:parseFloat(mainMin)||0,
+      cooldown,knownDist
+    };
+    const result=gpxComputePhases(points,cfg);
+    setPhaseResult(result);
+    setApplyMsg(null);
+  };
+
+  useEffect(()=>{
+    if(!phaseResult||!chartRef.current||!points) return;
+    drawGpxChart(chartRef.current,points,phaseResult.rows);
+  },[phaseResult,points]);
+
+  const totalDistKm=phaseResult?phaseResult.rows.reduce((a,r)=>a+r.distKm,0):0;
+  const distWarn=(()=>{
+    if(!phaseResult||!knownDist) return null;
+    const known=parseFloat(knownDist);
+    if(!known) return null;
+    const diff=Math.abs(totalDistKm-known);
+    if(diff>0.05) return `⚠ Hesaplanan toplam mesafe ${totalDistKm.toFixed(3)} km, girilen ${known} km'den ${(diff*1000).toFixed(0)} m farklı. Reçete alanlarını kontrol et.`;
+    return null;
+  })();
+
+  const canApply=!!(phaseResult&&planInfo?.baseRows?.length&&structure&&!noRecete);
+
+  const handleApply=async()=>{
+    if(!canApply||applying) return;
+    setApplying(true);
+    setApplyMsg(null);
+    try{
+      const liveZones=calcZones(athlete);
+      const {flatOverrides,aralikOverrides}=gpxMapPhasesToOverrides(planInfo.baseRows,structure,phaseResult.rows,liveZones);
+      if(!Object.keys(flatOverrides).length&&!Object.keys(aralikOverrides).length){
+        setApplyMsg({type:'err',text:'Eşleşen bir reçete satırı bulunamadı — reçete alanlarını kontrol edin.'});
+        setApplying(false);
+        return;
+      }
+      const isNewWorkout=!planInfo.existingKosuActual;
+      const workoutId=planInfo.existingKosuActual?.id||uid();
+      const measureZones=calcZones(athleteAtDate(athlete,date));
+      const totalSec=Math.round(phaseResult.totalEndT||0);
+      const hms=secToHMS(totalSec);
+      const hrVals=points.filter(p=>p.hr!=null).map(p=>p.hr);
+      const ortNabiz=hrVals.length?Math.round(hrVals.reduce((a,b)=>a+b,0)/hrVals.length):null;
+      const maksNabiz=hrVals.length?Math.round(Math.max(...hrVals)):null;
+
+      if(isNewWorkout){
+        onSaveWorkout({
+          ...EMPTY_W,id:workoutId,athleteId:athlete.id,date,
+          spor:'kosu',tur:planInfo.displayTip||'',
+          mesafe:totalDistKm?totalDistKm.toFixed(2):'',
+          sure_sa:String(hms.h),sure_dk:String(hms.m),sure_sn:String(hms.s),
+          ort_nabiz:ortNabiz?String(ortNabiz):'',maks_nabiz:maksNabiz?String(maksNabiz):'',
+          notlar:'GPX/TCX analiziyle eklendi',savedAt:new Date().toISOString()
+        });
+        // KÖK NEDEN NOTU: yeni antrenman kaydı onSaveWorkout (App seviyesi) üzerinden
+        // persistFreshFormSnap'i TETİKLER — bu fonksiyon plan_snapshots/{ath}/{weekKey}
+        // yolunu (localSnap bayatsa) rowOverrides DAHİL tüm üst-seviye alanlarıyla geri
+        // yazabilir. rowOverrides yazımızı bu işlemin makul sürede tamamlanmasından
+        // SONRAYA erteliyoruz ki "son yazan kazanır" kuralıyla veri kaybolmasın.
+        await new Promise(r=>setTimeout(r,1100));
+      }
+
+      const {__zoneDist,__gapData}=await gpxPersistToRecete({
+        athleteId:athlete.id,dateStr:date,weekKey:planInfo.weekKey,
+        baseRows:planInfo.baseRows,measureZones,
+        flatOverridesNew:flatOverrides,aralikOverridesNew:aralikOverrides,
+        displayTip:planInfo.displayTip
+      });
+
+      if(onUpdateWorkout&&workoutId){
+        const patch={};
+        if(__zoneDist) patch._rowZoneDist=__zoneDist;
+        if(__gapData) patch._rowGapData=__gapData;
+        if(updateAggregate&&!isNewWorkout){
+          patch.mesafe=totalDistKm?totalDistKm.toFixed(2):planInfo.existingKosuActual.mesafe;
+          patch.sure_sa=String(hms.h);patch.sure_dk=String(hms.m);patch.sure_sn=String(hms.s);
+          if(ortNabiz) patch.ort_nabiz=String(ortNabiz);
+          if(maksNabiz) patch.maks_nabiz=String(maksNabiz);
+        }
+        if(Object.keys(patch).length) onUpdateWorkout(workoutId,patch);
+      }
+
+      setApplyMsg({type:'ok',text:isNewWorkout
+        ?'Antrenman kaydı oluşturuldu ve reçeteye eklendi. Rozetler ve skor için Koşu İzlerim / Plan sekmesine bakabilirsin.'
+        :'Reçeteye eklendi. Rozetler ve skor için Plan sekmesine bakabilirsin.'});
+
+      // EK GÜVENLİK (arka planda, bekletmeden): yeni antrenman kaydı durumunda
+      // persistFreshFormSnap'in gecikmeli tamamlanma ihtimaline karşı aynı
+      // rowOverrides yazımını birkaç saniye sonra SESSİZCE tekrarla — aynı veriyi
+      // tekrar yazmak zararsızdır (idempotent), ama olası bir geç çakışmayı onarır.
+      if(isNewWorkout){
+        setTimeout(()=>{
+          gpxPersistToRecete({
+            athleteId:athlete.id,dateStr:date,weekKey:planInfo.weekKey,
+            baseRows:planInfo.baseRows,measureZones,
+            flatOverridesNew:flatOverrides,aralikOverridesNew:aralikOverrides,
+            displayTip:planInfo.displayTip
+          }).catch(e=>console.warn('GPX Analiz — arka plan onarım yazımı başarısız:',e));
+        },3000);
+      }
+    }catch(e){
+      console.error(e);
+      setApplyMsg({type:'err',text:'Kaydedilirken hata oluştu: '+e.message});
+    }finally{
+      setApplying(false);
+    }
+  };
+
+  if(!athlete) return null;
+
+  const unitLabel=(base)=>{
+    if(base==='minSec') return unit==='time'?'dk':'m';
+    return unit==='time'?'sn':'m';
+  };
+
+  return React.createElement('div',{className:'modal-bg',onClick:e=>{if(e.target.className==='modal-bg')onClose();}},
+    React.createElement('div',{className:'modal',style:{maxWidth:720,maxHeight:'92vh',overflowY:'auto'}},
+      React.createElement('div',{className:'modal-title'},
+        React.createElement('span',null,'📈 GPX Analiz — '+((athlete.ad||'')+' '+(athlete.soyad||''))),
+        React.createElement('button',{className:'modal-close',onClick:onClose},'×')
+      ),
+      React.createElement('div',{className:'form-group',style:{marginBottom:12,maxWidth:220}},
+        React.createElement('label',null,'Antrenman Tarihi'),
+        React.createElement('input',{type:'date',value:date,onChange:e=>setDate(e.target.value)})
+      ),
+      loadingPlan&&React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',marginBottom:10}},'Reçete kontrol ediliyor…'),
+      !loadingPlan&&hint&&React.createElement('div',{style:{fontSize:12,color:'var(--warn)',background:'var(--warn-bg)',padding:'8px 10px',borderRadius:'var(--radius)',marginBottom:12}},'⚠ '+hint),
+      !loadingPlan&&!hint&&planInfo?.baseRows?.length>0&&React.createElement('div',{style:{fontSize:12,color:'var(--success)',marginBottom:12}},'✓ Reçete bulundu: '+(planInfo.dayLike?.baslik||planInfo.displayTip||'')+' — alanlar otomatik dolduruldu, gerekirse düzenle.'),
+
+      React.createElement('div',{className:'card'},
+        React.createElement('div',{className:'card-title'},'1 — Antrenman Dosyası'),
+        React.createElement('div',{
+          onClick:()=>fileInputRef.current&&fileInputRef.current.click(),
+          onDragOver:e=>{e.preventDefault();setDragActive(true);},
+          onDragLeave:()=>setDragActive(false),
+          onDrop:e=>{e.preventDefault();setDragActive(false);if(e.dataTransfer.files.length)handleFile(e.dataTransfer.files[0]);},
+          style:{border:'1.5px dashed '+(dragActive?'var(--info)':'var(--border)'),borderRadius:'var(--radius)',padding:'22px 14px',textAlign:'center',cursor:'pointer',background:dragActive?'var(--info-bg)':'transparent',fontSize:13,color:'var(--text-secondary)'}
+        },
+          React.createElement('div',null,'📁 Dosyayı buraya bırak ya da tıklayıp seç'),
+          React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:4}},'.gpx veya .tcx'),
+          React.createElement('input',{type:'file',accept:'.gpx,.tcx,.xml',ref:fileInputRef,style:{display:'none'},onChange:e=>{if(e.target.files.length)handleFile(e.target.files[0]);}})
+        ),
+        fileName&&React.createElement('div',{style:{marginTop:8,fontSize:12,fontFamily:'monospace'}},fileName),
+        status&&React.createElement('div',{style:{marginTop:6,fontSize:12,color:status.type==='err'?'var(--danger)':status.type==='ok'?'var(--success)':'var(--text-secondary)'}},status.msg)
+      ),
+
+      React.createElement('div',{className:'card'},
+        React.createElement('div',{className:'card-title'},'2 — Antrenman Reçetesi'),
+        React.createElement('div',{style:{display:'flex',gap:6,marginBottom:10}},
+          ['interval','simple'].map(m=>React.createElement('button',{
+            key:m,type:'button',onClick:()=>setMode(m),
+            style:{flex:1,padding:'7px 8px',fontSize:11,borderRadius:'var(--radius)',border:'1px solid '+(mode===m?'var(--info)':'var(--border)'),background:mode===m?'var(--info-bg)':'transparent',color:'var(--text-primary)',cursor:'pointer',fontWeight:mode===m?600:400}
+          },m==='interval'?'Tekrarlı (interval)':'Basit — Isınma+Ana Bölüm+Soğuma'))
+        ),
+        React.createElement('div',{style:{display:'flex',gap:6,marginBottom:12}},
+          ['time','distance'].map(u=>React.createElement('button',{
+            key:u,type:'button',onClick:()=>{setUnit(u);applyUnitDefaults(u);},
+            style:{flex:1,padding:'7px 8px',fontSize:11,borderRadius:'var(--radius)',border:'1px solid '+(unit===u?'var(--info)':'var(--border)'),background:unit===u?'var(--info-bg)':'transparent',color:'var(--text-primary)',cursor:'pointer',fontWeight:unit===u?600:400}
+          },u==='time'?'Süre bazlı':'Mesafe bazlı (m)'))
+        ),
+        React.createElement('div',{className:'form-grid'},
+          React.createElement('div',{className:'form-group'},
+            React.createElement('label',null,'Isınma ('+unitLabel('minSec')+')'),
+            React.createElement('input',{type:'number',value:warmup,min:0,step:unit==='time'?0.5:50,onChange:e=>setWarmup(e.target.value)})
+          ),
+          mode==='interval'?React.createElement(React.Fragment,null,
+            React.createElement('div',{className:'form-group'},React.createElement('label',null,'Tekrar sayısı'),React.createElement('input',{type:'number',value:reps,min:1,step:1,onChange:e=>setReps(e.target.value)})),
+            React.createElement('div',{className:'form-group'},React.createElement('label',null,'Koşu ('+unitLabel('secM')+')'),React.createElement('input',{type:'number',value:work,min:1,step:unit==='time'?5:50,onChange:e=>setWork(e.target.value)})),
+            React.createElement('div',{className:'form-group'},React.createElement('label',null,'Yürüyüş ('+unitLabel('secM')+')'),React.createElement('input',{type:'number',value:rest,min:0,step:unit==='time'?5:50,onChange:e=>setRest(e.target.value)}))
+          ):React.createElement('div',{className:'form-group'},React.createElement('label',null,'Ana Bölüm ('+unitLabel('minSec')+')'),React.createElement('input',{type:'number',value:mainMin,min:1,step:1,onChange:e=>setMainMin(e.target.value)})),
+          React.createElement('div',{className:'form-group'},
+            React.createElement('label',null,'Soğuma ('+unitLabel('minSec')+') — boş: dosya sonuna kadar'),
+            React.createElement('input',{type:'number',value:cooldown,min:0,step:unit==='time'?0.5:50,placeholder:'dosya sonu',onChange:e=>setCooldown(e.target.value)})
+          ),
+          React.createElement('div',{className:'form-group'},
+            React.createElement('label',null,"Bilinen toplam mesafe (km) — opsiyonel"),
+            React.createElement('input',{type:'number',value:knownDist,step:0.001,placeholder:'örn. 3.53',onChange:e=>setKnownDist(e.target.value)})
+          )
+        ),
+        React.createElement('button',{className:'btn btn-primary',style:{width:'100%',marginTop:14},disabled:!points,onClick:runAnalysis},'Analiz Et')
+      ),
+
+      phaseResult&&React.createElement('div',{className:'card'},
+        React.createElement('div',{className:'card-title'},'Sonuç'),
+        distWarn&&React.createElement('div',{style:{fontSize:12,color:'var(--warn)',background:'var(--warn-bg)',padding:'8px 10px',borderRadius:'var(--radius)',marginBottom:10}},distWarn),
+        React.createElement('div',{style:{display:'flex',flexWrap:'wrap',gap:16,marginBottom:10,fontSize:12}},
+          React.createElement('div',null,'Toplam mesafe: ',React.createElement('b',null,totalDistKm.toFixed(2)+' km')),
+          React.createElement('div',null,'Toplam süre: ',React.createElement('b',null,gpxFmtMin(phaseResult.totalEndT)))
+        ),
+        React.createElement('div',{style:{overflowX:'auto'}},
+          React.createElement('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:11}},
+            React.createElement('thead',null,React.createElement('tr',null,
+              ['Faz','Süre','Mesafe','Pace','Ort.','Maks.','Min.'].map((h,i)=>React.createElement('th',{key:i,style:{textAlign:i===0?'left':'right',padding:'4px 6px',borderBottom:'1px solid var(--border)',color:'var(--text-tertiary)',fontWeight:600}},h))
+            )),
+            React.createElement('tbody',null,
+              phaseResult.rows.map((r,i)=>React.createElement('tr',{key:i},
+                React.createElement('td',{style:{padding:'4px 6px',borderBottom:'1px solid var(--border)'}},r.name),
+                React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},gpxFmtMin(r.durSec)),
+                React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},(r.distKm*1000).toFixed(0)+'m'),
+                React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},gpxFmtPace(r.pace)),
+                React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},r.hr.avg!=null?Math.round(r.hr.avg):'—'),
+                React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},r.hr.max!=null?Math.round(r.hr.max):'—'),
+                React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},r.hr.min!=null?Math.round(r.hr.min):'—')
+              ))
+            )
+          )
+        ),
+        React.createElement('canvas',{ref:chartRef,style:{width:'100%',height:180,display:'block',marginTop:10}}),
+
+        React.createElement('div',{style:{marginTop:16,paddingTop:14,borderTop:'1px solid var(--border)'}},
+          !canApply&&React.createElement('div',{style:{fontSize:12,color:'var(--warn)',marginBottom:8}},'Bu gün için reçete satırları eşleştirilemedi — reçeteye otomatik ekleme yapılamaz.'),
+          canApply&&planInfo?.existingKosuActual&&React.createElement('label',{style:{display:'flex',alignItems:'center',gap:6,fontSize:12,marginBottom:10,cursor:'pointer'}},
+            React.createElement('input',{type:'checkbox',checked:updateAggregate,onChange:e=>setUpdateAggregate(e.target.checked)}),
+            'Ekle kaydındaki toplam mesafe/süre/nabız değerlerini de GPX analiziyle güncelle'
+          ),
+          canApply&&!planInfo?.existingKosuActual&&React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:10}},'Bu tarih için antrenman kaydı yok — "Reçeteye Ekle" ile otomatik oluşturulacak.'),
+          React.createElement('button',{className:'btn btn-primary',style:{width:'100%'},disabled:!canApply||applying,onClick:handleApply},applying?'Kaydediliyor…':'Reçeteye Ekle'),
+          applyMsg&&React.createElement('div',{style:{marginTop:8,fontSize:12,color:applyMsg.type==='err'?'var(--danger)':'var(--success)'}},applyMsg.text)
+        )
+      )
+    )
+  );
+}
+
+function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,workouts,races,testPlanlar,onUpdateWorkout}){
   const [form,setForm]=useState({...EMPTY_W});
   const [saved,setSaved]=useState(false);
   const [lastRec,setLastRec]=useState(null);
   const [planOneri,setPlanOneri]=useState(null);
   const [selectedRaceForYaris,setSelectedRaceForYaris]=useState(null);
   const [showNabizOfsetInfo,setShowNabizOfsetInfo]=useState(false);
+  const [showGpxModal,setShowGpxModal]=useState(false);
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
   const durSec=toSec(form.sure_sa,form.sure_dk,form.sure_sn);
   const selectedAth=athletes.find(a=>a.id===selId)||null;
@@ -25786,8 +26583,19 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,wor
           // pasif sporcular BİLEREK filtrelenmiyor — kendi kendine kayıt olan (henüz
           // koç tarafından aktif edilmemiş) sporculara da antrenman girilebilmesi için.
           [...athletes].sort((a,b)=>{const cA=(allHistory&&allHistory[a.id]&&allHistory[a.id].length)?allHistory[a.id][allHistory[a.id].length-1].ctl||0:0;const cB=(allHistory&&allHistory[b.id]&&allHistory[b.id].length)?allHistory[b.id][allHistory[b.id].length-1].ctl||0:0;return cB-cA;}).map(a=>{const h=allHistory&&allHistory[a.id]||[];const ctl=h.length&&h[h.length-1].ctl!=null?' (CTL '+h[h.length-1].ctl.toFixed(1)+')':'';return React.createElement('option',{key:a.id,value:a.id},(a.ad||'')+' '+(a.soyad||'')+ctl+(a.pasif?' — Aktif Değil':''));})
-        )
+        ),
+        selId&&React.createElement('button',{
+          type:'button',className:'btn btn-sm',
+          style:{marginLeft:'auto',background:'var(--info-bg)',color:'var(--info)',borderColor:'var(--info)'},
+          onClick:()=>setShowGpxModal(true)
+        },'📈 GPX Analiz')
       ),
+
+      showGpxModal&&selId&&React.createElement(GpxAnalizModal,{
+        athlete:selectedAth,initialDate:form.date,workouts,allHistory,races,testPlanlar,
+        onUpdateWorkout,onSaveWorkout:onSave,
+        onClose:()=>setShowGpxModal(false)
+      }),
 
       React.createElement('div',{className:'card-title',style:{display:'flex',alignItems:'center',gap:8}},
         'Antrenman Türü',
@@ -28147,7 +28955,7 @@ function App(){
           persistFreshFormSnap(ath,athWksNew,races,baseSnapForForm)
             .then(merged=>{if(merged&&selId===ath.id)setPlanSnapApp(merged);});
         }
-      },athlete,athletes,selId,onSelChange:setSelId,allHistory,workouts,races,testPlanlar}),
+      },athlete,athletes,selId,onSelChange:setSelId,allHistory,workouts,races,testPlanlar,onUpdateWorkout:handleUpdateWorkout}),
       tab==='antrenmanlar'&&React.createElement(AntrenmanlarTab,{athlete,workouts}),
       tab==='gecmis'&&React.createElement(Gecmis,{workouts,athletes,races,onDelete:id=>setWorkouts(p=>p.filter(x=>x.id!==id)),onBulkDelete:ids=>setWorkouts(p=>p.filter(x=>!ids.includes(x.id))),onUpdate:handleUpdateWorkout}),
       tab==='analiz'&&React.createElement(AntrenmanAnalizTab,{workouts,athletes,races,raceResults,ctlCalibration,onUpdateCtlAnchors:handleUpdateCtlAnchors}),
