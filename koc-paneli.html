@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.30-1658 --><!DOCTYPE html>
+<!-- Version: v2026.08.30-2107 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.30-1658';
+const APP_VERSION='v2026.08.30-2107';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -2031,84 +2031,97 @@ async function fetchWeeklyPaceComplianceScores(athlete,weeks){
 // güçlü/yoğun sinyaller (Tehlikeli ağırlıklı) daha büyük adım, zayıf/dağınık sinyaller (Biraz
 // ağırlıklı) daha küçük adım üretir. Mekanizma 1'in R²'siyle aynı [0,1] ölçeğine eşleniyor.
 const FAST_TRIGGER_SCORE=8; // tek günlük hızlı tetik eşiği (≥1 gün VE ≥8 puan)
+// 2026.08.30 — Sınır Kalibrasyonu çerçevesi ile top-level'a taşındı (önceden
+// analyzeRecipeFeedbackSignals içinde closure'dı). Artık HEM Çıpa (vLT) HEM Sınır
+// kalibrasyonu bu AYNI iki fonksiyonu (toVltDir + dayAggregateSignal) kullanıyor —
+// tek kaynak, iki farklı gruplama (tümü-birleşik vs. zon-bazlı) ve eşik seçeneği.
+function toVltDir(paceDir,hrDir,paceOk,zi=0){
+  // A) Çapraz doğrulama — iki bağımsız kanıt (tüm zonlar geçerli)
+  if(paceDir&&hrDir){
+    if(paceDir==='fast'&&hrDir!=='high') return 'up';
+    if(paceDir==='slow'&&hrDir!=='low')  return 'down';
+    // A2) Z1-Z2 özel çakışma kuralı: kolay zonda fast+high → DOWN, fast+low → UP
+    // Z3+ zaten Kanal B ile kapsanıyor; burada yalnızca Z1-Z2 (zi<2) ele alınır.
+    if(zi<2){
+      if(paceDir==='fast'&&hrDir==='high') return 'down'; // kolay zonda hızlı + nabız yüksek → eşik düşük
+      if(paceDir==='fast'&&hrDir==='low')  return 'up';   // kolay zonda hızlı + nabız düşük → eşik yüksek
+    }
+    return null; // diğer çakışmalar (slow+high Z3+, slow+low Z3+ vb.) belirsiz → filtrele
+  }
+  // B) Pace hedefte, nabız sapıyor — YALNIZCA Z3+ (zi≥2)
+  // Z1–Z2 kolay koşu nabzı vLT için tek başına güvenilmez: aerobik taban ≠ eşik kapasitesi.
+  // Aerobik bazı iyi ama eşiği zayıf sporcu Z2'yi düşük nabızla rahat koşabilir
+  // → yanlış 'up' sinyali üretir. Z3 (Tempo) ve üstü zone'lar bu kanalı besleyebilir.
+  // NOT (Sınır Kalibrasyonu kapsam kararı): bu Z3+ kısıtı Z1/Z2 SINIRLARI için de
+  // aynen korunuyor — Z1/Z2'nin kendi payına düşen Kanal B sinyali şu an üretilmiyor.
+  // Bilinçli bir temkinlilik tercihi: aynı fizyolojik gerekçe (kolay-bölge nabzının
+  // tek başına güvenilmezliği) sınır kalibrasyonu için de geçerli sayıldı. İleride
+  // Z1/Z2'ye özel ayrı bir kanal istenirse burası gözden geçirilebilir.
+  if(zi>=2&&paceOk&&hrDir&&!paceDir){
+    if(hrDir==='high') return 'down'; // doğru pace'e gereğinden fazla efor → eşik sanılandan yavaş
+    if(hrDir==='low')  return 'up';   // doğru pace'i kolayca sürdürüyor → eşik sanılandan hızlı
+  }
+  return null;
+}
+
+// Gün bazlı AĞIRLIKLI puan birikimi — ORTAK motor (Çıpa + Sınır).
+// Tetikleme iki yoldan biri sağlanırsa gerçekleşir:
+//   • Normal yol: ≥opts.minDays farklı gün VE ≥opts.scoreThreshold toplam puan
+//   • Hızlı yol:  ≥1 gün                  VE ≥opts.fastMinScore toplam puan
+//     (güçlü tek günlük kanıt — örn. 4 kritik nabız sapması = 16 puan)
+// combined: [{date, dir:'up'|'down', hrWeight}]
+function dayAggregateSignal(combined, opts){
+  const minDays=opts?.minDays??2;
+  const scoreThreshold=opts?.scoreThreshold??BPM_SIGNAL_SCORE_THRESHOLD;
+  const fastMinScore=opts?.fastMinScore??FAST_TRIGGER_SCORE;
+  if(combined.length===0) return{action:null,dominantDayCount:0,totalDays:0,totalSignals:0,totalScore:0,avgScore:0,confidence:0,noCombined:true};
+  const byDate={};
+  combined.forEach(s=>{
+    if(!byDate[s.date])byDate[s.date]=[];
+    byDate[s.date].push({dir:s.dir,weight:s.hrWeight||1});
+  });
+  const dayDirs=Object.entries(byDate).map(([date,items])=>{
+    const sums={};
+    items.forEach(it=>{sums[it.dir]=(sums[it.dir]||0)+it.weight;});
+    const sorted=Object.entries(sums).sort((a,b)=>b[1]-a[1]);
+    return{date,dir:sorted[0][0],dayScore:sorted[0][1],rowCount:items.length};
+  });
+  const dirScores={};
+  dayDirs.forEach(d=>{dirScores[d.dir]=(dirScores[d.dir]||0)+d.dayScore;});
+  const dirDayCounts={};
+  dayDirs.forEach(d=>{dirDayCounts[d.dir]=(dirDayCounts[d.dir]||0)+1;});
+  const sortedScores=Object.entries(dirScores).sort((a,b)=>b[1]-a[1]);
+  const dominant=sortedScores[0];
+  const dominantDir=dominant?dominant[0]:null;
+  const dominantScore=dominant?dominant[1]:0;
+  const dominantDayCount=dominantDir?(dirDayCounts[dominantDir]||0):0;
+  // Ortalama gün puanı: BPM_SIGNAL_WEIGHT aralığı [1,4] → güvene [0,1] doğrusal eşleme
+  const avgScore=dominantDayCount>0?dominantScore/dominantDayCount:0;
+  const confidence=Math.max(0,Math.min(1,(avgScore-1)/3));
+  // Tetikleme: normal yol VEYA hızlı yol
+  const normalTrigger=dominantDayCount>=minDays&&dominantScore>=scoreThreshold;
+  const fastTrigger  =dominantDayCount>=1&&dominantScore>=fastMinScore;
+  return{
+    action:(dominantDir&&(normalTrigger||fastTrigger))?dominantDir:null,
+    pendingDir:dominantDir, // eylem eşiği henüz karşılanmasa da baskın yönü gösterir (örn. "1/2 gün" iken)
+    dominantDayCount,
+    totalScore:dominantScore,
+    avgScore:round2(avgScore),
+    confidence:round2(confidence),
+    totalDays:dayDirs.length,
+    totalSignals:combined.length,
+    noCombined:false,
+  };
+}
+
 function analyzeRecipeFeedbackSignals(signals){
   if(!signals||signals.length===0) return null;
-
-  const toVltDir=(paceDir,hrDir,paceOk,zi=0)=>{
-    // A) Çapraz doğrulama — iki bağımsız kanıt (tüm zonlar geçerli)
-    if(paceDir&&hrDir){
-      if(paceDir==='fast'&&hrDir!=='high') return 'up';
-      if(paceDir==='slow'&&hrDir!=='low')  return 'down';
-      // A2) Z1-Z2 özel çakışma kuralı: kolay zonda fast+high → DOWN, fast+low → UP
-      // Z3+ zaten Kanal B ile kapsanıyor; burada yalnızca Z1-Z2 (zi<2) ele alınır.
-      if(zi<2){
-        if(paceDir==='fast'&&hrDir==='high') return 'down'; // kolay zonda hızlı + nabız yüksek → eşik düşük
-        if(paceDir==='fast'&&hrDir==='low')  return 'up';   // kolay zonda hızlı + nabız düşük → eşik yüksek
-      }
-      return null; // diğer çakışmalar (slow+high Z3+, slow+low Z3+ vb.) belirsiz → filtrele
-    }
-    // B) Pace hedefte, nabız sapıyor — YALNIZCA Z3+ (zi≥2)
-    // Z1–Z2 kolay koşu nabzı vLT için tek başına güvenilmez: aerobik taban ≠ eşik kapasitesi.
-    // Aerobik bazı iyi ama eşiği zayıf sporcu Z2'yi düşük nabızla rahat koşabilir
-    // → yanlış 'up' sinyali üretir. Z3 (Tempo) ve üstü zone'lar bu kanalı besleyebilir.
-    if(zi>=2&&paceOk&&hrDir&&!paceDir){
-      if(hrDir==='high') return 'down'; // doğru pace'e gereğinden fazla efor → eşik sanılandan yavaş
-      if(hrDir==='low')  return 'up';   // doğru pace'i kolayca sürdürüyor → eşik sanılandan hızlı
-    }
-    return null;
-  };
-
-  // Gün bazlı AĞIRLIKLI puan birikimi
-  // Tetikleme iki yoldan biri sağlanırsa gerçekleşir:
-  //   • Normal yol: ≥2 farklı gün VE ≥BPM_SIGNAL_SCORE_THRESHOLD toplam puan
-  //   • Hızlı yol:  ≥1 gün    VE ≥FAST_TRIGGER_SCORE toplam puan
-  //     (güçlü tek günlük kanıt — örn. 4 kritik nabız sapması = 16 puan)
-  const analyzeByDay=(combined)=>{
-    if(combined.length===0) return{action:null,dominantDayCount:0,totalDays:0,totalSignals:0,totalScore:0,avgScore:0,confidence:0,noCombined:true};
-    const byDate={};
-    combined.forEach(s=>{
-      if(!byDate[s.date])byDate[s.date]=[];
-      byDate[s.date].push({dir:s.dir,weight:s.hrWeight||1});
-    });
-    const dayDirs=Object.entries(byDate).map(([date,items])=>{
-      const sums={};
-      items.forEach(it=>{sums[it.dir]=(sums[it.dir]||0)+it.weight;});
-      const sorted=Object.entries(sums).sort((a,b)=>b[1]-a[1]);
-      return{date,dir:sorted[0][0],dayScore:sorted[0][1],rowCount:items.length};
-    });
-    const dirScores={};
-    dayDirs.forEach(d=>{dirScores[d.dir]=(dirScores[d.dir]||0)+d.dayScore;});
-    const dirDayCounts={};
-    dayDirs.forEach(d=>{dirDayCounts[d.dir]=(dirDayCounts[d.dir]||0)+1;});
-    const sortedScores=Object.entries(dirScores).sort((a,b)=>b[1]-a[1]);
-    const dominant=sortedScores[0];
-    const dominantDir=dominant?dominant[0]:null;
-    const dominantScore=dominant?dominant[1]:0;
-    const dominantDayCount=dominantDir?(dirDayCounts[dominantDir]||0):0;
-    // Ortalama gün puanı: BPM_SIGNAL_WEIGHT aralığı [1,4] → güvene [0,1] doğrusal eşleme
-    const avgScore=dominantDayCount>0?dominantScore/dominantDayCount:0;
-    const confidence=Math.max(0,Math.min(1,(avgScore-1)/3));
-    // Tetikleme: normal yol VEYA hızlı yol
-    const normalTrigger=dominantDayCount>=2&&dominantScore>=BPM_SIGNAL_SCORE_THRESHOLD;
-    const fastTrigger  =dominantDayCount>=1&&dominantScore>=FAST_TRIGGER_SCORE;
-    return{
-      action:(dominantDir&&(normalTrigger||fastTrigger))?dominantDir:null,
-      pendingDir:dominantDir, // eylem eşiği henüz karşılanmasa da baskın yönü gösterir (örn. "1/2 gün" iken)
-      dominantDayCount,
-      totalScore:dominantScore,
-      avgScore:round2(avgScore),
-      confidence:round2(confidence),
-      totalDays:dayDirs.length,
-      totalSignals:combined.length,
-      noCombined:false,
-    };
-  };
 
   const paceSigs=signals.filter(s=>s.paceDir).length;
   const hrSigs  =signals.filter(s=>s.hrDir).length;
   const conflictSigs=signals.filter(s=>s.paceDir&&s.hrDir&&!toVltDir(s.paceDir,s.hrDir,false,s.zi??0)).length;
 
-  const vltResult =analyzeByDay(signals.map(s=>({...s,dir:toVltDir(s.paceDir,s.hrDir,s.paceOk,s.zi??0)})).filter(s=>s.dir));
+  const vltResult =dayAggregateSignal(signals.map(s=>({...s,dir:toVltDir(s.paceDir,s.hrDir,s.paceOk,s.zi??0)})).filter(s=>s.dir),{minDays:2});
 
   return{
     vltAction :vltResult.action  ==='up'?'up' :vltResult.action  ==='down'?'down':null,
@@ -2120,6 +2133,107 @@ function analyzeRecipeFeedbackSignals(signals){
     totalDays:vltResult.totalDays,
     noCombined:vltResult.noCombined,
   };
+}
+
+// ── Sınır Kalibrasyonu — Sinyal Analizi (2026.08.30) ──────────────────────────
+// Her sınır PAYLAŞILAN bir değerdir: altındaki ve üstündeki zonun sinyali BİRLİKTE
+// oy verir. Bir zon "yukarı" (sporcu için kolay/hızlı — eşik sanılandan yüksek)
+// sinyali veriyorsa, o zonun hem alt hem üst sınırının yukarı kaymasını destekler;
+// "aşağı" sinyali tam tersini destekler. Komşu iki zon ANLAŞIRSA sınır güvenle
+// kayar; ANLAŞMAZLARSA (ör. Z2 "yukarı", Z3 "aşağı" diyor) sinyaller doğal olarak
+// birbirini götürür — dayAggregateSignal zaten net bir baskın yön bulamayınca
+// tetiklenmiyor, ayrıca bir "çakışma" filtresi eklemeye gerek yok.
+// Pencere/eşik Çıpa'dan (Reçete Geri Bildirim Kalibrasyonu) KASITLI olarak daha
+// sıkı: bölge başına veri yoğunluğu çok daha düşük (özellikle Z5 grubunda), bu
+// yüzden en az HR_BOUNDARY_MIN_DAYS (3) farklı gün şartı aranır.
+function analyzeBoundarySignals(signals){
+  if(!signals||signals.length===0) return null;
+  const withDir=signals.map(s=>({...s,_dir:toVltDir(s.paceDir,s.hrDir,s.paceOk,s.zi??0)})).filter(s=>s._dir);
+  const result={};
+  HR_BOUNDARY_KEYS.forEach(k=>{
+    const [loZi,hiZi]=HR_BOUNDARY_ZONE_PAIRS[k];
+    const combined=withDir.filter(s=>(s.zi??0)===loZi||(s.zi??0)===hiZi)
+      .map(s=>({date:s.date,dir:s._dir,hrWeight:s.hrWeight}));
+    result[k]=dayAggregateSignal(combined,{minDays:HR_BOUNDARY_MIN_DAYS});
+  });
+  return result;
+}
+
+// ── Sınır Kalibrasyonu — Kademeli Güncelleme (2026.08.30) ─────────────────────
+// gradualVltUpdate ile AYNI ruh (güvene orantılı adım, sabit tavan), ama birim
+// farklı: sn/km yerine YÜZDE PUANI. Tavan (HR_BOUNDARY_STEP_MAX_PP=2) vLT'nin
+// 8sn/km tavanına karşılık gelir; sınır kalibrasyonu daha yapısal/kalıcı bir
+// değişiklik olduğundan kasıtlı olarak çok daha küçük tutuldu. Kümülatif tavan
+// (±HR_BOUNDARY_CUM_CAP_PP) bu fonksiyonun bilmediği, çağıran tarafın (bkz.
+// applyBoundaryCalibration) sorumluluğundadır — gradualVltUpdate'in vLT geçmişini
+// bilmemesiyle aynı ayrım.
+function gradualBoundaryUpdate(currentDeltaPP, direction, confidence){
+  const cur=parseSayi(currentDeltaPP)||0;
+  const conf=confidence!=null&&confidence>0?Math.min(1,Math.max(0,confidence)):0.5;
+  const MIN_STEP_PP=0.3; // anlamsız mikro-adımları engelleyen taban
+  const stepMag=MIN_STEP_PP+conf*(HR_BOUNDARY_STEP_MAX_PP-MIN_STEP_PP);
+  const step=direction==='up'?stepMag:-stepMag;
+  return {
+    newDeltaPP:round2(cur+step),
+    stepPP:round2(step),
+    confidencePct:Math.round(conf*100),
+  };
+}
+
+// ── Sınır Kalibrasyonu — Toplu Uygulama (2026.08.30) ──────────────────────────
+// boundaryAnalysis: analyzeBoundarySignals() çıktısı — {z1z2:{action,confidence,...},...}
+// Sadece action!=null olan sınırlar için yeni delta hesaplanır; diğerleri MEVCUT
+// değerinde kalır (o sınır için yeterli/net veri yok — dokunulmaz). Kümülatif tavan
+// VE min-gap (sıra bozulmazlığı) koruması, TÜM sınırlar bir arada değerlendirilerek
+// en sonda uygulanır.
+function applyBoundaryCalibration(athlete, boundaryAnalysis){
+  if(!boundaryAnalysis) return null;
+  const newDeltas={};
+  const changeLog=[];
+  HR_BOUNDARY_KEYS.forEach(k=>{
+    const cur=parseSayi(athlete[HR_BOUNDARY_FIELD[k]])||0;
+    const a=boundaryAnalysis[k];
+    if(!a||!a.action){ newDeltas[k]=cur; return; }
+    const grad=gradualBoundaryUpdate(cur,a.action,a.confidence);
+    let capped=grad.newDeltaPP;
+    if(capped>HR_BOUNDARY_CUM_CAP_PP) capped=HR_BOUNDARY_CUM_CAP_PP;
+    if(capped<-HR_BOUNDARY_CUM_CAP_PP) capped=-HR_BOUNDARY_CUM_CAP_PP;
+    newDeltas[k]=capped;
+    if(round2(capped)!==round2(cur)) changeLog.push({key:k,from:cur,to:capped,dir:a.action,confidence:a.confidence,dayCount:a.dominantDayCount});
+  });
+  // Min-gap koruması: sıralama ASLA bozulamaz. Sınırları sırayla gez, her birini
+  // bir öncekinden en az HR_BOUNDARY_MIN_GAP_PP kadar uzak tut (gerekirse kırp).
+  let prevPct=HR_ZONES_LTHR[0].lo*100; // 65 — sabit dış sınır
+  HR_BOUNDARY_KEYS.forEach(k=>{
+    const basePct=HR_BOUNDARY_BASE_PCT[k]*100;
+    let effectivePct=basePct+newDeltas[k];
+    if(effectivePct<prevPct+HR_BOUNDARY_MIN_GAP_PP) effectivePct=prevPct+HR_BOUNDARY_MIN_GAP_PP;
+    newDeltas[k]=round2(effectivePct-basePct);
+    prevPct=effectivePct;
+  });
+  return {deltas:newDeltas, changeLog};
+}
+
+// ── Çıpa ↔ Sınır Kalibrasyonu Çapraz Farkındalık (2026.08.30 — Göksel'in "bir
+// mekanizmanın uygulanması diğerinin ideal uygulanma anını etkiler mi" sorusuna
+// yanıt) ──────────────────────────────────────────────────────────────────────
+// İki kural:
+//  1) ÖNCELİK: ikisi de AYNI ANDA uygulanabilir görünüyorsa Çıpa öncelikli — yanlış
+//     konumlanmış bir çıpa üzerine sınır kalibrasyonu yapmak anlamsızdır.
+//  2) PENCERE TEMİZLİĞİ: bir mekanizma uygulandıktan SONRA diğerinin taraması o
+//     tarihten ÖNCEKİ sinyalleri saymamalı — bu, ayrı bir badge değil, tarama
+//     fonksiyonlarındaki tarih-kırpma ile sağlanır (bkz. runFbScan/runBoundaryScan
+//     içindeki crossCutoffStr).
+// YUMUŞAK ETKİ: buton HER ZAMAN tıklanabilir kalır — 'yellow' yalnızca UI'da ikinci
+// bir onay adımı (fbConfirmPending/bcConfirmPending) tetikler, engelleme yapmaz.
+function crossCalibBadge({mechanism, ownActionReady, otherActionReadyNow}){
+  if(!ownActionReady) return {badge:null,reason:null};
+  if(mechanism==='anchor') return {badge:'green',reason:null};
+  // mechanism==='boundary'
+  if(otherActionReadyNow){
+    return {badge:'yellow',reason:'Çıpa (vLT) Kalibrasyonu da şu anda uygulanabilir görünüyor — önce onu uygulamak, sınırların doğru referans üzerinden hesaplanmasını sağlar.'};
+  }
+  return {badge:'green',reason:null};
 }
 
 // ── Reçete Geri Bildirim — Tanı Kırılımı ──────────────────────────────────────
@@ -2273,6 +2387,61 @@ const HR_ZONES_LTHR = [
   {id:'Z5c',label:'Z5c — Maksimal',     lo:1.06, hi:1.15},
 ];
 
+// ── Sınır Kalibrasyonu — Kişisel Bölge Sınırları (2026.08.30 — Göksel'in "her nabız
+// bölgesinin genişliği sporcuya özel olabilir mi?" talebi üzerine tasarlandı) ──────
+// HR_ZONES_LTHR şablonundaki 7 zon aslında 6 PAYLAŞILAN İÇ SINIR (Z1/Z2, Z2/Z3, Z3/Z4,
+// Z4/Z5a, Z5a/Z5b, Z5b/Z5c) + 2 SABİT DIŞ SINIR (Z1 alt=%65, Z5c üst=%115) demektir.
+// Kişiselleştirme yalnızca 6 iç sınırı hedefler — dış sınırlar herkes için sabit kalır
+// (fizyolojik olarak "toparlanmanın altı" ve "maksimalin üstü" evrensel kabul edilir).
+// Varsayılan (delta=0) durumda bu tablo HR_ZONES_LTHR ile birebir aynı sonucu üretir —
+// hiç kalibre edilmemiş sporcularda mevcut davranış hiç değişmez.
+const HR_BOUNDARY_KEYS=['z1z2','z2z3','z3z4','z4z5a','z5az5b','z5bz5c'];
+// Her sınırın HR_ZONES_LTHR dizisindeki komşu zon indeksleri [alttaki, üstteki]
+const HR_BOUNDARY_ZONE_PAIRS={z1z2:[0,1],z2z3:[1,2],z3z4:[2,3],z4z5a:[3,4],z5az5b:[4,5],z5bz5c:[5,6]};
+// Sporcu profilindeki alan adı — düz sayısal alanlar (obje DEĞİL): handleUpdateAthlete'in
+// PROFILE_FIELDS String-karşılaştırmalı değişiklik tespiti nesnelerde çalışmaz, bu yüzden
+// LTHR/MHR/RHR ile birebir aynı düz-alan deseni izlendi (bkz. dosya sonu PROFILE_FIELDS notu).
+const HR_BOUNDARY_FIELD={z1z2:'bd_z1z2',z2z3:'bd_z2z3',z3z4:'bd_z3z4',z4z5a:'bd_z4z5a',z5az5b:'bd_z5az5b',z5bz5c:'bd_z5bz5c'};
+// Sınır Kalibrasyonu kartındaki tabloda gösterilecek okunur etiketler
+const HR_BOUNDARY_LABEL={z1z2:'Z1 / Z2',z2z3:'Z2 / Z3',z3z4:'Z3 / Z4',z4z5a:'Z4 / Z5a',z5az5b:'Z5a / Z5b',z5bz5c:'Z5b / Z5c'};
+// Jenerik Friel tabanı (oran, HR_ZONES_LTHR'daki lo/hi ile birebir aynı kaynaktan)
+const HR_BOUNDARY_BASE_PCT={z1z2:0.85,z2z3:0.89,z3z4:0.94,z4z5a:1.00,z5az5b:1.03,z5bz5c:1.06};
+const HR_BOUNDARY_STEP_MAX_PP=2;    // tek kalibrasyon uygulamasında azami kayma (yüzde puanı)
+const HR_BOUNDARY_CUM_CAP_PP=6;     // jenerik şablondan azami TOPLAM (kümülatif) sapma
+const HR_BOUNDARY_MIN_GAP_PP=1.5;   // iki komşu sınır arası azami yakınlaşma — sıra bozulmasını YAPISAL olarak engeller
+const HR_BOUNDARY_MIN_DAYS=3;       // Çıpa'nın 2 gününden kasıtlı olarak daha sıkı (bkz. analyzeBoundarySignals)
+const HR_BOUNDARY_SCAN_WINDOW_DAYS=70; // ≈10 hafta — bölge başına yeterli veri yoğunluğu için Çıpa'nın 21 gününden çok daha geniş
+
+// Sporcunun kişisel sınır deltalarını (yüzde puanı → orana çevrilmiş) döndürür.
+// Delta girilmemiş sınırlar 0 kalır → jenerik şablonla birebir aynı davranış.
+function getHrBoundaryDeltas(ath){
+  const d={};
+  HR_BOUNDARY_KEYS.forEach(k=>{ d[k]=(parseSayi(ath?.[HR_BOUNDARY_FIELD[k]])||0)/100; });
+  return d;
+}
+
+// HR_ZONES_LTHR şablonunu sporcunun kişisel sınır deltalarıyla kişiselleştirir.
+// Min-gap koruması burada da (savunma amaçlı ikinci katman — asıl koruma kalibrasyon
+// UYGULAMA anında applyBoundaryCalibration'da yapılır) uygulanır: elle/harici bir
+// veri bozulması olsa bile zon sırası bu fonksiyondan ASLA ters çıkamaz.
+function personalizedHrZoneTable(ath){
+  const deltas=getHrBoundaryDeltas(ath);
+  const n=HR_ZONES_LTHR.length;
+  const boundaryVal={};
+  let prev=HR_ZONES_LTHR[0].lo; // %65 — sabit dış sınır
+  HR_BOUNDARY_KEYS.forEach(k=>{
+    let v=HR_BOUNDARY_BASE_PCT[k]+deltas[k];
+    if(v<prev+HR_BOUNDARY_MIN_GAP_PP/100) v=prev+HR_BOUNDARY_MIN_GAP_PP/100;
+    boundaryVal[k]=v;
+    prev=v;
+  });
+  return HR_ZONES_LTHR.map((z,i)=>({
+    ...z,
+    lo:i===0?z.lo:boundaryVal[HR_BOUNDARY_KEYS[i-1]],
+    hi:i===n-1?z.hi:boundaryVal[HR_BOUNDARY_KEYS[i]],
+  }));
+}
+
 const HR_ZONES_HRR = [
   {id:'Z1', label:'Z1 — Toparlanma',    lo:0.50, hi:0.60},
   {id:'Z2', label:'Z2 — Aerobik Taban', lo:0.60, hi:0.70},
@@ -2318,7 +2487,10 @@ function calcZones(ath){
   let hrZones = null;
   if(lthr > 0){
     // %LTHR yöntemi — yalnızca LTHR gerekir, MHR formülde kullanılmıyor
-    hrZones = HR_ZONES_LTHR.map(z=>({
+    // 2026.08.30 — Sınır Kalibrasyonu: jenerik HR_ZONES_LTHR yerine sporcuya özel
+    // personalizedHrZoneTable kullanılıyor. Delta girilmemişse (varsayılan/eski
+    // sporcu) çıktı HR_ZONES_LTHR ile birebir aynıdır — geriye dönük uyumluluk tam.
+    hrZones = personalizedHrZoneTable(ath).map(z=>({
       ...z,
       lo_bpm: Math.round(lthr * z.lo),
       hi_bpm: Math.round(lthr * z.hi),
@@ -4718,8 +4890,13 @@ function SporcuModal({onClose,onSave,initial,races}){
           // Bkz. aynı mantık: yeni vLT ayar çubuğu ve athlete kartındaki diğer
           // güncelleme yolları.
           const _vltChanged=String(f.vlt||'')!==String((initial?.vlt)||'');
+          // 2026.08.30 — Sınır Kalibrasyonu: LTHR manuel değiştiğinde de AYNI gerekçeyle
+          // boundaryLastCalib sıfırlanır — eski damga, yeni LTHR referansıyla alınan taze
+          // sinyalleri "zaten yakın zamanda kalibre edildi" sanıp gereksiz yere bekletmesin.
+          const _lthrChanged=String(f.lthr||'')!==String((initial?.lthr)||'');
           const _payload={...f,id:f.id||uid()};
           if(_vltChanged){_payload.fbLastCalib=null;}
+          if(_lthrChanged){_payload.boundaryLastCalib=null;}
           onSave(_payload);
         }},(initial?'Güncelle':'Sporcu Ekle')),
         React.createElement('button',{className:'btn',onClick:onClose},'İptal')
@@ -7383,6 +7560,11 @@ function athleteAtDate(ath,dateStr){
   if(!hist.length) return ath;
   const snap=hist.filter(s=>s.date<=dateStr).slice(-1)[0];
   if(!snap) return ath; // tarihe öncesinde kayıt yok → güncel profil
+  // NOT (2026.08.30 — Sınır Kalibrasyonu): 2026.08.30'dan ÖNCE oluşmuş snapshot'larda
+  // bd_* anahtarları hiç yoktur (o zaman özellik yoktu) — bu durumda spread onları
+  // ATLAR (undefined ile ezmez), yani dönen nesne CANLI/güncel bd_* değerlerini taşır.
+  // Bu, LTHR/MHR/RHR'de "ilk snapshot'tan önceki antrenmanlar" için zaten var olan ve
+  // Göksel'e daha önce açıklanan aynı bilinen sınırlamadır — yeni bir hata değildir.
   return {...ath,...snap};
 }
 
@@ -21811,7 +21993,7 @@ const ZONE_COLORS={Z1:'#34d399',Z2:'#6ee7b7',Z3:'#f97316',Z4:'#fbbf24',Z5a:'#991
 
 
 function BolgeTab({athlete,workouts,onUpdateAthlete}){
-  // ── Reçete Geri Bildirim Kalibrasyonu ──
+  // ── Reçete Geri Bildirim Kalibrasyonu (Çıpa — yalnızca vLT) ──
   const [fbScanLoading,setFbScanLoading]=useState(false);
   const [fbAnalysis,setFbAnalysis]=useState(null);
   const [fbRawCount,setFbRawCount]=useState(null); // {pace, hr}
@@ -21820,15 +22002,31 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
   const [fbBreakdown,setFbBreakdown]=useState(null); // {conflict:{fastHigh,slowLow}, zones:[...]}
   const [fbTelkin,setFbTelkin]=useState(null); // {pattern,title,coach,athlete}
   const [fbNoNewData,setFbNoNewData]=useState(false); // son fbLastCalib'den sonra yeni antrenman yok
+  const [fbConfirmPending,setFbConfirmPending]=useState(false); // 🟡 rozetinde ikinci onay adımı
 
-  // Sporcu değişince tüm fb tarama state'lerini sıfırla
+  // ── Sınır Kalibrasyonu (Şekil — 6 nabız bölgesi sınırı, 2026.08.30) ──────────
+  const [bcScanLoading,setBcScanLoading]=useState(false);
+  const [bcAnalysis,setBcAnalysis]=useState(null);   // {z1z2:{action,...}, ..., z5bz5c:{...}}
+  const [bcRawCount,setBcRawCount]=useState(null);   // {hr,hrOk}
+  const [bcApplied,setBcApplied]=useState(null);     // uygulanan changeLog (dizi) ya da null
+  const [bcError,setBcError]=useState(null);
+  const [bcNoNewData,setBcNoNewData]=useState(false);
+  const [bcConfirmPending,setBcConfirmPending]=useState(false);
+  const [bcClippedNote,setBcClippedNote]=useState(null); // Çıpa yakın zamanda uygulandıysa bilgi notu
+
+  // Sporcu değişince tüm tarama state'lerini sıfırla (her iki mekanizma)
   React.useEffect(()=>{
     setFbAnalysis(null);setFbRawCount(null);setFbApplied(null);
-    setFbError(null);setFbBreakdown(null);setFbTelkin(null);setFbNoNewData(false);
+    setFbError(null);setFbBreakdown(null);setFbTelkin(null);setFbNoNewData(false);setFbConfirmPending(false);
+    setBcAnalysis(null);setBcRawCount(null);setBcApplied(null);setBcError(null);
+    setBcNoNewData(false);setBcConfirmPending(false);setBcClippedNote(null);
   },[athlete?.id]);
 
   const FB_SCAN_WINDOW_DAYS=21; // Son 21 gün (≈1 mezosiklus) — eski form verisi karışmasın
   const FB_SCAN_WEEKS_FETCH=5;  // 21 günü her takvim hizalamasında garanti kapsayan cömert üst sınır
+  // 2026.08.30 — Sınır Kalibrasyonu: pencere Çıpa'dan kasıtlı olarak çok daha geniş —
+  // bölge başına veri yoğunluğu (özellikle Z5 grubunda) çok daha düşük.
+  const BC_SCAN_WEEKS_FETCH=12; // ≈84 gün — HR_BOUNDARY_SCAN_WINDOW_DAYS'i (70) her takvim hizalamasında güvenle kapsar
 
   // Hedefte/zone dışı sayılarını HER ZAMAN birlikte gösterir — biri diğerini gizlemez
   const fmtOkOff=(off,ok)=>{
@@ -21841,7 +22039,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
 
   const runFbScan=async()=>{
     if(!athlete?.id) return;
-    setFbScanLoading(true);setFbAnalysis(null);setFbRawCount(null);setFbApplied(null);setFbError(null);setFbBreakdown(null);setFbTelkin(null);setFbNoNewData(false);
+    setFbScanLoading(true);setFbAnalysis(null);setFbRawCount(null);setFbApplied(null);setFbError(null);setFbBreakdown(null);setFbTelkin(null);setFbNoNewData(false);setFbConfirmPending(false);
     try{
       // Tüm geçmiş yerine sadece son birkaç haftayı çek — weekKey'ler Pazartesi tarihiyle anahtarlı
       const weekKeys=Array.from({length:FB_SCAN_WEEKS_FETCH},(_,i)=>getWeekKey(-i));
@@ -21849,9 +22047,15 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       const allSnaps={};
       weekKeys.forEach((wk,i)=>{ if(weekSnaps[i]) allSnaps[wk]=weekSnaps[i]; });
 
-      const cutoffStr=localDateStr(new Date(Date.now()-FB_SCAN_WINDOW_DAYS*864e5));
+      let cutoffStr=localDateStr(new Date(Date.now()-FB_SCAN_WINDOW_DAYS*864e5));
+      // ── Çapraz Farkındalık — Pencere Temizliği (2026.08.30) ──────────────────
+      // Sınır Kalibrasyonu yakın zamanda uygulandıysa, o tarihten ÖNCEKİ sinyaller
+      // artık farklı bir zon şekline göre değerlendirilmiş sayılır — Çıpa taramasına
+      // karışmasın diye pencere (doğal cutoff'tan daha yeniyse) o tarihe kırpılır.
+      const boundaryLastCalibStr=athlete.boundaryLastCalib?athlete.boundaryLastCalib.substring(0,10):null;
+      if(boundaryLastCalibStr&&boundaryLastCalibStr>cutoffStr) cutoffStr=boundaryLastCalibStr;
       const sigsAll=extractFeedbackSignals(allSnaps,athlete);
-      const sigs=sigsAll.filter(s=>s.date>=cutoffStr); // tam 21 günlük pencereye kırp
+      const sigs=sigsAll.filter(s=>s.date>=cutoffStr);
 
       // ── Veri tabanlı tekrar kalibrasyonu engeli ──────────────────────────
       // fbLastCalib: Reçete kalibrasyonunun en son uygulandığı ISO tarih-saati.
@@ -21898,11 +22102,88 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
     if(grad){
       onUpdateAthlete({...athlete,vlt:String(grad.newVlt),fbLastCalib:new Date().toISOString()});
       setFbApplied('vlt');
+      setFbConfirmPending(false);
     }
+  };
+
+  // ── Sınır Kalibrasyonu — Tarama (2026.08.30) ──────────────────────────────────
+  const runBoundaryScan=async()=>{
+    if(!athlete?.id) return;
+    setBcScanLoading(true);setBcAnalysis(null);setBcRawCount(null);setBcApplied(null);setBcError(null);setBcNoNewData(false);setBcConfirmPending(false);setBcClippedNote(null);
+    try{
+      const weekKeys=Array.from({length:BC_SCAN_WEEKS_FETCH},(_,i)=>getWeekKey(-i));
+      const weekSnaps=await Promise.all(weekKeys.map(wk=>fbGet('plan_snapshots/'+athlete.id+'/'+wk)));
+      const allSnaps={};
+      weekKeys.forEach((wk,i)=>{ if(weekSnaps[i]) allSnaps[wk]=weekSnaps[i]; });
+
+      let cutoffStr=localDateStr(new Date(Date.now()-HR_BOUNDARY_SCAN_WINDOW_DAYS*864e5));
+      // ── Çapraz Farkındalık — Pencere Temizliği (2026.08.30) ──────────────────
+      // Çıpa yakın zamanda uygulandıysa, o tarihten ÖNCEKİ sinyaller eski (artık
+      // geçersiz) vLT referansına göre değerlendirilmiş sayılır — Sınır taramasına
+      // karışmasın diye pencere kırpılır ve durum bilgilendirici bir notla gösterilir.
+      const fbLastCalibStr=athlete.fbLastCalib?athlete.fbLastCalib.substring(0,10):null;
+      if(fbLastCalibStr&&fbLastCalibStr>cutoffStr){
+        cutoffStr=fbLastCalibStr;
+        setBcClippedNote('Pencere '+localDateStr(new Date(fbLastCalibStr+'T12:00:00'))+' itibarıyla kırpıldı — Çıpa (vLT) o tarihte güncellendi, öncesi karışık sinyal üretebilir.');
+      }
+
+      const sigsAll=extractFeedbackSignals(allSnaps,athlete);
+      const sigs=sigsAll.filter(s=>s.date>=cutoffStr);
+
+      const boundaryLastCalibStr=athlete.boundaryLastCalib?athlete.boundaryLastCalib.substring(0,10):null;
+      if(boundaryLastCalibStr){
+        const hasNewData=sigs.some(s=>s.date>boundaryLastCalibStr);
+        if(!hasNewData){
+          setBcNoNewData(true);
+          return;
+        }
+      }
+
+      setBcRawCount({hr:sigs.filter(s=>s.hrDir).length,hrOk:sigs.filter(s=>s.hrOk).length});
+      const analysis=analyzeBoundarySignals(sigs);
+      setBcAnalysis(analysis);
+    }catch(e){
+      setBcError('Veri okunamadı: '+e.message);
+    }finally{
+      setBcScanLoading(false);
+    }
+  };
+
+  const applyBoundaryCalib=()=>{
+    if(!bcAnalysis) return;
+    const result=applyBoundaryCalibration(athlete,bcAnalysis);
+    if(!result||!result.changeLog.length) return;
+    const updates={};
+    HR_BOUNDARY_KEYS.forEach(k=>{ updates[HR_BOUNDARY_FIELD[k]]=String(result.deltas[k]); });
+    onUpdateAthlete({...athlete,...updates,boundaryLastCalib:new Date().toISOString()});
+    setBcApplied(result.changeLog);
+    setBcConfirmPending(false);
+  };
+
+  // Sınırları jenerik Friel şablonuna sıfırla (güvenlik ağı — beklenmedik bir kişisel
+  // şekil rahatsız edici/yanlış görünürse koç tek tıkla geriye dönebilir).
+  const resetBoundaries=()=>{
+    const updates={};
+    HR_BOUNDARY_KEYS.forEach(k=>{ updates[HR_BOUNDARY_FIELD[k]]='0'; });
+    onUpdateAthlete({...athlete,...updates,boundaryLastCalib:null});
+    setBcApplied(null);setBcAnalysis(null);setBcRawCount(null);
   };
 
   if(!athlete)return React.createElement('div',{className:'empty'},'Sporcu seçilmedi.');
   const zones=calcZones(athlete);
+  // ── Çapraz Rozet Hesabı (2026.08.30) — bkz. crossCalibBadge tanımı ──────────
+  const fbReady=!!fbAnalysis?.vltAction;
+  const bcReady=!!(bcAnalysis&&HR_BOUNDARY_KEYS.some(k=>bcAnalysis[k]?.action));
+  const fbBadge=crossCalibBadge({mechanism:'anchor',ownActionReady:fbReady,otherActionReadyNow:bcReady});
+  const bcBadge=crossCalibBadge({mechanism:'boundary',ownActionReady:bcReady,otherActionReadyNow:fbReady});
+  const renderCalibBadge=(badge)=>{
+    if(!badge?.badge) return null;
+    const g=badge.badge==='green';
+    return React.createElement('span',{style:{
+      display:'inline-flex',alignItems:'center',gap:4,padding:'2px 8px',borderRadius:12,fontSize:11,fontWeight:700,
+      background:g?'var(--success-bg)':'var(--warn-bg)',color:g?'var(--success)':'var(--warn)'
+    }},g?'🟢 Şimdi Uygula':'🟡 Bekle');
+  };
   const vlt=zones.vlt;
   const vltDetail=calcVltDetail(athlete);
   const vltSource=vltDetail.label;
@@ -21942,7 +22223,10 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
     React.createElement('div',{className:'card',style:{marginBottom:12}},
       React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}},
         React.createElement('div',null,
-          React.createElement('div',{className:'card-title',style:{margin:0}},'Reçete Geri Bildirim Kalibrasyonu'),
+          React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8}},
+            React.createElement('div',{className:'card-title',style:{margin:0}},'Reçete Geri Bildirim Kalibrasyonu'),
+            renderCalibBadge(fbBadge)
+          ),
           React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:2}},
             athlete.fbLastCalib
               ?'Son kalibrasyon: '+localDateStr(new Date(athlete.fbLastCalib))
@@ -22027,8 +22311,20 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
                 ),
                 !hasVlt&&fbAnalysis.vltAction&&React.createElement('div',{style:{color:'var(--text-tertiary)',fontSize:11}},'vLT: Sporcu profilinde vLT girilmemiş.')
               ),
+              // Yumuşak etki (2026.08.30): fbBadge şu an mimari gereği yalnızca
+              // 'green'|null döner (Çıpa hiçbir zaman Sınır'a beklemez) — ama
+              // fbConfirmPending akışı ileride bir 'yellow' durumu eklenirse
+              // (bkz. crossCalibBadge) hazır bulunsun diye burada da kuruldu.
+              fbBadge?.badge==='yellow'&&fbConfirmPending&&React.createElement('div',{className:'alert alert-warn',style:{fontSize:11,marginBottom:6}},fbBadge.reason+' Yine de uygulamak istiyor musunuz?'),
               React.createElement('div',{className:'flex-gap'},
-                hasVlt&&React.createElement('button',{className:'btn btn-primary btn-sm',style:{flex:'1 1 auto'},onClick:()=>applyFbCalib()},'vLT → '+(vltGrad?vltGrad.newVlt+' m/s':'…'))
+                hasVlt&&React.createElement('button',{
+                  className:'btn btn-primary btn-sm',style:{flex:'1 1 auto'},
+                  onClick:()=>{
+                    if(fbBadge?.badge==='yellow'&&!fbConfirmPending){ setFbConfirmPending(true); return; }
+                    applyFbCalib();
+                  }
+                }, fbConfirmPending?'Evet, yine de uygula':'vLT → '+(vltGrad?vltGrad.newVlt+' m/s':'…')),
+                fbConfirmPending&&React.createElement('button',{className:'btn btn-sm',onClick:()=>setFbConfirmPending(false)},'Vazgeç')
               )
             )
         );
@@ -22128,6 +22424,114 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
         'Tarama başlatılmadı.'
       )
     ),
+
+    // ── Sınır Kalibrasyonu Kartı (2026.08.30) ─────────────────────────────────
+    // Çıpa'dan (yukarıdaki kart) BİLİNÇLİ olarak AYRI: farklı pencere (≈10 hafta),
+    // farklı eşik (≥3 gün), farklı çıktı (tek vLT sayısı değil, 6 bağımsız sınır).
+    // Aynı sinyal altyapısını (extractFeedbackSignals) paylaşır ama kendi analiz
+    // (analyzeBoundarySignals) ve uygulama (applyBoundaryCalibration) motoruna sahiptir.
+    React.createElement('div',{className:'card',style:{marginBottom:12}},
+      React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}},
+        React.createElement('div',null,
+          React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8}},
+            React.createElement('div',{className:'card-title',style:{margin:0}},'Sınır Kalibrasyonu'),
+            renderCalibBadge(bcBadge)
+          ),
+          React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:2}},
+            athlete.boundaryLastCalib
+              ?'Son kalibrasyon: '+localDateStr(new Date(athlete.boundaryLastCalib))
+              :'Her nabız bölgesi sınırını (Z1/Z2…Z5b/Z5c) sporcuya özel ince ayarlar — Çıpa\'dan bağımsız, çok daha geniş bir pencerede çalışır.'
+          )
+        ),
+        React.createElement('button',{
+          className:'btn btn-sm btn-primary',
+          disabled:bcScanLoading,
+          onClick:runBoundaryScan
+        },bcScanLoading?'Taranıyor…':'🔍 Sınırları Tara')
+      ),
+      React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:8}},
+        'Her sınır, altındaki ve üstündeki zonun sinyalinden BİRLİKTE beslenir — ikisi aynı yönü gösterirse sınır güvenle kayar. ',
+        'Pencere ≈10 hafta, en az 3 farklı gün gerekir (Çıpa\'dan kasıtlı olarak daha sıkı ve daha yavaş).'
+      ),
+      bcClippedNote&&React.createElement('div',{className:'alert alert-info',style:{fontSize:11,marginBottom:8}},'ℹ️ '+bcClippedNote),
+      bcNoNewData&&React.createElement('div',{className:'alert alert-warn',style:{fontSize:12}},
+        '🔁 Son kalibrasyondan bu yana yeni antrenman verisi girilmemiş — bir sonraki antrenmanın ardından tekrar tarayın.'
+      ),
+      bcError&&React.createElement('div',{className:'alert alert-warn',style:{fontSize:12}},bcError),
+      bcRawCount&&React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',marginBottom:8}},
+        'Nabız Sinyali: '+bcRawCount.hr+' faz ('+fmtOkOff(bcRawCount.hr,bcRawCount.hrOk)+')'
+      ),
+      bcAnalysis&&React.createElement('div',{className:'table-wrap',style:{marginBottom:8}},
+        React.createElement('table',{className:'table',style:{fontSize:11}},
+          React.createElement('thead',null,
+            React.createElement('tr',null,
+              React.createElement('th',null,'Sınır'),
+              React.createElement('th',null,'Taban'),
+              React.createElement('th',null,'Güncel'),
+              React.createElement('th',null,'Gün'),
+              React.createElement('th',null,'Öneri')
+            )
+          ),
+          React.createElement('tbody',null,
+            HR_BOUNDARY_KEYS.map(k=>{
+              const a=bcAnalysis[k];
+              const curDelta=parseSayi(athlete[HR_BOUNDARY_FIELD[k]])||0;
+              const basePct=round1(HR_BOUNDARY_BASE_PCT[k]*100);
+              const curPct=round1(basePct+curDelta);
+              return React.createElement('tr',{key:k},
+                React.createElement('td',null,HR_BOUNDARY_LABEL[k]),
+                React.createElement('td',{style:{fontFamily:'monospace'}},'%'+basePct),
+                React.createElement('td',{style:{fontFamily:'monospace',fontWeight:curDelta?700:400,color:curDelta?'var(--info)':'var(--text-secondary)'}},'%'+curPct),
+                React.createElement('td',null,a?.dominantDayCount||0),
+                React.createElement('td',null,
+                  a?.action?React.createElement('span',{style:{color:'var(--info)',fontWeight:600}},a.action==='up'?'⬆':'⬇'):React.createElement('span',{style:{color:'var(--text-tertiary)'}},'—')
+                )
+              );
+            })
+          )
+        )
+      ),
+      (()=>{
+        const bcReadyLocal=!!(bcAnalysis&&HR_BOUNDARY_KEYS.some(k=>bcAnalysis[k]?.action));
+        if(!bcAnalysis) return null;
+        if(!bcReadyLocal) return React.createElement('div',{className:'alert alert-info',style:{fontSize:12}},
+          'Henüz hiçbir sınır için yeterli/net sinyal yok (en az 3 farklı gün gerekir). Antrenman verisi girmeye devam edin.'
+        );
+        if(bcApplied) return React.createElement('div',{className:'alert alert-info',style:{fontSize:12}},
+          '✓ Sınır Kalibrasyonu uygulandı ('+bcApplied.length+' sınır). Bir sonraki antrenman verisi girildikten sonra tekrar tarayın.'
+        );
+        const preview=applyBoundaryCalibration(athlete,bcAnalysis);
+        return React.createElement('div',null,
+          React.createElement('div',{style:{background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:6,padding:10,marginBottom:8,fontSize:12}},
+            React.createElement('div',{style:{fontWeight:600,marginBottom:6,color:'var(--info)'}},'📋 Kalibrasyon Önerisi'),
+            preview.changeLog.map(c=>React.createElement('div',{key:c.key,style:{marginBottom:2}},
+              React.createElement('span',{style:{color:'var(--text-secondary)'}},HR_BOUNDARY_LABEL[c.key]+': '),
+              React.createElement('span',{style:{fontFamily:'monospace'}},'%'+round1(HR_BOUNDARY_BASE_PCT[c.key]*100+c.from)+' → '),
+              React.createElement('strong',{style:{color:'var(--success)',fontFamily:'monospace'}},'%'+round1(HR_BOUNDARY_BASE_PCT[c.key]*100+c.to)),
+              React.createElement('span',{style:{color:'var(--text-tertiary)',fontSize:11}},'  ('+c.dayCount+' gün · güven %'+Math.round((c.confidence||0)*100)+')')
+            ))
+          ),
+          bcBadge?.badge==='yellow'&&bcConfirmPending&&React.createElement('div',{className:'alert alert-warn',style:{fontSize:11,marginBottom:6}},bcBadge.reason+' Yine de uygulamak istiyor musunuz?'),
+          React.createElement('div',{className:'flex-gap'},
+            React.createElement('button',{
+              className:'btn btn-primary btn-sm',style:{flex:'1 1 auto'},
+              onClick:()=>{
+                if(bcBadge?.badge==='yellow'&&!bcConfirmPending){ setBcConfirmPending(true); return; }
+                applyBoundaryCalib();
+              }
+            }, bcConfirmPending?'Evet, yine de uygula':'Sınırları Uygula ('+preview.changeLog.length+')'),
+            bcConfirmPending&&React.createElement('button',{className:'btn btn-sm',onClick:()=>setBcConfirmPending(false)},'Vazgeç')
+          )
+        );
+      })(),
+      athlete.boundaryLastCalib&&React.createElement('div',{style:{marginTop:8}},
+        React.createElement('button',{className:'btn btn-sm',onClick:resetBoundaries},'↺ Jenerik şablona sıfırla')
+      ),
+      !bcRawCount&&!bcScanLoading&&React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',fontStyle:'italic'}},
+        'Tarama başlatılmadı.'
+      )
+    ),
+
     React.createElement('div',{className:'card',style:{marginBottom:12}},
       React.createElement('div',{className:'card-title'},'Fizyolojik Temel'),
       React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))',gap:8}},
@@ -28833,7 +29237,11 @@ function App(){
 
   const handleUpdateAthlete=(newA)=>{
     const oldA=athletes.find(x=>x.id===newA.id);
-    const PROFILE_FIELDS=['vo2max','lthr','mhr','rhr','kilo','boy','vlt','hrv_7gun','sakatlık'];
+    // 2026.08.30 — Sınır Kalibrasyonu: bd_* alanları (6 sınır deltası, düz sayısal —
+    // bkz. HR_BOUNDARY_FIELD) da LTHR/MHR/RHR gibi "profil alanı" sayılır, aksi halde
+    // geçmiş antrenmanlar sınır değiştiğinde tarihsel doğruluğunu (athleteAtDate) kaybeder.
+    const PROFILE_FIELDS=['vo2max','lthr','mhr','rhr','kilo','boy','vlt','hrv_7gun','sakatlık',
+      'bd_z1z2','bd_z2z3','bd_z3z4','bd_z4z5a','bd_z5az5b','bd_z5bz5c'];
     // SporcuModal'dan (sporcu profili düzenleme ekranı) gelen kaydetmelerde işaretlenir.
     // Bu durumda anket akışıyla paralel olarak, değer değişmese bile snapshot atılır —
     // aksi halde koç profili "kaydet" dese de değer aynıysa profileHistory'de o tarihe ait
@@ -28851,7 +29259,8 @@ function App(){
       // Profil değişikliği varsa VEYA sporcu profili modalından zorunlu kaydediliyorsa snapshot ekle
       const profileChanged=PROFILE_FIELDS.some(f=>String(oldA[f]||'')!==String(newA[f]||''));
       if(profileChanged||forceSnap){
-        const snap={date:localDateStr(new Date()),vo2max:newA.vo2max,lthr:newA.lthr,mhr:newA.mhr,rhr:newA.rhr,kilo:newA.kilo,boy:newA.boy,vlt:newA.vlt,hrv_7gun:newA.hrv_7gun,sakatlık:newA.sakatlık};
+        const snap={date:localDateStr(new Date()),vo2max:newA.vo2max,lthr:newA.lthr,mhr:newA.mhr,rhr:newA.rhr,kilo:newA.kilo,boy:newA.boy,vlt:newA.vlt,hrv_7gun:newA.hrv_7gun,sakatlık:newA.sakatlık,
+          bd_z1z2:newA.bd_z1z2,bd_z2z3:newA.bd_z2z3,bd_z3z4:newA.bd_z3z4,bd_z4z5a:newA.bd_z4z5a,bd_z5az5b:newA.bd_z5az5b,bd_z5bz5c:newA.bd_z5bz5c};
         newA={...newA,profileHistory:[...((newA.profileHistory||[]).filter(s=>s.date!==snap.date)),snap].slice(-80)};
       }
     }
