@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.31-1457 --><!DOCTYPE html>
+<!-- Version: v2026.08.31-1530 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.31-1457';
+const APP_VERSION='v2026.08.31-1530';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -3845,6 +3845,12 @@ const BAGLAMSAL_TIPLERI=['hazirlik'];
 // yoğun ama antrenman amacı bakımından "kaliteli" değil, aerobik taban sayılır
 // — bkz. TUR_ENERJI_KAT/TUR_AMAC_KAT).
 const YOGUN_TURLER=[...KALITELI_TIPLERI,'tirmanis'];
+// S-seviyeli (calcProgressionSIdx/calcSeviyeFromHistory kullanan) 12 şablon — bkz.
+// ~satır 11793 notu. Hacim bütçesi dar olduğunda "önce S1'e düş" mantığının
+// uygulanabileceği tipler SADECE bunlar — strides/acici/teknik/depar/back_to_back
+// zaten kısa ve bu S-seviye mekanizmasını kullanmıyor (31.08.2026, Göksel onayı).
+const S_SEVIYELI_TIPLER=['tempo','esik','interval','yokus_kisa','yokus_uzun','piramit',
+  'kesintisiz_piramit','cruise','progressive','on_off','yaris_tempo','hill_sprint'];
 
 // Spora göre filtrelenmiş tür listesi döndür
 function getTurlerForSpor(spor){
@@ -11820,7 +11826,14 @@ function calcProgressionSIdx(baseIdx, phaseStep, phaseMaxIdx){
 // kendi başında bilinçli olarak []'e sıfırlar (bkz. ilgili notlar) — sporcular
 // arası sızıntı riski (bkz. "çapraz-sporcu sızıntısı" geçmiş hatası) engellenir.
 let _PLANDAY_ATH_WORKOUTS=[];
+// _PLANDAY_FORCE_MIN_SEVIYE (31.08.2026 — Göksel onayı, hacim bütçesi dar günler):
+// true iken calcSeviyeFromHistory geçmişi TAMAMEN yok sayıp o tipin en küçük
+// (S1/sIdx=0) variyantını döndürür. Kaliteli bir gün haftalık/günlük km bütçesine
+// sığmadığında planDay bunu kısa süreliğine true yapıp şablonu S1 ile yeniden
+// üretir, hemen ardından false'a döndürür (bkz. planDay içindeki _minSeviyeTpl).
+let _PLANDAY_FORCE_MIN_SEVIYE=false;
 function calcSeviyeFromHistory(tur, phaseMaxIdx, fallbackIdx, athWorkouts){
+  if(_PLANDAY_FORCE_MIN_SEVIYE) return 0;
   athWorkouts=athWorkouts||[];
   if(!athWorkouts.length) return fallbackIdx;
   const gecmis=athWorkouts
@@ -11851,6 +11864,32 @@ function calcSeviyeFromHistory(tur, phaseMaxIdx, fallbackIdx, athWorkouts){
   if(son.rpe<=kisiselOrt-0.5) return Math.min(sonSeviye+1,phaseMaxIdx); // İlerledi → bir üst seviye
   if(son.rpe>=kisiselOrt+1.0) return Math.max(sonSeviye-1,0);           // Geriledi → bir alt seviye
   return sonSeviye; // Yerinde sayıyor → aynı seviye
+}
+
+// ── Şablonun GERÇEK toplam süresi (dk) — _rows'tan, sure_dk metadata alanına
+// güvenmeden ──────────────────────────────────────────────────────────────
+// KÖK NEDEN NOTU (31.08.2026 — Göksel'in "Progressive S1, 11.3km ama Hedef
+// 12.2km" bildirimi): Tempo/Eşik/İnterval gibi PROG-tablolu şablonlarda üst
+// seviyedeki `sure_dk` alanı fonksiyona VERİLEN parametrenin kendisidir — asıl
+// blok yapısı (ör. "2×6 dk") sIdx'ten gelir ve sure_dk'dan bağımsızdır. Yani
+// dışarıdan küçük bir sure_dk vermek görünüşte süreyi küçültür ama _rows'taki
+// gerçek segment süreleri DEĞİŞMEZ (bkz. aşağıdaki hacim-bütçesi kontrolü bu
+// yüzden sure_dk yerine bu fonksiyonu kullanır). _R yardımcılarının tamamı
+// {sure_sn, tekrar?, din_sn?} sözleşmesini kullanır: tekrar>1 ise din_sn
+// TEKRARLAR ARASI dinlenmedir (N tekrar → N-1 ara); tekrar yoksa (piramitSeq
+// gibi ayrı-ayrı satır üreten şablonlarda) din_sn o satırdan SONRAKİ dinlenmedir
+// (son satırda zaten 0'dır) — formül ikisini de doğru toplar.
+function toplamSureDkFromYapilar(yapilar){
+  let totalSn=0;
+  (yapilar||[]).forEach(y=>{
+    (y._rows||[]).forEach(r=>{
+      const tekrar=r.tekrar||1;
+      const dinSn=r.din_sn||0;
+      const gapKat=tekrar>1?(tekrar-1):(dinSn?1:0);
+      totalSn+=(r.sure_sn||0)*tekrar+dinSn*gapKat;
+    });
+  });
+  return totalSn>0?Math.round(totalSn/60):0;
 }
 
 // ── Progresyon İçerik Dizileri (0-indexed; sIdx+1 = S-seviyesi) ─────────────
@@ -15826,7 +15865,20 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
       // Alt sınır uygulanmaz — progresyon güvenlik kuralı korunur (sporcu
       // hedefin altındaysa zorla artırma, kademeli ilerle).
       // Trail kolu (tplTirmanisAcik) kendi hedefini zaten dpGun üzerinden alır.
-      if(!isTrail&&wkStats.uzunGunKm>0&&kosuTpl.sure_dk>0){
+      // DÜZELTME (31.08.2026 — Göksel onayı, "Uzun: 3.1km ama sporcunun geçmişi
+      // daha uzunu destekliyor" bildirimi): bu tavan ÖNCEDEN fazdan bağımsız her
+      // zaman uygulanıyordu — Temel/Gelişme'de bile geçmişe dayalı kademeli
+      // ilerlemeyi (tplUzun'ün recentLongRuns hesabı) haftalık %'lik orantısal
+      // tahminin (estimateUzunKosuHedefi/uzunGunKm — geçmişe hiç bakmaz) altına
+      // bastırıyordu. Artık SADECE Taper/Zirve'de uygulanır — bu fazlarda gerçekten
+      // istenmeyen yükü önlemek asıl amaç; Temel/Gelişme'de ise geçmişe göre
+      // yukarı esnemesi (üstteki tplUzun sonucu) korunur.
+      // Not: "Yarış Sonrası" da tavana dahil — bu kod tabanında her yerde
+      // (ör. phaseStep sıfırlama, ~satır 15423) Taper ile aynı "yük azaltma
+      // dönemi" grubunda ele alınıyor; Göksel'in onayladığı Taper/Zirve
+      // ayrımına tutarlı bir uzantı.
+      const _uzunTavanFazAktif=(phase==='Taper'||phase==='Zirve'||phase==='Yarış Sonrası');
+      if(_uzunTavanFazAktif&&!isTrail&&wkStats.uzunGunKm>0&&kosuTpl.sure_dk>0){
         const _z2Sec=getPaceSec(zones,1)||360;
         const _hedefDk=Math.round(wkStats.uzunGunKm*_z2Sec/60);
         if(_hedefDk>10&&kosuTpl.sure_dk>_hedefDk){
@@ -16202,6 +16254,65 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
         if(_newTpl){
           kosuTpl={..._newTpl,sure_dk:_maxSureDk};
           if(!kosuUyari) kosuUyari='Hacim hedefi: '+Math.round(_noRaceMaxGunlukKm*10)/10+'km/gun — sure '+_maxSureDk+'dk';
+        }
+      }
+    }
+    // ── Kaliteli günün hacim bütçesi kontrolü — HİBRİT (31.08.2026, Göksel onayı) ──
+    // Yukarıdaki blok SADECE _noRaceMaxGunlukKm>0 (yarışsız düşük hacim) durumunda
+    // çalışır ve kaliteli tiplerde de sadece sure_dk metadata'sını ezer (_rows
+    // gerçek segment sürelerini DEĞİŞTİRMEZ — bkz. yukarıdaki "template boyutu
+    // küçültemedik" notu). Bu iki eksikliği birlikte kapatır: (1) yarışlı
+    // sporcularda da (band/haftalık hedefe göre hesaplanan wkStats.kaliteliGunKm
+    // üzerinden) aynı kontrolü uygular, (2) gerçek toplam süreyi sure_dk yerine
+    // _rows'tan (toplamSureDkFromYapilar) okur. Karar: önce AYNI TİPİN en küçük
+    // seviyesine (S1) düşülür — fizyolojik amaç korunur; S1 bile bütçeye
+    // sığmıyorsa (yalnızca bu durumda) Aerobik Koşu'ya geçilir. ±%20 tolerans
+    // (WEEKLY_VOL_TOL_HIGH) haftalık hacim toleransıyla aynı ilkeyi kullanır.
+    if(kosuTpl&&S_SEVIYELI_TIPLER.includes(kosuTpl.tip)){
+      // Yarışsız düşük hacim sporcularında (_noRaceMaxGunlukKm) zaten DAHA SIKI,
+      // onaylanmış bir günlük bütçe var — çakışan/gevşek bir ikinci bütçeyle
+      // (kaliteliGunKm) ezilmesin diye o zaten aktifse öncelik ona verilir. Bu
+      // sporcularda yukarıdaki eski blok kaliteli tipleri düzgün küçültemiyordu
+      // (bkz. "template boyutu küçültemedik" notu) — bu blok o eksikliği de
+      // (AYNI bütçeyle) düzgün şekilde kapatır.
+      const _kaliteliBudgetKm=_noRaceMaxGunlukKm>0?_noRaceMaxGunlukKm:(wkStats.kaliteliGunKm||0);
+      if(_kaliteliBudgetKm>0){
+        const _kaliteliMaxSureDk=Math.max(20,Math.round(_kaliteliBudgetKm*tahminiPace*WEEKLY_VOL_TOL_HIGH));
+        const _gercekSureDk=toplamSureDkFromYapilar(kosuTpl.yapilar)||kosuTpl.sure_dk||0;
+        if(_gercekSureDk>_kaliteliMaxSureDk){
+          const _origTip=kosuTpl.tip;
+          const _s1Hint=Math.max(20,Math.round(_kaliteliBudgetKm*tahminiPace));
+          const _athWorkoutsPlan=wkStats.athWorkouts||[];
+          // Aynı tipi S1'de (en küçük seviye) yeniden üret — bkz. _PLANDAY_FORCE_MIN_SEVIYE
+          const _minSeviyeTpl=(tip,sureDkHint)=>{
+            _PLANDAY_FORCE_MIN_SEVIYE=true;
+            let t=null;
+            try{
+              if(tip==='tempo') t=tplTempo(band,sureDkHint,zones,phase,phaseStep,_athWorkoutsPlan);
+              else if(tip==='esik') t=tplEsik(band,sureDkHint,zones,phase,phaseStep,_athWorkoutsPlan);
+              else if(tip==='interval') t=tplInterval(band,phase,zones,phaseStep,_athWorkoutsPlan);
+              else if(tip==='yokus_kisa') t=tplYokusKisa(band,zones,phase,phaseStep,_athWorkoutsPlan);
+              else if(tip==='yokus_uzun') t=tplYokusUzun(band,zones,phase,phaseStep,_athWorkoutsPlan);
+              else if(tip==='piramit') t=tplPiramit(band,zones,phase,phaseStep,_athWorkoutsPlan);
+              else if(tip==='kesintisiz_piramit') t=tplKesintisizPiramit(band,zones,phase,phaseStep,_athWorkoutsPlan);
+              else if(tip==='cruise') t=tplCruise(band,sureDkHint,zones,phase,phaseStep,_athWorkoutsPlan);
+              else if(tip==='progressive') t=tplProgressive(band,sureDkHint,zones,phase,phaseStep,_athWorkoutsPlan);
+              else if(tip==='on_off') t=tplOnOff(band,zones,phase,phaseStep,_athWorkoutsPlan);
+              else if(tip==='yaris_tempo') t=tplYarisTempo(band,sureDkHint,zones,phase,race,_ytPaceSec,phaseStep,_athWorkoutsPlan);
+              else if(tip==='hill_sprint') t=tplHillSprint(band,zones,phase,phaseStep,race,_athWorkoutsPlan);
+            }catch(e){t=null;}
+            _PLANDAY_FORCE_MIN_SEVIYE=false;
+            return t;
+          };
+          const _s1Tpl=_minSeviyeTpl(_origTip,_s1Hint);
+          const _s1Sure=_s1Tpl?(toplamSureDkFromYapilar(_s1Tpl.yapilar)||_s1Tpl.sure_dk||0):0;
+          if(_s1Tpl&&_s1Sure>0&&_s1Sure<=_kaliteliMaxSureDk){
+            kosuTpl={..._s1Tpl,sure_dk:_s1Sure,_rightSized:true,_originalTip:_origTip};
+            kosuUyari=(TUR_LABELS[_origTip]||_origTip)+' — hacim bütçesi dar (~'+Math.round(_kaliteliBudgetKm*10)/10+'km/gün), en küçük seviyeye (S1, '+_s1Sure+'dk) düşürüldü.';
+          } else {
+            kosuTpl={...tplAerobik(band,_s1Hint,zones,disiplin),sure_dk:_s1Hint,_downgraded:true,_originalTip:_origTip};
+            kosuUyari=(TUR_LABELS[_origTip]||_origTip)+' antrenmanı (hacim bütçesi dar, S1 bile sığmadı) yerine Aerobik Koşu seçildi.';
+          }
         }
       }
     }
@@ -16597,6 +16708,15 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       // Kaliteli seans başına tahmini km (band'a göre) — bütçe rezervasyonu için
       const kaliteliSessionKm=band<=1?5:band===2?6:band===3?7:band===4?8:9;
       const tahminiKaliteliKm=kaliteliKalanSayi*kaliteliSessionKm;
+      // Kaliteli GÜNÜN kendi bütçesi (31.08.2026 — Göksel onayı, "Progressive S1
+      // 11.3km ama Hedef 12.2km" bildirimi): ÖNCEDEN bu sadece kolay/uzun günlere
+      // dağıtım REZERVASYONU için kullanılıyordu (kaliteli günün KENDİ süresi hiç
+      // kısıtlanmıyordu — bkz. planDay "S2: fizyolojik bütünlük" notu). Artık AYNI
+      // tahmini, kaliteli günün kendi hacim tavanı olarak da wkStats'e yazılıyor;
+      // planDay bunu (yarışlı/yarışsız FARK ETMEKSİZİN) "önce S1'e düş, sığmazsa
+      // Aerobik'e geç" kararı için kullanır (bkz. _minSeviyeTpl). Haftanın kalanı
+      // bu tek seanstan bile azsa (çok dar bütçe), kalanTargetKm ile ayrıca sınırlanır.
+      const kaliteliGunKm=kalanTargetKm>0?Math.min(kaliteliSessionKm,kalanTargetKm):kaliteliSessionKm;
       // Uzun koşu payı: faz ve disipline göre değişir (bkz. uzunKosuPayOrani) —
       // yükleme planı tablosundaki "Uzun" tahminiyle aynı kaynağı kullanır.
       // Band tavanı (uzunKosuBandMaxKm) da uygulanır — badge ile tutarlı olsun.
@@ -16622,6 +16742,7 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       wkStats.kalanTargetDp=kalanTargetDp;
       wkStats.uzunGunKm=uzunGunKm;
       wkStats.gunlukKolayKm=gunlukKolayKm;
+      wkStats.kaliteliGunKm=kaliteliGunKm;
       wkStats.kolayAerobikKalanSayi=kolayAerobikKalanSayi;
       wkStats.dpHedefHafta=kalanTargetDp;
       wkStats.uzunKalanSayi=uzunKalanSayi;
@@ -20416,7 +20537,10 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               // değil. Band tavanı (bandCapKm) hâlâ üstünde geçerlidir — kanıtlanmış
               // mesafe bu güvenlik sınırını aşıyorsa taban oraya kadar uygulanır.
               const _prevWt=weekTargets[i-1]||null;
-              const _prevWeekLongestKm=(_prevWt&&!wt.isRecovery&&wt.phase!=='Taper'&&!wt.isRaceWeek&&wt.phase!=='Yarış Sonrası')
+              // DÜZELTME (31.08.2026 — Göksel onayı): "Zirve" de hariç — bkz. planDay
+              // içindeki _uzunTavanFazAktif ve aşağıdaki haftalık özet kartındaki aynı
+              // düzeltme notu. Üçü de artık aynı faz setini kullanıyor (parite).
+              const _prevWeekLongestKm=(_prevWt&&!wt.isRecovery&&wt.phase!=='Taper'&&wt.phase!=='Zirve'&&!wt.isRaceWeek&&wt.phase!=='Yarış Sonrası')
                 ?(()=>{
                     const _pwWks=athWks.filter(w=>{
                       const d=new Date(w.date+'T12:00:00');
@@ -20992,7 +21116,10 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               // uygulansa bile burada ayrıca uygulanması gerekiyordu — aksi halde kart ile tablo
               // aynı hafta için FARKLI bir "haftanın uzunu" sayısı gösterebilirdi (görsel parite).
               const _prevWtHafta=weekTargets.find(w=>w.weekIdx===(week.wt.weekIdx-1))||null;
-              const _prevWeekLongestKmHafta=(_prevWtHafta&&!week.wt.isRecovery&&week.wt.phase!=='Taper'&&!week.wt.isRaceWeek&&week.wt.phase!=='Yarış Sonrası')
+              // DÜZELTME (31.08.2026 — Göksel onayı): "Zirve" de hariç tutuluyor — gerçek
+              // gün üretimindeki tavan-esnetme kuralıyla (planDay, _uzunTavanFazAktif)
+              // birebir aynı faz seti (yalnızca Temel/Gelişme'de geçmişe göre esner).
+              const _prevWeekLongestKmHafta=(_prevWtHafta&&!week.wt.isRecovery&&week.wt.phase!=='Taper'&&week.wt.phase!=='Zirve'&&!week.wt.isRaceWeek&&week.wt.phase!=='Yarış Sonrası')
                 ?(()=>{
                     const _pwWks=athWks.filter(w=>{
                       const d=new Date(w.date+'T12:00:00');
