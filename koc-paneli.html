@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.31-0941 --><!DOCTYPE html>
+<!-- Version: v2026.08.31-1457 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.31-0941';
+const APP_VERSION='v2026.08.31-1457';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -11794,6 +11794,65 @@ function calcProgressionSIdx(baseIdx, phaseStep, phaseMaxIdx){
   return Math.min(baseIdx+(phaseStep||0), phaseMaxIdx);
 }
 
+// ── Geçmiş Performansa Dayalı S-Seviye Motoru ────────────────────────────────
+// KÖK NEDEN DÜZELTMESİ (31.08.2026 — Göksel talebi): S-seviyesi (S1/S2/S3...)
+// yukarıdaki calcProgressionSIdx ile SADECE faz+band+phaseStep formülünden
+// türetiliyordu. phaseStep (bkz. phaseStepFromRot, ~generateTwoWeekPlan) rotIdx'ten
+// gelir; rotIdx ise athlete._planRotOffset İÇERİR — bu sayaç her "Planı Güncelle"
+// basışında +1 artar (amacı pickSeq'in HANGİ TÜRÜ seçtiğinde çeşitlilik sağlamak,
+// örn. Salı günü bazen Tempo bazen Eşik önerilsin). Ama aynı sayaç dolaylı olarak
+// phaseStep'i de kaydırdığından, SEÇİLEN TÜRÜN İÇİNDEKİ S-seviyesi de sporcunun
+// antrenman geçmişiyle hiçbir ilgisi olmadan, sadece butona basılma sayısına göre
+// S1↔S2↔S3 arası rastgele zıplıyordu. Çözüm: seviye artık sporcunun bu TÜRDE EN
+// SON GERÇEKTEN YAPTIĞI antrenmandan ve o antrenmandaki gelişim durumundan
+// (kişisel RPE ortalamasına göre kolay/zor geldi) türetiliyor — aynı geçmiş veri
+// için HER ZAMAN aynı sonucu üretir; _planRotOffset'ten tamamen bağımsızdır.
+// (pickSeq'in tür-çeşitliliği KORUNUR — sadece seviye artık farklı bir kaynaktan
+// geliyor, hangi türün seçildiği bu değişiklikten etkilenmez.)
+// Bu türde hiç geçmiş kayıt yoksa (ilk öneri) eski deterministik formüle
+// (fallbackIdx = calcProgressionSIdx sonucu) düşülür — bootstrap davranışı değişmez.
+//
+// _PLANDAY_ATH_WORKOUTS: generateTwoWeekPlan/planDay çalışırken o sporcunun
+// athWorkouts'u ile doldurulan modül seviyeli geçici tutucu — 12 şablon
+// fonksiyonunun ~90 çağrı noktasının HER BİRİNE yeni bir parametre eklemek
+// yerine, varsayılan parametre değeri üzerinden tek noktadan besleme sağlar.
+// Şablon Kütüphanesi (AntrenmanlarTab) ve Manuel Atama önizlemesi (ManuelAtamaModal)
+// kendi başında bilinçli olarak []'e sıfırlar (bkz. ilgili notlar) — sporcular
+// arası sızıntı riski (bkz. "çapraz-sporcu sızıntısı" geçmiş hatası) engellenir.
+let _PLANDAY_ATH_WORKOUTS=[];
+function calcSeviyeFromHistory(tur, phaseMaxIdx, fallbackIdx, athWorkouts){
+  athWorkouts=athWorkouts||[];
+  if(!athWorkouts.length) return fallbackIdx;
+  const gecmis=athWorkouts
+    .filter(w=>w&&w.tur===tur&&w.date&&w.yapi_notu&&(toSec(w.sure_sa,w.sure_dk,w.sure_sn)||0)>0)
+    .map(w=>{
+      const m=/S(\d+)/.exec(w.yapi_notu);
+      if(!m) return null;
+      return{date:w.date,sIdx:parseInt(m[1],10)-1,rpe:parseFloat(w.rpe)||null};
+    })
+    .filter(Boolean)
+    .sort((a,b)=>b.date.localeCompare(a.date));
+  if(!gecmis.length) return fallbackIdx;
+  const son=gecmis[0];
+  const sonSeviye=Math.min(Math.max(son.sIdx,0),phaseMaxIdx);
+  // RPE girilmemişse gelişim yönü belirsiz — rastgele zıplama yerine sporcunun
+  // gerçekten yaptığı son seviyede sabit kal (veri yokken temkinli varsayılan).
+  if(son.rpe==null) return sonSeviye;
+  // Kişisel RPE ortalaması: son antrenman HARİÇ, aynı türün önceki en fazla 5
+  // kaydı — yeterli veri yoksa popülasyon varsayımı (Orta/Yüksek Kaliteli) kullanılır.
+  const oncekiRpeler=gecmis.slice(1,6).map(g=>g.rpe).filter(r=>r!=null&&r>0);
+  const varsayilanRpe=YUKSEK_KALITELI_TIPLERI.includes(tur)?8:7;
+  const kisiselOrt=oncekiRpeler.length>=2
+    ?(oncekiRpeler.reduce((a,b)=>a+b,0)/oncekiRpeler.length)
+    :varsayilanRpe;
+  // Not: eşikler kesin bir kural değil, makul bir başlangıç varsayımı — ilerleme
+  // alt sınırı (-0.5) daha hassas, gerileme üst sınırı (+1.0) daha temkinli
+  // seçildi (seviyeyi düşürmekte daha muhafazakâr davranmak için).
+  if(son.rpe<=kisiselOrt-0.5) return Math.min(sonSeviye+1,phaseMaxIdx); // İlerledi → bir üst seviye
+  if(son.rpe>=kisiselOrt+1.0) return Math.max(sonSeviye-1,0);           // Geriledi → bir alt seviye
+  return sonSeviye; // Yerinde sayıyor → aynı seviye
+}
+
 // ── Progresyon İçerik Dizileri (0-indexed; sIdx+1 = S-seviyesi) ─────────────
 // Her giriş YAPI_NOTLARI'ndaki S-sıralamasıyla birebir eşleşir.
 const TEMPO_PROG=[
@@ -12100,12 +12159,13 @@ function tplPowerHiking(band, zones, dpHedef){
   };
 }
 
-function tplTempo(band, sure_dk, zones, phase='Gelişme', phaseStep=0){
-  // Progresyon: TEMPO_PROG[sIdx] — phaseBase+bandOffset+phaseStep → sIdx
+function tplTempo(band, sure_dk, zones, phase='Gelişme', phaseStep=0, athWorkouts=_PLANDAY_ATH_WORKOUTS){
+  // Progresyon: TEMPO_PROG[sIdx] — phaseBase+bandOffset+phaseStep → sIdx (geçmiş
+  // yoksa fallback); geçmiş varsa calcSeviyeFromHistory (bkz. tanım) belirler.
   const phaseBase={Temel:0,Gelişme:3,Zirve:6,Taper:0}[phase]||0;
   const bandOff=band<=2?0:band===3?1:2;
   const phaseMax={Temel:2,Gelişme:5,Zirve:7,Taper:2}[phase]??7;
-  const sIdx=calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax);
+  const sIdx=calcSeviyeFromHistory('tempo',phaseMax,calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax),athWorkouts);
   const cfg=TEMPO_PROG[sIdx];
   const seviye='S'+(sIdx+1);
   const extraFinal=phase==='Taper'?'Taper — hafif tempo, yorgunluk yok':cfg.extra;
@@ -12122,12 +12182,12 @@ function tplTempo(band, sure_dk, zones, phase='Gelişme', phaseStep=0){
   };
 }
 
-function tplEsik(band, sure_dk, zones, phase='Gelişme', phaseStep=0){
-  // Progresyon: ESIK_PROG[sIdx]
+function tplEsik(band, sure_dk, zones, phase='Gelişme', phaseStep=0, athWorkouts=_PLANDAY_ATH_WORKOUTS){
+  // Progresyon: ESIK_PROG[sIdx] — bkz. calcSeviyeFromHistory tanımı
   const phaseBase={Temel:0,Gelişme:3,Zirve:6}[phase]||0;
   const bandOff=band<=2?0:band===3?1:2;
   const phaseMax={Temel:2,Gelişme:5,Zirve:8}[phase]??8;
-  const sIdx=calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax);
+  const sIdx=calcSeviyeFromHistory('esik',phaseMax,calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax),athWorkouts);
   const cfg=ESIK_PROG[sIdx];
   const seviye='S'+(sIdx+1);
   const yapiNotuE=`Eşik · ${seviye} — ${cfg.sets} / ${cfg.din} ara`;
@@ -12143,15 +12203,15 @@ function tplEsik(band, sure_dk, zones, phase='Gelişme', phaseStep=0){
   };
 }
 
-function tplInterval(band, phase, zones, phaseStep=0){
+function tplInterval(band, phase, zones, phaseStep=0, athWorkouts=_PLANDAY_ATH_WORKOUTS){
   const sure_dk=band<=2?45:band===3?50:band===4?55:60;
   const z5a=zoneInfo(zones,4)||'Z5a VO₂max';
   const z5b=zoneInfo(zones,5)||'Z5b';
-  // Progresyon: INTERVAL_PROG[sIdx]
+  // Progresyon: INTERVAL_PROG[sIdx] — bkz. calcSeviyeFromHistory tanımı
   const phaseBase={Temel:0,Gelişme:3,Zirve:6}[phase]||0;
   const bandOff=band<=2?0:band===3?1:2;
   const phaseMax={Temel:2,Gelişme:5,Zirve:8}[phase]??8;
-  const sIdx=calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax);
+  const sIdx=calcSeviyeFromHistory('interval',phaseMax,calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax),athWorkouts);
   const ic=INTERVAL_PROG[sIdx];
   const seviye='S'+(sIdx+1);
   // blok açıklama satırı
@@ -12184,12 +12244,12 @@ function tplInterval(band, phase, zones, phaseStep=0){
   };
 }
 
-function tplYokusKisa(band, zones, phase='Gelişme', phaseStep=0){
-  // Progresyon: YOKUS_KISA_PROG[sIdx]
+function tplYokusKisa(band, zones, phase='Gelişme', phaseStep=0, athWorkouts=_PLANDAY_ATH_WORKOUTS){
+  // Progresyon: YOKUS_KISA_PROG[sIdx] — bkz. calcSeviyeFromHistory tanımı
   const phaseBase={Temel:0,Gelişme:3,Zirve:6}[phase]||0;
   const bandOff=band<=2?0:band===3?1:2;
   const phaseMax={Temel:2,Gelişme:5,Zirve:7}[phase]??7;
-  const sIdx=calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax);
+  const sIdx=calcSeviyeFromHistory('yokus_kisa',phaseMax,calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax),athWorkouts);
   const cfg=YOKUS_KISA_PROG[sIdx];
   const sure_dk=YOKUS_KISA_SURE[sIdx]||40;
   const seviye='S'+(sIdx+1);
@@ -12205,12 +12265,12 @@ function tplYokusKisa(band, zones, phase='Gelişme', phaseStep=0){
   };
 }
 
-function tplYokusUzun(band, zones, phase='Gelişme', phaseStep=0){
-  // Progresyon: YOKUS_UZUN_PROG[sIdx]
+function tplYokusUzun(band, zones, phase='Gelişme', phaseStep=0, athWorkouts=_PLANDAY_ATH_WORKOUTS){
+  // Progresyon: YOKUS_UZUN_PROG[sIdx] — bkz. calcSeviyeFromHistory tanımı
   const phaseBase={Temel:0,Gelişme:3,Zirve:6}[phase]||0;
   const bandOff=band<=2?0:band===3?1:2;
   const phaseMax={Temel:2,Gelişme:5,Zirve:7}[phase]??7;
-  const sIdx=calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax);
+  const sIdx=calcSeviyeFromHistory('yokus_uzun',phaseMax,calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax),athWorkouts);
   const cfg=YOKUS_UZUN_PROG[sIdx];
   const sure_dk=YOKUS_UZUN_SURE[sIdx]||45;
   const z4=zoneInfo(zones,3)||'Z4';
@@ -12245,16 +12305,16 @@ function tplAcici(sure_dk, phase='Gelişme'){
 }
 
 // ── İnterval Piramit ──────────────────────────────────────────────────────────
-function tplPiramit(band, zones, phase='Gelişme', phaseStep=0){
+function tplPiramit(band, zones, phase='Gelişme', phaseStep=0, athWorkouts=_PLANDAY_ATH_WORKOUTS){
   const hr5a=zones?.hrZones?.[4]; const p5a=zones?.paceZones?.[4];
   const hr4=zones?.hrZones?.[3];  const p4=zones?.paceZones?.[3];
   const z5aStr=[hr5a?.lo_bpm&&hr5a?.hi_bpm?hr5a.lo_bpm+'–'+hr5a.hi_bpm+' bpm':'', p5a?.lo_pace&&p5a?.hi_pace?p5a.hi_pace+'–'+p5a.lo_pace+' /km':''].filter(Boolean).join(' · ')||'Z5a';
   const z4Str= [hr4?.lo_bpm&&hr4?.hi_bpm?hr4.lo_bpm+'–'+hr4.hi_bpm+' bpm':'',  p4?.lo_pace&&p4?.hi_pace?p4.hi_pace+'–'+p4.lo_pace+' /km':''].filter(Boolean).join(' · ')||'Z4';
-  // Progresyon: PIRAMIT_PROG[sIdx] — diğer 10 kaliteli şablonla aynı band+phaseStep mantığı
+  // Progresyon: PIRAMIT_PROG[sIdx] — bkz. calcSeviyeFromHistory tanımı
   const phaseBase={Temel:0,Gelişme:3,Zirve:6}[phase]||0;
   const bandOff=band<=2?0:band===3?1:2;
   const phaseMax={Temel:2,Gelişme:5,Zirve:7}[phase]??7;
-  const sIdx=calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax);
+  const sIdx=calcSeviyeFromHistory('piramit',phaseMax,calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax),athWorkouts);
   const cfg=PIRAMIT_PROG[sIdx];
   const seviyePir='S'+(sIdx+1);
   const yapiNotuPir=`İnterval Piramit · ${seviyePir} — ${cfg.seq} dk`;
@@ -12275,14 +12335,14 @@ function tplPiramit(band, zones, phase='Gelişme', phaseStep=0){
 // ── Kesintisiz Piramit ────────────────────────────────────────────────────────
 // Hiç durmadan: düşük tempo → artan yoğunluk → zirve → azalan yoğunluk
 // Yarışta sürekli tempo değişimlerine adaptasyon için ideal
-function tplKesintisizPiramit(band, zones, phase='Gelişme', phaseStep=0){
+function tplKesintisizPiramit(band, zones, phase='Gelişme', phaseStep=0, athWorkouts=_PLANDAY_ATH_WORKOUTS){
   const z2=zoneInfo(zones,1)||'Z2'; const z3=zoneInfo(zones,2)||'Z3';
   const z4=zoneInfo(zones,3)||'Z4'; const z5a=zoneInfo(zones,4)||'Z5a';
-  // Progresyon: KESINTISIZ_PIRAMIT_PROG[sIdx] — diğer 10 kaliteli şablonla aynı band+phaseStep mantığı
+  // Progresyon: KESINTISIZ_PIRAMIT_PROG[sIdx] — bkz. calcSeviyeFromHistory tanımı
   const phaseBase={Temel:0,Gelişme:3,Zirve:6}[phase]||0;
   const bandOff=band<=2?0:band===3?1:2;
   const phaseMax={Temel:2,Gelişme:5,Zirve:7}[phase]??7;
-  const sIdx=calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax);
+  const sIdx=calcSeviyeFromHistory('kesintisiz_piramit',phaseMax,calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax),athWorkouts);
   const cfg=KESINTISIZ_PIRAMIT_PROG[sIdx];
   const zResolved=[null,z2,z3,z4,z5a];
   const blokParts=cfg.seg.map(s=>s.d+' dk '+zResolved[s.z]);
@@ -12303,13 +12363,13 @@ function tplKesintisizPiramit(band, zones, phase='Gelişme', phaseStep=0){
 }
 
 // ── Cruise Intervals ─────────────────────────────────────────────────────────
-function tplCruise(band, sure_dk, zones, phase='Gelişme', phaseStep=0){
+function tplCruise(band, sure_dk, zones, phase='Gelişme', phaseStep=0, athWorkouts=_PLANDAY_ATH_WORKOUTS){
   const z4=zoneInfo(zones,3)||'Z4 Eşik';
-  // Progresyon: CRUISE_PROG[sIdx]
+  // Progresyon: CRUISE_PROG[sIdx] — bkz. calcSeviyeFromHistory tanımı
   const phaseBase={Temel:0,Gelişme:3,Zirve:6}[phase]||0;
   const bandOff=band<=2?0:band===3?1:2;
   const phaseMax={Temel:2,Gelişme:5,Zirve:7}[phase]??7;
-  const sIdx=calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax);
+  const sIdx=calcSeviyeFromHistory('cruise',phaseMax,calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax),athWorkouts);
   const cp=CRUISE_PROG[sIdx];
   const seviye='S'+(sIdx+1);
   const dinStr=cp.d+'sn';
@@ -12332,13 +12392,13 @@ function tplCruise(band, sure_dk, zones, phase='Gelişme', phaseStep=0){
 }
 
 // ── Progressive Run ──────────────────────────────────────────────────────────
-function tplProgressive(band, sure_dk, zones, phase='Gelişme', phaseStep=0){
+function tplProgressive(band, sure_dk, zones, phase='Gelişme', phaseStep=0, athWorkouts=_PLANDAY_ATH_WORKOUTS){
   const z2=zoneInfo(zones,1)||'Z2'; const z3=zoneInfo(zones,2)||'Z3'; const z4=zoneInfo(zones,3)||'Z4'; const z5a=zoneInfo(zones,4)||'Z5a';
-  // Progresyon: PROGRESSIVE_PROG[sIdx] — diğer 10 kaliteli şablonla aynı band+phaseStep mantığı
+  // Progresyon: PROGRESSIVE_PROG[sIdx] — bkz. calcSeviyeFromHistory tanımı
   const phaseBase={Temel:0,Gelişme:3,Zirve:6}[phase]||0;
   const bandOff=band<=2?0:band===3?1:2;
   const phaseMax={Temel:2,Gelişme:5,Zirve:7}[phase]??7;
-  const sIdx=calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax);
+  const sIdx=calcSeviyeFromHistory('progressive',phaseMax,calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax),athWorkouts);
   const cfg=PROGRESSIVE_PROG[sIdx];
   const seviyeProg='S'+(sIdx+1);
   const zResolved=[null,z2,z3,z4,z5a];
@@ -12358,13 +12418,13 @@ function tplProgressive(band, sure_dk, zones, phase='Gelişme', phaseStep=0){
 }
 
 // ── On-Off (Fartlek) ─────────────────────────────────────────────────────────
-function tplOnOff(band, zones, phase='Gelişme', phaseStep=0){
+function tplOnOff(band, zones, phase='Gelişme', phaseStep=0, athWorkouts=_PLANDAY_ATH_WORKOUTS){
   const z5a=zoneInfo(zones,4)||'Z5a'; const z1=zoneInfo(zones,0)||'Z1';
-  // Progresyon: ON_OFF_PROG[sIdx]
+  // Progresyon: ON_OFF_PROG[sIdx] — bkz. calcSeviyeFromHistory tanımı
   const phaseBase={Temel:0,Gelişme:3,Zirve:6}[phase]||0;
   const bandOff=band<=2?0:band===3?1:2;
   const phaseMax={Temel:2,Gelişme:5,Zirve:7}[phase]??7;
-  const sIdx=calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax);
+  const sIdx=calcSeviyeFromHistory('on_off',phaseMax,calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax),athWorkouts);
   const oo=ON_OFF_PROG[sIdx];
   const seviye='S'+(sIdx+1);
   const sure_dk=Math.round((oo.set*(oo.on+oo.off)*oo.tur)/60)+18;
@@ -12394,7 +12454,7 @@ function tplOnOff(band, zones, phase='Gelişme', phaseStep=0){
 }
 
 // ── Yarış Temposu (Race Pace) ─────────────────────────────────────────────────
-function tplYarisTempo(band, sure_dk, zones, phase='Zirve', race=null, racePaceSec=null, phaseStep=0){
+function tplYarisTempo(band, sure_dk, zones, phase='Zirve', race=null, racePaceSec=null, phaseStep=0, athWorkouts=_PLANDAY_ATH_WORKOUTS){
   const km=parseFloat(race?.mesafe)||0;
   // Pace kaynağı: 1) raceHedefSure'dan gelen spesifik hedef pace (öncelikli)
   //               2) mesafeye göre zone fallback (5K→Z5a, 10K/HM→Z4, Maraton→Z3)
@@ -12411,11 +12471,11 @@ function tplYarisTempo(band, sure_dk, zones, phase='Zirve', race=null, racePaceS
     const raceZoneLabel=km>0&&km<=5?'Z5a 5K Yarış Temposu':km>21.5?'Z3 Maraton Temposu':'Z4 Yarış Temposu';
     zYT=zoneInfo(zones,raceZoneIdx)||raceZoneLabel;
   }
-  // Progresyon: YARIS_TEMPO_PROG[sIdx]
+  // Progresyon: YARIS_TEMPO_PROG[sIdx] — bkz. calcSeviyeFromHistory tanımı
   const phaseBase={Taper:0,Gelişme:3,Zirve:5}[phase]||0;
   const bandOff=band<=2?0:band===3?1:2;
   const phaseMax={Taper:2,Gelişme:4,Zirve:6}[phase]??6;
-  const sIdx=calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax);
+  const sIdx=calcSeviyeFromHistory('yaris_tempo',phaseMax,calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax),athWorkouts);
   const yt=YARIS_TEMPO_PROG[sIdx];
   const seviye='S'+(sIdx+1);
   const setsStr=`${yt.t}×${yt.s} dk`;
@@ -12437,20 +12497,20 @@ function tplYarisTempo(band, sure_dk, zones, phase='Zirve', race=null, racePaceS
 }
 
 // ── Hill Sprints ─────────────────────────────────────────────────────────────
-function tplHillSprint(band, zones, phase='Gelişme', phaseStep=0, race=null){
+function tplHillSprint(band, zones, phase='Gelişme', phaseStep=0, race=null, athWorkouts=_PLANDAY_ATH_WORKOUTS){
   // Guard: D+≤300m yarış için hill sprint uygunsuz — hangi code path'ten çağırılsa
   // Faza uygun alternatif döndür; sabit interval değil (pickSeq çeşitlilik mantığını bozmaz)
   const _dp=race?(parseFloat(race.d_plus)||0):null;
   if(_dp!==null&&_dp<=300){
-    if(phase==='Zirve')   return tplCruise(band,Math.round(50),zones,phase,phaseStep);
-    if(phase==='Gelişme') return tplEsik(band,Math.round(50),zones,phase,phaseStep);
-    return tplTempo(band,Math.round(45),zones,phase,phaseStep);
+    if(phase==='Zirve')   return tplCruise(band,Math.round(50),zones,phase,phaseStep,athWorkouts);
+    if(phase==='Gelişme') return tplEsik(band,Math.round(50),zones,phase,phaseStep,athWorkouts);
+    return tplTempo(band,Math.round(45),zones,phase,phaseStep,athWorkouts);
   }
-  // Progresyon: HILL_SPRINT_PROG[sIdx]
+  // Progresyon: HILL_SPRINT_PROG[sIdx] — bkz. calcSeviyeFromHistory tanımı
   const phaseBase={Temel:0,Gelişme:3,Zirve:5}[phase]||0;
   const bandOff=band<=2?0:band===3?1:2;
   const phaseMax={Temel:2,Gelişme:5,Zirve:5}[phase]??5;
-  const sIdx=calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax);
+  const sIdx=calcSeviyeFromHistory('hill_sprint',phaseMax,calcProgressionSIdx(phaseBase+bandOff,phaseStep,phaseMax),athWorkouts);
   const hs=HILL_SPRINT_PROG[sIdx];
   const seviye='S'+(sIdx+1);
   const extraHS=phase==='Temel'?'Form öncelikli: öne eğim, kolları kullan — nabız ölçütü yok':
@@ -16238,6 +16298,13 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
   const kosuGunleri=athlete.kosu_gunleri||[];
   const caprazGunleri=athlete.capraz_gunleri||[];
   const athWorkouts=actualWorkouts.filter(w=>w.athleteId===athlete.id);
+  // Geçmiş Performansa Dayalı S-Seviye Motoru (bkz. calcSeviyeFromHistory tanımı,
+  // ~satır 11793): bu fonksiyon ve içeriden çağırdığı planDay boyunca üretilen TÜM
+  // S-seviyeli şablonlar (tempo/eşik/interval/progressive/vb.) bu sporcunun gerçek
+  // antrenman geçmişini kullansın diye modül seviyeli tutucuya yazılıyor. Bu fonksiyon
+  // her zaman TEK bir sporcu için senkron çalıştığından (async ara vermez), sonraki
+  // çağrıda bir sonraki sporcunun athWorkouts'u ile üzerine yazılması güvenlidir.
+  _PLANDAY_ATH_WORKOUTS=athWorkouts;
   const weekTargets=calcWeeklyTargets(athlete,races,actualWorkouts||[],optimizeMode,history);
 
   const weeks=[];
@@ -17541,6 +17608,15 @@ function ManuelAtamaModal(props){
   var amacObj=athlete&&athlete.antrenman_amaci?ANTRENMAN_AMACLARI.find(function(a){return a.v===athlete.antrenman_amaci;}):null;
   useEffect(function(){
     try{
+      // GÜVENLİK KİLİDİ: Bu modal, koçun elle bir tür seçip ÖNİZLEME ürettiği bağımsız
+      // bir bileşendir — calcSeviyeFromHistory'nin okuduğu modül seviyeli
+      // _PLANDAY_ATH_WORKOUTS, en son generateTwoWeekPlan çağrısından (başka bir sporcu
+      // için, bu modal açıkken bile) kalmış olabilir. Sıfırlanmazsa önizleme başka bir
+      // sporcunun geçmişine göre seviye gösterebilir — burada HER ZAMAN deterministik
+      // faz/band/phaseStep formülü (fallbackIdx) kullanılmalı; koç zaten Seviye
+      // dropdown'ından istediği S-seviyesini elle seçebiliyor. Aynı risk sınıfı için
+      // bkz. bu bileşendeki "çapraz-sporcu sızıntısı" (20.07.2026) notu.
+      _PLANDAY_ATH_WORKOUTS=[];
       var dk=50,tpl=null;
       if(tur==='kolay')tpl=tplKolay(band,dk,zones);
       else if(tur==='serbest')tpl=tplSerbest(dk);
@@ -17830,6 +17906,14 @@ function AntrenmanlarTab({athlete,workouts}){
   const buildTpl=(tur,yapiNotu)=>{
     const dk=50;
     let base=null;
+    // GÜVENLİK KİLİDİ: Şablon Kütüphanesi genel bir referans görünümüdür (belirli bir
+    // sporcunun GERÇEK önerisi değil) — calcSeviyeFromHistory'nin okuduğu modül seviyeli
+    // _PLANDAY_ATH_WORKOUTS, en son generateTwoWeekPlan çağrısından (başka bir ekran/
+    // sporcu için) kalmış olabilir. Sıfırlanmazsa kütüphanede gösterilen "S2" örneği
+    // aslında başka bir sporcunun geçmişine göre hesaplanmış olur — burada HER ZAMAN
+    // deterministik faz/band formülü (fallbackIdx) gösterilmeli. Bkz. ManuelAtamaModal'daki
+    // "çapraz-sporcu sızıntısı" geçmiş hatasıyla aynı risk sınıfı.
+    _PLANDAY_ATH_WORKOUTS=[];
     try{
       if(tur==='kolay')base=tplKolay(filterBand,dk,zones);
       else if(tur==='aerobik')base=tplAerobik(filterBand,dk,zones,dis);
