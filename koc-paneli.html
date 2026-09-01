@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.01-2333 --><!DOCTYPE html>
+<!-- Version: v2026.09.01-2348 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.01-2333';
+const APP_VERSION='v2026.09.01-2348';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -5349,6 +5349,131 @@ async function scanAthleteForStaleOverrides(athlete){
   return found;
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// GERİYE DÖNÜK ONARIM (2026.09.01, Göksel talebi) — On-Off ON bacağının
+// `_isSprint` (alt çizgili, hatalı) yerine `isSprint` (alt çizgisiz, doğru)
+// kullanması VE On-Off/Strides'ın eski nabız+pace bölge referanslı detay
+// metninin RPE odaklı metne çevrilmesi, ZATEN ÜRETİLMİŞ/KAYITLI günler için.
+//
+// Kapsam bilinçli olarak DAR tutuldu: sadece `plan_snapshots/{ath}/{hafta}/
+// overrideMap/{tarih}.yapilar` içindeki iki bilinen kalıp regex ile TAM
+// eşleşirse dokunulur — koçun `_cuePatch` ile özelleştirdiği metinler
+// (ayrı saklanır, burada hiç okunmuyor/yazılmıyor) ve girilen performans
+// verileri (rowOverrides/pace/nabız/RPE girişleri, AYRI bir Firebase yolunda)
+// bu onarımdan TAMAMEN etkilenmez — sadece şablonun "iskelet" metni/bayrağı
+// düzeltilir.
+// ══════════════════════════════════════════════════════════════════════════
+const ONOFF_ON_DETAY_RE=/^ON:\s*Z\d[a-c]?\s*·\s*[\d–\-]+\s*bpm(?:\s*·\s*[\d:]+[–\-][\d:]+(?:\s*\([\d:]+\))?\s*\/km)?\s*(?:maksimal|VO2max efor)\s*·\s*OFF:/;
+const STRIDES_DETAY_RE=/^(\d+)×25sn kademeli hızlanma\s*—\s*Z5a\s*·\s*[\d–\-]+\s*bpm(?:\s*·\s*[\d:]+[–\-][\d:]+(?:\s*\([\d:]+\))?\s*\/km)?\s*zirve\s*·/;
+
+function fixOnOffStridesYapilar(yapilarIn){
+  const fixes=[];
+  let changed=false;
+  const yapilar=(yapilarIn||[]).map(blockIn=>{
+    let b=blockIn;
+    // 1) On-Off ON satırı: eski `_isSprint:true` (alt çizgili) → `isSprint:true`
+    if(Array.isArray(b._rows)&&b._rows.some(r=>r&&typeof r.label==='string'&&/— ON$/.test(r.label)&&r._isSprint===true&&r.isSprint!==true)){
+      const newRows=b._rows.map(r=>{
+        if(r&&typeof r.label==='string'&&/— ON$/.test(r.label)&&r._isSprint===true&&r.isSprint!==true){
+          const{_isSprint,...rest}=r;
+          fixes.push((b.baslik||r.label)+' — isSprint alanı');
+          return{...rest,isSprint:true};
+        }
+        return r;
+      });
+      b={...b,_rows:newRows};
+      changed=true;
+    }
+    // 2) On-Off ON detay metni: eski nabız/pace bölge referansı → RPE odaklı
+    if(typeof b.detay==='string'&&ONOFF_ON_DETAY_RE.test(b.detay)){
+      const newDetay=b.detay.replace(ONOFF_ON_DETAY_RE,'ON: RPE 9–10 maksimal patlama (hissiyat odaklı, nabız hedefi yok) · OFF:');
+      if(newDetay!==b.detay){ b={...b,detay:newDetay}; fixes.push((b.baslik||'ON bloğu')+' — detay metni'); changed=true; }
+    }
+    // 3) Strides bloğu — detay metni
+    if(b.baslik==='Strides'&&typeof b.detay==='string'&&STRIDES_DETAY_RE.test(b.detay)){
+      const newDetay=b.detay.replace(STRIDES_DETAY_RE,(m,sets)=>`${sets}×25sn kademeli hızlanma — RPE 8–9 zirve (hissiyat odaklı, nabız hedefi yok) ·`);
+      if(newDetay!==b.detay){ b={...b,detay:newDetay}; fixes.push('Strides — detay metni'); changed=true; }
+    }
+    // 4) Strides satırının kendi _cue'su — aynı eski metni ayrıca taşıyabilir
+    if(b.baslik==='Strides'&&Array.isArray(b._rows)&&b._rows.some(r=>r&&r.label==='Strides'&&typeof r._cue==='string'&&STRIDES_DETAY_RE.test(r._cue))){
+      const newRows=b._rows.map(r=>{
+        if(r&&r.label==='Strides'&&typeof r._cue==='string'&&STRIDES_DETAY_RE.test(r._cue)){
+          const newCue=r._cue.replace(STRIDES_DETAY_RE,(m,sets)=>`${sets}×25sn kademeli hızlanma — RPE 8–9 zirve (hissiyat odaklı, nabız hedefi yok) ·`);
+          if(newCue!==r._cue){ fixes.push('Strides — satır cue'); return{...r,_cue:newCue}; }
+        }
+        return r;
+      });
+      b={...b,_rows:newRows};
+      changed=true;
+    }
+    return b;
+  });
+  return{yapilar,changed,fixes};
+}
+
+// Tarama: sadece HESAPLAR, hiçbir yere YAZMAZ. Geriye (KONTROL taramasıyla aynı
+// derinlik: 104 hafta, 6 haftalık boş seri sonrası dur) VE ileriye (önceden
+// üretilmiş gelecek haftalar için 8 hafta, 3 haftalık boş seri sonrası dur) bakar.
+async function scanOnOffStridesLegacy(athletes,onProgress){
+  const pending=[];
+  const active=(athletes||[]);
+  const _collect=(ath,wk,snap)=>{
+    const overrideMap=snap.overrideMap||{};
+    Object.entries(overrideMap).forEach(([date,ov])=>{
+      if(!ov?.yapilar?.length) return;
+      const{yapilar:newYapilar,changed,fixes}=fixOnOffStridesYapilar(ov.yapilar);
+      if(changed){
+        pending.push({
+          athleteId:ath.id,
+          athleteName:((ath.ad||'')+' '+(ath.soyad||'')).trim(),
+          date,weekKey:wk,tip:ov.tip||'—',
+          newOv:{...ov,yapilar:newYapilar},
+          fixes
+        });
+      }
+    });
+  };
+  for(let ai=0;ai<active.length;ai++){
+    const ath=active[ai];
+    if(onProgress) onProgress({done:ai,total:active.length,current:((ath.ad||'')+' '+(ath.soyad||'')).trim()});
+    if(!ath?.id) continue;
+    let emptyStreak=0;
+    for(let i=0;i<KONTROL_HARD_CAP_WEEKS;i++){
+      const wk=getWeekKey(-i);
+      let snap=null;
+      try{ snap=await fbGet('plan_snapshots/'+ath.id+'/'+wk); }catch(e){ snap=null; }
+      if(!snap){ emptyStreak++; if(emptyStreak>=KONTROL_EMPTY_STREAK_STOP) break; continue; }
+      emptyStreak=0;
+      _collect(ath,wk,snap);
+    }
+    let fEmptyStreak=0;
+    for(let i=1;i<=8;i++){
+      const wk=getWeekKey(i);
+      let snap=null;
+      try{ snap=await fbGet('plan_snapshots/'+ath.id+'/'+wk); }catch(e){ snap=null; }
+      if(!snap){ fEmptyStreak++; if(fEmptyStreak>=3) break; continue; }
+      fEmptyStreak=0;
+      _collect(ath,wk,snap);
+    }
+  }
+  if(onProgress) onProgress({done:active.length,total:active.length,current:''});
+  return pending;
+}
+
+// Uygulama: scanOnOffStridesLegacy'nin bulduğu değişiklikleri Firebase'e yazar.
+// Aynı sporcu+hafta için birden fazla tarih varsa TEK fbUpdate ile toplu yazılır.
+async function applyOnOffStridesLegacyFixes(pending){
+  const byAthWeek=new Map();
+  (pending||[]).forEach(p=>{
+    const key=p.athleteId+'|'+p.weekKey;
+    if(!byAthWeek.has(key)) byAthWeek.set(key,{athleteId:p.athleteId,weekKey:p.weekKey,updates:{}});
+    byAthWeek.get(key).updates['overrideMap/'+p.date]=stripUndefined(p.newOv);
+  });
+  for(const{athleteId,weekKey,updates} of byAthWeek.values()){
+    await fbUpdate(`plan_snapshots/${athleteId}/${weekKey}`,updates);
+  }
+}
+
 function RawAralikInspector({athletes}){
   const [athId,setAthId]=useState('');
   const [dateStr,setDateStr]=useState('');
@@ -5925,6 +6050,43 @@ function KontrolTab({athletes}){
   const [results,setResults]=useState(null); // null=hiç taranmadı
   const [scannedAt,setScannedAt]=useState(null);
 
+  // ── On-Off/Strides RPE Geriye Dönük Onarımı (2026.09.01) ──
+  const [legacyScanning,setLegacyScanning]=useState(false);
+  const [legacyProgress,setLegacyProgress]=useState({done:0,total:0,current:''});
+  const [legacyPending,setLegacyPending]=useState(null); // null=hiç taranmadı
+  const [legacyApplying,setLegacyApplying]=useState(false);
+  const [legacyApplied,setLegacyApplied]=useState(null); // {count,athleteCount} | null
+
+  const runLegacyScan=async()=>{
+    setLegacyScanning(true);
+    setLegacyApplied(null);
+    setLegacyPending(null);
+    setLegacyProgress({done:0,total:(athletes||[]).length,current:''});
+    try{
+      const pending=await scanOnOffStridesLegacy(athletes,setLegacyProgress);
+      setLegacyPending(pending);
+    }catch(e){
+      console.warn('On-Off/Strides tarama hatası:',e);
+      setLegacyPending([]);
+    }
+    setLegacyScanning(false);
+  };
+
+  const runLegacyApply=async()=>{
+    if(!legacyPending?.length) return;
+    setLegacyApplying(true);
+    try{
+      await applyOnOffStridesLegacyFixes(legacyPending);
+      const athCount=new Set(legacyPending.map(p=>p.athleteId)).size;
+      setLegacyApplied({count:legacyPending.length,athleteCount:athCount});
+      setLegacyPending([]);
+    }catch(e){
+      console.warn('On-Off/Strides uygulama hatası:',e);
+      alert('⚠️ Düzeltmeler yazılırken hata oluştu: '+(e?.message||e));
+    }
+    setLegacyApplying(false);
+  };
+
   const runScan=async()=>{
     const active=(athletes||[]).filter(a=>!a.pasif);
     setScanning(true);
@@ -5984,6 +6146,43 @@ function KontrolTab({athletes}){
             )
           ))
         )
+    ),
+    React.createElement('div',{style:{marginTop:32,paddingTop:24,borderTop:'2px solid var(--border)'}},
+      React.createElement('div',{style:{marginBottom:16}},
+        React.createElement('h2',{style:{margin:'0 0 4px 0',fontSize:18}},'🔧 On-Off / Strides — RPE Geriye Dönük Onarımı'),
+        React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',lineHeight:1.5}},
+          'On-Off ON bacağı ve Strides zirve satırının eski kodda yanlışlıkla nabız/pace odaklı görünmesine yol açan hatayı (isSprint isim uyuşmazlığı + eski detay metni), ZATEN ÜRETİLMİŞ/kayıtlı günlerde de düzeltir. Girilen performans verilerine (pace/nabız/RPE girişleri) ve koçun özel düzenlediği metinlere (_cuePatch) DOKUNMAZ — sadece şablonun iskelet metni/bayrağı düzeltilir. Önce tarama (yazma yapmaz), sonra onaylayınca uygulama.'
+        )
+      ),
+      React.createElement('button',{
+        onClick:runLegacyScan,disabled:legacyScanning||legacyApplying,
+        style:{padding:'8px 16px',borderRadius:6,border:'none',background:(legacyScanning||legacyApplying)?'var(--border)':'var(--info)',color:'#fff',fontWeight:700,fontSize:13,cursor:(legacyScanning||legacyApplying)?'default':'pointer'}
+      },legacyScanning?'Taranıyor…':'🔍 Tara (yazmaz)'),
+      legacyScanning&&React.createElement('div',{style:{marginTop:10,fontSize:12,color:'var(--text-secondary)'}},
+        `${legacyProgress.done}/${legacyProgress.total} sporcu tarandı`+(legacyProgress.current?' — şu an: '+legacyProgress.current:'')
+      ),
+      legacyApplied&&React.createElement('div',{style:{marginTop:16,padding:16,background:'var(--success-bg,#f0fdf4)',borderRadius:8,color:'var(--success,#22c55e)',fontWeight:600,fontSize:13}},
+        `✓ ${legacyApplied.count} gün (${legacyApplied.athleteCount} sporcu) düzeltildi ve Firebase'e yazıldı.`
+      ),
+      legacyPending!==null&&!legacyScanning&&!legacyApplied&&React.createElement('div',{style:{marginTop:16}},
+        legacyPending.length===0
+          ?React.createElement('div',{style:{padding:16,background:'var(--success-bg,#f0fdf4)',borderRadius:8,color:'var(--success,#22c55e)',fontWeight:600,fontSize:13}},'✓ Düzeltilecek gün bulunamadı.')
+          :React.createElement('div',null,
+            React.createElement('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10,flexWrap:'wrap',gap:10}},
+              React.createElement('div',{style:{fontSize:13,fontWeight:700,color:'#ef4444'}},legacyPending.length+' gün düzeltilecek:'),
+              React.createElement('button',{
+                onClick:runLegacyApply,disabled:legacyApplying,
+                style:{padding:'8px 16px',borderRadius:6,border:'none',background:legacyApplying?'var(--border)':'#22c55e',color:'#fff',fontWeight:700,fontSize:13,cursor:legacyApplying?'default':'pointer'}
+              },legacyApplying?'Uygulanıyor…':`✅ Uygula — ${legacyPending.length} günü düzelt`)
+            ),
+            legacyPending.map((p,i)=>React.createElement('div',{key:i,style:{
+              padding:'10px 12px',marginBottom:8,borderRadius:8,background:'var(--bg-secondary)',border:'1px solid var(--border)',fontSize:12
+            }},
+              React.createElement('div',{style:{fontWeight:700,marginBottom:4}},p.athleteName+' — '+p.date+' ('+p.tip+', hafta '+p.weekKey+')'),
+              React.createElement('div',{style:{color:'var(--text-secondary)',fontSize:11}},p.fixes.join(' · '))
+            ))
+          )
+      )
     ),
     React.createElement(RawAralikInspector,{athletes})
   );
