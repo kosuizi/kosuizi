@@ -1,4 +1,4 @@
-<!-- Version: v2026.08.31-1544 --><!DOCTYPE html>
+<!-- Version: v2026.09.01-1322 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.08.31-1544';
+const APP_VERSION='v2026.09.01-1322';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -1261,6 +1261,13 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         // motoru o veriyi hiç görmüyordu. Aşağıya (pace bloğu, "_rpeExcludesPace") taşındı — artık
         // sadece pace sinyalini etkiliyor, tıpkı paceValidation/bpmValidation'daki gibi.
         if(row.type==='header'||row._isSprint) return;
+        // 2026.09.01 — Göksel talebi: Uzun Yokuş ve Power Hiking tamamen RPE/
+        // hissiyat odaklı koşulmalı, skor hesabına HİÇ girmemeli. Diğer dallardaki
+        // gibi tek tek pace/hr/mesafe koşullarına serpiştirmek yerine (o zaman
+        // ileride eklenecek yeni bir sinyal türü kolayca unutulup sızabilir) satır
+        // burada TAMAMEN atlanıyor — bpmValidation/paceValidation/focusIndicator
+        // (ReceteTablosu içi, ~satır 9865/10032/10119) ile BİREBİR AYNI iki tip.
+        if(__tip==='yokus_uzun'||__tip==='power_hiking') return;
         // 2026.08.16 — KÖK NEDEN DÜZELTMESİ (Göksel onayı): "type==='walk' → tamamen
         // hariç" satırı kaldırıldı. Bu satır Isınma/Soğuma/aralık-içi "Yürüyüş"
         // (dinlenme) fazlarının HİÇBİRİNİN mesafe/nabız sinyali üretmemesine yol
@@ -1710,6 +1717,14 @@ function allocatePercentages(counts,total){
 // ağırlıklı ortalanır. Bir fazda sadece pace VEYA sadece nabız hedefi
 // girilmiş olabilir (örn. Z2 kolay gün nabızla, interval pace ile takip edilir) —
 // bu durumda mevcut olan tek bileşen puana %100 yansır, eksik olan yok sayılır.
+//
+// 2026.09.01 — Göksel talebi: sabit Pace %100/Nabız %50 ağırlığı, antrenman
+// TİPİNE (zon'una) göre DİNAMİK hale getirildi (bkz. aşağıda calcPaceComplianceScore
+// içindeki "Antrenman Tipine Göre Dinamik Pace/Nabız Ağırlığı" bloğu). Kolay/aerobik
+// bölgede (Z1-Z2 — Yürü-Koş'un koşu fazları DAHİL) Nabız ağır basar (Nabız 1.0/
+// Pace 0.5); tempo/eşik/interval (Z3+) bölgesinde 2026.08.04'teki sabit davranış
+// aynen korunur (Pace 1.0/Nabız 0.5). Karma dönemlerde faz sayısına göre orantılı
+// karışır.
 // hrClosenessScore: pace'teki gibi sürekli bir sn/km farkı yerine, extractFeedbackSignals
 // zaten sapmayı basamaklı bir ağırlığa (hrWeight: 1=uyarı,2=tehlike,4=kritik)
 // indirgediği için yakınlık da bu basamaklara göre kademeli hesaplanır.
@@ -1811,6 +1826,34 @@ function calcPaceComplianceScore(signals){
   const mesafeTotal=mesafeSignals.length;
   if(total===0&&hrTotal===0&&mesafeTotal===0) return null;
 
+  // ── Antrenman Tipine Göre Dinamik Pace/Nabız Ağırlığı (2026.09.01 — Göksel talebi) ──
+  // Kolay/aerobik bölgede (Z1-Z2 — Yürü-Koş'un koşu fazları DAHİL) amaç belirli bir
+  // FİZYOLOJİK yükü sağlamaktır; pace o yükü tahmin etmeye yarayan bir araçtır
+  // (sıcaklık/yorgunluk/uyku gibi dış etkenlerden etkilenir), asıl hedef nabız
+  // bölgesidir. Tempo/eşik/interval (Z3+) bölgesinde ise tam tersi: hedef doğrudan
+  // pace'in kendisidir (nöromüsküler/metabolik adaptasyon o hıza özgüdür), nabız
+  // orada ikincil bir doğrulama sinyalidir. zi<=1 eşiği, mesZoneKolay ile BİREBİR
+  // AYNI (bkz. yukarıda extractFeedbackSignals → scanRow → mesZoneKolay) — panel/
+  // skor tutarlılığı için aynı sınır kullanılır. Karma dönemlerde (bazı fazlar
+  // kolay, bazıları zor — örn. son 4 haftada hem Yürü-Koş hem tempo günü varsa)
+  // ağırlık faz SAYISINA göre orantılı karışır: tamamı kolaysa Nabız 1.0/Pace 0.5,
+  // tamamı zorsa Pace 1.0/Nabız 0.5 (2026.08.04'teki eski sabit davranışla AYNI),
+  // arası oranla geçiş yapar. Sadece pace VEYA sadece nabız verisi olan bir dönemde
+  // bu ağırlığın etkisi yoktur (tek bileşenli ağırlıklı ortalamada ağırlık payda ile
+  // sadeleşir) — yalnızca İKİSİ birden mevcutken anlamlıdır. zi bilgisi olmayan
+  // (eski/bozuk) sinyaller zi??0 ile Z1 (en kolay) sayılır — güvenli/muhafazakâr
+  // varsayım, yanlışlıkla "zor" sayılıp Pace'e haksız ağırlık vermez.
+  const PACE_AGIRLIK_ZOR=1.0, PACE_AGIRLIK_KOLAY=0.5;
+  const HR_AGIRLIK_ZOR=0.5,   HR_AGIRLIK_KOLAY=1.0;
+  const _zoneKeyFn=(s)=>s.date+'|'+(s.label||'')+'|'+(s._rep??'');
+  const _zoneUnionByKey={};
+  [...paceSignals,...hrSignals].forEach(s=>{_zoneUnionByKey[_zoneKeyFn(s)]=s.zi??0;});
+  const _zoneVals=Object.values(_zoneUnionByKey);
+  const _kolayFrac=_zoneVals.length>0?_zoneVals.filter(z=>z<=1).length/_zoneVals.length:0;
+  const _zorFrac=1-_kolayFrac;
+  const _paceAgirlik=_zorFrac*PACE_AGIRLIK_ZOR+_kolayFrac*PACE_AGIRLIK_KOLAY;
+  const _hrAgirlik=_zorFrac*HR_AGIRLIK_ZOR+_kolayFrac*HR_AGIRLIK_KOLAY;
+
   // ── Pace bileşeni ──
   let uyum=0,hizli=0,yavas=0,closenessSum=0,closenessN=0;
   const paceDetayByKey={};
@@ -1897,15 +1940,19 @@ function calcPaceComplianceScore(signals){
   const _mesHacimBonus=mesUyum*HACIM_BONUS_PUAN;
   const puanMesafeForScore=mesafeTotal>0?Math.min(100,(mesYakinlikPuani!=null?Math.round((mesUyumPctForScore??mesUyumPct)*0.5+mesYakinlikPuani*0.5):Math.round(mesUyumPctForScore??mesUyumPct))+_mesHacimBonus):null;
 
-  // ── Birleşik puan (2026.08.04 — Göksel onayı): Pace %100, Mesafe Hedefi %100,
-  // Hedef Nabız %50 ağırlık ── Mevcut bileşenlerin ağırlıklı ortalaması alınır;
-  // bir bileşen için hiç sinyal yoksa (o hafta/dönemde hiç veri girilmemişse)
-  // toplamdan tamamen çıkarılır, kalan bileşenler kendi aralarında normalize edilir.
+  // ── Birleşik puan: Mesafe Hedefi sabit %100 ağırlık; Pace/Nabız ağırlığı artık
+  // antrenman TİPİNE göre DİNAMİK (bkz. yukarıdaki _paceAgirlik/_hrAgirlik —
+  // 2026.09.01 Göksel talebi). Eski sabit "Pace %100/Nabız %50" (2026.08.04 onayı)
+  // artık yalnızca tamamen "zor" bölgeden oluşan dönemlerde aynen geçerli; kolay/
+  // aerobik (Yürü-Koş dahil) dönemlerde tersine döner (Nabız 1.0/Pace 0.5).
+  // Mevcut bileşenlerin ağırlıklı ortalaması alınır; bir bileşen için hiç sinyal
+  // yoksa (o hafta/dönemde hiç veri girilmemişse) toplamdan tamamen çıkarılır,
+  // kalan bileşenler kendi aralarında normalize edilir.
   // `puan` = GÖSTERİLEN "🎯 Hedef Uyumu" (ham, dürüst). `puanForScore` = SADECE
   // Skor/sıralama hesabında kullanılan, faz sayısı adaletiyle düzeltilmiş versiyon.
   const _puanBilesenleri=[];
-  if(puanPace!=null)   _puanBilesenleri.push([puanPace,1.0]);
-  if(puanNabiz!=null)  _puanBilesenleri.push([puanNabiz,0.5]);
+  if(puanPace!=null)   _puanBilesenleri.push([puanPace,_paceAgirlik]);
+  if(puanNabiz!=null)  _puanBilesenleri.push([puanNabiz,_hrAgirlik]);
   if(puanMesafe!=null) _puanBilesenleri.push([puanMesafe,1.0]);
   const _agirlikToplami=_puanBilesenleri.reduce((s,[,w])=>s+w,0);
   const puan=_puanBilesenleri.length
@@ -1913,8 +1960,8 @@ function calcPaceComplianceScore(signals){
     :null;
 
   const _puanBilesenleriForScore=[];
-  if(puanPaceForScore!=null)   _puanBilesenleriForScore.push([puanPaceForScore,1.0]);
-  if(puanNabizForScore!=null)  _puanBilesenleriForScore.push([puanNabizForScore,0.5]);
+  if(puanPaceForScore!=null)   _puanBilesenleriForScore.push([puanPaceForScore,_paceAgirlik]);
+  if(puanNabizForScore!=null)  _puanBilesenleriForScore.push([puanNabizForScore,_hrAgirlik]);
   if(puanMesafeForScore!=null) _puanBilesenleriForScore.push([puanMesafeForScore,1.0]);
   const _agirlikToplamiForScore=_puanBilesenleriForScore.reduce((s,[,w])=>s+w,0);
   const puanForScore=_puanBilesenleriForScore.length
@@ -8877,7 +8924,7 @@ async function saveCueGlobal(label, text){
 }
 
 // Aralıklar editörü — tekrarlı antrenmanlarda her bir tekrarın koşu+dinlenme pace'lerini ayrı düzenler
-function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange, paceValidation, paceToZoneIdx, zones, measureZones, readOnly, isWorkoutLogged}){
+function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange, paceValidation, focusIndicator, paceToZoneIdx, zones, measureZones, readOnly, isWorkoutLogged}){
   const [editKey, setEditKey] = React.useState(null); // 'rep:type:field'
   const e = React.createElement;
   // 2026.08.23 — KÖK NEDEN DÜZELTMESİ: ReceteTablosu'daki _mZones (measureZones||zones,
@@ -9113,7 +9160,10 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
             const pv = hasPaceEntryRun ? paceValidation(runData) : null;
             out.push(e('tr',{key:`r${rep}`,style:{background:runData.color,borderBottom:'1px solid rgba(0,0,0,.1)'}},
               e('td',{style:{...cellSt,color:'#000'}},rep),
-              e('td',{style:{...cellSt,textAlign:'left',color:'#000'}},runData.label),
+              e('td',{style:{...cellSt,textAlign:'left',color:'#000'}},
+                runData.label,
+                (()=>{const fi=focusIndicator?focusIndicator(runData):null;return fi?e('span',{title:fi.label,style:{marginLeft:4,fontSize:9}},fi.icon):null;})()
+              ),
               e('td',{style:{padding:'4px 4px',verticalAlign:'middle',textAlign:'center'}},
                 e('div',{style:{display:'flex',flexDirection:'column',gap:3,alignItems:'center'}},
                   pv ? e('span',{style:{display:'inline-block',padding:'2px 5px',borderRadius:3,fontSize:8,fontWeight:700,color:pv.color,background:pv.bg,whiteSpace:'nowrap',lineHeight:1.3}},pv.icon+' '+pv.label) : e('span',{style:{color:'#94a3b8',fontSize:9}},'—'),
@@ -9811,6 +9861,15 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     // yarışta yüksek nabız beklenen/istenen bir şeydir, "sapma" rozetine dönüşmemeli.
     // extractFeedbackSignals'daki karşılığı için bkz. ~satır 1498 (_isRaceRow).
     if(tip==='yaris') return null;
+    // 2026.09.01 — Göksel talebi: Uzun Yokuş ve Power Hiking tamamen RPE/hissiyat
+    // odaklı koşulmalı — pace zaten RPE istisnasıyla dışlanıyordu (eğim antrenman
+    // boyunca değişken, pace hedefi anlamsız); AYNI gerekçe nabza da uygulanıyor
+    // (eğim/zemin/sıcaklık o günkü "Z4 hedefi"nin anlamını bulanıklaştırır). Isınma/
+    // Soğuma DAHİL antrenmanın TAMAMI bloklanır — kısmi rozet (ör. sadece Isınma
+    // Nabzı görünüp ana blok görünmemesi) tutarsız/yarım bir izlenim verirdi.
+    // paceValidation (~satır 10014) ve focusIndicator (~satır 10110) ile BİREBİR
+    // AYNI iki tip; extractFeedbackSignals'daki karşılığı için bkz. scanRow başı.
+    if(tip==='yokus_uzun'||tip==='power_hiking') return null;
     // Sprint/strides dinlenme satırlarında nabız tam inemez → gösterge atlanır
     const rowLabel=row.label||'';
     const isSprintRestRow=/strides|sprint|hill|depar|açıcı|yokuş/i.test(rowLabel)&&/arası/i.test(rowLabel);
@@ -9970,6 +10029,13 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     if(!row||row.type==='header'||(row.rpe&&tip!=='yuru_kos'&&row.type!=='walk')||row._isSprint) return null;
     if(tip==='yaris') return null; // Yarışlarda pace kontrolü yapma
     if(tip==='serbest') return null; // Serbest Koşu: hedef yok — fallback _origPaceSec'e göre de validasyon yapma
+    // 2026.09.01 — Göksel talebi: Uzun Yokuş/Power Hiking zaten satırlardaki RPE
+    // alanı yüzünden yukarıdaki genel kuralla dolaylı olarak dışlanıyordu — ama
+    // bu, coach ileride bir satırın RPE'sini boşaltırsa (düzenleme/istisna) sessizce
+    // pace rozetinin geri gelmesine açık kapı bırakırdı. yaris/serbest ile AYNI
+    // netlikte, tip bazında AÇIKÇA dışlanıyor — bkz. bpmValidation/focusIndicator'daki
+    // birebir aynı kontrol.
+    if(tip==='yokus_uzun'||tip==='power_hiking') return null;
     if(/[iı]sınma|isinma|soğuma|soguma/i.test(row.label||'')) return null; // Isınma/soğuma geçiş fazı — valide etme
     // ── OP-YK3 (29.07.2026 — koç geri bildirimi): Dinlenme/toparlanma fazları (On-Off,
     // İnterval, Piramit vb. "rest" satırları VE Yürü-Koş "walk" yürüyüş satırları) artık
@@ -10042,6 +10108,42 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     return diff>0
       ?{label:'Çok Yavaş',color:'#ef4444',bg:'#fef2f2',icon:'▼▼'}
       :{label:'Çok Hızlı',color:'#ef4444',bg:'#fef2f2',icon:'▲▲'};
+  };
+
+  // ── Pace/Nabız Odak Rozeti (2026.09.01 — Göksel talebi) ─────────────────────
+  // Kolay/aerobik fazlarda (Z1-Z2 — Yürü-Koş'un koşu fazları DAHİL) amaç belirli
+  // bir FİZYOLOJİK yükü sağlamaktır — pace o yükü tahmin etmeye yarayan bir
+  // araçtır, asıl hedef nabız bölgesidir. Tempo/eşik/interval (Z3+) fazlarında
+  // ise tam tersi: hedef doğrudan pace'in kendisidir, nabız ikincil bir
+  // doğrulama sinyalidir. zi<=1 eşiği, calcPaceComplianceScore içindeki dinamik
+  // Pace/Nabız ağırlık hesabıyla (bkz. ~satır 1839, "Antrenman Tipine Göre
+  // Dinamik Pace/Nabız Ağırlığı") BİREBİR AYNI — rozet ile puanlama motoru
+  // hangi fazda hangisinin ağır bastığı konusunda HER ZAMAN aynı şeyi söylesin.
+  //
+  // Bu rozet bir SONUÇ değil PLANLAMA bilgisidir: paceValidation'ın aksine
+  // isWorkoutLogged/veri-girişi kontrolü YOK — sporcu antrenmanı henüz
+  // yapmadan/girmeden ÖNCE de görünür, amaç "bu fazda hangisine odaklan" demektir.
+  // Satırın DOĞASINA dair istisnalar (header/ısınma/soğuma/rest/walk/sprint/
+  // yarış/serbest) paceValidation ile BİREBİR AYNI — bu fazlarda zaten gerçek
+  // bir pace hedefi YOK (sadece nabızla değerlendiriliyorlar), bu yüzden ayrıca
+  // "odak" diye işaretlemeye gerek yok; veri-girişi kontrolleri (pm/ps>0 var mı)
+  // BİLEREK tekrarlanmadı çünkü bu rozet veriden bağımsız olmalı.
+  const focusIndicator=(row)=>{
+    if(!row||row.type==='header'||(row.rpe&&tip!=='yuru_kos'&&row.type!=='walk')||row._isSprint) return null;
+    if(tip==='yaris'||tip==='serbest') return null;
+    // 2026.09.01 — Göksel talebi: Uzun Yokuş/Power Hiking tamamen RPE/hissiyat
+    // odaklı — bpmValidation/paceValidation ile BİREBİR AYNI tip istisnası
+    // (bkz. ~satır 9865, 10032). Bu iki tipte artık gerçekten HİÇBİR şey
+    // (ne pace ne nabız) değerlendirilmiyor, dolayısıyla odak rozetinin de
+    // gösterecek bir şeyi yok.
+    if(tip==='yokus_uzun'||tip==='power_hiking') return null;
+    if(/[iı]sınma|isinma|soğuma|soguma/i.test(row.label||'')) return null;
+    if(row.type==='rest'||row.type==='walk') return null;
+    const zi=row._targetZIdx!=null?row._targetZIdx:row._origZIdx;
+    if(zi==null) return null;
+    return zi<=1
+      ?{label:'Nabız Odaklı',icon:'❤️',color:'#be185d',bg:'#fdf2f8'}
+      :{label:'Pace Odaklı',icon:'↔️',color:'#1d4ed8',bg:'#eff6ff'};
   };
 
   // ── Mesafe Hedefi rozeti (2026.08.04 — Göksel talebi) ───────────────────────
@@ -10723,6 +10825,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
                     overrides:aralikOverrides[i]||{},
                     onChange:(rep,type,field,val)=>updateAralikCell(i,rep,type,field,val),
                     paceValidation,
+                    focusIndicator,
                     paceToZoneIdx,
                     zones,
                     measureZones,
@@ -10741,6 +10844,10 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
             React.createElement('td',{style:{padding:'5px 6px',fontWeight:700,fontSize:11,color:'#000',display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:6}},
               React.createElement('div',{style:{flex:1,minWidth:0}},
               r.label,
+              (()=>{
+                const fi=focusIndicator(r);
+                return fi?React.createElement('span',{title:fi.label,style:{display:'inline-block',marginLeft:6,padding:'1px 5px',borderRadius:3,fontSize:8,fontWeight:700,color:fi.color,background:fi.bg,whiteSpace:'nowrap',lineHeight:1.4,verticalAlign:'middle'}},fi.icon+' '+fi.label):null;
+              })(),
               (()=>{
                 const src=r._srcBaslik||r.label;
                 // Öncelik sırası: 1) _cuePatch (row-label bazlı kullanıcı düzenlemesi)
