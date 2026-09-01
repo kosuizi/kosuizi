@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.01-2311 --><!DOCTYPE html>
+<!-- Version: v2026.09.01-2333 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.01-2311';
+const APP_VERSION='v2026.09.01-2333';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -11959,15 +11959,28 @@ function tplFromYapiNotu(tur, yapiNotu, band, sure_dk, zones, disiplin, phase, c
     const turCount=ooM?parseInt(ooM[4]):2;
     const turBloklar=[];
     // 2026.09.01 — Göksel talebi: On-Off'un ON bacağı (30-45sn, SHORT_ROW_MAX_SEC=45
-    // sınırının içinde/eşiğinde) _isSprint:true olarak işaretlendi. Bu kadar kısa
-    // maksimal patlamalarda nabız fizyolojik olarak hedef bölgeye yetişemez
-    // ("cardiac lag") — pace zaten RPE yüzünden dışlanıyordu, ama nabız hâlâ
-    // (yumuşatılmış da olsa) değerlendirmeye açıktı ve puanlamaya sızıyordu. Strides/
-    // Depar/Açıcı/Hill Sprint ile AYNI mantık/bayrak — bpmValidation/paceValidation/
-    // focusIndicator/extractFeedbackSignals hepsi _isSprint'i zaten kontrol ediyor,
-    // tek bayrakla dördü de tutarlı şekilde "Hissiyat Odaklı"ya döner. "Tur Arası
-    // Toparlanma" (3-5dk Z1) ETKİLENMEDİ — o kısa bir patlama değil, normal bir
-    // toparlanma fazı, nabızla değerlendirilmeye devam ediyor.
+    // sınırının içinde/eşiğinde) sprint olarak işaretlendi. Bu kadar kısa maksimal
+    // patlamalarda nabız fizyolojik olarak hedef bölgeye yetişemez ("cardiac lag") —
+    // pace zaten RPE yüzünden dışlanıyordu, ama nabız hâlâ değerlendirmeye açıktı ve
+    // puanlamaya sızıyordu. "Tur Arası Toparlanma" (3-5dk Z1) ETKİLENMEDİ — o kısa
+    // bir patlama değil, normal bir toparlanma fazı, nabızla değerlendirilmeye devam
+    // ediyor.
+    //
+    // GERÇEK KÖK NEDEN DÜZELTMESİ (2026.09.01, Göksel'in ekran görüntüsüyle bildirdiği
+    // "detay metni RPE diyor ama rozet hâlâ Nabız Odaklı" çelişkisi): Aşağıdaki ham
+    // _rows satırında ilk yazıldığında `_isSprint:true` (ALT ÇİZGİLİ) kullanılmıştı.
+    // Ama adimToRows()'un mkRow() fonksiyonu (~satır 8912) ham şablon satırından bu
+    // bayrağı `rr.isSprint||false` (ALT ÇİZGİSİZ) olarak okuyor — Strides/Yokuş Kısa/
+    // Hill Sprint/Açıcı/Depar'ın hepsi ham şablonda `isSprint:true` (alt çizgisiz)
+    // kullanıyor, SADECE On-Off `_isSprint` (alt çizgili) kullanıyordu. Bu isim
+    // uyuşmazlığı yüzünden mkRow çıktısında ON satırının GERÇEK `_isSprint` değeri
+    // HER ZAMAN false oluyordu — yani bpmValidation/paceValidation/focusIndicator/
+    // liveRowColor/extractFeedbackSignals'ın _isSprint kontrolleri baştan beri hiç
+    // devreye girmiyordu (sorun rozetin METNİ değil, rozetin/renklendirmenin KENDİSİYDİ,
+    // muhtemelen puanlama sinyali de etkileniyordu). Önceki not ("hepsi _isSprint'i
+    // zaten kontrol ediyor, tek bayrakla tutarlı döner") YANLIŞTI — kontrol ediliyordu
+    // ama bayrak hiç ulaşmıyordu. Düzeltme: ham satırda da `isSprint:true` (alt
+    // çizgisiz) kullanmak — diğer tüm sprint tiplerinin ZATEN kullandığı kural.
     for(let t=0;t<turCount;t++){
       turBloklar.push({
         baslik:`Tur ${t+1} — ${sets} set (${onSn}sn ON / ${offSn}sn OFF)`,
@@ -11979,7 +11992,7 @@ function tplFromYapiNotu(tur, yapiNotu, band, sure_dk, zones, disiplin, phase, c
         // metin çelişiyordu. ON artık açıkça RPE ile ifade ediliyor, OFF (toparlanma)
         // nabız odaklı kalmaya devam ediyor (OP-YK3 ile tutarlı).
         detay:`ON: RPE 9–10 maksimal patlama (hissiyat odaklı, nabız hedefi yok) · OFF: ${z2} hafif koşu · Ayaklar durmuyor`,
-        _rows:[{label:`Tur ${t+1} — ON`,sure_sn:onSn,zIdx:4,tekrar:sets,din_sn:offSn,dinZIdx:0,rpe:'9–10',_isSprint:true}]
+        _rows:[{label:`Tur ${t+1} — ON`,sure_sn:onSn,zIdx:4,tekrar:sets,din_sn:offSn,dinZIdx:0,rpe:'9–10',isSprint:true}]
       });
       if(t<turCount-1) turBloklar.push({
         baslik:'Tur Arası Toparlanma',
@@ -13079,10 +13092,17 @@ function tplOnOff(band, zones, phase='Gelişme', phaseStep=0, athWorkouts=_PLAND
   const sure_dk=Math.round((oo.set*(oo.on+oo.off)*oo.tur)/60)+18;
   const yapiNotuOO=`On-Off · ${seviye} — ${oo.set} set: ${oo.on}sn/${oo.off}sn × ${oo.tur} tur`;
   const turBloklar=[];
-  // 2026.09.01 — Göksel talebi: bkz. tur==='on_off' (metin-parse varyantı, ~satır
-  // 11484) içindeki BİREBİR AYNI not — bu, aynı On-Off tipinin yapılandırılmış
-  // (ON_OFF_PROG tablosu üzerinden) üretim yolu; iki üretim yolu da AYNI davranışı
-  // vermeli. ON bacağı (oo.on = 30-40sn) _isSprint:true.
+  // 2026.09.01 — Göksel talebi: bkz. tur==='on_off' (metin-parse varyantı) içindeki
+  // BİREBİR AYNI not — bu, aynı On-Off tipinin yapılandırılmış (ON_OFF_PROG tablosu
+  // üzerinden) üretim yolu; iki üretim yolu da AYNI davranışı vermeli. ON bacağı
+  // (oo.on = 30-40sn) sprint olarak işaretlenir.
+  //
+  // GERÇEK KÖK NEDEN DÜZELTMESİ (2026.09.01) — bkz. metin-parse varyantındaki BİREBİR
+  // AYNI not: ham _rows'ta `_isSprint:true` (alt çizgili) yazılmıştı ama adimToRows/
+  // mkRow (~satır 8912) bunu `isSprint` (alt çizgisiz) olarak okuyor — Strides/Yokuş
+  // Kısa/Hill Sprint/Açıcı/Depar'ın hepsinin kullandığı isimle aynı olmalıydı. Bu
+  // yüzden ON satırının işlenmiş `_isSprint` değeri HER ZAMAN false çıkıyordu; rozet/
+  // renklendirme/puanlama tarafındaki hiçbir _isSprint kontrolü devreye girmiyordu.
   for(let t=0;t<oo.tur;t++){
     turBloklar.push({
       baslik:`Tur ${t+1} — ${oo.set} set (${oo.on}sn ON / ${oo.off}sn OFF)`,
@@ -13090,7 +13110,7 @@ function tplOnOff(band, zones, phase='Gelişme', phaseStep=0, athWorkouts=_PLAND
       // düzeltme notu: ON artık RPE ile ifade ediliyor (zoneInfo/nabız değil), OFF
       // nabız odaklı kalıyor. İki üretim yolu da AYNI davranışı vermeli.
       detay:`ON: RPE 9–10 VO2max patlama (hissiyat odaklı, nabız hedefi yok) · OFF: ${z1} hafif koşu — ayaklar durmuyor · Form bozulmamalı`,
-      _rows:[{label:`Tur ${t+1} — ON`,sure_sn:oo.on,zIdx:4,tekrar:oo.set,din_sn:oo.off,dinZIdx:0,rpe:'9–10',_isSprint:true}]
+      _rows:[{label:`Tur ${t+1} — ON`,sure_sn:oo.on,zIdx:4,tekrar:oo.set,din_sn:oo.off,dinZIdx:0,rpe:'9–10',isSprint:true}]
     });
     if(t<oo.tur-1) turBloklar.push({
       baslik:'Tur Arası Toparlanma',
@@ -13199,7 +13219,15 @@ function tplStrides(band, sure_dk, zones, phase='Temel'){
     yapi_notu:yapiNotuStr,
     yapilar:[
       {baslik:'Z2 Aerobik Koşu',detay:`${Math.round((cfg.sure||50)*0.7)} dk — ${zoneInfo(zones,1)||'Z2'} sabit tempo`,_rows:_R.sabit('Z2 Aerobik',Math.round((cfg.sure||50)*0.7),1)},
-      {baslik:'Strides',detay:`${cfg.sets}×25sn kademeli hızlanma — ${zoneInfo(zones,4)||'Z5a'} zirve · ${cfg.extra}`,_rows:_R.strides('Strides',parseInt(cfg.sets),25, `${cfg.sets}×25sn kademeli hızlanma — ${zoneInfo(zones,4)||'Z5a'} zirve · ${cfg.extra}`, '45 sn hafif koşu')},
+      // 2026.09.01 — Göksel'in On-Off'ta bulduğu hatayla BİREBİR AYNI örüntü: Strides
+      // satırı _R.strides() ile _isSprint:true + rpe:'8–9' alıyor (25sn kısa patlama,
+      // aynı kardiyak gecikme gerekçesiyle bpmValidation/paceValidation rozeti zaten
+      // baskılanıyor) — ama bu detay/_cue metni zoneInfo(zones,4) çağırdığı için
+      // ekranda hâlâ canlı Z5a nabız+pace aralığını (örn. "172–182 bpm · 3:40/km")
+      // hedefmiş gibi gösteriyordu. tur==='strides' metin-parse varyantı (~satır 12040)
+      // zaten bu hatayı hiç taşımıyordu (sadece yapi+'RPE 7–8' yazıyor) — iki üretim
+      // yolu şimdi tutarlı: ON kısmı/zirve RPE ile ifade ediliyor, nabız hedefi yok.
+      {baslik:'Strides',detay:`${cfg.sets}×25sn kademeli hızlanma — RPE 8–9 zirve (hissiyat odaklı, nabız hedefi yok) · ${cfg.extra}`,_rows:_R.strides('Strides',parseInt(cfg.sets),25, `${cfg.sets}×25sn kademeli hızlanma — RPE 8–9 zirve (hissiyat odaklı, nabız hedefi yok) · ${cfg.extra}`, '45 sn hafif koşu')},
       {baslik:'Soğuma',detay:`5 dk hafif yürüyüş`,_rows:_R.soguma(5)},
     ]
   };
