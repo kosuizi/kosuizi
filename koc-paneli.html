@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.01-1847 --><!DOCTYPE html>
+<!-- Version: v2026.09.01-1853 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.01-1847';
+const APP_VERSION='v2026.09.01-1853';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -30706,6 +30706,9 @@ function SporcuAnketi(){
   const [athletes,setAthletes]=useState([]);
   const [races,setRaces]=useState([]);
   const [selId,setSelId]=useState('');
+  // "Adını Seç" listesi search edilebilir olsun diye (2026.09.01 Göksel talebi)
+  const [nameQuery,setNameQuery]=useState('');
+  const [showNameList,setShowNameList]=useState(false);
   const [form,setForm]=useState(null);
   const [saved,setSaved]=useState(false);
   const [loading,setLoading]=useState(true);
@@ -30773,6 +30776,8 @@ function SporcuAnketi(){
     setPinOk(false);
     setPinErr('');
     const a=athletes.find(function(x){return x.id===id;});
+    setShowNameList(false);
+    setNameQuery(a?((a.ad||'')+' '+(a.soyad||'')).trim():'');
     if(!a){setForm(null);return;}
     setForm({
       foto:a.foto||'',kilo:a.kilo||'',boy:a.boy||'',rhr:a.rhr||'',
@@ -30940,21 +30945,62 @@ function SporcuAnketi(){
   const dataAgeMin=dataLoadedAt?Math.round((new Date()-dataLoadedAt)/60000):0;
   const isStale=dataAgeMin>=5;
 
-  const selectEl=React.createElement('div',{className:'card',style:{marginBottom:12}},
+  // Arama sorgusuna göre filtrelenmiş, alfabetik sıralı sporcu listesi.
+  // 2026.09.01 — Göksel talebi: BİLİNÇLİ OLARAK filter(a=>!a.pasif) YOK —
+  // diğer sporcu seçim listelerinin aksine (bkz. aynı desenin kullanıldığı
+  // Antrenman Ekle/Karşılaştır vb.), bu listede "Aktif Değil" işaretli
+  // sporcular da görünmeli. Sebep: pasif bir sporcu bile kendi anketine
+  // girip bilgilerini (örn. Reklam ve Tanıtım İzni) güncelleyebilmeli.
+  const sortedAthletesForSearch=[...athletes].sort((a,b)=>((a.ad||'')+' '+(a.soyad||'')).toLocaleLowerCase('tr').localeCompare(((b.ad||'')+' '+(b.soyad||'')).toLocaleLowerCase('tr'),'tr'));
+  const nameQueryNorm=nameQuery.trim().toLocaleLowerCase('tr');
+  const filteredAthletesForSearch=nameQueryNorm
+    ?sortedAthletesForSearch.filter(a=>((a.ad||'')+' '+(a.soyad||'')).toLocaleLowerCase('tr').includes(nameQueryNorm))
+    :sortedAthletesForSearch;
+
+  const selectEl=React.createElement('div',{className:'card',style:{marginBottom:12,position:'relative'}},
     React.createElement('label',{style:{fontSize:13,fontWeight:600,display:'block',marginBottom:8}},'Adını Seç'),
-    React.createElement('select',{
-      value:selId,
-      onChange:function(e){selectAthlete(e.target.value);},
-      style:{fontSize:14,padding:'10px 12px'}
-    },
-      React.createElement('option',{value:''},'— Listeden Seç —'),
-      // 2026.09.01 — Göksel talebi: BİLİNÇLİ OLARAK filter(a=>!a.pasif) YOK —
-      // diğer sporcu seçim listelerinin aksine (bkz. aynı desenin kullanıldığı
-      // Antrenman Ekle/Karşılaştır vb.), bu listede "Aktif Değil" işaretli
-      // sporcular da görünmeli. Sebep: pasif bir sporcu bile kendi anketine
-      // girip bilgilerini (örn. Reklam ve Tanıtım İzni) güncelleyebilmeli.
-      [...athletes].sort((a,b)=>((a.ad||'')+' '+(a.soyad||'')).toLocaleLowerCase('tr').localeCompare(((b.ad||'')+' '+(b.soyad||'')).toLocaleLowerCase('tr'),'tr')).map(function(a){return React.createElement('option',{key:a.id,value:a.id},(a.ad||'')+' '+(a.soyad||''));})
-    )
+    React.createElement('input',{
+      type:'text',
+      value:nameQuery,
+      placeholder:'İsminle ara…',
+      onFocus:function(){setShowNameList(true);},
+      onChange:function(e){
+        setNameQuery(e.target.value);
+        setShowNameList(true);
+        // Kullanıcı yazmaya başlayınca eski seçim (varsa) formu göstermeye
+        // devam etmesin diye temizlenmiyor — sadece listeden yeni bir isme
+        // tıklayınca selectAthlete tetiklenir. Serbestçe yazıp vazgeçebilsin.
+      },
+      style:{fontSize:14,padding:'10px 12px',width:'100%',boxSizing:'border-box'}
+    }),
+    showNameList&&React.createElement('div',{style:{
+      position:'absolute',left:16,right:16,top:'100%',marginTop:2,zIndex:20,
+      maxHeight:240,overflowY:'auto',background:'var(--bg-primary)',
+      border:'1px solid var(--border)',borderRadius:'var(--radius)',
+      boxShadow:'0 6px 20px rgba(0,0,0,.15)'
+    }},
+      filteredAthletesForSearch.length===0
+        ?React.createElement('div',{style:{padding:'10px 12px',fontSize:13,color:'var(--text-tertiary)'}},'Eşleşen isim yok')
+        :filteredAthletesForSearch.map(function(a){
+            const adSoyad=((a.ad||'')+' '+(a.soyad||'')).trim();
+            return React.createElement('div',{
+              key:a.id,
+              // onMouseDown (onClick değil) — input'un blur ile listeyi
+              // kapatmasından ÖNCE tetiklenir, böylece tıklama kaybolmaz.
+              onMouseDown:function(e){e.preventDefault();selectAthlete(a.id);},
+              style:{
+                padding:'10px 12px',fontSize:14,cursor:'pointer',
+                background:a.id===selId?'var(--bg-secondary)':'transparent',
+                borderBottom:'1px solid var(--border)'
+              }
+            },adSoyad||'(İsimsiz)');
+          })
+    ),
+    // Liste açıkken kart dışına dokununca kapansın
+    showNameList&&React.createElement('div',{
+      onClick:function(){setShowNameList(false);},
+      style:{position:'fixed',inset:0,zIndex:10}
+    })
   );
 
   // Son anket tarihi — sporcu seçildiğinde PIN'den önce göster
