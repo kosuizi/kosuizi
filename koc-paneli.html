@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.01-1508 --><!DOCTYPE html>
+<!-- Version: v2026.09.01-1552 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.01-1508';
+const APP_VERSION='v2026.09.01-1552';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -5521,7 +5521,7 @@ const AD_CARD={
   cta:'Takımın da yarışsın 🔥'
 };
 
-function ReklamTab({teamName,teamLogo,adCardOverride,onSaveAdCard}){
+function ReklamTab({teamName,teamLogo,athletes,adCardOverride,onSaveAdCard}){
   const cardRef=useRef();
   const [sharing,setSharing]=useState(false);
   // Koç tarafından tıkla-düzenle ile değiştirilmiş metin varsa (adCardOverride,
@@ -5536,20 +5536,30 @@ function ReklamTab({teamName,teamLogo,adCardOverride,onSaveAdCard}){
   const [editingBaslik,setEditingBaslik]=useState(false);
   const [editingAciklama,setEditingAciklama]=useState(false);
   const [editingCta,setEditingCta]=useState(false);
+  // Podyumdaki mockup isimlerin (Sporcu A/B/C) yerine seçilebilen GERÇEK
+  // sporcular — 2026.09.01 Göksel talebi. {sira:athleteId} şeklinde saklanır,
+  // ad_card override'ının içinde 'podyum' alanı olarak Firebase'e yazılır.
+  // SADECE reklam_izni===true olan (Sporcu Anketi'nde açık onay veren)
+  // sporcular seçim listesinde görünür — bkz. izinliSporcular.
+  const [podyumSecim,setPodyumSecim]=useState(saved.podyum||{});
+  const [showPicker,setShowPicker]=useState(false);
+  const izinliSporcular=(athletes||[]).filter(a=>a.reklam_izni&&!a.pasif);
 
-  // Bir alan onaylandığında (✓) GÜNCEL üç alanı da (baslik/aciklama/cta) tek
-  // bir nesne olarak Firebase'e kalıcı yazar — böylece sayfa yenilense de
-  // düzenlenen metin korunur.
+  // Bir alan onaylandığında (✓) GÜNCEL tüm alanları (baslik/aciklama/cta/podyum)
+  // tek bir nesne olarak Firebase'e kalıcı yazar — böylece sayfa yenilense de
+  // düzenlenen metin ve seçilen sporcular korunur.
   const persist=(patch)=>{
-    const merged={baslik,aciklama,cta,...patch};
+    const merged={baslik,aciklama,cta,podyum:podyumSecim,...patch};
     onSaveAdCard&&onSaveAdCard(merged);
   };
+  const persistPodyum=(newMap)=>{setPodyumSecim(newMap);persist({podyum:newMap});};
   const isEdited=!!adCardOverride;
   const resetToOriginal=()=>{
-    if(!confirm('Düzenlemeler silinip kartın orijinal metnine dönülsün mü?'))return;
+    if(!confirm('Düzenlemeler silinip kartın orijinal metnine ve mockup sporcularına dönülsün mü?'))return;
     setBaslik(AD_CARD.baslik);
     setAciklama(AD_CARD.aciklama);
     setCta(AD_CARD.cta);
+    setPodyumSecim({});
     onSaveAdCard&&onSaveAdCard(null);
   };
 
@@ -5557,12 +5567,20 @@ function ReklamTab({teamName,teamLogo,adCardOverride,onSaveAdCard}){
   const inputStyle={background:'rgba(0,0,0,0.35)',border:'1px solid rgba(251,191,36,0.5)',color:'#fff',borderRadius:6,padding:'6px 10px',fontSize:13,width:'100%',boxSizing:'border-box',fontFamily:'inherit'};
   const hint=React.createElement('div',{'data-no-export':true,style:{fontSize:9,color:'rgba(255,255,255,0.25)',marginTop:4}},'tıklayarak düzenle');
 
-  // Podyum mockup verisi — GERÇEK sporcu verisi DEĞİLDİR, sadece görsel örnek
+  // Podyum mockup verisi — GERÇEK sporcu verisi DEĞİLDİR, sadece görsel örnek.
+  // Bir sıra için podyumSecim'de bir sporcu seçiliyse (ve o sporcu hâlâ izin
+  // veriyorsa), mockup ad/foto yerine o sporcunun gerçek adı/fotoğrafı kullanılır
+  // — puan HER ZAMAN mockup kalır (izin sadece isim/fotoğraf içindir, gerçek
+  // performans verisinin reklamda paylaşılması ayrı bir konudur).
   const podyum=[
     {sira:2,madalya:'🥈',renk:'#cbd5e1',h:66,ad:'Sporcu B',puan:88},
     {sira:1,madalya:'🥇',renk:'#fbbf24',h:96,ad:'Sporcu A',puan:97},
     {sira:3,madalya:'🥉',renk:'#f97316',h:48,ad:'Sporcu C',puan:81}
-  ];
+  ].map(p=>{
+    const secilenId=podyumSecim[p.sira];
+    const ath=secilenId?izinliSporcular.find(a=>a.id===secilenId):null;
+    return ath?Object.assign({},p,{ad:ath.ad||p.ad,foto:ath.foto||null,gercek:true}):p;
+  });
 
   const handleShare=async()=>{
     if(!cardRef.current)return;
@@ -5603,6 +5621,36 @@ function ReklamTab({teamName,teamLogo,adCardOverride,onSaveAdCard}){
         padding:'6px 14px',fontSize:12,cursor:'pointer',color:'var(--text-secondary)',fontWeight:600
       }},'↺ Orijinale Dön'),
       React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)'}},'9:16 dikey · düzenlemek için üzerine tıklayın')
+    ),
+
+    // ── Podyuma gerçek sporcu ekleme paneli (izinliSporcular ile sınırlı) ──
+    React.createElement('div',{style:{marginBottom:10}},
+      React.createElement('button',{onClick:()=>setShowPicker(v=>!v),style:{
+        background:'none',border:'1px solid var(--border)',borderRadius:8,
+        padding:'6px 14px',fontSize:12,cursor:'pointer',color:'var(--text-secondary)',fontWeight:600
+      }},(showPicker?'▲ ':'▼ ')+'👤 Podyuma Gerçek Sporcu Ekle'),
+      showPicker&&React.createElement('div',{style:{marginTop:8,padding:12,background:'var(--bg-secondary)',borderRadius:8,border:'1px solid var(--border)'}},
+        izinliSporcular.length===0
+          ?React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',lineHeight:1.5}},
+              'Henüz reklam izni veren sporcu yok. Sporcu Anketi\'ndeki "📣 Reklam ve Tanıtım İzni" kutusunu işaretleyen sporcular burada seçilebilir olacak.'
+            )
+          :[1,2,3].map(sira=>React.createElement('div',{key:sira,style:{display:'flex',alignItems:'center',gap:8,marginBottom:8}},
+              React.createElement('span',{style:{fontSize:12,width:56,flexShrink:0,color:'var(--text-secondary)'}},sira+'. sıra:'),
+              React.createElement('select',{
+                value:podyumSecim[sira]||'',
+                onChange:e=>{
+                  const val=e.target.value;
+                  const yeni=Object.assign({},podyumSecim);
+                  if(val)yeni[sira]=val;else delete yeni[sira];
+                  persistPodyum(yeni);
+                },
+                style:{flex:1,fontSize:12,padding:'5px 8px',borderRadius:6,border:'1px solid var(--border)',background:'var(--bg-primary)',color:'var(--text-primary)'}
+              },
+                React.createElement('option',{value:''},'— Mockup ('+['','Sporcu A','Sporcu B','Sporcu C'][sira]+') —'),
+                izinliSporcular.map(a=>React.createElement('option',{key:a.id,value:a.id},(a.ad||'')+' '+(a.soyad||'')))
+              )
+            ))
+      )
     ),
 
     // Instagram dikey kart
@@ -5655,14 +5703,21 @@ function ReklamTab({teamName,teamLogo,adCardOverride,onSaveAdCard}){
         hint
       ),
 
-      // Podyum görseli (mockup — gerçek veri değil)
+      // Podyum görseli (mockup — gerçek isim/skor; sadece izinli sporcu seçilirse gerçek ad/foto kullanılır)
       React.createElement('div',{style:{background:'rgba(255,255,255,0.06)',borderRadius:14,padding:'18px 14px 14px',border:'1px solid rgba(255,255,255,0.1)',marginBottom:22}},
         React.createElement('div',{style:{fontSize:10,letterSpacing:1,color:'rgba(255,255,255,0.4)',marginBottom:14,textAlign:'center'}},'🔥 BU HAFTA LİDERLİK'),
         React.createElement('div',{style:{display:'flex',alignItems:'flex-end',justifyContent:'center',gap:10,height:110}},
           podyum.map(p=>
             React.createElement('div',{key:p.sira,style:{display:'flex',flexDirection:'column',alignItems:'center',width:64}},
               React.createElement('div',{style:{fontSize:11,fontWeight:700,marginBottom:4,color:'#fff'}},p.puan+'p'),
-              React.createElement('div',{style:{width:40,height:40,borderRadius:'50%',background:p.renk,display:'flex',alignItems:'center',justifyContent:'center',fontSize:16,marginBottom:6,border:'2px solid rgba(255,255,255,0.3)'}},p.madalya),
+              React.createElement('div',{style:{width:40,height:40,borderRadius:'50%',background:p.renk,display:'flex',alignItems:'center',justifyContent:'center',fontSize:16,marginBottom:6,border:'2px solid rgba(255,255,255,0.3)',position:'relative',overflow:'visible'}},
+                p.gercek
+                  ?(p.foto
+                      ?React.createElement('img',{src:p.foto,style:{width:'100%',height:'100%',borderRadius:'50%',objectFit:'cover',objectPosition:'top center'}})
+                      :React.createElement('span',{style:{fontWeight:800,fontSize:15,color:'#1e1b4b'}},(p.ad||'?').charAt(0).toLocaleUpperCase('tr')))
+                  :p.madalya,
+                p.gercek&&React.createElement('div',{style:{position:'absolute',bottom:-4,right:-4,fontSize:13,background:'#1e1b4b',borderRadius:'50%',width:18,height:18,display:'flex',alignItems:'center',justifyContent:'center',border:'1px solid rgba(255,255,255,0.3)'}},p.madalya)
+              ),
               React.createElement('div',{style:{width:'100%',height:p.h,background:'linear-gradient(180deg,'+p.renk+'55,'+p.renk+'22)',borderRadius:'6px 6px 0 0',borderTop:'2px solid '+p.renk}}),
               React.createElement('div',{style:{fontSize:9,color:'rgba(255,255,255,0.5)',marginTop:4}},p.ad)
             )
@@ -7281,27 +7336,44 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races,leaderboardWeigh
   const stats=React.useMemo(()=>finalizeLeaderboard(rawStats,paceScores,weightsDraft,paceBaselines),[rawStats,paceScores,weightsDraft,paceBaselines]);
   // Bir önceki haftanın sıralaması — değişim okları için
   const prevStats=React.useMemo(()=>finalizeLeaderboard(rawPrevStats,prevPaceScores,weightsDraft,prevPaceBaselines),[rawPrevStats,prevPaceScores,weightsDraft,prevPaceBaselines]);
+
+  // ── Reklam izni filtresi (2026.09.01 Göksel talebi) ────────────────────────
+  // Bu liderlik kartı hem takım içi hem de HERKESE AÇIK paylaşılabiliyor (Göksel
+  // onayı) — bu yüzden dışa aktarılan/paylaşılan görselde reklam_izni===true
+  // OLMAYAN sporcuların satırı TAMAMEN kaldırılır (gizlenmiş bir "🔒 Gizli
+  // Sporcu" satırı DEĞİL — coach'un canlı ekranda gördüğü tam liste etkilenmez,
+  // sadece exportMode true iken üretilen görsel/indirilen dosya filtrelenir).
+  // Sıralama, kalan (izinli) sporculara göre YENİDEN numaralandırılır; bir
+  // önceki haftanın sırası da (trend oku için) AYNI izinli alt küme içinde
+  // yeniden hesaplanır — aksi halde ok, artık görselde hiç görünmeyen
+  // sporculara göre kaymış/anlamsız bir sıçrama gösterirdi.
+  const [exportMode,setExportMode]=useState(false);
+  const consentIds=React.useMemo(()=>new Set((athletes||[]).filter(a=>a.reklam_izni).map(a=>a.id)),[athletes]);
+  const displayStats=exportMode?stats.filter(r=>consentIds.has(r.ath.id)):stats;
+  const displayPrevStats=exportMode?prevStats.filter(r=>consentIds.has(r.ath.id)):prevStats;
   const prevRankMap=React.useMemo(()=>{
-    const m={};prevStats.forEach((r,i)=>{m[r.ath.id]=i+1;});return m;
-  },[prevStats]);
-  const totalDp=Math.round(stats.reduce((s,r)=>s+r.irtifa,0));
-  const totalSessions=stats.reduce((s,r)=>s+r.count,0);
-  const activeCount=stats.filter(r=>r.count>0).length;
+    const m={};displayPrevStats.forEach((r,i)=>{m[r.ath.id]=i+1;});return m;
+  },[displayPrevStats]);
+  const waitForPaint=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+  const totalDp=Math.round(displayStats.reduce((s,r)=>s+r.irtifa,0));
+  const totalSessions=displayStats.reduce((s,r)=>s+r.count,0);
+  const activeCount=displayStats.filter(r=>r.count>0).length;
   // Takım toplam mesafesi spor türüne göre ayrıştırılır (koşu km'si ile yüzme km'si karışmaz)
   const teamMesafeBySpor=React.useMemo(()=>{
     const out={};
-    stats.forEach(r=>{
+    displayStats.forEach(r=>{
       Object.entries(r.mesafeBySpor||{}).forEach(([k,v])=>{
         out[k]=round1((out[k]||0)+v);
       });
     });
     return out;
-  },[stats]);
+  },[displayStats]);
   const distanceTiles=Object.entries(teamMesafeBySpor)
     .filter(([,v])=>v>0)
     .sort((a,b)=>b[1]-a[1])
     .map(([k,v])=>({l:SPOR_MAP[k]?.l||k,v:v+' km',icon:SPOR_MAP[k]?.emoji||'📍'}));
   if(distanceTiles.length===0)distanceTiles.push({l:'Toplam km',v:'0 km',icon:'📍'});
+
 
   const medalColors=['#FFD700','#C0C0C0','#CD7F32'];
   const medals=['🥇','🥈','🥉'];
@@ -7320,7 +7392,14 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races,leaderboardWeigh
     setDownloading(true);
     try{
       await loadHtml2Canvas();
-      const canvas=await captureElement(cardRef.current,'#0f172a');
+      // Reklam izni filtresi: görsel oluşturulmadan önce izinsiz sporcuları
+      // gizleyen exportMode'a geç, DOM'un yeni haliyle boyanmasını bekle,
+      // yakala, sonra normal (koçun tam listesini gördüğü) görünüme dön.
+      setExportMode(true);
+      await waitForPaint();
+      let canvas;
+      try{canvas=await captureElement(cardRef.current,'#0f172a');}
+      finally{setExportMode(false);}
       const a=document.createElement('a');
       const dateStr=new Date().toISOString().split('T')[0];
       a.download=`kosuizi_haftalik_${dateStr}.png`;
@@ -7393,11 +7472,19 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races,leaderboardWeigh
     setDownloading(true);
     try{
       await loadHtml2Canvas();
+      // Reklam izni filtresi: bkz. downloadImage'daki AYNI not — izinsiz
+      // sporcular paylaşılan görselden tamamen çıkarılır.
+      setExportMode(true);
+      await waitForPaint();
       // Paylaş butonlarını geçici gizle
       const btns=cardRef.current.querySelectorAll('[data-no-export]');
       btns.forEach(b=>{b._prevDisplay=b.style.display;b.style.display='none';});
-      const canvas=await captureElement(cardRef.current,'#0f172a');
-      btns.forEach(b=>{b.style.display=b._prevDisplay||'';});
+      let canvas;
+      try{canvas=await captureElement(cardRef.current,'#0f172a');}
+      finally{
+        btns.forEach(b=>{b.style.display=b._prevDisplay||'';});
+        setExportMode(false);
+      }
       const blob=await new Promise(r=>canvas.toBlob(r,'image/png'));
       const dateStr=new Date().toISOString().split('T')[0];
       const file=new File([blob],`kosuizi_haftalik_${dateStr}.png`,{type:'image/png'});
@@ -7549,7 +7636,7 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races,leaderboardWeigh
         const kpiItems=[...distanceTiles,
           {l:'Toplam D+',v:totalDp+' m'},
           {l:'Antrenman',v:totalSessions},
-          {l:'Aktif Sporcu',v:activeCount+'/'+athletes.length},
+          {l:'Aktif Sporcu',v:activeCount+'/'+displayStats.length},
         ];
         const n=kpiItems.length;
         const valueFontSize=n<=4?20:n<=6?17:n<=8?15:13;
@@ -7580,9 +7667,14 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races,leaderboardWeigh
       // ediyordu. ÇÖZÜM: filtre artık MUTLAK — sıradaki konumdan bağımsız olarak,
       // o hafta hiç antrenman girilmemiş (count===0) sporcu HER ZAMAN gizlenir.
       React.createElement('div',null,
-        stats.map((row,i)=>{
+        exportMode&&displayStats.filter(r=>r.count>0).length===0
+          ?React.createElement('div',{style:{textAlign:'center',padding:'24px 12px',fontSize:13,color:'#94a3b8'}},
+              'Bu hafta paylaşım için uygun (reklam izni veren) sporcu bulunmuyor.'
+            )
+          :null,
+        displayStats.map((row,i)=>{
           if(row.count===0)return null;
-          const pct=stats[0].finalScore>0?Math.round(row.finalScore/stats[0].finalScore*100):0;
+          const pct=displayStats[0].finalScore>0?Math.round(row.finalScore/displayStats[0].finalScore*100):0;
           const sporList=Object.entries(row.sporDagilim).map(([k,v])=>(SPOR_MAP[k]?.emoji||'🏅')+' ×'+v).join(' ');
           const isExpanded=expandedAthId===row.ath.id;
           const mainRow=React.createElement('div',{key:row.ath.id,
@@ -30451,7 +30543,7 @@ function App(){
       }),
       tab==='tani'&&React.createElement(TaniPaneliTab,{athletes,allHistory,races,workouts}),
       tab==='kontrol'&&React.createElement(KontrolTab,{athletes}),
-      tab==='reklam'&&React.createElement(ReklamTab,{teamName,teamLogo,adCardOverride,onSaveAdCard:setAdCardOverride})
+      tab==='reklam'&&React.createElement(ReklamTab,{teamName,teamLogo,athletes,adCardOverride,onSaveAdCard:setAdCardOverride})
     )
   );
 }
@@ -30666,6 +30758,7 @@ function SporcuAnketi(){
         mhr:a.mhr||'',lthr:a.lthr||'',vo2max:a.vo2max||'',
         hrv_durum:a.hrv_durum||'',hrv_7gun:a.hrv_7gun||'',
         sakatlık:a.sakatlık||'1',
+        reklam_izni:!!a.reklam_izni,
         kosu_gunleri:a.kosu_gunleri||[],
         capraz_gunleri:a.capraz_gunleri||[],
         uzun_gun:Array.isArray(a.uzun_gun)?a.uzun_gun:[a.uzun_gun].filter(Boolean),
@@ -30686,6 +30779,7 @@ function SporcuAnketi(){
       mhr:a.mhr||'',lthr:a.lthr||'',vo2max:a.vo2max||'',
       hrv_durum:a.hrv_durum||'',hrv_7gun:a.hrv_7gun||'',
       sakatlık:a.sakatlık||'1',
+        reklam_izni:!!a.reklam_izni,
       kosu_gunleri:a.kosu_gunleri||[],
       capraz_gunleri:a.capraz_gunleri||[],
       uzun_gun:Array.isArray(a.uzun_gun)?a.uzun_gun:[a.uzun_gun].filter(Boolean),
@@ -30704,6 +30798,7 @@ function SporcuAnketi(){
           mhr:a.mhr||'',lthr:a.lthr||'',vo2max:a.vo2max||'',
           hrv_durum:a.hrv_durum||'',hrv_7gun:a.hrv_7gun||'',
           sakatlık:a.sakatlık||'1',
+        reklam_izni:!!a.reklam_izni,
           kosu_gunleri:a.kosu_gunleri||[],
           capraz_gunleri:a.capraz_gunleri||[],
           uzun_gun:Array.isArray(a.uzun_gun)?a.uzun_gun:[a.uzun_gun].filter(Boolean),
@@ -31112,6 +31207,31 @@ function SporcuAnketi(){
           }},'🔁 Ardışık iki uzun koşu günü seçildi — antrenör sistemi bu günlere Back-to-Back antrenman planlayacak'):null
         );
       })()
+    ),
+
+    // ── Reklam İzni — 2026.09.01 Göksel talebi ───────────────────────────────
+    // İki ayrı özelliği kapsar: (1) Koç Paneli → Reklam sekmesindeki (ReklamTab)
+    // mockup podyum kartında gerçek isim/fotoğraf kullanımı, (2) Koç Paneli →
+    // Lider sekmesindeki (LiderlikTab) haftalık liderlik görselinin paylaşımı/
+    // indirilmesi — bu görsel hem takım içi hem de HERKESE AÇIK paylaşılabildiği
+    // için (Göksel onayı), izin vermeyen sporcunun satırı o görselden TAMAMEN
+    // çıkarılır (bkz. LiderlikTab'daki exportMode/consentIds). Sadece
+    // reklam_izni===true olan sporcular her iki yerde de görünür. İzin
+    // istendiği an geri çekilebilir (kutuyu kaldırıp "Bilgilerimi Güncelle"ye
+    // basmak yeterli).
+    React.createElement('div',{className:'card',style:{marginBottom:12}},
+      React.createElement('div',{className:'card-title'},'📣 Reklam ve Tanıtım İzni'),
+      React.createElement('label',{style:{display:'flex',gap:10,alignItems:'flex-start',cursor:'pointer'}},
+        React.createElement('input',{
+          type:'checkbox',checked:!!form.reklam_izni,
+          onChange:e=>setForm(f=>Object.assign({},f,{reklam_izni:e.target.checked})),
+          style:{marginTop:3,width:16,height:16,flexShrink:0,cursor:'pointer'}
+        }),
+        React.createElement('span',{style:{fontSize:12,color:'var(--text-secondary)',lineHeight:1.5}},
+          'Antrenörümün, uygulamanın tanıtımı için hazırladığı paylaşılabilir reklam kartlarında ve haftalık liderlik görsellerinde adımı, profil fotoğrafımı ve antrenman skorlarımı kullanmasına izin veriyorum. Bu görseller takım içi gruplarda veya herkese açık (sosyal medya vb.) ortamlarda paylaşılabilir. ',
+          React.createElement('b',null,'Bu izni istediğim an, bu kutunun işaretini kaldırıp bilgilerimi güncelleyerek geri çekebilirim.')
+        )
+      )
     ),
 
     React.createElement('button',{
