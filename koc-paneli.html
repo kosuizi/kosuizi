@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.01-1322 --><!DOCTYPE html>
+<!-- Version: v2026.09.01-1338 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.01-1322';
+const APP_VERSION='v2026.09.01-1338';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -9214,7 +9214,10 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
             const pvR = hasPaceEntryRest ? paceValidation(restData) : null;
             out.push(e('tr',{key:`d${rep}`,style:{background:restData.color,borderBottom:'2px solid rgba(0,0,0,.15)'}},
               e('td',{style:{...cellSt,color:'#000'}},''),
-              e('td',{style:{...cellSt,textAlign:'left',color:'#000',fontStyle:'italic',fontSize:10}},'↳ '+restData.label),
+              e('td',{style:{...cellSt,textAlign:'left',color:'#000',fontStyle:'italic',fontSize:10}},
+                '↳ '+restData.label,
+                (()=>{const fi=focusIndicator?focusIndicator(restData):null;return fi?e('span',{title:fi.label,style:{marginLeft:4,fontSize:9}},fi.icon):null;})()
+              ),
               e('td',{style:{padding:'4px 4px',verticalAlign:'middle',textAlign:'center'}},
                 e('div',{style:{display:'flex',flexDirection:'column',gap:3,alignItems:'center'}},
                   pvR ? e('span',{style:{display:'inline-block',padding:'2px 5px',borderRadius:3,fontSize:8,fontWeight:700,color:pvR.color,background:pvR.bg,whiteSpace:'nowrap',lineHeight:1.3}},pvR.icon+' '+pvR.label) : e('span',{style:{color:'#94a3b8',fontSize:9}},'—'),
@@ -10110,7 +10113,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
       :{label:'Çok Hızlı',color:'#ef4444',bg:'#fef2f2',icon:'▲▲'};
   };
 
-  // ── Pace/Nabız Odak Rozeti (2026.09.01 — Göksel talebi) ─────────────────────
+  // ── Pace/Nabız/RPE Odak Rozeti (2026.09.01 — Göksel talebi) ─────────────────
   // Kolay/aerobik fazlarda (Z1-Z2 — Yürü-Koş'un koşu fazları DAHİL) amaç belirli
   // bir FİZYOLOJİK yükü sağlamaktır — pace o yükü tahmin etmeye yarayan bir
   // araçtır, asıl hedef nabız bölgesidir. Tempo/eşik/interval (Z3+) fazlarında
@@ -10123,24 +10126,40 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
   // Bu rozet bir SONUÇ değil PLANLAMA bilgisidir: paceValidation'ın aksine
   // isWorkoutLogged/veri-girişi kontrolü YOK — sporcu antrenmanı henüz
   // yapmadan/girmeden ÖNCE de görünür, amaç "bu fazda hangisine odaklan" demektir.
-  // Satırın DOĞASINA dair istisnalar (header/ısınma/soğuma/rest/walk/sprint/
-  // yarış/serbest) paceValidation ile BİREBİR AYNI — bu fazlarda zaten gerçek
-  // bir pace hedefi YOK (sadece nabızla değerlendiriliyorlar), bu yüzden ayrıca
-  // "odak" diye işaretlemeye gerek yok; veri-girişi kontrolleri (pm/ps>0 var mı)
-  // BİLEREK tekrarlanmadı çünkü bu rozet veriden bağımsız olmalı.
+  //
+  // 2026.09.01 — Göksel talebi (genişletme): ÖNCEDEN bu rozet sadece "gerçek pace
+  // hedefi olan" fazlarda gösteriliyordu (paceValidation'ın istisnalarıyla birebir
+  // aynı liste), diğer TÜM fazlarda (Isınma/Soğuma/Dinlenme/Yürüyüş/RPE'li/sprint/
+  // yarış/serbest/Uzun Yokuş/Power Hiking) hiçbir şey göstermiyordu. Artık HER
+  // satır için bir rozet üretiliyor — mantık, o satırda FİİLEN neyin ölçüldüğünü
+  // sorar (paceValidation/bpmValidation'ın kendi kapı koşullarını BİREBİR AYNI
+  // tekrar eder, hesabı değil, sadece "değerlendirmeye açık mı" sorusunu), üç
+  // olası sonuç:
+  //   ❤️ Nabız Odaklı  — sadece nabız değerlendiriliyor (Isınma/Soğuma/Dinlenme/
+  //                      Yürüyüş, VEYA RPE pace'i baskılıyor ama nabız hâlâ aktif
+  //                      — Z4 Yokuş tarzı satırlar, On-Off ON bacağı vb.), VEYA
+  //                      ikisi de aktif ama zon kolay (zi<=1).
+  //   ↔️ Pace Odaklı   — ikisi de aktif VE zon zor (zi>=2).
+  //   🎯 RPE Odaklı    — NE pace NE nabız değerlendiriliyor (sprint/strides/depar/
+  //                      açıcı/hill patlamaları, sprint arası dinlenme, yarış,
+  //                      serbest koşu, Uzun Yokuş, Power Hiking) — tamamen
+  //                      hissiyat/RPE'ye göre koşulur.
+  // Header (yapısal grup satırı, kendi hedefi yok) TEK istisna — rozet üretmeye
+  // devam etmiyor.
   const focusIndicator=(row)=>{
-    if(!row||row.type==='header'||(row.rpe&&tip!=='yuru_kos'&&row.type!=='walk')||row._isSprint) return null;
-    if(tip==='yaris'||tip==='serbest') return null;
-    // 2026.09.01 — Göksel talebi: Uzun Yokuş/Power Hiking tamamen RPE/hissiyat
-    // odaklı — bpmValidation/paceValidation ile BİREBİR AYNI tip istisnası
-    // (bkz. ~satır 9865, 10032). Bu iki tipte artık gerçekten HİÇBİR şey
-    // (ne pace ne nabız) değerlendirilmiyor, dolayısıyla odak rozetinin de
-    // gösterecek bir şeyi yok.
-    if(tip==='yokus_uzun'||tip==='power_hiking') return null;
-    if(/[iı]sınma|isinma|soğuma|soguma/i.test(row.label||'')) return null;
-    if(row.type==='rest'||row.type==='walk') return null;
+    if(!row||row.type==='header') return null;
+    const rowLabel=row.label||'';
+    const _isWarmCool=/[iı]sınma|isinma|soğuma|soguma/i.test(rowLabel);
+    // bpmValidation'ın (~satır 9849) kapı koşullarıyla BİREBİR AYNI — hesabı değil,
+    // sadece "bu satırda nabız değerlendirmeye AÇIK mı" sorusunu tekrarlar.
+    const _isSprintRestRow=/strides|sprint|hill|depar|açıcı|yokuş/i.test(rowLabel)&&/arası/i.test(rowLabel);
+    const hrActive=!row._isSprint&&tip!=='serbest'&&tip!=='yaris'&&tip!=='yokus_uzun'&&tip!=='power_hiking'&&!_isSprintRestRow;
+    // paceValidation'ın (~satır 10018) kapı koşullarıyla BİREBİR AYNI.
+    const paceActive=hrActive&&!(row.rpe&&tip!=='yuru_kos'&&row.type!=='walk')&&!_isWarmCool&&row.type!=='rest'&&row.type!=='walk';
+    if(!hrActive&&!paceActive) return{label:'RPE Odaklı',icon:'🎯',color:'#7c3aed',bg:'#f5f3ff'};
+    if(!paceActive) return{label:'Nabız Odaklı',icon:'❤️',color:'#be185d',bg:'#fdf2f8'}; // sadece nabız aktif
     const zi=row._targetZIdx!=null?row._targetZIdx:row._origZIdx;
-    if(zi==null) return null;
+    if(zi==null) return{label:'Nabız Odaklı',icon:'❤️',color:'#be185d',bg:'#fdf2f8'}; // zon bilgisi yoksa güvenli varsayım
     return zi<=1
       ?{label:'Nabız Odaklı',icon:'❤️',color:'#be185d',bg:'#fdf2f8'}
       :{label:'Pace Odaklı',icon:'↔️',color:'#1d4ed8',bg:'#eff6ff'};
