@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.02-0952 --><!DOCTYPE html>
+<!-- Version: v2026.09.02-1012 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.02-0952';
+const APP_VERSION='v2026.09.02-1012';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -30037,6 +30037,45 @@ function AnketlerTab({athletes,onUpdateAthlete}){
     color:subTab===id?'var(--info)':'var(--text-secondary)'
   });
 
+  // ── MHR/LTHR onay bekleyen öneriler (2026.09.02, Göksel talebi) ─────────────
+  // Sporcu Anketi'nde MHR/LTHR değiştirildiğinde canlı alana (mhr/lthr) değil
+  // *_pending alanına yazılır (bkz. SporcuAnketi→handleSave). Koç burada, ayrı
+  // ayrı butonlarla, her iki değeri de bağımsız onaylayabilir.
+  const PENDING_FIELD_META={
+    mhr:{label:'MHR',unit:'bpm',icon:'💓'},
+    lthr:{label:'LTHR',unit:'bpm',icon:'🎯'}
+  };
+  const approvePending=(ath,field)=>{
+    const val=ath[field+'_pending'];
+    if(val==null||val==='')return;
+    onUpdateAthlete&&onUpdateAthlete(Object.assign({},ath,{
+      [field]:val,[field+'_pending']:null,[field+'_pending_tarih']:null
+    }));
+  };
+  const pendingApprovalBlock=(ath)=>{
+    const rows=['mhr','lthr'].map(field=>{
+      const pv=ath[field+'_pending'];
+      if(pv==null||pv==='')return null;
+      const meta=PENDING_FIELD_META[field];
+      const t=fmtRelTarih(ath[field+'_pending_tarih']);
+      return React.createElement('div',{key:field,style:{
+        display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',
+        marginTop:6,padding:'6px 10px',borderRadius:8,
+        background:'var(--warn-bg)',border:'1px solid var(--warn)'
+      }},
+        React.createElement('span',{style:{fontSize:12,fontWeight:600,color:'var(--warn)'}},
+          meta.icon+' '+meta.label+' onay bekliyor: '+pv+' '+meta.unit+' (mevcut: '+(ath[field]||'—')+' '+meta.unit+')'
+        ),
+        t&&React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)'}},t.relative+' · '+t.tarih+' '+t.saat),
+        onUpdateAthlete&&React.createElement('button',{
+          className:'btn btn-sm btn-primary',
+          onClick:()=>approvePending(ath,field)
+        },'✓ '+meta.label+' Onayla')
+      );
+    }).filter(Boolean);
+    return rows.length?React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:6}},rows):null;
+  };
+
   // ── 1) FİZYOLOJİK ANKET (sporcunun kilo/nabız/HRV vb. bilgi formu) ──────────
   const fizStats=calcStats('anket_guncelleme',athletes);
   const fizSorted=[...athletes].sort((a,b)=>{
@@ -30114,7 +30153,8 @@ function AnketlerTab({athletes,onUpdateAthlete}){
                         :React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)'}},
                             'Son güncellemede fiziksel değişiklik yok')
                   )
-                :React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)'}},'Fiziksel veri henüz girilmedi')
+                :React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)'}},'Fiziksel veri henüz girilmedi'),
+              pendingApprovalBlock(ath)
             )
           )
         );
@@ -31299,13 +31339,41 @@ function SporcuAnketi(){
       const freshAll=freshAths||athletes;
       const mevcut=freshAll.find(function(a){return a.id===selId;})||athletes.find(function(a){return a.id===selId;})||{};
 
+      // MHR ve LTHR — koç onayı olmadan devreye alınmaz (Göksel talebi 2026.09.02):
+      // sporcu bu iki alanı değiştirse dahi CANLI değer (mhr/lthr — tüm hesaplamalarda
+      // kullanılan) değişmez, yeni değer *_pending alanına yazılır. Koç, Bildirimler >
+      // Fizyolojik Anket'teki sporcu kartında ayrı ayrı "Onayla" butonlarıyla onaylayınca
+      // (bkz. AnketlerTab → approvePending) canlı alana geçer. Sporcu, önerdiği değeri
+      // canlı değere geri çekerse (aynı değeri tekrar girerse) bekleyen öneri iptal edilir.
+      const buildPendingPatch=function(field){
+        const submitted=String(form[field]||'').trim();
+        if(submitted==='')return {}; // boş bırakılmışsa ne canlı ne bekleyen değere dokun
+        const subNum=parseFloat(submitted);
+        if(isNaN(subNum))return {};
+        const liveNum=parseFloat(mevcut[field]);
+        if(!isNaN(liveNum)&&subNum===liveNum){
+          // Sporcu canlı (onaylı) değere geri döndü — bekleyen öneri varsa iptal edilir
+          return mevcut[field+'_pending']!=null?{[field+'_pending']:null,[field+'_pending_tarih']:null}:{};
+        }
+        return {[field+'_pending']:submitted,[field+'_pending_tarih']:new Date().toISOString()};
+      };
+      const mhrPatch=buildPendingPatch('mhr');
+      const lthrPatch=buildPendingPatch('lthr');
+      // form'dan mhr/lthr çıkarılır — bunlar artık yalnızca yukarıdaki *_pending
+      // alanları üzerinden gider, canlı alana doğrudan YAZILMAZ.
+      const formLive=Object.assign({},form);
+      delete formLive.mhr;
+      delete formLive.lthr;
+
       // Her anket kaydında snapshot atılır — değer değişmemiş olsa bile.
       // Amaç: sporcu değerlerini değiştirmeden "Kaydet" dese dahi profileHistory'de
       // o tarihe ait kayıt oluşsun; aksi halde MetrikGrafikKarti'nin kısa pencereleri
       // (1H/2H/4H) son gerçek değişiklik eskiyse boş görünüyordu (bkz. 2026.08.10 tespiti).
-      const formWithSnap=Object.assign({},form,{
+      // NOT: lthr/mhr burada CANLI (onaylı, mevcut.lthr/mevcut.mhr) değerle yazılır —
+      // henüz onaylanmamış bir öneri profil geçmişine asla karışmamalı.
+      const formWithSnap=Object.assign({},formLive,mhrPatch,lthrPatch,{
         profileHistory:[...((mevcut.profileHistory||[]).filter(function(s){return s.date!==localDateStr(new Date());})),
-          {date:localDateStr(new Date()),vo2max:form.vo2max,lthr:form.lthr,mhr:form.mhr,rhr:form.rhr,
+          {date:localDateStr(new Date()),vo2max:form.vo2max,lthr:mevcut.lthr,mhr:mevcut.mhr,rhr:form.rhr,
            kilo:form.kilo,boy:form.boy,hrv_7gun:form.hrv_7gun,sakatlık:form.sakatlık}
         ].slice(-80)
       });
@@ -31435,11 +31503,6 @@ function SporcuAnketi(){
 
   // Son anket tarihi — sporcu seçildiğinde PIN'den önce göster
   const _selAth=athletes.find(function(x){return x.id===selId;});
-  // MHR öneri (Tanaka/Fox formülü) — Koç Paneli SporcuModal'daki AYNI desen (satır ~4706)
-  // buraya da taşındı: sporcu saatinin gösterdiği "son dönem max nabız" ile gerçek
-  // potansiyel MHR'ı karıştırıyor olabilir (2026.09.02 Göksel talebi).
-  const _selYas=_selAth&&_selAth.dogum?new Date().getFullYear()-new Date(_selAth.dogum).getFullYear():null;
-  const mhrPred=predictMHR(_selYas,_selAth&&_selAth.cinsiyet);
   const sonAnketEl=selId?React.createElement('div',{style:{
     background:_selAth&&_selAth.anket_guncelleme?'var(--info-bg)':'var(--warn-bg)',
     border:'1px solid '+(_selAth&&_selAth.anket_guncelleme?'var(--info)':'var(--warn)'),
@@ -31567,26 +31630,19 @@ function SporcuAnketi(){
         ),
         React.createElement('div',{className:'form-group'},
           React.createElement('label',null,'Maksimum Nabız — MHR (bpm)'),
-          React.createElement('div',{style:{fontSize:11,color:'var(--warn)',marginBottom:4,lineHeight:1.4}},
-            '⚠️ Saatinizin "max nabız" olarak gösterdiği değer bu DEĞİLDİR — o, son dönemde ölçtüğü en yüksek nabızdır. Buraya potansiyel maksimum nabzınızı girin (bilmiyorsanız aşağıdaki öneriyi kullanabilirsiniz).'
-          ),
-          React.createElement('div',{className:'flex-gap'},
-            React.createElement('input',{type:'number',value:form.mhr,min:100,max:230,placeholder:'ör. 185',style:{flex:1},
-              onChange:function(e){setForm(function(f){return Object.assign({},f,{mhr:e.target.value});});}}),
-            mhrPred&&!form.mhr&&React.createElement('button',{type:'button',className:'btn btn-sm',
-              onClick:function(){setForm(function(f){return Object.assign({},f,{mhr:String(mhrPred.önerilen)});});},
-              title:'Tanaka 2001 formülü (yaşa göre tahmini)'},
-              'Öneri: '+mhrPred.önerilen
-            )
-          ),
-          mhrPred&&!form.mhr&&React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:3}},
-            'Tanaka ('+mhrPred.tanaka+') · Fox ('+mhrPred.fox+') · Cinsiyet bazlı ('+mhrPred.gender+')'
+          React.createElement('input',{type:'number',value:form.mhr,min:100,max:230,placeholder:'ör. 185',
+            onChange:function(e){setForm(function(f){return Object.assign({},f,{mhr:e.target.value});});}}),
+          _selAth&&_selAth.mhr_pending!=null&&_selAth.mhr_pending!==''&&React.createElement('div',{style:{fontSize:11,color:'var(--warn)',marginTop:3}},
+            '⏳ '+_selAth.mhr_pending+' bpm önerin koç onayını bekliyor. Onaylanana kadar antrenmanlarında '+(_selAth.mhr||'—')+' bpm kullanılmaya devam edecek.'
           )
         ),
         React.createElement('div',{className:'form-group'},
           React.createElement('label',null,'Laktat Eşiği — LTHR (bpm)'),
           React.createElement('input',{type:'number',value:form.lthr,min:80,max:220,placeholder:'ör. 162',
-            onChange:function(e){setForm(function(f){return Object.assign({},f,{lthr:e.target.value});});}})
+            onChange:function(e){setForm(function(f){return Object.assign({},f,{lthr:e.target.value});});}}),
+          _selAth&&_selAth.lthr_pending!=null&&_selAth.lthr_pending!==''&&React.createElement('div',{style:{fontSize:11,color:'var(--warn)',marginTop:3}},
+            '⏳ '+_selAth.lthr_pending+' bpm önerin koç onayını bekliyor. Onaylanana kadar antrenmanlarında '+(_selAth.lthr||'—')+' bpm kullanılmaya devam edecek.'
+          )
         ),
         React.createElement('div',{className:'form-group'},
           React.createElement('label',null,'VO₂max (ml/kg/dak)'),
@@ -31898,9 +31954,6 @@ function SporcuKayit(){
   const [done,setDone]=useState(false);
   const [err,setErr]=useState('');
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
-  // MHR öneri (Tanaka/Fox) — SporcuAnketi'ndeki AYNI desen (2026.09.02 Göksel talebi, panel paritesi)
-  const _kayitYas=f.dogum?new Date().getFullYear()-new Date(f.dogum).getFullYear():null;
-  const kayitMhrPred=predictMHR(_kayitYas,f.cinsiyet);
   // Çift gönderimi (mobilde hızlı çift dokunma / "ghost click") engelleyen kilit —
   // aksi halde bir tıklamadan iki aynı sporcu kaydı oluşabilir. useRef kullanılıyor
   // çünkü senkron ve anlık; React state (saving) asenkron olduğu için ikinci tıklama
@@ -32060,23 +32113,7 @@ function SporcuKayit(){
         React.createElement('div',{className:'card-title'},'Performans Verileri (biliyorsan doldur, sonra da eklenebilir)'),
         React.createElement('div',{className:'form-grid'},
           fg('Dinlenme Nabzı — RHR (bpm)',f.rhr,v=>set('rhr',v),'number',{min:30,max:100}),
-          React.createElement('div',{className:'form-group'},
-            React.createElement('label',null,'Maksimum Nabız — MHR (bpm)'),
-            React.createElement('div',{style:{fontSize:11,color:'var(--warn)',marginBottom:4,lineHeight:1.4}},
-              '⚠️ Saatinizin "max nabız" olarak gösterdiği değer bu DEĞİLDİR — o, son dönemde ölçtüğü en yüksek nabızdır. Bilmiyorsanız aşağıdaki öneriyi kullanabilirsiniz.'
-            ),
-            React.createElement('div',{className:'flex-gap'},
-              React.createElement('input',{type:'number',value:f.mhr||'',min:140,max:240,style:{flex:1},onChange:e=>set('mhr',e.target.value)}),
-              kayitMhrPred&&!f.mhr&&React.createElement('button',{type:'button',className:'btn btn-sm',
-                onClick:()=>set('mhr',String(kayitMhrPred.önerilen)),
-                title:'Tanaka 2001 formülü (yaşa göre tahmini)'},
-                'Öneri: '+kayitMhrPred.önerilen
-              )
-            ),
-            kayitMhrPred&&!f.mhr&&React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:3}},
-              'Tanaka ('+kayitMhrPred.tanaka+') · Fox ('+kayitMhrPred.fox+') · Cinsiyet bazlı ('+kayitMhrPred.gender+')'
-            )
-          ),
+          fg('Maksimum Nabız — MHR (bpm)',f.mhr,v=>set('mhr',v),'number',{min:140,max:240}),
           fg('Laktat Eşiği — LTHR (bpm)',f.lthr,v=>set('lthr',v),'number',{min:100,max:210}),
           fg('VO₂max (ml/kg/dak)',f.vo2max,v=>set('vo2max',v),'number',{min:20,max:90,step:.1})
         ),
