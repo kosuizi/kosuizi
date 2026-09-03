@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.03-2327 --><!DOCTYPE html>
+<!-- Version: v2026.09.03-2342 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.03-2327';
+const APP_VERSION='v2026.09.03-2342';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -7584,6 +7584,35 @@ async function fetchAthletePaceBaselines(athletes,weekOffset){
 // paceBaselines: {athleteId: {value,weeksCount}|null} — fetchAthletePaceBaselines'tan
 // gelir, bu hafta Hedef Uyumu ölçülemediğinde nötr 50 yerine kullanılır (bkz.
 // 2026.08.23 notu; weeksCount ile güven ölçeklemesi için bkz. 2026.08.30 notu).
+// ── Kişisel-göreli/Mutlak harmanı: ARİTMETİK değil GEOMETRİK ortalama ──────
+// 2026.09.03 — KÖK NEDEN DÜZELTMESİ (Göksel'in bildirdiği vaka: Rengin Ece Kaya
+// haftada sadece 3.7 km ile, Cansel Çelik'i — 6.5 km + 24 m D+ koşmuş, Hedef
+// Uyumu'nda da önde olan bir sporcuyu — toplam skorda geçmesi). 2026.08.23/
+// 08.30'da eklenen kişisel-göreli+mutlak %50-%50 ARİTMETİK ortalama, iki
+// bileşenden BİRİNİN diğerini TAMAMEN telafi etmesine izin veriyordu: haftalık
+// ~8 birimlik düşük bir baseline'ı olan bir sporcu, o haftaki mütevazı işini
+// (3.7 eşd.km) kendi ortalamasının %44'ü olarak görüp yüksek kişisel-göreli
+// puan alıyor, düşük MUTLAK işini (haftalık birkaç birim) aritmetik ortalamada
+// tamamen gizleyebiliyordu — üstelik kendisinden çok daha fazla mutlak iş yapan
+// (ama kendi standardına göre "ortalama altı" kalan) bir sporcuyu geçebiliyordu.
+// Bu, antrenman bilimi/spor performans literatüründe bilinen bir sorun: SADECE
+// ORANA dayalı ölçütler (ör. ACWR — Akut:Kronik Yük Oranı), düşük bir kronik/
+// baseline değeriyle eşleştiğinde istatistiksel olarak güvenilmez hale gelir —
+// küçük mutlak artışlar orantısız derecede büyük oranlar üretir (Impellizzeri
+// ve ark.'ın ACWR eleştirisi). ÇÖZÜM: iki bileşen artık ARİTMETİK değil
+// GEOMETRİK ortalamayla (√(a×b)) birleştiriliyor — kompozit endeks tasarımında
+// TAM TELAFİ edilebilirliği azaltmak için kullanılan standart bir teknik (ör.
+// BM İnsani Gelişme Endeksi'nin 2010'da tam da bu nedenle aritmetikten
+// geometriğe geçmesi). Sonuç: bir bileşen (kişisel-göreli VEYA mutlak) çok
+// düşükse, diğeri ne kadar yüksek olursa olsun BİRLEŞİK puan orantısız şekilde
+// düşük kalır — yani hem KİŞİSEL TUTARLILIK hem GERÇEK/MUTLAK İŞ aynı anda
+// güçlü olmalı; biri diğerini artık TEK BAŞINA telafi edemez. Literal 0 girişi
+// (ör. o bileşen hiç ölçülemediyse) tüm sonucu sıfırlamasın diye değerler önce
+// 1'e (alt taban) sınırlanır — yine ağır cezalandırır ama NaN/0 üretmez.
+function combineGeoMean(a,b){
+  const _a=Math.max(1,a??0),_b=Math.max(1,b??0);
+  return Math.sqrt(_a*_b);
+}
 function finalizeLeaderboard(rows,paceScores,weights,paceBaselines){
   const w=weights||DEFAULT_LEADERBOARD_WEIGHTS;
   // 2026.08.11 — Göksel onayı: Efor ve Gerçek İş artık TAKIM İÇİ en yüksek değere
@@ -7618,7 +7647,7 @@ function finalizeLeaderboard(rows,paceScores,weights,paceBaselines){
     // varsayılan 120 (yük birimi) — Göksel'in onayladığı başlangıç değeri.
     const eforReferans=w.eforReferans||DEFAULT_LEADERBOARD_WEIGHTS.eforReferans;
     const eforNormAbsolute=r.sporSkoru>0?round1(100*r.sporSkoru/(r.sporSkoru+eforReferans)):0;
-    const eforNorm=round1((eforNormRelative+eforNormAbsolute)/2);
+    const eforNorm=round1(combineGeoMean(eforNormRelative,eforNormAbsolute));
     // 2026.08.23 — Göksel talebi: Gerçek İş'in SADECE kendi geçmişine göre (isBaseline)
     // normalize edilmesi, mutlak hacim farkını siliyordu — haftalık 80 birimlik rutini
     // olan biri kendi ortalamasını tutturunca da, 30 birimlik rutini olan biri kendi
@@ -7638,7 +7667,7 @@ function finalizeLeaderboard(rows,paceScores,weights,paceBaselines){
     const isNormRelative=r.isBaseline>0?round1(Math.min(100,r.gercekIs/r.isBaseline*100)):(r.count>0?50:0);
     const gercekIsReferans=w.gercekIsReferans||DEFAULT_LEADERBOARD_WEIGHTS.gercekIsReferans;
     const isNormAbsolute=r.gercekIs>0?round1(100*r.gercekIs/(r.gercekIs+gercekIsReferans)):0;
-    const isNorm=round1((isNormRelative+isNormAbsolute)/2);
+    const isNorm=round1(combineGeoMean(isNormRelative,isNormAbsolute));
     const raw=paceScores?.[r.ath.id];
     // uygunlukPct: GÖSTERİLEN "🎯 Hedef Uyumu" — HER ZAMAN ham puan (2026.08.09 —
     // Göksel talebi: sporcu her şeyi tam yaptıysa %100 görmeli, istatistiksel
@@ -8323,12 +8352,12 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races,leaderboardWeigh
                 ['💪 Efor',null],
                 ['  Ham / Baseline',fmtN(row.sporSkoru)+' / '+(row.eforBaseline==null?'yetersiz geçmiş':fmtN(row.eforBaseline))],
                 ['  Kişisel-göreli / Mutlak (ref '+row.eforReferans+')',row.eforNormRelative+' / '+row.eforNormAbsolute],
-                ['  Norm (ortalama)',row.eforNorm],
+                ['  Norm (geometrik ort.)',row.eforNorm],
                 ['  Katkı',row.eforNorm+' × %'+w.efor+' = '+katkiEfor],
                 ['⛰ Gerçek İş',null],
                 ['  Ham / Baseline',fmtN(row.gercekIs)+' eşd.km / '+(row.isBaseline==null?'yetersiz geçmiş':fmtN(row.isBaseline))],
                 ['  Kişisel-göreli / Mutlak (ref '+row.gercekIsReferans+'km)',row.isNormRelative+' / '+row.isNormAbsolute],
-                ['  Norm (ortalama)',row.isNorm],
+                ['  Norm (geometrik ort.)',row.isNorm],
                 ['  Katkı',row.isNorm+' × %'+w.gercekIs+' = '+katkiIs],
                 ['📐 Toplam',null],
                 ['  Ham Skor',katkiHU+'+'+katkiEfor+'+'+katkiIs+' = '+row.rawFinalScore],
