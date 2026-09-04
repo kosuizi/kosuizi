@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.04-1227 --><!DOCTYPE html>
+<!-- Version: v2026.09.04-1557 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.04-1227';
+const APP_VERSION='v2026.09.04-1557';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -9100,6 +9100,18 @@ function parseSetsStr(s){
   if(m)return{tekrar:1,sure_sn:+m[1]};
   return null;
 }
+// ── Compound "+" grupları: "5×4 dk + 5×3 dk" gibi birden fazla FARKLI tekrarlı grup
+// tek bir sets string'inde "+" ile ayrılmış olabilir (bkz. Interval S7/S8/S9).
+// KÖK NEDEN DÜZELTMESİ (2026.09.04 — Göksel talebi): parseSetsStr tek grup ayrıştırır
+// ve "5×4 dk + 5×3 dk" gibi bir string verildiğinde SADECE ilk grubu ("5×4 dk")
+// okuyup ikinci grubu ("+ 5×3 dk") sessizce YOK SAYIYORDU — reçete o ikinci grubu
+// hiç içermiyordu (GPX'le ilgisiz, üretimin kendisindeki bir kayıp). Bu fonksiyon
+// "+" ile ayrılmış TÜM grupları ayrı ayrı ayrıştırıp döndürür. Tek grup varsa
+// eskisiyle birebir aynı sonucu verir (geriye dönük uyumlu).
+function parseSetsGroups(s){
+  if(!s) return [];
+  return s.split('+').map(part=>parseSetsStr(part.trim())).filter(Boolean);
+}
 // Din string parser: "3 dk"→180, "90 sn"→90, "2.5 dk"→150
 function parseDinStr(s){
   if(!s)return 120;
@@ -9115,11 +9127,22 @@ const _R={
   soguma:dk=>([{label:'Soğuma',sure_sn:dk*60,zIdx:0}]),
   sabit:(label,dk,zIdx)=>([{label,sure_sn:dk*60,zIdx}]),
   blok:(label,setsStr,zIdx,dinStr,_runCue,_dinCue)=>{
-    const p=parseSetsStr(setsStr);if(!p)return[];
-    const row={label,sure_sn:p.sure_sn,zIdx,tekrar:p.tekrar,din_sn:parseDinStr(dinStr)};
-    if(_runCue!==undefined) row._cue=_runCue;
-    if(_dinCue!==undefined) row._dinCue=_dinCue;
-    return[row];
+    const groups=parseSetsGroups(setsStr);
+    if(!groups.length) return [];
+    const dinSn=parseDinStr(dinStr);
+    // Tek grup: eski davranışla birebir aynı (etiket değişmez). Çoklu grup (S7/S8/S9
+    // gibi "5×4 dk + 5×3 dk"): her grup KENDİ header+iş+dinlenme üçlüsüne genişleyecek
+    // ayrı bir ham satır olarak döner (bkz. adimToRows'un r.tekrar genişletmesi —
+    // _rows dizisindeki HER satır ayrı ayrı işlenir, bu yüzden birden fazla satır
+    // dönmek otomatik olarak birden fazla header üretir).
+    return groups.map((p,i)=>{
+      const row={label:groups.length>1?label+' — Grup '+(i+1):label,sure_sn:p.sure_sn,zIdx,tekrar:p.tekrar,din_sn:dinSn};
+      if(i===0){
+        if(_runCue!==undefined) row._cue=_runCue;
+        if(_dinCue!==undefined) row._dinCue=_dinCue;
+      }
+      return row;
+    });
   },
   sprint:(label,tekrar,sureSn,dinSn)=>([{label,sure_sn:sureSn,zIdx:5,tekrar,din_sn:dinSn,isSprint:true,rpe:'9–10'}]),
   strides:(label,tekrar,sureSn,_cue,_dinCue)=>{const row={label,sure_sn:sureSn,zIdx:4,tekrar,din_sn:45,isSprint:true,rpe:'8–9'};if(_cue!==undefined)row._cue=_cue;if(_dinCue!==undefined)row._dinCue=_dinCue;return[row];},
@@ -28000,62 +28023,83 @@ async function gpxResolveDayPlan(athlete,dateStr,allHistory,races,workouts,testP
 }
 
 // ── Bir günün baseRows'undan Isınma/Tekrar-bloğu/Ana-Bölüm/Soğuma yapısını tespit et ──
-function gpxDetectStructure(baseRows){
-  if(!baseRows||!baseRows.length) return null;
+// ── Bir günün baseRows'unu GENEL bir "blok listesine" ayırır — her blok ya tek
+// seferlik bir satır (Isınma/Soğuma/Tempo Bloğu/Son Koşu Bloğu/Segment N/Aktif
+// Toparlanma...) ya da GERÇEK bir tekrar grubu (header + iş + opsiyonel dinlenme,
+// N kez fiilen koşulur). Göksel talebi (2026.09.04): "S7'ye özel" sabit alan seti
+// yerine, GPX Analiz modalı artık HANGİ antrenman tipi olursa olsun (Piramit, çok
+// bloklu Tempo/Eşik Sürekli, çok "tur"lu On-Off, çoklu grup İnterval, S7 tipi ek
+// blok...) günün GERÇEK satır sırasını birebir yansıtan, dinamik bir liste üretir —
+// eski gpxDetectStructure/gpxPrefillFromStructure'ın (tek header + sabit alan seti)
+// yerini alır.
+//
+// AYIRT EDİCİ KURAL: bir header'ın GERÇEK bir tekrar mı yoksa sadece görsel bir GRUP
+// ETİKETİ mi olduğunu, kendisinden hemen sonraki satırın repeatCount'unun header'ın
+// repeatCount'una BİREBİR eşit olup olmadığına bakarak ayırt ediyoruz. Bu eşleşme
+// sistemdeki TEK yol olan adimToRows'un r.tekrar genişletmesinden (mkInterval,
+// _R.blok, On-Off, "N×M dk" fallback — hepsi header/iş/dinlenmeye AYNI repeatCount'u
+// basar, bkz. ~satır 9260) geçen GERÇEK tekrarlarda her zaman var; Piramit/
+// Kesintisiz Piramit gibi adimToRowsFallback'in ürettiği "N Blok/Segment"
+// header'larında YOK (çocuk satırlar repeatCount taşımaz) — yani bu, ekstra bir veri
+// alanı gerektirmeyen, halihazırda var olan güvenilir bir imza.
+function gpxDetectBlocks(baseRows){
+  if(!baseRows||!baseRows.length) return [];
   const rowDurSecOf=(r)=>(r?.h||0)*3600+(r?.m||0)*60+(r?.s||0);
   const warmupIdx=baseRows.findIndex(r=>/[iı]sınma|isinma/i.test(r.label||''));
   let cooldownIdx=-1;
   for(let i=baseRows.length-1;i>=0;i--){ if(/soğuma|soguma/i.test(baseRows[i].label||'')){cooldownIdx=i;break;} }
-  const headerIdx=baseRows.findIndex(r=>r.type==='header');
-  let workRowIdx=-1,restRowIdx=-1,hasRest=false,repCount=0;
-  if(headerIdx>=0){
-    repCount=baseRows[headerIdx].repeatCount||1;
-    workRowIdx=headerIdx+1;
-    const maybeRest=headerIdx+2;
-    if(baseRows[maybeRest]&&baseRows[maybeRest].type!=='header'&&maybeRest!==cooldownIdx&&(baseRows[maybeRest].type==='walk'||baseRows[maybeRest].type==='rest')){
-      restRowIdx=maybeRest;hasRest=true;
+  const blocks=[];
+  let i=0;
+  while(i<baseRows.length){
+    const r=baseRows[i];
+    if(r.type==='header'){
+      const work=baseRows[i+1];
+      const isTrueRepeat=!!(work&&work.repeatCount!=null&&r.repeatCount!=null&&work.repeatCount===r.repeatCount);
+      if(isTrueRepeat){
+        const rest=baseRows[i+2];
+        const hasRest=!!(rest&&rest.repeatCount===r.repeatCount&&(rest.type==='walk'||rest.type==='rest'));
+        blocks.push({
+          kind:'repeat',headerIdx:i,workIdx:i+1,restIdx:hasRest?i+2:-1,hasRest,
+          repCount:r.repeatCount,
+          workLabel:work.label||'Koşu',restLabel:hasRest?(rest.label||'Dinlenme'):'',
+          workDefaultSec:rowDurSecOf(work),restDefaultSec:hasRest?rowDurSecOf(rest):0
+        });
+        i+=hasRest?3:2;
+        continue;
+      }
+      i+=1; // sadece görsel grup etiketi — kendisi atlanır, altındaki satırlar tekil bloklar
+      continue;
     }
+    const role=(i===warmupIdx)?'warmup':(i===cooldownIdx?'cooldown':'main');
+    blocks.push({kind:'single',rowIdx:i,role,label:r.label||(role==='warmup'?'Isınma':role==='cooldown'?'Soğuma':'Blok'),defaultSec:rowDurSecOf(r)});
+    i+=1;
   }
-  const usedIdx=new Set([warmupIdx,cooldownIdx,headerIdx,workRowIdx,restRowIdx].filter(i=>i!=null&&i>=0));
-  const mainRowIdxs=[];
-  baseRows.forEach((r,i)=>{ if(r.type!=='header'&&!usedIdx.has(i)) mainRowIdxs.push(i); });
-  const headerCount=baseRows.filter(r=>r.type==='header').length;
-  return {
-    warmupIdx,cooldownIdx,headerIdx,workRowIdx,restRowIdx,hasRest,repCount,mainRowIdxs,
-    warmupSec:warmupIdx>=0?rowDurSecOf(baseRows[warmupIdx]):0,
-    cooldownSec:cooldownIdx>=0?rowDurSecOf(baseRows[cooldownIdx]):0,
-    workSec:workRowIdx>=0?rowDurSecOf(baseRows[workRowIdx]):0,
-    restSec:restRowIdx>=0?rowDurSecOf(baseRows[restRowIdx]):0,
-    mainSec:mainRowIdxs.reduce((a,i)=>a+rowDurSecOf(baseRows[i]),0),
-    isComplex:headerCount>1||mainRowIdxs.length>1
-  };
+  return blocks;
 }
 
-// ── Yapıdan "2 — Antrenman Reçetesi" form alanlarını öner (hâlâ düzenlenebilir) ──
-function gpxPrefillFromStructure(structure){
-  const warmupMin=(structure&&structure.warmupSec>0)?Math.round(structure.warmupSec/30)/2:5;
-  if(structure&&structure.headerIdx>=0&&structure.repCount>0){
-    return {
-      mode:'interval',warmup:warmupMin,reps:structure.repCount,
-      work:Math.round(structure.workSec/5)*5||150,
-      rest:structure.hasRest?Math.round(structure.restSec/5)*5:0,
-      mainMin:40,cooldown:'',
-      hint:structure.isComplex?'Bu gün için birden fazla antrenman bloğu tespit edildi — sadece ilk blok otomatik dolduruldu, gerekirse elle düzenle.':null,
-      noRecete:false
-    };
-  }
-  if(structure&&structure.mainRowIdxs.length>0){
-    return {
-      mode:'simple',warmup:warmupMin,reps:6,work:150,rest:90,
-      mainMin:Math.max(1,Math.round(structure.mainSec/60))||40,
-      cooldown:'',
-      hint:structure.isComplex?'Bu gün için birden fazla bölüm tespit edildi — toplam süre tek Ana Bölüm olarak dolduruldu, gerekirse elle düzenle.':null,
-      noRecete:false
-    };
-  }
-  return {mode:'interval',warmup:5,reps:6,work:150,rest:90,mainMin:40,cooldown:'',
-    hint:'Bu tarih için tanınan bir reçete yapısı bulunamadı — varsayılan değerler kullanılıyor, reçete alanlarını elle düzenle.',
-    noRecete:true};
+// ── Tespit edilen blok listesine varsayılan (hâlâ düzenlenebilir) değerleri ekler.
+// Tekil bloklar 'dk' (Isınma/Soğuma/Ana-tip alanlarla tutarlı), tekrar bloklarının
+// iş/dinlenme alanları 'sn' (eski work/rest alanlarıyla tutarlı) birimiyle doldurulur.
+function gpxDefaultBlockCfgs(blocks){
+  return (blocks||[]).map(b=>{
+    if(b.kind==='single'){
+      const roundedMin=b.defaultSec>0?Math.round(b.defaultSec/30)/2:0;
+      const isEmptyCooldown=b.role==='cooldown'&&!b.defaultSec;
+      return {...b,unit:'time',value:isEmptyCooldown?'':(roundedMin||5)};
+    }
+    return {...b,unit:'time',
+      workValue:Math.round(b.workDefaultSec/5)*5||150,workUnit:'time',
+      restValue:b.hasRest?(Math.round(b.restDefaultSec/5)*5||90):0,restUnit:'time'};
+  });
+}
+// ── Reçete bulunamadığında modalın hâlâ kullanılabilir olması için varsayılan blok
+// listesi (eski sabit "5dk ısınma + 6×[150sn/90sn] + soğuma" varsayılanıyla aynı).
+function gpxFallbackBlocks(){
+  return [
+    {kind:'single',role:'warmup',rowIdx:-1,label:'Isınma',unit:'time',value:5},
+    {kind:'repeat',headerIdx:-1,workIdx:-1,restIdx:-1,hasRest:true,workLabel:'Koşu',restLabel:'Yürüyüş',repCount:6,workValue:150,workUnit:'time',restValue:90,restUnit:'time'},
+    {kind:'single',role:'cooldown',rowIdx:-1,label:'Soğuma',unit:'time',value:''}
+  ];
 }
 
 // ── Bir fazı ilerlet: lenSpec={value,unit} — unit='time' ise value saniye olarak
@@ -28081,44 +28125,56 @@ function gpxAdvance(points,curT,lenSpec){
 //    (gpxAdvance). Bu yüzden "cfg.unit==='time'?...:..." dallanması yerine tek tip
 //    zaman ekseni + gpxAdvance kullanılıyor; test edilmiş: süre ve eşdeğer mesafe
 //    girişleri BİREBİR aynı faz sınırlarını üretiyor (bkz. proje notu).
-function gpxComputePhases(points,cfg){
+// ── GPX/TCX noktalarından faz bazlı sonuç üret — GENELLEŞTİRİLMİŞ (2026.09.04,
+//    Göksel talebi): artık sabit warmup/reps/work/rest/finalBlock/mainMin/cooldown
+//    alanları yerine, gpxDetectBlocks'un ürettiği SIRALI blok listesini (blockCfgs)
+//    aynı sırayla zaman ekseninde ilerletir. Her blok 'single' (tek seferlik, bir
+//    kez) ya da 'repeat' (N kez fiilen koşulan iş[+dinlenme]) olabilir — bu yüzden
+//    tek bir header'lı gün kadar, N header'lı ya da hiç header'sız çok-bloklu bir
+//    gün de (Piramit, çok bloklu Tempo/Eşik Sürekli, çok "tur"lu On-Off, çoklu grup
+//    İnterval...) AYNI kodla doğru şekilde hesaplanır. Faz kimliği artık sabit
+//    Türkçe isimler (eskiden 'Isınma'/'Koşu 1'/'Son Koşu Bloğu' gibi) değil,
+//    blockIdx/legKind/repIndex — bu, isim çakışması riskini ortadan kaldırır ve
+//    gpxMapPhasesToOverrides'ın doğrudan indeksle eşleşmesini sağlar (bkz. altta).
+//    Konum ekseni HER ZAMAN zaman (saniye) üzerinden ilerletilir — mesafe bazlı bir
+//    blok, o mesafenin dosyada ne kadar sürdüğü hesaplanarak zamana çevrilir
+//    (gpxAdvance).
+function gpxComputePhases(points,blockCfgs){
   if(!points||points.length<2) return null;
   const totalEndT=points[points.length-1].t;
   const totalEndD=points[points.length-1].d;
-  let reps,workSpec,restSpec;
-  if(cfg.mode==='simple'){
-    reps=1;
-    workSpec=cfg.mainMin;
-    restSpec={value:0,unit:'time'};
-  } else {
-    reps=Math.max(1,parseInt(cfg.reps)||1);
-    workSpec=cfg.work;
-    restSpec=cfg.rest;
-  }
-  const singlePhase=(reps===1&&!(restSpec&&restSpec.value>0));
   const native=[];
   let t=0;
-  const warmupEndT=gpxAdvance(points,0,cfg.warmup);
-  native.push({name:'Isınma',kind:'edge',t0:0,t1:warmupEndT});
-  t=warmupEndT;
-  for(let i=1;i<=reps;i++){
-    const workName=singlePhase?'Ana Bölüm':`Koşu ${i}`;
-    const workEndT=gpxAdvance(points,t,workSpec);
-    native.push({name:workName,kind:'run',t0:t,t1:workEndT});
-    t=workEndT;
-    if(restSpec&&restSpec.value>0){
-      const restEndT=gpxAdvance(points,t,restSpec);
-      native.push({name:`Yürüyüş ${i}`,kind:'walk',t0:t,t1:restEndT});
-      t=restEndT;
+  (blockCfgs||[]).forEach((b,bi)=>{
+    if(b.kind==='single'){
+      const hasValue=b.value!==''&&b.value!=null&&parseFloat(b.value)>0;
+      let endT;
+      if(!hasValue&&b.role==='cooldown'){
+        endT=totalEndT; // Soğuma boş bırakılırsa dosya sonuna kadar (eski davranış)
+      } else if(!hasValue){
+        endT=t; // değer girilmemiş tekil blok — süresi 0, faz yine üretilir (boş)
+      } else {
+        const spec={value:parseFloat(b.value)*(b.unit==='time'?60:1),unit:b.unit};
+        endT=gpxAdvance(points,t,spec);
+      }
+      native.push({blockIdx:bi,kind:(b.role==='main')?'run':'edge',t0:t,t1:endT});
+      t=endT;
+    } else {
+      const reps=Math.max(1,parseInt(b.repCount)||1);
+      for(let k=1;k<=reps;k++){
+        const workSpec={value:parseFloat(b.workValue)||0,unit:b.workUnit};
+        const workEndT=gpxAdvance(points,t,workSpec);
+        native.push({blockIdx:bi,legKind:'work',repIndex:k,kind:'run',t0:t,t1:workEndT});
+        t=workEndT;
+        if(b.hasRest&&parseFloat(b.restValue)>0){
+          const restSpec={value:parseFloat(b.restValue)||0,unit:b.restUnit};
+          const restEndT=gpxAdvance(points,t,restSpec);
+          native.push({blockIdx:bi,legKind:'rest',repIndex:k,kind:'walk',t0:t,t1:restEndT});
+          t=restEndT;
+        }
+      }
     }
-  }
-  let cooldownEndT;
-  if(cfg.cooldown&&cfg.cooldown.value){
-    cooldownEndT=gpxAdvance(points,t,cfg.cooldown);
-  } else {
-    cooldownEndT=totalEndT;
-  }
-  native.push({name:'Soğuma',kind:'edge',t0:t,t1:Math.min(cooldownEndT,totalEndT)});
+  });
   native.forEach(p=>{p.t1=Math.min(p.t1,totalEndT);p.t0=Math.min(p.t0,p.t1);});
 
   const rows=native.map(p=>{
@@ -28127,9 +28183,17 @@ function gpxComputePhases(points,cfg){
     const pace=durSec>0&&distKm>0?(durSec/distKm):null;
     const hr=gpxHrStatsWindow(points,p.t0,p.t1);
     const hrEdge=gpxHrEdgeStats(points,p.t0,p.t1);
-    return {name:p.name,kind:p.kind,t0:p.t0,t1:p.t1,distKm,durSec,pace,hr,hrEdge};
+    return {...p,distKm,durSec,pace,hr,hrEdge};
   });
   return {rows,totalEndT,totalEndD};
+}
+// ── Bir faz satırının EKRANDA gösterilecek etiketi — blockCfgs'teki gerçek reçete
+// adını kullanır (ör. "🏃 Son Koşu Bloğu", "Z3 Tempo Bloğu 2", "Koşu 3").
+function gpxPhaseLabel(row,blockCfgs){
+  const b=blockCfgs&&blockCfgs[row.blockIdx];
+  if(!b) return '—';
+  if(b.kind==='single') return b.label;
+  return (row.legKind==='work'?b.workLabel:b.restLabel)+' '+row.repIndex;
 }
 
 // ── Bir faz sonucunu ReceteTablosu'nun rowOverrides satır şemasına çevir ──────────
@@ -28188,40 +28252,36 @@ function gpxBuildLegPayload(baseRow,phase,liveZones,isAralikLeg){
 }
 
 // ── Analiz sonuçlarını (gpxComputePhases çıktısı) reçete override'larına eşle ──────
-function gpxMapPhasesToOverrides(baseRows,structure,phaseRows,liveZones){
+// GENELLEŞTİRİLMİŞ (2026.09.04): eski isim-tabanlı byName('Isınma')/byName('Koşu 1')
+// eşleştirmesi yerine, artık HER faz kendi blockIdx/legKind/repIndex kimliğini
+// doğrudan taşıyor — bu yüzden isim çakışması/eksik eşleşme riski olmadan, KAÇ
+// blok/tekrar grubu olursa olsun (S7'nin tek ek bloğu, On-Off'un birden fazla
+// "tur"u, Piramit'in N segmenti, çoklu grup İnterval...) doğrudan indeksle eşlenir.
+function gpxMapPhasesToOverrides(baseRows,blockCfgs,phaseRows,liveZones){
   const flatOverrides={};
   const aralikOverrides={};
-  const byName=(n)=>phaseRows.find(p=>p.name===n);
-  const warmupPhase=byName('Isınma');
-  const cooldownPhase=byName('Soğuma');
-  if(structure.warmupIdx>=0&&warmupPhase){
-    const payload=gpxBuildLegPayload(baseRows[structure.warmupIdx],warmupPhase,liveZones,false);
-    if(payload) flatOverrides[structure.warmupIdx]=payload;
-  }
-  if(structure.cooldownIdx>=0&&cooldownPhase){
-    const payload=gpxBuildLegPayload(baseRows[structure.cooldownIdx],cooldownPhase,liveZones,false);
-    if(payload) flatOverrides[structure.cooldownIdx]=payload;
-  }
-  if(structure.headerIdx>=0&&structure.workRowIdx>=0){
-    const repMap={};
-    for(let i=1;i<=structure.repCount;i++){
-      const runPhase=byName(`Koşu ${i}`)||(structure.repCount===1?byName('Ana Bölüm'):null);
-      const restPhase=byName(`Yürüyüş ${i}`);
-      const legs={};
-      if(runPhase){ const p=gpxBuildLegPayload(baseRows[structure.workRowIdx],runPhase,liveZones,true); if(p) legs.run=p; }
-      if(structure.hasRest&&restPhase&&structure.restRowIdx>=0){ const p=gpxBuildLegPayload(baseRows[structure.restRowIdx],restPhase,liveZones,true); if(p) legs.rest=p; }
-      if(legs.run||legs.rest) repMap[i]=legs;
+  (blockCfgs||[]).forEach((b,bi)=>{
+    if(b.kind==='single'){
+      if(b.rowIdx<0) return; // gpxFallbackBlocks() varsayılanları — eşlenecek gerçek satır yok
+      const phase=phaseRows.find(p=>p.blockIdx===bi);
+      if(phase){
+        const payload=gpxBuildLegPayload(baseRows[b.rowIdx],phase,liveZones,false);
+        if(payload) flatOverrides[b.rowIdx]=payload;
+      }
+    } else {
+      if(b.headerIdx<0) return;
+      const repMap={};
+      for(let k=1;k<=b.repCount;k++){
+        const workPhase=phaseRows.find(p=>p.blockIdx===bi&&p.legKind==='work'&&p.repIndex===k);
+        const restPhase=b.hasRest?phaseRows.find(p=>p.blockIdx===bi&&p.legKind==='rest'&&p.repIndex===k):null;
+        const legs={};
+        if(workPhase){ const p=gpxBuildLegPayload(baseRows[b.workIdx],workPhase,liveZones,true); if(p) legs.run=p; }
+        if(b.hasRest&&restPhase&&b.restIdx>=0){ const p=gpxBuildLegPayload(baseRows[b.restIdx],restPhase,liveZones,true); if(p) legs.rest=p; }
+        if(legs.run||legs.rest) repMap[k]=legs;
+      }
+      if(Object.keys(repMap).length) aralikOverrides[b.headerIdx]=repMap;
     }
-    if(Object.keys(repMap).length) aralikOverrides[structure.headerIdx]=repMap;
-  } else if(structure.mainRowIdxs.length){
-    const mainPhase=byName('Ana Bölüm');
-    if(mainPhase){
-      structure.mainRowIdxs.forEach(idx=>{
-        const payload=gpxBuildLegPayload(baseRows[idx],mainPhase,liveZones,false);
-        if(payload) flatOverrides[idx]=payload;
-      });
-    }
-  }
+  });
   return {flatOverrides,aralikOverrides};
 }
 
@@ -28251,20 +28311,13 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
   const [date,setDate]=useState(initialDate||localDateStr(new Date()));
   const [loadingPlan,setLoadingPlan]=useState(true);
   const [planInfo,setPlanInfo]=useState(null);
-  const [structure,setStructure]=useState(null);
   const [noRecete,setNoRecete]=useState(false);
-  const [mode,setMode]=useState('interval');
-  const [warmup,setWarmup]=useState(5);
-  const [warmupUnit,setWarmupUnit]=useState('time');
-  const [reps,setReps]=useState(6);
-  const [work,setWork]=useState(150);
-  const [workUnit,setWorkUnit]=useState('time');
-  const [rest,setRest]=useState(90);
-  const [restUnit,setRestUnit]=useState('time');
-  const [mainMin,setMainMin]=useState(40);
-  const [mainUnit,setMainUnit]=useState('time');
-  const [cooldown,setCooldown]=useState('');
-  const [cooldownUnit,setCooldownUnit]=useState('time');
+  // GENELLEŞTİRİLMİŞ BLOK LİSTESİ (2026.09.04, Göksel talebi): eski sabit
+  // mode/warmup/reps/work/rest/finalBlock/mainMin/cooldown alan seti yerine, günün
+  // GERÇEK yapısını (gpxDetectBlocks) birebir yansıtan sıralı bir blok listesi.
+  // Her eleman ya {kind:'single',...} ya da {kind:'repeat',...} — bkz. yukarıdaki
+  // gpxDetectBlocks/gpxDefaultBlockCfgs/gpxFallbackBlocks tanımları.
+  const [blocks,setBlocks]=useState(()=>gpxDefaultBlockCfgs(gpxFallbackBlocks()));
   const [knownDist,setKnownDist]=useState('');
   const [hint,setHint]=useState(null);
   const [dragActive,setDragActive]=useState(false);
@@ -28286,42 +28339,42 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
     gpxResolveDayPlan(athlete,date,allHistory,races,workouts,testPlanlar).then(info=>{
       if(cancelled) return;
       setPlanInfo(info);
-      const st=info?.baseRows?.length?gpxDetectStructure(info.baseRows):null;
-      setStructure(st);
-      const pf=gpxPrefillFromStructure(st);
-      setMode(pf.mode);
-      // Reçeteden gelen öneri değerleri her zaman SÜRE birimiyle doldurulur (kaynak
-      // veri süre/mesafeyi birlikte taşıdığı için hangisinin "asıl" niyet olduğu
-      // belirsiz — süre varsayılan, koç isterse aşağıdan faz bazında mesafeye çevirir).
-      setWarmupUnit('time');setWorkUnit('time');setRestUnit('time');setMainUnit('time');setCooldownUnit('time');
-      setWarmup(pf.warmup);setReps(pf.reps);setWork(pf.work);setRest(pf.rest);
-      setMainMin(pf.mainMin);setCooldown(pf.cooldown);setHint(pf.hint);
-      setNoRecete(!!pf.noRecete);
+      if(info?.baseRows?.length){
+        setBlocks(gpxDefaultBlockCfgs(gpxDetectBlocks(info.baseRows)));
+        setHint(null);
+        setNoRecete(false);
+      } else {
+        setBlocks(gpxDefaultBlockCfgs(gpxFallbackBlocks()));
+        setHint('Bu tarih için tanınan bir reçete yapısı bulunamadı — varsayılan değerler kullanılıyor, reçete alanlarını elle düzenle.');
+        setNoRecete(true);
+      }
       setLoadingPlan(false);
     });
     return ()=>{cancelled=true;};
   },[athlete?.id,date]);
 
-  // Bir fazın biriminî değiştir — yeni birime uygun makul bir varsayılan değere sıfırla
-  // (örn. "150 sn" → mesafeye geçince "1000 m" gibi anlamlı bir başlangıç, ters yönde de öyle).
-  const FIELD_UNIT_DEFAULTS={
+  // Bir bloğun tek alanını güncelle (functional update — hızlı ardışık yazımlarda güvenli).
+  const updateBlock=(idx,patch)=>setBlocks(bs=>bs.map((b,i)=>i===idx?{...b,...patch}:b));
+  // Tekil blokların (Isınma/Soğuma/Ana-tip) birim varsayılanları — role bazlı.
+  const SINGLE_UNIT_DEFAULTS={
     warmup:{time:5,distance:1000},
-    work:{time:150,distance:1000},
-    rest:{time:90,distance:200},
-    mainMin:{time:40,distance:5000},
-    cooldown:{time:'',distance:''}
+    cooldown:{time:'',distance:''},
+    main:{time:10,distance:2000}
   };
-  const toggleFieldUnit=(field,newUnit,setVal,setUnitFn)=>{
-    setUnitFn(newUnit);
-    setVal(FIELD_UNIT_DEFAULTS[field][newUnit]);
+  // Tekrar bloklarının iş/dinlenme birim varsayılanları — eski work/rest alanlarıyla tutarlı.
+  const REPEAT_UNIT_DEFAULTS={work:{time:150,distance:1000},rest:{time:90,distance:200}};
+  const toggleSingleUnit=(idx,newUnit)=>{
+    const role=blocks[idx]?.role||'main';
+    updateBlock(idx,{unit:newUnit,value:SINGLE_UNIT_DEFAULTS[role]?.[newUnit]??(newUnit==='time'?5:1000)});
   };
-  // Her faz alanının yanında gösterilen küçük süre/mesafe seçici — her faz
-  // bağımsız birim taşıdığı için (Göksel talebi) global tek bir anahtar yerine
-  // alan başına bu pil kullanılıyor.
-  const unitPill=(field,curUnit,setVal,setUnitFn,timeLabel,distLabel)=>React.createElement('div',{style:{display:'inline-flex',border:'1px solid var(--border)',borderRadius:5,overflow:'hidden'}},
+  const toggleRepeatUnit=(idx,field,newUnit)=>{
+    updateBlock(idx,{[field+'Unit']:newUnit,[field+'Value']:REPEAT_UNIT_DEFAULTS[field][newUnit]});
+  };
+  // Her alanın yanında gösterilen küçük süre/mesafe seçici.
+  const unitPill=(curUnit,onToggle,timeLabel,distLabel)=>React.createElement('div',{style:{display:'inline-flex',border:'1px solid var(--border)',borderRadius:5,overflow:'hidden'}},
     [['time',timeLabel],['distance',distLabel]].map(([u,lbl])=>React.createElement('button',{
       key:u,type:'button',
-      onClick:()=>toggleFieldUnit(field,u,setVal,setUnitFn),
+      onClick:()=>onToggle(u),
       style:{padding:'1px 6px',fontSize:9,border:'none',cursor:'pointer',lineHeight:'16px',
         background:curUnit===u?'var(--info)':'var(--bg-secondary)',
         color:curUnit===u?'#fff':'var(--text-tertiary)',
@@ -28373,17 +28426,7 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
 
   const runAnalysis=()=>{
     if(!points) return;
-    const cfg={
-      mode,
-      reps:parseInt(reps)||1,
-      warmup:{value:(parseFloat(warmup)||0)*(warmupUnit==='time'?60:1),unit:warmupUnit},
-      work:{value:parseFloat(work)||0,unit:workUnit},
-      rest:{value:parseFloat(rest)||0,unit:restUnit},
-      mainMin:{value:(parseFloat(mainMin)||0)*(mainUnit==='time'?60:1),unit:mainUnit},
-      cooldown:(cooldown!==''&&cooldown!=null)?{value:(parseFloat(cooldown)||0)*(cooldownUnit==='time'?60:1),unit:cooldownUnit}:null,
-      knownDist
-    };
-    const result=gpxComputePhases(points,cfg);
+    const result=gpxComputePhases(points,blocks);
     setPhaseResult(result);
     setApplyMsg(null);
   };
@@ -28403,7 +28446,7 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
     return null;
   })();
 
-  const canApply=!!(phaseResult&&planInfo?.baseRows?.length&&structure&&!noRecete);
+  const canApply=!!(phaseResult&&planInfo?.baseRows?.length&&blocks.length&&!noRecete);
 
   const handleApply=async()=>{
     if(!canApply||applying) return;
@@ -28411,7 +28454,7 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
     setApplyMsg(null);
     try{
       const liveZones=calcZones(athlete);
-      const {flatOverrides,aralikOverrides}=gpxMapPhasesToOverrides(planInfo.baseRows,structure,phaseResult.rows,liveZones);
+      const {flatOverrides,aralikOverrides}=gpxMapPhasesToOverrides(planInfo.baseRows,blocks,phaseResult.rows,liveZones);
       if(!Object.keys(flatOverrides).length&&!Object.keys(aralikOverrides).length){
         setApplyMsg({type:'err',text:'Eşleşen bir reçete satırı bulunamadı — reçete alanlarını kontrol edin.'});
         setApplying(false);
@@ -28538,55 +28581,57 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
 
       React.createElement('div',{className:'card'},
         React.createElement('div',{className:'card-title'},'2 — Antrenman Reçetesi'),
-        React.createElement('div',{style:{display:'flex',gap:6,marginBottom:12}},
-          ['interval','simple'].map(m=>React.createElement('button',{
-            key:m,type:'button',onClick:()=>setMode(m),
-            style:{flex:1,padding:'7px 8px',fontSize:11,borderRadius:'var(--radius)',border:'1px solid '+(mode===m?'var(--info)':'var(--border)'),background:mode===m?'var(--info-bg)':'transparent',color:'var(--text-primary)',cursor:'pointer',fontWeight:mode===m?600:400}
-          },m==='interval'?'Tekrarlı (interval)':'Basit — Isınma+Ana Bölüm+Soğuma'))
-        ),
-        React.createElement('div',{style:{fontSize:10.5,color:'var(--text-tertiary)',marginBottom:10}},'Her aşamayı istersen ayrı ayrı süre ya da mesafe olarak tanımlayabilirsin (örn. koşu kısmı "1000 m", yürüyüş "90 sn").'),
-        React.createElement('div',{className:'form-grid'},
-          React.createElement('div',{className:'form-group'},
-            React.createElement('label',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:6}},
-              React.createElement('span',null,'Isınma ('+(warmupUnit==='time'?'dk':'m')+')'),
-              unitPill('warmup',warmupUnit,setWarmup,setWarmupUnit,'dk','m')
-            ),
-            React.createElement('input',{type:'number',value:warmup,min:0,step:warmupUnit==='time'?0.5:50,onChange:e=>setWarmup(e.target.value)})
-          ),
-          mode==='interval'?React.createElement(React.Fragment,null,
-            React.createElement('div',{className:'form-group'},React.createElement('label',null,'Tekrar sayısı'),React.createElement('input',{type:'number',value:reps,min:1,step:1,onChange:e=>setReps(e.target.value)})),
-            React.createElement('div',{className:'form-group'},
+        React.createElement('div',{style:{fontSize:10.5,color:'var(--text-tertiary)',marginBottom:12}},
+          'Aşağıdaki alanlar bu günün reçetesindeki GERÇEK sırayı yansıtır — her aşamayı süre ya da mesafe olarak tanımlayabilirsin.'),
+        // ── Dinamik blok listesi — Göksel talebi (2026.09.04): sabit/gereksiz alan
+        // yok, sadece bu günün yapısında GERÇEKTEN var olan bloklar gösterilir.
+        // Tekrar blokları (↻), tekil bloklardan (Isınma/Soğuma/Ana) farklı renkte
+        // bir kutu içinde, gerçek reçete etiketiyle gösterilir.
+        blocks.map((b,idx)=>{
+          if(b.kind==='single'){
+            const icon=b.role==='warmup'?'🔥':b.role==='cooldown'?'🧊':'▶';
+            return React.createElement('div',{key:idx,className:'form-group',style:{marginBottom:10}},
               React.createElement('label',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:6}},
-                React.createElement('span',null,'Koşu ('+(workUnit==='time'?'sn':'m')+')'),
-                unitPill('work',workUnit,setWork,setWorkUnit,'sn','m')
+                React.createElement('span',null,icon+' '+b.label+' ('+(b.unit==='time'?'dk':'m')+')'+(b.role==='cooldown'?' — boş: dosya sonuna kadar':'')),
+                unitPill(b.unit,u=>toggleSingleUnit(idx,u),'dk','m')
               ),
-              React.createElement('input',{type:'number',value:work,min:1,step:workUnit==='time'?5:50,onChange:e=>setWork(e.target.value)})
+              React.createElement('input',{type:'number',value:b.value,min:0,step:b.unit==='time'?0.5:50,
+                placeholder:b.role==='cooldown'?'dosya sonu':undefined,
+                onChange:e=>updateBlock(idx,{value:e.target.value})})
+            );
+          }
+          return React.createElement('div',{key:idx,style:{
+            border:'1px solid var(--info)',borderRadius:'var(--radius)',padding:'10px 12px',marginBottom:10,background:'var(--info-bg)'
+          }},
+            React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:8,fontSize:12,fontWeight:600}},
+              React.createElement('span',{style:{background:'#1e293b',color:'#f8fafc',borderRadius:4,padding:'2px 8px',fontSize:11}},'↻ Tekrar'),
+              React.createElement('input',{type:'number',value:b.repCount,min:1,step:1,style:{width:52},
+                onChange:e=>updateBlock(idx,{repCount:e.target.value})}),
+              React.createElement('span',null,'kez')
             ),
-            React.createElement('div',{className:'form-group'},
-              React.createElement('label',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:6}},
-                React.createElement('span',null,'Yürüyüş ('+(restUnit==='time'?'sn':'m')+')'),
-                unitPill('rest',restUnit,setRest,setRestUnit,'sn','m')
+            React.createElement('div',{className:'form-grid'},
+              React.createElement('div',{className:'form-group'},
+                React.createElement('label',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:6}},
+                  React.createElement('span',null,b.workLabel+' ('+(b.workUnit==='time'?'sn':'m')+')'),
+                  unitPill(b.workUnit,u=>toggleRepeatUnit(idx,'work',u),'sn','m')
+                ),
+                React.createElement('input',{type:'number',value:b.workValue,min:1,step:b.workUnit==='time'?5:50,
+                  onChange:e=>updateBlock(idx,{workValue:e.target.value})})
               ),
-              React.createElement('input',{type:'number',value:rest,min:0,step:restUnit==='time'?5:50,onChange:e=>setRest(e.target.value)})
+              b.hasRest&&React.createElement('div',{className:'form-group'},
+                React.createElement('label',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:6}},
+                  React.createElement('span',null,b.restLabel+' ('+(b.restUnit==='time'?'sn':'m')+')'),
+                  unitPill(b.restUnit,u=>toggleRepeatUnit(idx,'rest',u),'sn','m')
+                ),
+                React.createElement('input',{type:'number',value:b.restValue,min:0,step:b.restUnit==='time'?5:50,
+                  onChange:e=>updateBlock(idx,{restValue:e.target.value})})
+              )
             )
-          ):React.createElement('div',{className:'form-group'},
-            React.createElement('label',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:6}},
-              React.createElement('span',null,'Ana Bölüm ('+(mainUnit==='time'?'dk':'m')+')'),
-              unitPill('mainMin',mainUnit,setMainMin,setMainUnit,'dk','m')
-            ),
-            React.createElement('input',{type:'number',value:mainMin,min:1,step:mainUnit==='time'?1:100,onChange:e=>setMainMin(e.target.value)})
-          ),
-          React.createElement('div',{className:'form-group'},
-            React.createElement('label',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:6}},
-              React.createElement('span',null,'Soğuma ('+(cooldownUnit==='time'?'dk':'m')+') — boş: dosya sonuna kadar'),
-              unitPill('cooldown',cooldownUnit,setCooldown,setCooldownUnit,'dk','m')
-            ),
-            React.createElement('input',{type:'number',value:cooldown,min:0,step:cooldownUnit==='time'?0.5:50,placeholder:'dosya sonu',onChange:e=>setCooldown(e.target.value)})
-          ),
-          React.createElement('div',{className:'form-group'},
-            React.createElement('label',null,"Bilinen toplam mesafe (km) — opsiyonel"),
-            React.createElement('input',{type:'number',value:knownDist,step:0.001,placeholder:'örn. 3.53',onChange:e=>setKnownDist(e.target.value)})
-          )
+          );
+        }),
+        React.createElement('div',{className:'form-group',style:{marginTop:2}},
+          React.createElement('label',null,"Bilinen toplam mesafe (km) — opsiyonel"),
+          React.createElement('input',{type:'number',value:knownDist,step:0.001,placeholder:'örn. 3.53',onChange:e=>setKnownDist(e.target.value)})
         ),
         React.createElement('button',{className:'btn btn-primary',style:{width:'100%',marginTop:14},disabled:!points,onClick:runAnalysis},'Analiz Et')
       ),
@@ -28605,7 +28650,7 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
             )),
             React.createElement('tbody',null,
               phaseResult.rows.map((r,i)=>React.createElement('tr',{key:i},
-                React.createElement('td',{style:{padding:'4px 6px',borderBottom:'1px solid var(--border)'}},r.name),
+                React.createElement('td',{style:{padding:'4px 6px',borderBottom:'1px solid var(--border)'}},gpxPhaseLabel(r,blocks)),
                 React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},gpxFmtMin(r.durSec)),
                 React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},(r.distKm*1000).toFixed(0)+'m'),
                 React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},gpxFmtPace(r.pace)),
@@ -28632,6 +28677,7 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
     )
   );
 }
+
 
 function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,workouts,races,testPlanlar,onUpdateWorkout}){
   const [form,setForm]=useState({...EMPTY_W});
