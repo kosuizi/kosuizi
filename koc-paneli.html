@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.03-2342 --><!DOCTYPE html>
+<!-- Version: v2026.09.04-1227 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.03-2342';
+const APP_VERSION='v2026.09.04-1227';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -27668,11 +27668,15 @@ function gpxParseGPXText(text){
     const timeEl=pt.getElementsByTagName('time')[0];
     const time=timeEl?new Date(timeEl.textContent):null;
     const hr=gpxFindHR(pt);
+    // İrtifa kazanımını "Ekle" formuna otomatik doldurabilmek için <ele> okunuyor
+    // (Göksel talebi, 2026.09.04) — yoksa null kalır, hiçbir alan zorla doldurulmaz.
+    const eleEl=pt.getElementsByTagName('ele')[0];
+    const ele=eleEl?parseFloat(eleEl.textContent):null;
     if(prevLat!=null&&!isNaN(lat)&&!isNaN(lon)){
       cum+=gpxHaversineM(prevLat,prevLon,lat,lon);
     }
     prevLat=lat;prevLon=lon;
-    out.push({time,dist:cum,hr});
+    out.push({time,dist:cum,hr,ele:(ele!=null&&!isNaN(ele))?ele:null});
   }
   return out;
 }
@@ -27691,7 +27695,10 @@ function gpxParseTCXText(text){
       const v=hrParent.getElementsByTagName('Value')[0];
       if(v) hr=parseFloat(v.textContent);
     }
-    out.push({time:timeEl?new Date(timeEl.textContent):null,dist:distEl?parseFloat(distEl.textContent):null,hr});
+    // TCX'te irtifa <AltitudeMeters> — GPX'teki <ele> karşılığı (bkz. gpxParseGPXText).
+    const eleEl=tp.getElementsByTagName('AltitudeMeters')[0];
+    const ele=eleEl?parseFloat(eleEl.textContent):null;
+    out.push({time:timeEl?new Date(timeEl.textContent):null,dist:distEl?parseFloat(distEl.textContent):null,hr,ele:(ele!=null&&!isNaN(ele))?ele:null});
   }
   return out;
 }
@@ -27704,7 +27711,7 @@ function gpxNormalizePoints(raw){
     const t=(p.time.getTime()-t0)/1000;
     let d=p.dist;
     if(d==null||isNaN(d)) d=lastDist; else lastDist=d;
-    return {t,d,hr:(p.hr!=null&&!isNaN(p.hr))?p.hr:null};
+    return {t,d,hr:(p.hr!=null&&!isNaN(p.hr))?p.hr:null,ele:(p.ele!=null&&!isNaN(p.ele))?p.ele:null};
   });
   pts.sort((a,b)=>a.t-b.t);
   let running=-Infinity;
@@ -27765,6 +27772,61 @@ function gpxFmtPace(secPerKm){
 function gpxFmtMin(sec){
   const m=Math.floor(sec/60),s=Math.round(sec%60);
   return s===0?`${m} dk`:`${m}:${s.toString().padStart(2,'0')}`;
+}
+// ── Toplam irtifa kazanımı (D+) — GPS/barometrik irtifa gürültülü olduğundan ham
+// farkların toplamı yanıltıcı şişer. Basit hareketli ortalamayla düzleştirip,
+// sadece THRESH metreden büyük net yükselişleri sayan bir taban-sıfırlama (reset
+// baseline) yöntemi kullanılıyor. Veri yoksa (GPX'te <ele>/<AltitudeMeters> yoksa) null.
+function gpxComputeElevGain(points){
+  const raw=(points||[]).map(p=>p.ele).filter(e=>e!=null&&!isNaN(e));
+  if(raw.length<2) return null;
+  const win=5;
+  const sm=raw.map((_,i)=>{
+    const lo=Math.max(0,i-win),hi=Math.min(raw.length-1,i+win);
+    let s=0,c=0;
+    for(let j=lo;j<=hi;j++){s+=raw[j];c++;}
+    return s/c;
+  });
+  const THRESH=0.5;
+  let gain=0,base=sm[0];
+  for(let i=1;i<sm.length;i++){
+    const diff=sm[i]-base;
+    if(diff>THRESH){gain+=diff;base=sm[i];}
+    else if(diff<0){base=sm[i];}
+  }
+  return Math.round(gain);
+}
+// ── GPX/TCX'ten "Ekle" formunun temel alanlarını otomatik doldurma özeti ──────
+// Göksel talebi (2026.09.04): koç artık alanları (başlangıç saati, mesafe, irtifa
+// kazanımı, süre, ort./maks. nabız, tarih) önce elle doldurup SONRA dosya eklemek
+// yerine, dosyayı YÜKLER YÜKLEMEZ — "Analiz Et"e basmadan — bu alanların otomatik
+// dolmasını istiyor. Sadece dosyadan GERÇEKTEN okunabilen alanlar patch'e girer;
+// GPX'te olmayan bir veri (ör. nabız kaydı yoksa) formdaki mevcut değeri EZMEZ.
+function gpxAutoFillPatch(rawParsed,norm){
+  const patch={};
+  const withTime=(rawParsed||[]).filter(p=>p.time instanceof Date&&!isNaN(p.time));
+  if(withTime.length){
+    const d=withTime[0].time;
+    patch.date=localDateStr(d);
+    patch.time=String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+  }
+  if(norm&&norm.length>1){
+    const totalSec=Math.round(norm[norm.length-1].t);
+    const totalKm=norm[norm.length-1].d/1000;
+    if(totalKm>0) patch.mesafe=totalKm.toFixed(2);
+    if(totalSec>0){
+      const hms=secToHMS(totalSec);
+      patch.sure_sa=String(hms.h);patch.sure_dk=String(hms.m);patch.sure_sn=String(hms.s);
+    }
+    const hrVals=norm.filter(p=>p.hr!=null).map(p=>p.hr);
+    if(hrVals.length){
+      patch.ort_nabiz=String(Math.round(hrVals.reduce((a,b)=>a+b,0)/hrVals.length));
+      patch.maks_nabiz=String(Math.round(Math.max(...hrVals)));
+    }
+    const elevGain=gpxComputeElevGain(norm);
+    if(elevGain!=null&&elevGain>0) patch.irtifa=String(elevGain);
+  }
+  return patch;
 }
 // HR eğrisi + faz şeritleri — antrenman-analiz.html'deki drawChart ile aynı çizim,
 // closure yerine açık parametre alır (React component'ten canvas ref ile çağrılır).
@@ -28185,7 +28247,7 @@ async function gpxPersistToRecete({athleteId,dateStr,weekKey,baseRows,measureZon
 }
 
 // ── GPX Analiz modalı — Ekle sekmesinden açılır ────────────────────────────────
-function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistory, races, testPlanlar, onUpdateWorkout, onSaveWorkout, onClose}){
+function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistory, races, testPlanlar, onUpdateWorkout, onSaveWorkout, onAutoFillFromGpx, onClose}){
   const [date,setDate]=useState(initialDate||localDateStr(new Date()));
   const [loadingPlan,setLoadingPlan]=useState(true);
   const [planInfo,setPlanInfo]=useState(null);
@@ -28288,7 +28350,18 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
         const hrCount=norm.filter(p=>p.hr!=null).length;
         const totalMin=(norm[norm.length-1].t/60).toFixed(1);
         const totalKm=(norm[norm.length-1].d/1000).toFixed(2);
-        setStatus({msg:`✓ ${norm.length} nokta okundu — toplam ${totalMin} dk, ${totalKm} km, ${hrCount} nabız örneği.`,type:'ok'});
+        // Göksel talebi (2026.09.04) — dosya okunur okunmaz, "Analiz Et"e basmadan,
+        // Ekle formunun temel alanları (tarih, saat, mesafe, süre, nabız, irtifa)
+        // dosyadan çekilebilenlerle otomatik dolduruluyor. Faz/interval detayları
+        // için aşağıdaki "Analiz Et" akışı hâlâ ayrıca gerekli.
+        const autoPatch=gpxAutoFillPatch(parsed,norm);
+        let filledMsg='';
+        if(Object.keys(autoPatch).length){
+          if(autoPatch.date) setDate(autoPatch.date);
+          if(onAutoFillFromGpx) onAutoFillFromGpx(autoPatch);
+          filledMsg=' Ekle formundaki alanlar otomatik dolduruldu.';
+        }
+        setStatus({msg:`✓ ${norm.length} nokta okundu — toplam ${totalMin} dk, ${totalKm} km, ${hrCount} nabız örneği.`+filledMsg,type:'ok'});
       }catch(err){
         console.error(err);
         setStatus({msg:'Dosya okunamadı: '+err.message,type:'err'});
@@ -28695,6 +28768,9 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,wor
       showGpxModal&&selId&&React.createElement(GpxAnalizModal,{
         athlete:selectedAth,initialDate:form.date,formSnapshot:form,workouts,allHistory,races,testPlanlar,
         onUpdateWorkout,onSaveWorkout:onSave,
+        // Göksel talebi (2026.09.04) — GPX/TCX dosyası yüklenir yüklenmez, dosyadan
+        // gerçekten okunabilen alanlar bu formun state'ine yazılır (bkz. gpxAutoFillPatch).
+        onAutoFillFromGpx:patch=>setForm(f=>({...f,...patch})),
         onClose:()=>setShowGpxModal(false)
       }),
 
