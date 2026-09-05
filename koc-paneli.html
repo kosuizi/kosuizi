@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.04-1557 --><!DOCTYPE html>
+<!-- Version: v2026.09.05-1858 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.04-1557';
+const APP_VERSION='v2026.09.05-1858';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -11232,9 +11232,25 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
       ?_editedZIdx
       :(_existingTargetZIdx!=null?_existingTargetZIdx:r._origZIdx);
     const _paceLocked=isWorkoutLogged&&_existingTargetPaceSec>0;
+    // KÖK NEDEN DÜZELTMESİ (2026.09.05 — Göksel'in bildirdiği "Progressive S1 Bölüm 2
+    // yanlış rozet" hatası): ÖNCEDEN "önceden donmuş hedef yoksa" durumu HER ZAMAN
+    // "coach bilinçli olarak hedef belirliyor" sayılıyordu — ama antrenman ZATEN
+    // EKLENMİŞSE (isWorkoutLogged=true) ve bu satıra daha önce HİÇ dokunulmamışsa, ilk
+    // pace girişi genelde "gerçekleşeni kaydetmek"tir, hedefi değiştirmek değil. Coach
+    // antrenman ÖNCESİNDE pace'i elle ayarlamışsa o zaten _existingTargetPaceSec olarak
+    // donmuş olur ve _paceLocked=true olur (bu düzeltmeden ETKİLENMEZ, davranış aynı
+    // kalır — Göksel'in "antrenman öncesi pace değiştirdiğimde ona göre kıyaslansın"
+    // beklentisi burada korunuyor). Sadece "hiç dokunulmamış + Ekle SONRASI ilk giriş"
+    // durumunda artık girilen pace'ten değil, kütüphanenin kendi orijinal hedefinden
+    // (r._origZIdx/r._origPaceSec) hedef belirleniyor — aralık (tekrar) satırları için
+    // 2026.08.16'da yapılan AYNI sınıf düzeltmenin düz satır karşılığı.
+    const _freshPostLogEntry=isWorkoutLogged&&!_paceLocked;
     if(_paceLocked){
       origFields._targetPaceSec=_existingTargetPaceSec;
       if(_existingTargetZIdx!=null) origFields._targetZIdx=_existingTargetZIdx;
+    } else if(_freshPostLogEntry){
+      if(r._origPaceSec>0) origFields._targetPaceSec=r._origPaceSec;
+      if(r._origZIdx!=null) origFields._targetZIdx=r._origZIdx;
     } else {
       if(_currentPaceForFreeze>0) origFields._targetPaceSec=_currentPaceForFreeze;
       if(_currentZIdxForFreeze!=null) origFields._targetZIdx=_currentZIdxForFreeze;
@@ -11269,8 +11285,16 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     // Nabız bölge SINIRLARI da donsun — sadece hangi bölge (_origZIdx) değil, o anki LTHR'a göre
     // hesaplanmış bpm aralığı da kaydedilir. Yoksa LTHR sonradan değişirse "aynı bölge" farklı
     // bpm sınırlarına denk gelir ve geçmiş satırın nabız değerlendirmesi yine kayar.
-    const _zIdxForHr=_paceLocked?_existingTargetZIdx:_currentZIdxForFreeze;
-    const ohr=_zIdxForHr!=null?zones?.hrZones?.[_zIdxForHr]:null;
+    // KÖK NEDEN DÜZELTMESİ (2026.09.05): (1) hedef zone artık yukarıdaki AYNI üç-durumlu
+    // mantıkla belirleniyor (_freshPostLogEntry'de kütüphane orijinali kullanılıyor —
+    // pace hedefiyle TUTARLI olsun diye, aksi hâlde tek bir pace girişi pace rozetini
+    // düzeltip nabız rozetini bozuk bırakabilirdi). (2) Sınır DEĞERLERİ artık `zones`
+    // (düzenleme ANINDAKİ canlı profil) yerine `_mZones` (bu antrenmanın TARİHİNE göre
+    // hesaplanmış profil, measureZones) üzerinden okunuyor — Göksel'in sorusu üzerine
+    // fark edildi: önceden, kalibrasyon antrenman tarihinden SONRA ama coach veriyi
+    // girmeden ÖNCE değişseydi, nabız sınırı yanlış (düzenleme anındaki) zone'dan donuyordu.
+    const _zIdxForHr=_paceLocked?_existingTargetZIdx:(_freshPostLogEntry?r._origZIdx:_currentZIdxForFreeze);
+    const ohr=_zIdxForHr!=null?_mZones?.hrZones?.[_zIdxForHr]:null;
     if(ohr?.lo_bpm) origFields._origLoBpm=ohr.lo_bpm;
     if(ohr?.hi_bpm) origFields._origHiBpm=ohr.hi_bpm;
     const newOverrides={...rowOverrides,[rowIdx]:{...(rowOverrides[rowIdx]||{}), ...origFields, ...upd}};
