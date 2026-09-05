@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.05-2356 --><!DOCTYPE html>
+<!-- Version: v2026.09.06-0007 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.05-2356';
+const APP_VERSION='v2026.09.06-0007';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -1226,16 +1226,41 @@ const BPM_SIGNAL_SCORE_THRESHOLD=4;
 // elle seçtiği bir rozette hassas sn cinsinden sapma zaten bilinmiyor/güvenilmiyor
 // (override'ın var oluş nedeni budur); amaç sadece yön ve göreli şiddeti (biraz/çok)
 // closeness skoruna doğru oranda yansıtmak.
-function paceBadgeToSignal(label){
-  const TOL=20;
-  switch(label){
-    case 'Hedef Bölge': return {paceOk:true,paceDir:null,paceDiff:0,paceTol:TOL};
-    case 'Biraz Yavaş': return {paceOk:false,paceDir:'slow',paceDiff:TOL,paceTol:TOL};
-    case 'Çok Yavaş':   return {paceOk:false,paceDir:'slow',paceDiff:TOL*2,paceTol:TOL};
-    case 'Biraz Hızlı': return {paceOk:false,paceDir:'fast',paceDiff:-TOL,paceTol:TOL};
-    case 'Çok Hızlı':   return {paceOk:false,paceDir:'fast',paceDiff:-TOL*2,paceTol:TOL};
-    default: return null; // tanınmayan/bağlamsal etiket (ör. 'Isınma Nabzı' pace için hiç üretilmez) — sinyal yok
+// paceDiff/paceTol MÜMKÜN OLDUĞUNCA gerçek veriden hesaplanır (real param) — sadece
+// gerçek zon verisi yoksa VEYA gerçek veri coach'un seçtiği yönle ÇELİŞİYORSA (ör.
+// coach 'yavaş' seçti ama gerçek pace aslında hedeften hızlı çıktı — bu, _origZIdx'in
+// de güvenilmez olduğu nadir bir durumu işaret eder) temsili bir referans değere düşülür.
+// "Hedef Bölge" için fark HER ZAMAN 0'dır — bu bir yaklaşıklık DEĞİL: paceValidation/
+// bu fonksiyonun kendi otomatik dalı da zone İÇİNDEKİ her pace için aynı şekilde
+// paceDiff=0 kullanır (bkz. birkaç satır aşağı, "tam zone içinde" notu) — zone'un
+// neresinde olunduğu zaten hiçbir zaman ayrıca puanlanmıyordu.
+function paceBadgeToSignal(label,real){
+  const FALLBACK_TOL=20;
+  const dirMap={'Hedef Bölge':'ok','Biraz Yavaş':'slow','Çok Yavaş':'slow','Biraz Hızlı':'fast','Çok Hızlı':'fast'};
+  const dir=dirMap[label];
+  if(!dir) return null; // tanınmayan/bağlamsal etiket (ör. 'Isınma Nabzı' pace için hiç üretilmez) — sinyal yok
+  if(dir==='ok') return {paceOk:true,paceDir:null,paceDiff:0,paceTol:real?.zi!=null&&real.zones?.paceZones?.[real.zi]?.lo_ms&&real.zones?.paceZones?.[real.zi]?.hi_ms
+    ?Math.max(1,Math.round((Math.round(1000/real.zones.paceZones[real.zi].lo_ms)-Math.round(1000/real.zones.paceZones[real.zi].hi_ms))*(real.isGapRow?1.0:0.5)))
+    :FALLBACK_TOL};
+  const pz=real?.zi!=null?real.zones?.paceZones?.[real.zi]:null;
+  if(pz?.lo_ms&&pz?.hi_ms&&real?.cmpSec>0){
+    const fastBoundarySec=Math.round(1000/pz.hi_ms);
+    const slowBoundarySec=Math.round(1000/pz.lo_ms);
+    const tol=Math.max(1,Math.round((slowBoundarySec-fastBoundarySec)*(real.isGapRow?1.0:0.5)));
+    if(dir==='slow'){
+      const realOver=real.cmpSec-slowBoundarySec;
+      if(realOver>0) return {paceOk:false,paceDir:'slow',paceDiff:realOver,paceTol:tol}; // GERÇEK sapma
+    } else {
+      const realOver=fastBoundarySec-real.cmpSec;
+      if(realOver>0) return {paceOk:false,paceDir:'fast',paceDiff:-realOver,paceTol:tol}; // GERÇEK sapma
+    }
+    // Gerçek veri seçilen yönle ÇELİŞİYOR (real.cmpSec aslında zone içinde ya da ters
+    // yönde) — _origZIdx'e güvenle temsiliye düşülür, negatif/anlamsız sapma üretilmez.
   }
+  const tol=FALLBACK_TOL;
+  return dir==='slow'
+    ?{paceOk:false,paceDir:'slow',paceDiff:label==='Çok Yavaş'?tol*2:tol,paceTol:tol}
+    :{paceOk:false,paceDir:'fast',paceDiff:label==='Çok Hızlı'?-tol*2:-tol,paceTol:tol};
 }
 // Nabız etiketleri bağlama göre değişir (Isınma/Soğuma/Toparlanma/Normal) — bkz.
 // ReceteTablosu → hrBadgeOptions ile AYNI etiket kümesi. 'Isınma Nabzı'/'Soğuma Nabzı'
@@ -1243,40 +1268,49 @@ function paceBadgeToSignal(label){
 // bpmValidation'ın kendisi de bu iki durumda extractFeedbackSignals'a hiç sinyal
 // göndermiyordu (Isınma HR hiç puanlanmıyor; tek-değer Soğuma girişi de öyle),
 // override bu mevcut nötr davranışı BOZMAMALI.
-function hrBadgeToSignal(label){
-  switch(label){
-    case 'Hedef Nabız':
-    case 'Toparlanma Sağlandı':
-      return {hrOk:true,hrDir:null,hrWeight:0};
-    case 'Biraz Yüksek Nabız':
-    case 'Toparlanma Yavaş':
-      return {hrOk:false,hrDir:'high',hrWeight:BPM_SIGNAL_WEIGHT.warn};
-    case 'Çok Yüksek Nabız':
-    case 'Toparlanma Yetersiz':
-      return {hrOk:false,hrDir:'high',hrWeight:BPM_SIGNAL_WEIGHT.danger};
-    case 'Aşırı Yüksek Nabız':
-    case 'Tehlikeli Nabız':
-    case 'Toparlanma Sağlanamadı':
-      return {hrOk:false,hrDir:'high',hrWeight:BPM_SIGNAL_WEIGHT.critical};
-    case 'Biraz Düşük Nabız':
-      return {hrOk:false,hrDir:'low',hrWeight:BPM_SIGNAL_WEIGHT.warn};
-    case 'Çok Düşük Nabız':
-      return {hrOk:false,hrDir:'low',hrWeight:BPM_SIGNAL_WEIGHT.danger};
-    case 'Yetersiz Yoğunluk':
-      return {hrOk:false,hrDir:'low',hrWeight:BPM_SIGNAL_WEIGHT.critical};
-    // Soğuma trend etiketleri — extractFeedbackSignals'ın SKIP_RE dalı 'yuksek' (küçük harf,
-    // detectCooldownTrend/'ın kendi kodundaki gibi) kullanıyor, normal daldaki 'high' DEĞİL.
-    case 'Soğuma Tam':
-    case 'Soğuma İyi':
-      return {hrOk:true,hrDir:null,hrWeight:0};
-    case 'Soğuma Yavaş':
-      return {hrOk:false,hrDir:'yuksek',hrWeight:BPM_SIGNAL_WEIGHT.warn};
-    case 'Soğuma Yetersiz':
-      return {hrOk:false,hrDir:'yuksek',hrWeight:BPM_SIGNAL_WEIGHT.danger};
-    case 'Soğuma Aksadı':
-      return {hrOk:false,hrDir:'yuksek',hrWeight:BPM_SIGNAL_WEIGHT.critical};
-    default: return null;
+// Nabız etiketleri bağlama göre değişir (Isınma/Soğuma/Toparlanma/Normal) — bkz.
+// ReceteTablosu → hrBadgeOptions ile AYNI etiket kümesi. 'Isınma Nabzı'/'Soğuma Nabzı'
+// (nötr/bilgilendirme amaçlı) ve tanınmayan etiketler bilinçli olarak null döner —
+// bpmValidation'ın kendisi de bu iki durumda extractFeedbackSignals'a hiç sinyal
+// göndermiyordu (Isınma HR hiç puanlanmıyor; tek-değer Soğuma girişi de öyle),
+// override bu mevcut nötr davranışı BOZMAMALI.
+// hrWeight MÜMKÜN OLDUĞUNCA gerçek bpm'in _origZIdx (güvenilir çapa) bölgesine göre
+// ne kadar saptığından (getBpmTol ile — bpmValidation'daki BİREBİR aynı eşikler)
+// hesaplanır — paceBadgeToSignal'daki AYNI ilke: gerçek veri seçilen yönle
+// çelişmediği sürece kullanılır, yoksa/çelişirse temsili bir ağırlığa düşülür.
+// Soğuma trend etiketleri ('yuksek') İSTİSNADIR — detectCooldownTrend 3 ayrı değer
+// (bpmStart/Avg/End) gerektirir, tek bpm'den yeniden üretilemez; her zaman temsili.
+function hrBadgeToSignal(label,real){
+  const dirMap={
+    'Hedef Nabız':'ok','Toparlanma Sağlandı':'ok','Soğuma Tam':'ok','Soğuma İyi':'ok',
+    'Biraz Yüksek Nabız':'high','Toparlanma Yavaş':'high',
+    'Çok Yüksek Nabız':'high','Toparlanma Yetersiz':'high',
+    'Aşırı Yüksek Nabız':'high','Tehlikeli Nabız':'high','Toparlanma Sağlanamadı':'high',
+    'Biraz Düşük Nabız':'low','Çok Düşük Nabız':'low','Yetersiz Yoğunluk':'low',
+    'Soğuma Yavaş':'yuksek','Soğuma Yetersiz':'yuksek','Soğuma Aksadı':'yuksek'
+  };
+  const dir=dirMap[label];
+  if(!dir) return null;
+  if(dir==='ok') return {hrOk:true,hrDir:null,hrWeight:0};
+  if(dir==='yuksek'){
+    const w=label==='Soğuma Yavaş'?BPM_SIGNAL_WEIGHT.warn:label==='Soğuma Yetersiz'?BPM_SIGNAL_WEIGHT.danger:BPM_SIGNAL_WEIGHT.critical;
+    return {hrOk:false,hrDir:'yuksek',hrWeight:w};
   }
+  const hr=real?.zi!=null?real.zones?.hrZones?.[real.zi]:null;
+  if(hr?.lo_bpm&&hr?.hi_bpm&&real?.bpm!=null){
+    const {warnUp,dangerUp,warnDown,dangerDown}=getBpmTol(hr,real.durSec);
+    if(dir==='high'){
+      const over=real.bpm-hr.hi_bpm;
+      if(over>0) return {hrOk:false,hrDir:'high',hrWeight:over<=warnUp?BPM_SIGNAL_WEIGHT.warn:over<=dangerUp?BPM_SIGNAL_WEIGHT.danger:BPM_SIGNAL_WEIGHT.critical};
+    } else if(!real.isRecoveryPhase){
+      const under=hr.lo_bpm-real.bpm;
+      if(under>0) return {hrOk:false,hrDir:'low',hrWeight:under<=warnDown?BPM_SIGNAL_WEIGHT.warn:under<=dangerDown?BPM_SIGNAL_WEIGHT.danger:BPM_SIGNAL_WEIGHT.critical};
+    }
+    // Gerçek veri seçilen yönle ÇELİŞİYOR (ör. gerçekte üstteyken coach 'düşük' seçti,
+    // ya da toparlanma fazında alt sınır zaten kontrol edilmiyor) — temsiliye düşülür.
+  }
+  const w=/^Biraz/.test(label)?BPM_SIGNAL_WEIGHT.warn:/^Çok/.test(label)?BPM_SIGNAL_WEIGHT.danger:BPM_SIGNAL_WEIGHT.critical;
+  return {hrOk:false,hrDir:dir,hrWeight:w};
 }
 
 // Tüm plan_snapshots verisinden reçete geribildirim sinyalleri çıkarır.
@@ -1505,24 +1539,28 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         // arasındaki tutarlılık, istisna EKLEMEDEN değil, ikisini de AYNI tutarak sağlanıyor.
         const _rpeExcludesPace=row.rpe&&__tip!=='yuru_kos'&&row.type!=='walk';
         const _isRaceRow=__tip==='yaris'||(row.label&&row.label.startsWith('🏁'));
+        // enteredSec/cmpSec override kontrolünden ÖNCE hesaplanır — override varsa bile
+        // satırın GERÇEK girilen pace'i (varsa) hâlâ mevcuttur ve tercih edilir; sadece
+        // hangi ZONE'a göre kıyaslanacağı (güvenilir _origZIdx, bkz. paceBadgeToSignal
+        // üstündeki not) coach'un seçtiği yönle çelişmediği sürece kullanılır.
+        const enteredSec=(pm||0)*60+(ps||0);
+        let cmpSec=enteredSec;
+        if(row.dp>0&&row._origMesafe>0&&!row._isGapRow){
+          const gap=calcGAP(row.dp,row._origMesafe/1000,0);
+          if(gap) cmpSec=Math.round(enteredSec/gap.factor);
+        }
         // Manuel rozet override — bkz. paceBadgeToSignal üstündeki not. Coach ReceteTablosu'nda
-        // pace rozetini elle düzelttiyse, puanlama motoru OTOMATİK hesaplama yerine onu kullanır.
-        const _paceOverrideSig=row._paceBadgeOverride?paceBadgeToSignal(row._paceBadgeOverride.label):null;
+        // pace rozetini elle düzelttiyse, puanlama motoru OTOMATİK hesaplama yerine onu kullanır;
+        // GERÇEK girilen pace'i _origZIdx'in (güvenilir çapa) bölgesine göre değerlendirerek
+        // temsili değil GERÇEK bir sapma/tolerans üretmeye çalışır (bkz. fonksiyonun içindeki
+        // "gerçek veri seçilen yönle çelişiyorsa" güvenlik notu).
+        const _paceOverrideSig=row._paceBadgeOverride
+          ?paceBadgeToSignal(row._paceBadgeOverride.label,{cmpSec:cmpSec>0?cmpSec:null,zi:row._origZIdx,zones,isGapRow:row._isGapRow})
+          :null;
         if(_paceOverrideSig){
           ({paceOk,paceDir,paceDiff,paceTol}=_paceOverrideSig);
         } else if((pm>0||ps>0)&&row.type!=='rest'&&row.type!=='walk'&&!_rpeExcludesPace&&!_isRaceRow){
-          const enteredSec=(pm||0)*60+(ps||0);
           const origPace=row._targetPaceSec!=null?row._targetPaceSec:row._origPaceSec;
-          // GAP düzeltmesi: paceValidation ile BİREBİR aynı mantık (bkz. ReceteTablosu →
-          // paceValidation). Satıra gerçek D+ girilmişse ve hedefte D+ öngörülmemişse
-          // (_isGapRow değilse), kıyaslama ham girilen pace yerine GAP-düzeltmeli (düz
-          // eşdeğer) pace ile yapılır. Mesafe burada _origMesafe'den gelir — bu fonksiyon
-          // yalnızca persist edilmiş rowOverrides'ı okur, baseRows'a erişemez.
-          let cmpSec=enteredSec;
-          if(row.dp>0&&row._origMesafe>0&&!row._isGapRow){
-            const gap=calcGAP(row.dp,row._origMesafe/1000,0);
-            if(gap) cmpSec=Math.round(enteredSec/gap.factor);
-          }
           if(enteredSec>0&&origPace>0){
             // ── Panel Parite Düzeltmesi (2026.08.11 — Göksel talebi): ReceteTablosu'ndaki
             // paceValidation() rozeti ("✓ Hedef Bölge") tüm zone GENİŞLİĞİNİ hedefte sayıyordu
@@ -1583,8 +1621,14 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         // Yarışta yüksek nabız İSTENEN/beklenen bir şeydir, "sapma" değildir — pace'le
         // AYNI gerekçeyle nabız da artık tamamen dışlanır. bpmValidation() rozetiyle
         // BİREBİR aynı istisna (bkz. ~satır 9200, tip==='yaris' kontrolü) — panel paritesi.
-        // Manuel rozet override — bkz. hrBadgeToSignal üstündeki not.
-        const _hrOverrideSig=row._hrBadgeOverride?hrBadgeToSignal(row._hrBadgeOverride.label):null;
+        // Manuel rozet override — bkz. hrBadgeToSignal üstündeki not. Gerçek bpm'i
+        // GÜVENİLİR çapa olan row._origZIdx'in (row._targetZIdx DEĞİL — o corrupted
+        // olabilir, bkz. paceBadgeToSignal üstündeki not) CANLI zone sınırlarına göre
+        // değerlendirir; _origLoBpm/_origHiBpm bilerek KULLANILMAZ çünkü onlar da aynı
+        // donma mekanizmasıyla yanlış dondurulmuş olabilir.
+        const _hrOverrideSig=row._hrBadgeOverride
+          ?hrBadgeToSignal(row._hrBadgeOverride.label,{bpm:row.bpm,zi:row._origZIdx,zones,durSec:rowDurSec(row),isRecoveryPhase:row.type==='rest'||row.type==='walk'})
+          :null;
         if(_hrOverrideSig){
           ({hrOk,hrDir,hrWeight}=_hrOverrideSig);
         } else if(row.bpm!=null&&zi!=null&&hr&&!_isRaceRow){
