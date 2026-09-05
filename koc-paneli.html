@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.05-1858 --><!DOCTYPE html>
+<!-- Version: v2026.09.05-2356 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.05-1858';
+const APP_VERSION='v2026.09.05-2356';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -1215,6 +1215,70 @@ function gradualVltUpdate(currentVlt, suggestedVlt, r2){
 const BPM_SIGNAL_WEIGHT={warn:1,danger:2,critical:4};
 const BPM_SIGNAL_SCORE_THRESHOLD=4;
 
+// ── Manuel rozet → puanlama sinyali (2026.09.05 — Göksel talebi) ─────────────────
+// ReceteTablosu'nda coach bir rozeti elle düzelttiğinde (_paceBadgeOverride/
+// _hrBadgeOverride, bkz. badgeWithPicker), bu düzeltme SADECE görünümde kalmamalı —
+// Hedef Uyumu/Yapabilme Puanı/Liderlik'i besleyen extractFeedbackSignals de AYNI
+// rozeti temel almalı. Bu, kod tabanının en sık tekrarlanan ilkesiyle (rozet ile
+// puan HİÇBİR ZAMAN çelişmesin) birebir tutarlı — aksi hâlde coach rozeti düzeltir,
+// puan yine eski/yanlış otomatik hesaplamayı yansıtmaya devam ederdi.
+// paceDiff/paceTol gerçek zone genişliğinden bağımsız TEMSİLİ bir çift — coach'un
+// elle seçtiği bir rozette hassas sn cinsinden sapma zaten bilinmiyor/güvenilmiyor
+// (override'ın var oluş nedeni budur); amaç sadece yön ve göreli şiddeti (biraz/çok)
+// closeness skoruna doğru oranda yansıtmak.
+function paceBadgeToSignal(label){
+  const TOL=20;
+  switch(label){
+    case 'Hedef Bölge': return {paceOk:true,paceDir:null,paceDiff:0,paceTol:TOL};
+    case 'Biraz Yavaş': return {paceOk:false,paceDir:'slow',paceDiff:TOL,paceTol:TOL};
+    case 'Çok Yavaş':   return {paceOk:false,paceDir:'slow',paceDiff:TOL*2,paceTol:TOL};
+    case 'Biraz Hızlı': return {paceOk:false,paceDir:'fast',paceDiff:-TOL,paceTol:TOL};
+    case 'Çok Hızlı':   return {paceOk:false,paceDir:'fast',paceDiff:-TOL*2,paceTol:TOL};
+    default: return null; // tanınmayan/bağlamsal etiket (ör. 'Isınma Nabzı' pace için hiç üretilmez) — sinyal yok
+  }
+}
+// Nabız etiketleri bağlama göre değişir (Isınma/Soğuma/Toparlanma/Normal) — bkz.
+// ReceteTablosu → hrBadgeOptions ile AYNI etiket kümesi. 'Isınma Nabzı'/'Soğuma Nabzı'
+// (nötr/bilgilendirme amaçlı) ve tanınmayan etiketler bilinçli olarak null döner —
+// bpmValidation'ın kendisi de bu iki durumda extractFeedbackSignals'a hiç sinyal
+// göndermiyordu (Isınma HR hiç puanlanmıyor; tek-değer Soğuma girişi de öyle),
+// override bu mevcut nötr davranışı BOZMAMALI.
+function hrBadgeToSignal(label){
+  switch(label){
+    case 'Hedef Nabız':
+    case 'Toparlanma Sağlandı':
+      return {hrOk:true,hrDir:null,hrWeight:0};
+    case 'Biraz Yüksek Nabız':
+    case 'Toparlanma Yavaş':
+      return {hrOk:false,hrDir:'high',hrWeight:BPM_SIGNAL_WEIGHT.warn};
+    case 'Çok Yüksek Nabız':
+    case 'Toparlanma Yetersiz':
+      return {hrOk:false,hrDir:'high',hrWeight:BPM_SIGNAL_WEIGHT.danger};
+    case 'Aşırı Yüksek Nabız':
+    case 'Tehlikeli Nabız':
+    case 'Toparlanma Sağlanamadı':
+      return {hrOk:false,hrDir:'high',hrWeight:BPM_SIGNAL_WEIGHT.critical};
+    case 'Biraz Düşük Nabız':
+      return {hrOk:false,hrDir:'low',hrWeight:BPM_SIGNAL_WEIGHT.warn};
+    case 'Çok Düşük Nabız':
+      return {hrOk:false,hrDir:'low',hrWeight:BPM_SIGNAL_WEIGHT.danger};
+    case 'Yetersiz Yoğunluk':
+      return {hrOk:false,hrDir:'low',hrWeight:BPM_SIGNAL_WEIGHT.critical};
+    // Soğuma trend etiketleri — extractFeedbackSignals'ın SKIP_RE dalı 'yuksek' (küçük harf,
+    // detectCooldownTrend/'ın kendi kodundaki gibi) kullanıyor, normal daldaki 'high' DEĞİL.
+    case 'Soğuma Tam':
+    case 'Soğuma İyi':
+      return {hrOk:true,hrDir:null,hrWeight:0};
+    case 'Soğuma Yavaş':
+      return {hrOk:false,hrDir:'yuksek',hrWeight:BPM_SIGNAL_WEIGHT.warn};
+    case 'Soğuma Yetersiz':
+      return {hrOk:false,hrDir:'yuksek',hrWeight:BPM_SIGNAL_WEIGHT.danger};
+    case 'Soğuma Aksadı':
+      return {hrOk:false,hrDir:'yuksek',hrWeight:BPM_SIGNAL_WEIGHT.critical};
+    default: return null;
+  }
+}
+
 // Tüm plan_snapshots verisinden reçete geribildirim sinyalleri çıkarır.
 // Yalnızca kalite fazları (ısınma/soğuma/dinlenme dışı) kullanılır.
 // athlete parametresi: hrZones recompute için kullanılır (_origZIdx → zone center)
@@ -1384,7 +1448,11 @@ function extractFeedbackSignals(allSnapsObj, athlete){
           // yeterli toparlanma sayılır), Yavaş=uyarı, Yetersiz=tehlike, Aksadı=kritik.
           let hrDir=null, hrOk=false, hrWeight=0;
           const isCooldownRow=/soğuma|soguma/i.test(row.label);
-          if(isCooldownRow&&(row.bpmStart!=null||row.bpmEnd!=null)){
+          // Manuel rozet override — bkz. paceBadgeToSignal/hrBadgeToSignal üstündeki not.
+          const _hrOverrideSigSkip=row._hrBadgeOverride?hrBadgeToSignal(row._hrBadgeOverride.label):null;
+          if(_hrOverrideSigSkip){
+            ({hrOk,hrDir,hrWeight}=_hrOverrideSigSkip);
+          } else if(isCooldownRow&&(row.bpmStart!=null||row.bpmEnd!=null)){
             const trend=detectCooldownTrend(row.bpmStart,row.bpmAvg,row.bpmEnd,rowDurSec(row),row._origHiBpm);
             if(trend){
               if(trend.tier==='tam'||trend.tier==='iyi') hrOk=true;
@@ -1437,7 +1505,12 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         // arasındaki tutarlılık, istisna EKLEMEDEN değil, ikisini de AYNI tutarak sağlanıyor.
         const _rpeExcludesPace=row.rpe&&__tip!=='yuru_kos'&&row.type!=='walk';
         const _isRaceRow=__tip==='yaris'||(row.label&&row.label.startsWith('🏁'));
-        if((pm>0||ps>0)&&row.type!=='rest'&&row.type!=='walk'&&!_rpeExcludesPace&&!_isRaceRow){
+        // Manuel rozet override — bkz. paceBadgeToSignal üstündeki not. Coach ReceteTablosu'nda
+        // pace rozetini elle düzelttiyse, puanlama motoru OTOMATİK hesaplama yerine onu kullanır.
+        const _paceOverrideSig=row._paceBadgeOverride?paceBadgeToSignal(row._paceBadgeOverride.label):null;
+        if(_paceOverrideSig){
+          ({paceOk,paceDir,paceDiff,paceTol}=_paceOverrideSig);
+        } else if((pm>0||ps>0)&&row.type!=='rest'&&row.type!=='walk'&&!_rpeExcludesPace&&!_isRaceRow){
           const enteredSec=(pm||0)*60+(ps||0);
           const origPace=row._targetPaceSec!=null?row._targetPaceSec:row._origPaceSec;
           // GAP düzeltmesi: paceValidation ile BİREBİR aynı mantık (bkz. ReceteTablosu →
@@ -1510,7 +1583,11 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         // Yarışta yüksek nabız İSTENEN/beklenen bir şeydir, "sapma" değildir — pace'le
         // AYNI gerekçeyle nabız da artık tamamen dışlanır. bpmValidation() rozetiyle
         // BİREBİR aynı istisna (bkz. ~satır 9200, tip==='yaris' kontrolü) — panel paritesi.
-        if(row.bpm!=null&&zi!=null&&hr&&!_isRaceRow){
+        // Manuel rozet override — bkz. hrBadgeToSignal üstündeki not.
+        const _hrOverrideSig=row._hrBadgeOverride?hrBadgeToSignal(row._hrBadgeOverride.label):null;
+        if(_hrOverrideSig){
+          ({hrOk,hrDir,hrWeight}=_hrOverrideSig);
+        } else if(row.bpm!=null&&zi!=null&&hr&&!_isRaceRow){
           if(hr.lo_bpm&&hr.hi_bpm){
             // Rozet sistemiyle (bpmValidation/bpmValidationAralik) BİREBİR aynı kademe:
             // tolerans payı (target) içindeki sapmalar sinyal üretmez — gürültü filtrelenir.
@@ -10431,6 +10508,8 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
   const [editingLabel, setEditingLabel] = useState(null);
   const [editText, setEditText] = useState('');
   const [editCell, setEditCell] = useState(null); // {rowIdx, field, aralikKey?}
+  // Manuel rozet seçici popover'ının açık olduğu hücre — {rowIdx,field:'_paceBadgeOverride'|'_hrBadgeOverride'} ya da null.
+  const [badgePicker, setBadgePicker] = useState(null);
   // savedOverrides hem satır-düzeyi (sayısal anahtarlar) hem de aralık-düzeyi (__aralik anahtarı) verisi içerebilir
   const _splitOv=(ov)=>{
     if(!ov) return {rowOv:{},aralikOv:{}};
@@ -11303,6 +11382,107 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     if(onSaveOverrides){const __zd=computeZoneDistFromRows(baseRows,newOverrides,_mZones,aralikOverrides);const __gd=computeGapDataFromRows(baseRows,newOverrides);onSaveOverrides(_withLoggedFlag({...newOverrides,__aralik:aralikOverrides,...(__zd?{__zoneDist:__zd}:{}),...(__gd?{__gapData:__gd}:{})}),_detaySync);}
   };
 
+  // ── Manuel rozet seçimi (2026.09.05 — Göksel talebi) ────────────────────────────
+  // Hedef dondurma mekanizması (yukarıdaki _targetZIdx/_paceLocked geçmişi) karmaşık
+  // ve bazı geçmiş kayıtlarda yeniden kaydetmekle düzeltilemiyor (bkz. Progressive S1
+  // Bölüm 2 vakası — eski yanlış _targetZIdx zaten donmuş olduğundan yeni giriş de
+  // onu "kilitli" sanıp koruyor). Coach otomatik hesaplanan rozetin yanlış olduğunu
+  // düşünürse, alt yapıyı kurcalamadan doğrudan doğru rozeti seçebilsin diye: her
+  // rozete tıklanabilir, açılan listeden manuel seçim yapılabilir. Seçim
+  // rowOverrides[i]._paceBadgeOverride / _hrBadgeOverride olarak kalıcı kaydedilir ve
+  // otomatik hesaplamanın ÖNÜNE geçer (render tarafında kontrol edilir); "↺ Otomatik"
+  // seçeneği override'ı temizleyip hesaplanan rozete geri döner.
+  const PACE_BADGE_OPTIONS=[
+    {label:'Çok Yavaş',color:'#ef4444',bg:'#fef2f2',icon:'▼▼'},
+    {label:'Biraz Yavaş',color:'#f59e0b',bg:'#fffbeb',icon:'▼'},
+    {label:'Hedef Bölge',color:'#22c55e',bg:'#f0fdf4',icon:'✓'},
+    {label:'Biraz Hızlı',color:'#f59e0b',bg:'#fffbeb',icon:'▲'},
+    {label:'Çok Hızlı',color:'#ef4444',bg:'#fef2f2',icon:'▲▲'}
+  ];
+  // Nabız rozeti seçenekleri satırın bağlamına göre değişir (Isınma/Soğuma/Toparlanma/
+  // Normal) — bpmValidation'daki AYNI dallanmayı izler, sadece hesaplamak yerine o
+  // dalın TÜM olası çıktılarını listeler.
+  const hrBadgeOptions=(row)=>{
+    const rowLabel=row?.label||'';
+    const isWarmup=/[iı]sınma|isinma/i.test(rowLabel);
+    const isCooldown=/soğuma|soguma/i.test(rowLabel);
+    const isToparlanma=!isWarmup&&!isCooldown&&(row?.type==='rest'||row?.type==='walk');
+    const zi=row?._targetZIdx!=null?row._targetZIdx:row?._origZIdx;
+    const hr=zi!=null?_mZones?.hrZones?.[zi]:null;
+    if(isWarmup) return [
+      {label:'Isınma Nabzı',color:'#64748b',bg:'#f1f5f9',icon:'↑'},
+      {label:'Hedef Nabız',color:'#22c55e',bg:'#f0fdf4',icon:'♥'},
+      {label:'Biraz Yüksek Nabız',color:'#f59e0b',bg:'#fffbeb',icon:'↑'},
+      {label:'Çok Yüksek Nabız',color:'#f97316',bg:'#fff7ed',icon:'↑↑'},
+      {label:dangerHighLabel(hr),color:'#ef4444',bg:'#fef2f2',icon:'⚠'}
+    ];
+    if(isCooldown) return [
+      {label:'Soğuma Tam',color:'#9333ea',bg:'#faf5ff',icon:'↓↓↓'},
+      {label:'Soğuma İyi',color:'#22c55e',bg:'#f0fdf4',icon:'↓↓'},
+      {label:'Soğuma Yavaş',color:'#f59e0b',bg:'#fffbeb',icon:'↓'},
+      {label:'Soğuma Yetersiz',color:'#f97316',bg:'#fff7ed',icon:'→'},
+      {label:'Soğuma Aksadı',color:'#ef4444',bg:'#fef2f2',icon:'↑'},
+      {label:'Soğuma Nabzı',color:'#64748b',bg:'#f1f5f9',icon:'↓'}
+    ];
+    if(isToparlanma) return [
+      {label:'Toparlanma Sağlandı',color:'#22c55e',bg:'#f0fdf4',icon:'✓'},
+      {label:'Toparlanma Yavaş',color:'#f59e0b',bg:'#fffbeb',icon:'~'},
+      {label:'Toparlanma Yetersiz',color:'#f97316',bg:'#fff7ed',icon:'!'},
+      {label:'Toparlanma Sağlanamadı',color:'#ef4444',bg:'#fef2f2',icon:'⚠'}
+    ];
+    return [
+      {label:'Çok Düşük Nabız',color:'#f97316',bg:'#fff7ed',icon:'↓↓'},
+      {label:'Biraz Düşük Nabız',color:'#f59e0b',bg:'#fffbeb',icon:'↓'},
+      {label:'Hedef Nabız',color:'#22c55e',bg:'#f0fdf4',icon:'♥'},
+      {label:'Biraz Yüksek Nabız',color:'#f59e0b',bg:'#fffbeb',icon:'↑'},
+      {label:'Çok Yüksek Nabız',color:'#f97316',bg:'#fff7ed',icon:'↑↑'},
+      {label:dangerHighLabel(hr),color:'#ef4444',bg:'#fef2f2',icon:'⚠'},
+      {label:'Yetersiz Yoğunluk',color:'#0891b2',bg:'#ecfeff',icon:'⬇'}
+    ];
+  };
+  const setBadgeOverride=(rowIdx,field,badge)=>{
+    const newOverrides={...rowOverrides,[rowIdx]:{...(rowOverrides[rowIdx]||{}),[field]:badge}};
+    setRowOverrides(newOverrides);
+    setBadgePicker(null);
+    if(onSaveOverrides){
+      const __zd=computeZoneDistFromRows(baseRows,newOverrides,_mZones,aralikOverrides);
+      const __gd=computeGapDataFromRows(baseRows,newOverrides);
+      onSaveOverrides(_withLoggedFlag({...newOverrides,__aralik:aralikOverrides,...(__zd?{__zoneDist:__zd}:{}),...(__gd?{__gapData:__gd}:{})}));
+    }
+  };
+  // Rozet + tıklanabilir seçici — ortak render yardımcısı (pace ve nabız için aynı görsel dil).
+  const badgeWithPicker=(rowIdx,field,autoBadge,options)=>{
+    const overrideBadge=rowOverrides[rowIdx]?.[field];
+    const shown=overrideBadge||autoBadge;
+    const isOpen=badgePicker?.rowIdx===rowIdx&&badgePicker?.field===field;
+    if(readOnly){
+      return shown?React.createElement('span',{style:{display:'inline-block',padding:'2px 5px',borderRadius:3,fontSize:8,fontWeight:700,color:shown.color,background:shown.bg,whiteSpace:'nowrap',lineHeight:1.3}},shown.icon+' '+shown.label):null;
+    }
+    if(isOpen){
+      return React.createElement('div',{'data-no-export':true,style:{display:'flex',flexDirection:'column',gap:2,alignItems:'stretch',background:'#fff',border:'1px solid var(--border)',borderRadius:4,padding:3,minWidth:110}},
+        options.map((opt,oi)=>React.createElement('button',{
+          key:oi,type:'button',
+          onClick:()=>setBadgeOverride(rowIdx,field,opt),
+          style:{display:'flex',alignItems:'center',gap:4,padding:'2px 5px',borderRadius:3,fontSize:8,fontWeight:700,color:opt.color,background:opt.bg,border:'none',cursor:'pointer',whiteSpace:'nowrap'}
+        },opt.icon+' '+opt.label)),
+        React.createElement('button',{
+          type:'button',onClick:()=>setBadgeOverride(rowIdx,field,null),
+          style:{padding:'2px 5px',borderRadius:3,fontSize:8,fontWeight:600,color:'#64748b',background:'#f1f5f9',border:'none',cursor:'pointer'}
+        },'↺ Otomatik'),
+        React.createElement('button',{
+          type:'button',onClick:()=>setBadgePicker(null),
+          style:{padding:'1px 5px',borderRadius:3,fontSize:8,color:'#94a3b8',background:'transparent',border:'none',cursor:'pointer'}
+        },'✕ kapat')
+      );
+    }
+    if(!shown) return null;
+    return React.createElement('span',{
+      title:'Değiştirmek için tıkla',
+      onClick:()=>setBadgePicker({rowIdx,field}),
+      style:{display:'inline-flex',alignItems:'center',gap:2,padding:'2px 5px',borderRadius:3,fontSize:8,fontWeight:700,color:shown.color,background:shown.bg,whiteSpace:'nowrap',lineHeight:1.3,cursor:'pointer',borderBottom:'1px dashed '+shown.color}
+    },shown.icon+' '+shown.label+(overrideBadge?' ✎':''));
+  };
+
   // Aralıklar editörü için per-rep cell güncelleme
   // Mesafe↔pace↔süre tutarlılığını korur (updateCell mantığının per-rep versiyonu)
   const updateAralikCell=(headerIdx, rep, type, field, rawVal)=>{
@@ -11795,22 +11975,21 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
               React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:3,alignItems:'center'}},
                 (()=>{
                   const hasPaceEntry=rowOverrides[i]?.pm!=null||rowOverrides[i]?.ps!=null;
-                  if(!hasPaceEntry) return React.createElement('span',{style:{color:'#94a3b8',fontSize:9}},'—');
+                  const hasOverride=rowOverrides[i]?._paceBadgeOverride;
+                  if(!hasPaceEntry&&!hasOverride) return React.createElement('span',{style:{color:'#94a3b8',fontSize:9}},'—');
                   const pv=paceValidation(r);
-                  return pv
-                    ?React.createElement('span',{style:{display:'inline-block',padding:'2px 5px',borderRadius:3,fontSize:8,fontWeight:700,color:pv.color,background:pv.bg,whiteSpace:'nowrap',lineHeight:1.3}},pv.icon+' '+pv.label)
-                    :React.createElement('span',{style:{color:'#94a3b8',fontSize:9}},'—');
+                  const rendered=badgeWithPicker(i,'_paceBadgeOverride',pv,PACE_BADGE_OPTIONS);
+                  return rendered||React.createElement('span',{style:{color:'#94a3b8',fontSize:9}},'—');
                 })(),
                 (()=>{
                   // Manuel bpm veya aralik ortalamasindan gelen bpm varsa badge goster
                   const isCooldownRow=/soğuma|soguma/i.test(r.label||'');
                   const hasBpm=rowOverrides[i]?.bpm!=null||(r._aralikAveraged&&r.bpm!=null)||
                     (isCooldownRow&&(rowOverrides[i]?.bpmStart!=null||rowOverrides[i]?.bpmEnd!=null));
-                  if(!hasBpm) return null;
+                  const hasOverride=rowOverrides[i]?._hrBadgeOverride;
+                  if(!hasBpm&&!hasOverride) return null;
                   const hv=bpmValidation(r);
-                  return hv
-                    ?React.createElement('span',{style:{display:'inline-block',padding:'2px 5px',borderRadius:3,fontSize:8,fontWeight:700,color:hv.color,background:hv.bg,whiteSpace:'nowrap',lineHeight:1.3}},hv.icon+' '+hv.label)
-                    :null;
+                  return badgeWithPicker(i,'_hrBadgeOverride',hv,hrBadgeOptions(r));
                 })(),
                 (()=>{
                   const mv=mesafeValidation(r);
