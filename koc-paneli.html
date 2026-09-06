@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.06-1919 --><!DOCTYPE html>
+<!-- Version: v2026.09.06-1931 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.06-1919';
+const APP_VERSION='v2026.09.06-1931';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -6749,6 +6749,7 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
     if(!ref.current||!history?.length||!race||!ath)return;
     const km=parseFloat(race?.mesafe)||0;
     if(km<=0||!race?.tarih)return;
+    const dp=parseFloat(race?.d_plus)||0;
 
     const raceDate=new Date(race.tarih+'T12:00:00');
     const prepWeeks=parseInt(race?.prep_weeks)||12;
@@ -6774,6 +6775,17 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
     let anchorMin=null;
     try{const t=calcTargetTime(race,ath,last.ctl,last.acwr||1.0,workouts);if(t?.totalMin>0)anchorMin=t.totalMin;}catch(e){}
     if(!anchorMin)return;
+
+    // ── Gerçekçilik tavanı — GELECEK projeksiyonu için ────────────────────────
+    // "Hazırlık Sonrası Hedef" kartıyla aynı, mesafeye göre kalibre edilmiş
+    // maksimum iyileşme potansiyelini kullanıyoruz. ctlTsbFactor'ün kendisi
+    // (±10-15%) mesafeden bağımsız düz bir bant; uzun ultra mesafelerde bu,
+    // "Hazırlık Sonrası Hedef" kartının izin verdiğinden çok daha iyimser bir
+    // gelecek tahmini üretebiliyordu. Tavan SADECE geleceğe (projeksiyon +
+    // yarış günü noktası) uygulanır — geçmişteki mor çizgi gerçek ölçülmüş
+    // veriyi yansıttığı için bu tavana tabi değildir.
+    const maxSwingFrac=maxIyilesmePotansiyeli(km,dp)/100;
+    const minProjMin=anchorMin*(1-maxSwingFrac);
 
     // ── 2+3. CTL+TSB birleşik faktör ─────────────────────────────────────────
     // CTL: kondisyon. TSB: form = CTL-ATL. Taper'da CTL düşer ama TSB yükselir.
@@ -6859,7 +6871,8 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
     let raceDayPoint=null;
     if(daysToRace>0&&daysToRace<400){
       const{ctl:rCtl,tsb:rTsb}=projCtlTsb(daysToRace);
-      raceDayPoint={x:fmtShort(race.tarih),y:round1(anchorMin*ctlTsbFactor(rCtl,rTsb)),race:true};
+      const raw=anchorMin*ctlTsbFactor(rCtl,rTsb);
+      raceDayPoint={x:fmtShort(race.tarih),y:round1(Math.max(minProjMin,raw)),race:true};
     } else if(daysToRace<=0){
       // Yarış geçtiyse = bugünün tahminiyle aynı nokta
       raceDayPoint={x:fmtShort(todayStr),y:round1(anchorMin),race:true};
@@ -6874,7 +6887,8 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
         const d=new Date(today);d.setDate(today.getDate()+i*7);
         if(d>raceDate)break;
         const{ctl,tsb}=projCtlTsb(i*7);
-        projPts.push({x:fmtShort(localDateStr(d)),y:round1(anchorMin*ctlTsbFactor(ctl,tsb))});
+        const raw=anchorMin*ctlTsbFactor(ctl,tsb);
+        projPts.push({x:fmtShort(localDateStr(d)),y:round1(Math.max(minProjMin,raw))});
       }
       // Yarış günü noktası — raceDayPoint ile aynı (tek hesap, tekrar yok)
       if(raceDayPoint)projPts.push(raceDayPoint);
@@ -6953,7 +6967,7 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
       (results||[]).length>0&&React.createElement('span',null,React.createElement('span',{style:{color:'#f59e0b',fontWeight:700}},'★ '),'Gerçekleşen')
     ),
     React.createElement('div',{style:{marginTop:6,fontSize:11,color:'var(--text-tertiary)',lineHeight:1.6}},
-      'Mor: "Bugün yarışsan" — o günkü CTL+TSB bazlı form tahmini, geçmiş boyunca trend olarak gösterilir. Turuncu nokta: "Yarış gününde" — bugünün kondisyonundan taper simülasyonuyla hesaplanmış tek tahmin, sadece yarış gününün konumunda işaretlenir.'
+      'Mor: "Bugün yarışsan" — o günkü CTL+TSB bazlı form tahmini, geçmiş boyunca trend olarak gösterilir. Turuncu nokta: "Yarış gününde" — bugünün kondisyonundan taper simülasyonuyla hesaplanmış tek tahmin, sadece yarış gününün konumunda işaretlenir; mesafeye göre gerçekçi bir iyileşme tavanıyla sınırlıdır.'
     )
   );
 }
@@ -16178,6 +16192,22 @@ function selectRaces(athlete, races){
   return{primary,intermediate};
 }
 
+// ── Mesafeye göre maksimum gerçekçi iyileşme potansiyeli ──────────────────────
+// Kısa mesafe → daha fazla iyileşme mümkün (VO2max/hız baskın).
+// Ultra/trail → teknik + D+ verimi baskın, ham fitness (CTL) tek başına büyük
+// fark yaratmaz — gerçek yarış verileriyle kalibre edilmiştir.
+// Tek kaynak: raceHedefSure, YarislarTab (Hazırlık Sonrası Hedef) ve
+// ChartTargetTrend (Yarış Günü Tahmini tavanı) buradan besleniyor —
+// aksi halde her biri kendi kopyasını farklı şekilde güncelleyip birbirinden
+// sapabilir (tam olarak bu yüzden şimdi tek yere toplandı).
+function maxIyilesmePotansiyeli(km, dPlus){
+  const dpPerKm = km>0 ? (dPlus||0)/km : 0;
+  let maxIyiPct = km<=5?6.0:km<=10?5.0:km<=21?4.0:km<=42?3.0:km<=60?2.5:2.0;
+  if(dpPerKm>100) maxIyiPct+=1.0;
+  else if(dpPerKm>50) maxIyiPct+=0.5;
+  return maxIyiPct;
+}
+
 // Tek gün için plan üret (şablon motoru ile)
 // ── Yarış Günü Hedef Pace Hesaplayıcı ────────────────────────────────────────
 // "Yarış Durumu" sekmesiyle aynı mantık: calcTargetTime + hazırlık iyileşme %'si → tHedef
@@ -16197,10 +16227,7 @@ function raceHedefSure(race, athlete, ctl, acwr, athWorkouts){
   const totalTrainingDays=Math.max(1,(prepWeeks-taperW)*7);
   const prepPct=Math.min(1,(totalTrainingDays-trainingDaysLeft)/totalTrainingDays);
 
-  const dpPerKm=km>0?(parseFloat(race.d_plus)||0)/km:0;
-  let maxIyiPct=km<=5?6.0:km<=10?5.0:km<=21?4.0:km<=42?3.0:km<=60?2.5:2.0;
-  if(dpPerKm>100)maxIyiPct+=1.0;
-  else if(dpPerKm>50)maxIyiPct+=0.5;
+  const maxIyiPct=maxIyilesmePotansiyeli(km, parseFloat(race.d_plus)||0);
 
   const realizePct=prepPct<0.1?0.05:prepPct<0.3?0.15+(prepPct-0.1)*0.5:
     prepPct<0.7?0.25+(prepPct-0.3)*1.5:prepPct<0.9?0.85+(prepPct-0.7)*0.5:0.95;
@@ -24515,21 +24542,9 @@ function YarislarTab({athlete,races,history,workouts,raceResults,onAddResult,onD
             const totalTrainingDays=Math.max(1,(prepWeeks-taperW)*7);
             const prepPct=Math.min(1,(totalTrainingDays-trainingDaysLeft)/totalTrainingDays);
 
-            // Mesafe & D+ bazlı max iyileştirme potansiyeli (hazırlık döngüsü başında)
-            // Kısa mesafe → daha fazla iyileşme mümkün
-            // Ultra/trail → teknik + D+ verimi önemli
-            const dpPerKm=km>0?dp/km:0;
-            let maxIyiPct;
-            if(km<=5)       maxIyiPct=6.0;
-            else if(km<=10) maxIyiPct=5.0;
-            else if(km<=21) maxIyiPct=4.0;
-            else if(km<=42) maxIyiPct=3.0;
-            else if(km<=60) maxIyiPct=2.5;
-            else            maxIyiPct=2.0;
-
-            // D+ >50m/km → trail teknik verimi ekler
-            if(dpPerKm>100) maxIyiPct+=1.0;
-            else if(dpPerKm>50) maxIyiPct+=0.5;
+            // Mesafe & D+ bazlı max iyileştirme potansiyeli — tek kaynak:
+            // maxIyilesmePotansiyeli() (raceHedefSure ve ChartTargetTrend ile paylaşılır)
+            const maxIyiPct=maxIyilesmePotansiyeli(km, dp);
 
             // Hazırlık tamamlanma oranına göre gerçekleşecek iyileşme tahmini
             // Erken dönem → potansiyelin az bir kısmı gerçekleşti
