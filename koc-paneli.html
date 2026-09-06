@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.06-1737 --><!DOCTYPE html>
+<!-- Version: v2026.09.06-1842 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.06-1737';
+const APP_VERSION='v2026.09.06-1842';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -6820,13 +6820,10 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
       return{ctl:projCtl,tsb:tsbRef};
     };
 
-    // ── Geçmiş noktalar — 2 seri ─────────────────────────────────────────────
+    // ── Geçmiş noktalar — 1 seri ──────────────────────────────────────────────
     // Seri 1 (mor): o günkü kondisyon → "bugün yarışsan ne yaparsın?"
     //   = dayAnchor × ctlTsbFactor(o günün CTL/TSB)
-    // Seri 2 (turuncu): o günkü kondisyon → "yarış gününde ne yaparsın?"
-    //   = dayAnchor × projFactor(o gün kalan süre + taper simülasyonu)
     const pts=[];
-    const raceDayPts=[];
     for(let i=0;i<history.length;i+=7){
       const d=history[i];
       if(!d?.ctl||d.ctl<1)continue;
@@ -6840,27 +6837,25 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
       // Seri 1: o günkü form
       const f=ctlTsbFactor(d.ctl,d.tsb??tsbRef);
       pts.push({x:fmtShort(d.date),y:round1(dayAnchor*f)});
-
-      // Seri 2: o günden yarış gününe kalan süreyi hesapla, taper simüle et
-      const dFromPoint=Math.ceil((raceDate-new Date(d.date+'T12:00:00'))/864e5);
-      if(dFromPoint>0){
-        const taperWLocal=taperW;
-        const taperStartLocal=dFromPoint-taperWLocal*7;
-        const rawT=dFromPoint-taperStartLocal;
-        const taperD=Math.max(0,Math.min(rawT,taperWLocal*7,dFromPoint));
-        const rCtl=Math.max(d.ctl*0.85,d.ctl-d.ctl*0.005*taperD);
-        const rTsb=Math.min(20,(d.tsb??tsbRef)+0.8*taperD);
-        const fRd=ctlTsbFactor(rCtl,rTsb);
-        raceDayPts.push({x:fmtShort(d.date),y:round1(dayAnchor*fRd)});
-      } else {
-        // Yarış geçtiyse = form tahminiyle aynı
-        raceDayPts.push({x:fmtShort(d.date),y:round1(dayAnchor*f)});
-      }
     }
     // Bugünün noktası = anchor değeri (karttaki ile eşleşir)
     if(!pts.find(p=>p.x===fmtShort(last.date)))
       pts.push({x:fmtShort(last.date),y:round1(anchorMin)});
     if(pts.length<2)return;
+
+    // ── Yarış günü tahmini — TEK NOKTA ───────────────────────────────────────
+    // "Yarış gününde ne yaparsın?" sorusunun cevabı: bugünün kondisyonundan
+    // yarış gününe kadar taper simülasyonu uygulanmış TEK bir tahmin.
+    // Not: Bu bir geçmiş trendi DEĞİLDİR — grafikte sadece yarış gününün
+    // X konumunda tek bir işaretçi olarak görünür.
+    let raceDayPoint=null;
+    if(daysToRace>0&&daysToRace<400){
+      const{ctl:rCtl,tsb:rTsb}=projCtlTsb(daysToRace);
+      raceDayPoint={x:fmtShort(race.tarih),y:round1(anchorMin*ctlTsbFactor(rCtl,rTsb)),race:true};
+    } else if(daysToRace<=0){
+      // Yarış geçtiyse = bugünün tahminiyle aynı nokta
+      raceDayPoint={x:fmtShort(todayStr),y:round1(anchorMin),race:true};
+    }
 
     // ── Projeksiyon noktaları ─────────────────────────────────────────────────
     const projPts=[];
@@ -6873,11 +6868,8 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
         const{ctl,tsb}=projCtlTsb(i*7);
         projPts.push({x:fmtShort(localDateStr(d)),y:round1(anchorMin*ctlTsbFactor(ctl,tsb))});
       }
-      // Yarış günü — daysToRace<=0 ise artık anchor ile tam örtüş
-      const racePt=daysToRace<=0
-        ? {x:fmtShort(race.tarih),y:round1(anchorMin),race:true}
-        : (()=>{const{ctl:rCtl,tsb:rTsb}=projCtlTsb(daysToRace);return{x:fmtShort(race.tarih),y:round1(anchorMin*ctlTsbFactor(rCtl,rTsb)),race:true};})();
-      projPts.push(racePt);
+      // Yarış günü noktası — raceDayPoint ile aynı (tek hesap, tekrar yok)
+      if(raceDayPoint)projPts.push(raceDayPoint);
     }
 
     const allLabels=[...pts.map(p=>p.x),...projPts.slice(1).map(p=>p.x)];
@@ -6899,12 +6891,13 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
               pointRadius:allLabels.map(l=>pts.find(p=>p.x===l)?3:0),
               pointBackgroundColor:'#7c3aed',
               tension:.4,fill:false,spanGaps:false},
-            showRaceDay&&{label:'Yarış Günü Tahmini',
-              data:allLabels.map(l=>{const p=raceDayPts.find(p=>p.x===l);return p?p.y:null;}),
-              borderColor:'#f97316',borderWidth:2,borderDash:[3,3],
-              pointRadius:allLabels.map(l=>raceDayPts.find(p=>p.x===l)?3:0),
+            showRaceDay&&raceDayPoint&&{label:'Yarış Günü Tahmini',
+              data:allLabels.map(l=>l===raceDayPoint.x?raceDayPoint.y:null),
+              borderColor:'#f97316',borderWidth:0,showLine:false,
+              pointRadius:allLabels.map(l=>l===raceDayPoint.x?7:0),
+              pointHoverRadius:9,
               pointBackgroundColor:'#f97316',
-              tension:.4,fill:false,spanGaps:false},
+              spanGaps:false},
             projPts.length>1&&{label:'Projeksiyon',
               data:allLabels.map(l=>{const p=projPts.find(p=>p.x===l);return p?p.y:null;}),
               borderColor:'#16a34a',borderWidth:2,borderDash:[6,4],
@@ -6947,12 +6940,12 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
     React.createElement('div',{style:{position:'relative',height:200}},React.createElement('canvas',{ref})),
     React.createElement('div',{style:{display:'flex',gap:14,fontSize:11,color:'var(--text-secondary)',marginTop:4,justifyContent:'center',flexWrap:'wrap'}},
       React.createElement('span',null,React.createElement('span',{style:{color:'#7c3aed',fontWeight:700}},'━ '),'Güncel Form'),
-      React.createElement('span',null,React.createElement('span',{style:{color:'#f97316',fontWeight:700}},'╌ '),'Yarış Günü Tahmini'),
+      React.createElement('span',null,React.createElement('span',{style:{color:'#f97316',fontWeight:700}},'● '),'Yarış Günü Tahmini'),
       React.createElement('span',null,React.createElement('span',{style:{color:'#16a34a',fontWeight:700}},'╌ '),'Projeksiyon'),
       (results||[]).length>0&&React.createElement('span',null,React.createElement('span',{style:{color:'#f59e0b',fontWeight:700}},'★ '),'Gerçekleşen')
     ),
     React.createElement('div',{style:{marginTop:6,fontSize:11,color:'var(--text-tertiary)',lineHeight:1.6}},
-      'Mor: "Bugün yarışsan" — o günkü CTL+TSB bazlı form tahmini. Turuncu: "Yarış gününde" — aynı tarihteki kondisyonla taper simülasyonu uygulanmış projeksiyon. İkisi yarış gününde örtüşür.'
+      'Mor: "Bugün yarışsan" — o günkü CTL+TSB bazlı form tahmini, geçmiş boyunca trend olarak gösterilir. Turuncu nokta: "Yarış gününde" — bugünün kondisyonundan taper simülasyonuyla hesaplanmış tek tahmin, sadece yarış gününün konumunda işaretlenir.'
     )
   );
 }
