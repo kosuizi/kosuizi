@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.06-1236 --><!DOCTYPE html>
+<!-- Version: v2026.09.06-1440 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.06-1236';
+const APP_VERSION='v2026.09.06-1440';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -26981,6 +26981,35 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
   const zoneStatus=zoneDist?zoneDist_status(zoneDist,zoneDist2wFixed):null;
   const zoneTrend=React.useMemo(()=>calcZoneTrend(zoneDist4wFixed,zoneDist2wFixed),[zoneDist4wFixed,zoneDist2wFixed]);
 
+  // ── Ham Veri (ATL/CTL Teşhis) — 2026.09.06 Göksel talebi: Tuz Gölü 80K / Merrell
+  // 60K'daki günlük yük tutarsızlığını Firebase konsoluna girmeden teşhis edebilmek
+  // için. Ekrandaki "chart" (buildHistory çıktısı) her ne gösteriyorsa, ANINDA
+  // 'workouts' state'inden ve calcMetrics'ten üretilen GERÇEK/CANLI veriyi ham JSON
+  // olarak gösterir — state bayatlığı mı, alan değeri mi, yoksa hesap mı sorunlu
+  // ayırt etmeye yarar.
+  const [debugAtlCtlRaw,setDebugAtlCtlRaw]=React.useState(null);
+  const _debugAtlCtlDump=()=>{
+    const rows=[...workouts].filter(w=>w.date).sort((a,b)=>new Date(a.date)-new Date(b.date)).map(w=>{
+      const m=calcMetrics(w,athlete);
+      return{
+        tarih:w.date,spor:w.spor,tur:w.tur,
+        mesafe:w.mesafe,irtifa:w.irtifa,zemin_zorluk:w.zemin_zorluk,
+        ort_nabiz:w.ort_nabiz,maks_nabiz:w.maks_nabiz,rpe:w.rpe,
+        sure:(w.sure_sa||'0')+':'+(w.sure_dk||'0')+':'+(w.sure_sn||'0'),
+        rowZoneDistVarMi:!!w._rowZoneDist,
+        yapilarVarMi:!!(w.yapilar&&w.yapilar.length),
+        yukObj:m.yukObj,yukYontem:m._yukYontem,hrTSS:m.hrTSS,trimp:m.trimp,mechLoad:m.mechLoad
+      };
+    });
+    setDebugAtlCtlRaw(JSON.stringify({
+      sporcu:athlete?.ad||athlete?.isim||athlete?.name||athlete?.id,
+      lthr:athlete?.lthr,rhr:athlete?.rhr,mhr:athlete?.mhr,cinsiyet:athlete?.cinsiyet,
+      cekilmeZamani:new Date().toISOString(),
+      antrenmanSayisi:rows.length,
+      antrenmanlar:rows
+    },null,2));
+  };
+
   const chart=history.slice(-90);
   if(!workouts.length)return React.createElement('div',{className:'empty'},'Bu sporcu için henüz antrenman kaydı yok.');
 
@@ -27105,7 +27134,46 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
     React.createElement('div',{ref:refAtlCtl,className:'card'},
       React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}},
         React.createElement('div',{className:'card-title',style:{margin:0}},'ATL / CTL — Son 90 gün'),
-        React.createElement(ShareBtn,{elRef:refAtlCtl,filename:'atl_ctl.png',title:'ATL/CTL Grafiği',text:athlete?.ad+' fitness trendi'})
+        React.createElement('div',{style:{display:'flex',gap:6}},
+          React.createElement('button',{
+            className:'btn btn-sm',
+            style:{background:'#7c3aed',color:'#fff',border:'none',fontSize:11},
+            title:'Bu sporcunun tüm antrenmanlarını, ham alanlarıyla ve o an hesaplanan yukObj/yükYöntemi ile birlikte gösterir',
+            onClick:_debugAtlCtlDump
+          },'🔍 Ham Veri (Yük Teşhis)'),
+          React.createElement(ShareBtn,{elRef:refAtlCtl,filename:'atl_ctl.png',title:'ATL/CTL Grafiği',text:athlete?.ad+' fitness trendi'})
+        )
+      ),
+      debugAtlCtlRaw&&React.createElement('div',{style:{
+        position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,.75)',
+        zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',padding:16
+      }},
+        React.createElement('div',{style:{background:'#0f172a',borderRadius:8,padding:16,maxWidth:'90vw',maxHeight:'85vh',display:'flex',flexDirection:'column',gap:8,border:'1px solid #334155'}},
+          React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8}},
+            React.createElement('span',{style:{color:'#fff',fontWeight:700,fontSize:13}},'🔍 Ham Veri (Yük Teşhis) — '+(athlete?.ad||athlete?.isim||athlete?.name||'')),
+            React.createElement('div',{style:{display:'flex',gap:6}},
+              React.createElement('button',{
+                className:'btn btn-sm',
+                style:{background:'#22c55e',color:'#fff',border:'none',fontSize:11},
+                onClick:async()=>{
+                  try{ await navigator.clipboard.writeText(debugAtlCtlRaw); alert('Kopyalandı!'); }
+                  catch(e){ alert('Kopyalanamadı — metni elle seçip kopyalayın.'); }
+                }
+              },'📋 Kopyala'),
+              React.createElement('button',{
+                className:'btn btn-sm',
+                style:{background:'#475569',color:'#fff',border:'none',fontSize:11},
+                onClick:()=>setDebugAtlCtlRaw(null)
+              },'✕ Kapat')
+            )
+          ),
+          React.createElement('textarea',{
+            readOnly:true,
+            value:debugAtlCtlRaw,
+            style:{width:'100%',minWidth:'60vw',height:'60vh',background:'#020617',color:'#e2e8f0',fontFamily:'monospace',fontSize:11,border:'1px solid #334155',borderRadius:6,padding:8},
+            onFocus:(e)=>e.target.select()
+          })
+        )
       ),
       React.createElement('div',{className:'flex-gap',style:{marginBottom:8,fontSize:11}},
         React.createElement('span',{style:{color:'#2563eb'}},'— CTL (fitness)'),
