@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.06-0033 --><!DOCTYPE html>
+<!-- Version: v2026.09.06-1148 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.06-0033';
+const APP_VERSION='v2026.09.06-1148';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -3365,22 +3365,48 @@ const LS_WARN_THRESHOLD=0.80;
 // "Dışa Aktar" gibi koça özel bir aksiyon içeren bu bildirim orada gösterilmez.
 const _IS_SPORCU_ANKET_SAYFASI=(new URLSearchParams(window.location.search).get('form')==='sporcu');
 let _lsWarnShown=false;
+
+// ── Gerçek zamanlı depolama kotası (06.09.2026 — Göksel'in isteği) ──────────
+// ÖNCEKİ DURUM: "5MB" sabit bir TAHMİNDİ (koda gömülüydü, hiçbir tarayıcı API'siyle
+// doğrulanmamıştı). Gerçek localStorage kotası tarayıcıya/cihaza göre değişir.
+// ÇÖZÜM: navigator.storage.estimate() destekleniyorsa (Chrome/Firefox/Edge'de
+// güvenilir), tarayıcının o an bildirdiği GERÇEK origin kotasını kullan. Bu API
+// yoksa veya hata verirse (bazı Safari sürümleri) eski 5MB tahminine sessizce geri
+// dön — davranış hiçbir zaman eskisinden daha kötü olmaz, sadece daha iyi olabilir.
+// NOT: estimate().quota, localStorage'a özel değil, origin'in TÜM depolama alanı
+// (localStorage+IndexedDB+cache) için ortak kotadır — bu yüzden UI'da "gerçek"/
+// "tahmini" kaynağını belirtiyoruz, kesin bir localStorage tavanı iddia etmiyoruz.
+// Bu değişiklik SALT-OKUNUR bir ölçümdür: hiçbir veri yazmaz/silmez/taşımaz.
+let _realStorageQuota=5*1024*1024; // API yoksa/hata olursa kullanılan yedek tahmin
+let _quotaSource='tahmini'; // 'gerçek' (API'den geldi) | 'tahmini' (yedek sabit)
+async function _refreshStorageQuota(){
+  try{
+    if(navigator.storage&&navigator.storage.estimate){
+      const est=await navigator.storage.estimate();
+      if(est&&est.quota>0){_realStorageQuota=est.quota;_quotaSource='gerçek';}
+    }
+  }catch(e){console.warn('Depolama kotası ölçülemedi, 5MB tahmini değer kullanılıyor:',e);}
+}
+if(!_IS_SPORCU_ANKET_SAYFASI)_refreshStorageQuota(); // sporcu anketi sayfasında bu bildirim zaten gösterilmiyor
+
 function lsCheckUsage(){
   try{
     if(_IS_SPORCU_ANKET_SAYFASI)return 0;
     let used=0;
     for(let k in localStorage)if(localStorage.hasOwnProperty(k))used+=localStorage[k].length*2;
-    const total=5*1024*1024; // 5MB tahmini limit
+    const total=_realStorageQuota; // navigator.storage.estimate() varsa gerçek kota, yoksa 5MB tahmini
     const pct=used/total;
     if(pct>=LS_WARN_THRESHOLD&&!_lsWarnShown){
       _lsWarnShown=true;
       const usedKB=Math.round(used/1024);
+      const totalKB=Math.round(total/1024);
       const pctStr=Math.round(pct*100);
+      const kaynakNot=_quotaSource==='gerçek'?' — tarayıcıdan ölçülen gerçek kota':' — tahmini, tarayıcı gerçek kotayı bildirmedi';
       // Banner göster
       const banner=document.createElement('div');
       banner.id='ls-warn-banner';
       banner.style.cssText='position:fixed;bottom:0;left:0;right:0;background:#b45309;color:#fff;padding:10px 16px;font-size:13px;display:flex;align-items:center;justify-content:space-between;z-index:9999;gap:12px;';
-      banner.innerHTML=`<span>⚠ Depolama %${pctStr} dolu (${usedKB}KB / ~5MB). Dışa Aktar ile yedek al, ardından eski antrenmanları temizle.</span><button onclick="document.getElementById('ls-warn-banner').remove();_lsWarnShown=false;" style="background:rgba(255,255,255,.2);border:none;color:#fff;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:12px;">Kapat</button>`;
+      banner.innerHTML=`<span>⚠ Depolama %${pctStr} dolu (${usedKB}KB / ~${totalKB}KB${kaynakNot}). Dışa Aktar ile yedek al, ardından eski antrenmanları temizle.</span><button onclick="document.getElementById('ls-warn-banner').remove();_lsWarnShown=false;" style="background:rgba(255,255,255,.2);border:none;color:#fff;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:12px;">Kapat</button>`;
       document.body.appendChild(banner);
     }
     return pct;
@@ -31324,18 +31350,21 @@ function App(){
             (()=>{
               let used=0;
               try{for(let k in localStorage)if(localStorage.hasOwnProperty(k))used+=localStorage[k].length*2;}catch{}
-              const total=5*1024*1024;
+              const total=_realStorageQuota; // navigator.storage.estimate() varsa gerçek kota, yoksa 5MB tahmini
+              const totalKB=Math.round(total/1024);
               const pct=Math.round(used/total*100);
               const usedKB=Math.round(used/1024);
               const color=pct>=80?'var(--danger)':pct>=50?'var(--warn)':'var(--success)';
+              const kaynakEtiketi=_quotaSource==='gerçek'?'gerçek kota':'tahmini';
               return React.createElement('div',null,
                 React.createElement('div',{style:{display:'flex',justifyContent:'space-between',fontSize:12,color:'var(--text-secondary)',marginBottom:4}},
                   React.createElement('span',null,'Depolama kullanımı'),
-                  React.createElement('span',{style:{fontWeight:600,color}},usedKB+'KB / ~5120KB ('+pct+'%)')
+                  React.createElement('span',{style:{fontWeight:600,color}},usedKB+'KB / ~'+totalKB+'KB ('+pct+'%)')
                 ),
                 React.createElement('div',{style:{height:6,background:'var(--bg-secondary)',borderRadius:3,overflow:'hidden'}},
                   React.createElement('div',{style:{height:'100%',width:Math.min(pct,100)+'%',background:color,borderRadius:3,transition:'width .3s'}})
-                )
+                ),
+                React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',marginTop:2,textAlign:'right'}},'Kota kaynağı: '+kaynakEtiketi)
               );
             })()
           ),
