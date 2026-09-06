@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.06-1959 --><!DOCTYPE html>
+<!-- Version: v2026.09.06-2015 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.06-1959';
+const APP_VERSION='v2026.09.06-2015';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -6781,11 +6781,17 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
     // asimptot — HAZIRLIK_TAM_REALIZE_PCT) kullanıyoruz. Önceden burada ham
     // maxIyiPct (%100) kullanılıyordu, kart ise %95'i — aralarında hep küçük
     // bir fark kalıyordu. Artık ikisi de birebir aynı sayıya kilitleniyor.
-    // ctlTsbFactor'ün kendisi (±10-15%) mesafeden bağımsız düz bir bant; uzun
-    // ultra mesafelerde bu, kartın izin verdiğinden çok daha iyimser bir
-    // gelecek tahmini üretebiliyordu. Tavan SADECE geleceğe (projeksiyon +
-    // yarış günü noktası) uygulanır — geçmişteki mor çizgi gerçek ölçülmüş
-    // veriyi yansıttığı için bu tavana tabi değildir.
+    // NOT: Bu tavan, CTL büyüme ekstrapolasyonundaki (aşağıda düzeltilen)
+    // aşırı-iyimserlik sorununun YERİNE geçmiyor — İKİSİ de gerekli, çünkü
+    // farklı şeyleri sınırlıyorlar: büyüme eğrisi "gelecekteki CTL tahmini
+    // ne kadar gerçekçi?" sorusuna, bu tavan ise "o CTL'deki bir değişim,
+    // BU mesafede gerçekte ne kadar süre farkına dönüşür?" sorusuna cevap
+    // veriyor. ctlTsbFactor'ün kendisi (±10-15%) mesafeden bağımsız düz bir
+    // bant — 5K için de 160K ultra için de aynı. Bu yüzden büyüme eğrisi
+    // düzgün olsa bile ultra mesafelerde hâlâ gerçekçi olmayan bir süre
+    // iyileşmesi işaret edebilir; tavan SADECE geleceğe (projeksiyon + yarış
+    // günü noktası) uygulanır — geçmişteki mor çizgi gerçek ölçülmüş veriyi
+    // yansıttığı için bu tavana tabi değildir.
     const maxSwingFrac=maxIyilesmePotansiyeli(km,dp)*HAZIRLIK_TAM_REALIZE_PCT/100;
     const minProjMin=anchorMin*(1-maxSwingFrac);
 
@@ -6809,11 +6815,31 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
     const taperStartDay=daysToRace-taperW*7;
     const recentH=history.slice(-28);
     const ctlGrowthPerDay=recentH.length>7?(last.ctl-(recentH[0]?.ctl||last.ctl))/recentH.length:0;
+
+    // ── Büyüme ekstrapolasyonu: DOYGUNLUK eğrisi (üstel), DOĞRUSAL değil ──────
+    // Kök neden düzeltmesi: son 28 günün büyüme hızını ~27+ hafta ileriye
+    // DOĞRUSAL uzatmak, kod tabanının PB ekstrapolasyonu için zaten kabul
+    // ettiği "ekstrapolasyon güvenilirlik azalması" ilkesini çiğniyordu (kısa
+    // vadeli bir trend, ufuk büyüdükçe güvenilirliğini yitirir). Ayrıca eski
+    // formül (Math.min(ctlRef*1.5,...)) tavana çarpınca ANİ bir dirsek
+    // oluşturuyordu — taper geçişinde düzelttiğimiz "uçurum" sorununun bir
+    // benzeri, sadece büyüme tarafında.
+    // Yeni model: ctlCeiling'e (aynı 1.5x fizyolojik tavan) YUMUŞAKÇA yaklaşan
+    // üstel doygunluk eğrisi. t=0'daki türevi bugün GÖZLEMLENEN büyüme hızıyla
+    // birebir eşleşir (süreklilik), ama zaman ilerledikçe hız kendiliğinden
+    // yavaşlar — sonsuza dek aynı hızda büyüme varsayılmaz.
+    const ctlCeiling=ctlRef*1.5;
+    const growthK=(ctlGrowthPerDay>0&&ctlCeiling>ctlRef)?ctlGrowthPerDay/(ctlCeiling-ctlRef):0;
+    const projCtlGrowth=(dayOffset)=>{
+      // Büyüme trendi yok/negatifse iyimser bir varsayım uydurmuyoruz — düz çizgi.
+      if(growthK<=0) return ctlRef;
+      return ctlCeiling-(ctlCeiling-ctlRef)*Math.exp(-growthK*dayOffset);
+    };
     // Taper'ın başladığı gün büyüme eğrisinin nereye ulaşacağını hesapla —
     // taper decay'i BURADAN başlatmalıyız, ctlRef'ten değil. Aksi halde taper
     // başlangıcında büyüme kazanımları birden silinir ve grafikte yapay bir
     // "uçurum" (ani düşüş) oluşur.
-    const ctlAtTaperStart=Math.max(1,Math.min(ctlRef*1.5,ctlRef+ctlGrowthPerDay*Math.max(0,taperStartDay)));
+    const ctlAtTaperStart=Math.max(1,projCtlGrowth(Math.max(0,taperStartDay)));
     const projCtlTsb=(dayOffset)=>{
       // Yarış günü geçtiyse (dayOffset >= daysToRace) → anchor ile örtüş: factor=1
       if(daysToRace<=0) return{ctl:ctlRef,tsb:tsbRef};
@@ -6837,8 +6863,8 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
         const projTsb=Math.min(20,tsbRef+0.8*taperDays);
         return{ctl:projCtl,tsb:projTsb};
       }
-      // Normal hafta: CTL büyüme trendi devam eder, TSB yaklaşık sabit
-      const projCtl=Math.max(1,Math.min(ctlRef*1.5,ctlRef+ctlGrowthPerDay*dayOffset));
+      // Normal hafta: CTL büyüme trendi devam eder (doygunluk eğrisiyle), TSB yaklaşık sabit
+      const projCtl=Math.max(1,projCtlGrowth(dayOffset));
       return{ctl:projCtl,tsb:tsbRef};
     };
 
