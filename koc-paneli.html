@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.06-1148 --><!DOCTYPE html>
+<!-- Version: v2026.09.06-1201 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.06-1148';
+const APP_VERSION='v2026.09.06-1201';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -3366,42 +3366,61 @@ const LS_WARN_THRESHOLD=0.80;
 const _IS_SPORCU_ANKET_SAYFASI=(new URLSearchParams(window.location.search).get('form')==='sporcu');
 let _lsWarnShown=false;
 
-// ── Gerçek zamanlı depolama kotası (06.09.2026 — Göksel'in isteği) ──────────
-// ÖNCEKİ DURUM: "5MB" sabit bir TAHMİNDİ (koda gömülüydü, hiçbir tarayıcı API'siyle
-// doğrulanmamıştı). Gerçek localStorage kotası tarayıcıya/cihaza göre değişir.
-// ÇÖZÜM: navigator.storage.estimate() destekleniyorsa (Chrome/Firefox/Edge'de
-// güvenilir), tarayıcının o an bildirdiği GERÇEK origin kotasını kullan. Bu API
-// yoksa veya hata verirse (bazı Safari sürümleri) eski 5MB tahminine sessizce geri
-// dön — davranış hiçbir zaman eskisinden daha kötü olmaz, sadece daha iyi olabilir.
-// NOT: estimate().quota, localStorage'a özel değil, origin'in TÜM depolama alanı
-// (localStorage+IndexedDB+cache) için ortak kotadır — bu yüzden UI'da "gerçek"/
-// "tahmini" kaynağını belirtiyoruz, kesin bir localStorage tavanı iddia etmiyoruz.
-// Bu değişiklik SALT-OKUNUR bir ölçümdür: hiçbir veri yazmaz/silmez/taşımaz.
-let _realStorageQuota=5*1024*1024; // API yoksa/hata olursa kullanılan yedek tahmin
-let _quotaSource='tahmini'; // 'gerçek' (API'den geldi) | 'tahmini' (yedek sabit)
-async function _refreshStorageQuota(){
+// ── Gerçek zamanlı depolama kotası — DÜZELTME (06.09.2026 — Göksel'in bulduğu hata) ─
+// İLK DENEME (başarısız): navigator.storage.estimate() kullanılmıştı. Bu API GERÇEK
+// bir sayı döndürüyor ama YANLIŞ ŞEYİ ölçüyor: origin'in TÜM "storage bucket"ı için
+// (IndexedDB+Cache Storage+localStorage ortak havuzu) disk boyutuna göre hesaplanan
+// kotayı veriyor (test cihazında ~10GB çıktı). localStorage ise bu ortak kotadan
+// TAMAMEN BAĞIMSIZ, tarayıcı tarafından sabit kodlanmış, disk boyutundan etkilenmeyen
+// çok daha küçük bir tavana tabi (Chromium kaynak kodunda doğrulandı: "hardcoded by
+// Chromium developers", ~5-10MB civarı, tarayıcıya göre değişir). estimate() bu iç
+// sınırı YANSITMIYOR — sonuç: banner pratikte hiç tetiklenmez, yanlış bir güvenlik
+// hissi verir. Kaynak: Chromium bug tracker + WHATWG Web Storage şartnamesi önerisi.
+//
+// DÜZELTİLMİŞ YAKLAŞIM: localStorage'a özel gerçek tavanı ölçmenin standart bir API'si
+// yok. Tek güvenilir yöntem — atılabilir bir test anahtarına artan boyutlarda veri
+// yazıp QuotaExceededError'a çarpana kadar ikili arama yapmak. Bu fonksiyon SADECE
+// '__kosuizi_quota_probe__' adlı geçici bir anahtara yazar, ölçüm bitince onu SİLER;
+// ath2/wks/races gibi hiçbir gerçek veriye asla dokunmaz veya erişmez.
+let _realStorageQuota=5*1024*1024; // ölçüm başarısız olursa kullanılan güvenli yedek tahmin
+let _quotaSource='tahmini'; // 'ölçüldü' (bu tarayıcıda bizzat test edildi) | 'tahmini' (yedek sabit)
+const _QUOTA_PROBE_KEY='__kosuizi_quota_probe__';
+function _probeLocalStorageLimit(){
   try{
-    if(navigator.storage&&navigator.storage.estimate){
-      const est=await navigator.storage.estimate();
-      if(est&&est.quota>0){_realStorageQuota=est.quota;_quotaSource='gerçek';}
+    let existingUsed=0;
+    for(let k in localStorage)if(localStorage.hasOwnProperty(k))existingUsed+=localStorage[k].length*2;
+    localStorage.removeItem(_QUOTA_PROBE_KEY); // temiz başla (yarım kalmış eski test varsa)
+    let lo=0,hi=32*1024*1024,best=0; // 0..32MB aralığında ikili arama, ~1KB hassasiyet
+    for(let i=0;i<20&&hi-lo>=1024;i++){
+      const mid=Math.floor((lo+hi)/2);
+      try{
+        localStorage.setItem(_QUOTA_PROBE_KEY,'x'.repeat(Math.floor(mid/2))); // UTF-16: ~2 byte/karakter
+        best=mid;lo=mid;
+      }catch(e){hi=mid;}
     }
-  }catch(e){console.warn('Depolama kotası ölçülemedi, 5MB tahmini değer kullanılıyor:',e);}
+    localStorage.removeItem(_QUOTA_PROBE_KEY);
+    _realStorageQuota=existingUsed+best;
+    _quotaSource='ölçüldü';
+  }catch(e){
+    try{localStorage.removeItem(_QUOTA_PROBE_KEY);}catch{}
+    console.warn('localStorage sınırı ölçülemedi, 5MB tahmini değer kullanılıyor:',e);
+  }
 }
-if(!_IS_SPORCU_ANKET_SAYFASI)_refreshStorageQuota(); // sporcu anketi sayfasında bu bildirim zaten gösterilmiyor
+if(!_IS_SPORCU_ANKET_SAYFASI)_probeLocalStorageLimit(); // sporcu anketi sayfasında bu bildirim zaten gösterilmiyor
 
 function lsCheckUsage(){
   try{
     if(_IS_SPORCU_ANKET_SAYFASI)return 0;
     let used=0;
     for(let k in localStorage)if(localStorage.hasOwnProperty(k))used+=localStorage[k].length*2;
-    const total=_realStorageQuota; // navigator.storage.estimate() varsa gerçek kota, yoksa 5MB tahmini
+    const total=_realStorageQuota; // bu tarayıcıda ölçülen gerçek tavan, yoksa 5MB tahmini
     const pct=used/total;
     if(pct>=LS_WARN_THRESHOLD&&!_lsWarnShown){
       _lsWarnShown=true;
       const usedKB=Math.round(used/1024);
       const totalKB=Math.round(total/1024);
       const pctStr=Math.round(pct*100);
-      const kaynakNot=_quotaSource==='gerçek'?' — tarayıcıdan ölçülen gerçek kota':' — tahmini, tarayıcı gerçek kotayı bildirmedi';
+      const kaynakNot=_quotaSource==='ölçüldü'?' — bu tarayıcıda ölçülen gerçek sınır':' — tahmini';
       // Banner göster
       const banner=document.createElement('div');
       banner.id='ls-warn-banner';
@@ -31350,12 +31369,12 @@ function App(){
             (()=>{
               let used=0;
               try{for(let k in localStorage)if(localStorage.hasOwnProperty(k))used+=localStorage[k].length*2;}catch{}
-              const total=_realStorageQuota; // navigator.storage.estimate() varsa gerçek kota, yoksa 5MB tahmini
+              const total=_realStorageQuota; // bu tarayıcıda ölçülen gerçek localStorage tavanı, yoksa 5MB tahmini
               const totalKB=Math.round(total/1024);
               const pct=Math.round(used/total*100);
               const usedKB=Math.round(used/1024);
               const color=pct>=80?'var(--danger)':pct>=50?'var(--warn)':'var(--success)';
-              const kaynakEtiketi=_quotaSource==='gerçek'?'gerçek kota':'tahmini';
+              const kaynakEtiketi=_quotaSource==='ölçüldü'?'bu tarayıcıda ölçüldü':'tahmini';
               return React.createElement('div',null,
                 React.createElement('div',{style:{display:'flex',justifyContent:'space-between',fontSize:12,color:'var(--text-secondary)',marginBottom:4}},
                   React.createElement('span',null,'Depolama kullanımı'),
