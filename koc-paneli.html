@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.06-1445 --><!DOCTYPE html>
+<!-- Version: v2026.09.06-1531 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.06-1445';
+const APP_VERSION='v2026.09.06-1531';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -6326,7 +6326,56 @@ function AdCardItem({cardDef,teamName,teamLogo,athletes,override,onSave}){
 }
 
 
-function KontrolTab({athletes}){
+// ── GPX Zon Dağılımı Onarımı (2026.09.06 — Göksel bildirimi, Tuz Gölü Ultra 80K
+// kök neden onarımı): gpxBuildLegPayload eskiden (bu düzeltmeden ÖNCE üretilen
+// override'larda) repeatCount alanını sıfırlamıyordu — bir satır gpxDetectBlocks
+// tarafından 'repeat' değil 'single' sınıflandırılıp üzerinde eski bir
+// repeatCount>1 kalmışsa, computeZoneDistFromRows GERÇEK toplam süreyi bu
+// repeatCount ile tekrar çarpıyordu (gözlenen vakada tam ~10 kat şişme: 670dk
+// girilen süre → 6695dk totalMin). Kod artık YENİ analizlerde bunu önlüyor
+// (repeatCount:1 her zaman yazılıyor) ama GEÇMİŞTE bu hatayla üretilmiş
+// _rowZoneDist'ler workout kayıtlarında hâlâ duruyor.
+// MANTIKSAL İMKANSIZLIK TESTİ: bir workoutun _rowZoneDist.totalMin'i, o
+// workoutun GERÇEK süresini (sure_sa/dk/sn'den hesaplanan durMin) aşamaz —
+// segment kapsamı bütünün bir alt kümesidir, asla üstü olamaz. totalMin,
+// durMin'i (küçük yuvarlama payı hariç) aşıyorsa bu KESİN bir bozulma işaretidir
+// — sağlıklı kayıtlarda totalMin HER ZAMAN durMin'e eşit ya da altındadır
+// (warmup/soğuma gibi analiz dışı kalan kısımlar yüzünden).
+function scanGpxZoneDistCorruption(workouts,athletes){
+  const found=[];
+  (workouts||[]).forEach(w=>{
+    const rzd=w._rowZoneDist;
+    if(!rzd||!rzd.totalMin) return;
+    const durMin=toSec(w.sure_sa,w.sure_dk,w.sure_sn)/60;
+    if(durMin<=0) return;
+    // Tolerans: +5dk VE +%20 (yuvarlama payı) — gerçek hata bundan kat kat büyük çıkıyor.
+    if(!(rzd.totalMin>durMin+5&&rzd.totalMin>durMin*1.2)) return;
+    const ath=(athletes||[]).find(a=>a.id===w.athleteId)||null;
+    const oldM=calcMetrics(w,ath);
+    const newM=calcMetrics({...w,_rowZoneDist:null,_rowGapData:null},ath);
+    found.push({
+      workoutId:w.id,athleteId:w.athleteId,
+      athleteName:ath?((ath.ad||'')+' '+(ath.soyad||'')).trim():'(sporcu bulunamadı)',
+      date:w.date,tur:w.tur||'',mesafe:w.mesafe||'',
+      durMin:round1(durMin),totalMin:rzd.totalMin,
+      oldYukObj:oldM.yukObj,newYukObj:newM.yukObj
+    });
+  });
+  found.sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  return found;
+}
+// Uygulama: tespit edilen kayıtların _rowZoneDist/_rowGapData alanlarını temizler
+// — bu, o workoutun yük hesabını otomatik olarak yukObjTek'e (ort.nabız bazlı,
+// manuel giriş kayıtlarıyla AYNI yöntem) düşürür. Ham GPX verisi zaten hiçbir
+// zaman saklanmadığı için "doğru" segment değerlerini yeniden üretmek mümkün
+// değil — en güvenli onarım, manuel kayıtlarla tutarlı standart yönteme dönmek.
+function applyGpxZoneDistFixes(pending,onUpdateWorkout){
+  (pending||[]).forEach(p=>{
+    onUpdateWorkout(p.workoutId,{_rowZoneDist:null,_rowGapData:null});
+  });
+}
+
+function KontrolTab({athletes,workouts,onUpdateWorkout}){
   const [scanning,setScanning]=useState(false);
   const [progress,setProgress]=useState({done:0,total:0,current:''});
   const [results,setResults]=useState(null); // null=hiç taranmadı
@@ -6338,6 +6387,30 @@ function KontrolTab({athletes}){
   const [legacyPending,setLegacyPending]=useState(null); // null=hiç taranmadı
   const [legacyApplying,setLegacyApplying]=useState(false);
   const [legacyApplied,setLegacyApplied]=useState(null); // {count,athleteCount} | null
+
+  // ── GPX Zon Dağılımı Onarımı state'i ──
+  const [gpxPending,setGpxPending]=useState(null); // null=hiç taranmadı, []=temiz
+  const [gpxApplying,setGpxApplying]=useState(false);
+  const [gpxApplied,setGpxApplied]=useState(null); // count | null
+
+  const runGpxScan=()=>{
+    setGpxApplied(null);
+    const found=scanGpxZoneDistCorruption(workouts,athletes);
+    setGpxPending(found);
+  };
+  const runGpxApply=()=>{
+    if(!gpxPending?.length) return;
+    setGpxApplying(true);
+    try{
+      applyGpxZoneDistFixes(gpxPending,onUpdateWorkout);
+      setGpxApplied(gpxPending.length);
+      setGpxPending([]);
+    }catch(e){
+      console.warn('GPX zon dağılımı onarım hatası:',e);
+      alert('⚠️ Düzeltmeler uygulanırken hata oluştu: '+(e?.message||e));
+    }
+    setGpxApplying(false);
+  };
 
   const runLegacyScan=async()=>{
     setLegacyScanning(true);
@@ -6462,6 +6535,45 @@ function KontrolTab({athletes}){
             }},
               React.createElement('div',{style:{fontWeight:700,marginBottom:4}},p.athleteName+' — '+p.date+' ('+p.tip+', hafta '+p.weekKey+')'),
               React.createElement('div',{style:{color:'var(--text-secondary)',fontSize:11}},p.fixes.join(' · '))
+            ))
+          )
+      )
+    ),
+    React.createElement('div',{style:{marginTop:32,paddingTop:24,borderTop:'2px solid var(--border)'}},
+      React.createElement('div',{style:{marginBottom:16}},
+        React.createElement('h2',{style:{margin:'0 0 4px 0',fontSize:18}},'🧭 GPX Zon Dağılımı Onarımı'),
+        React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',lineHeight:1.5}},
+          'GPX/TCX "Analiz Et" akışındaki eski bir repeatCount hatası (2026.09.06 düzeltildi), bazı geçmiş kayıtlarda segment-bazlı zon dağılımının (_rowZoneDist) toplam süresinin, workoutun gerçek süresinden KAT KAT büyük görünmesine yol açmıştı (ör. Tuz Gölü Ultra: 670dk girilen süre → 6695dk). Bu tarama, bu mantıksal imkansızlığı (segment süresi bütünden büyük olamaz) taşıyan TÜM sporculardaki TÜM kayıtları bulur. Düzeltme, o kayıtların _rowZoneDist/_rowGapData alanlarını temizler — ham GPX verisi hiç saklanmadığı için "doğru" segment değerleri yeniden üretilemez, bu yüzden en güvenli onarım, manuel kayıtlarla AYNI standart yönteme (ort. nabız bazlı) düşürmektir. Girilen mesafe/süre/nabız/RPE gibi hiçbir alana dokunulmaz.'
+        )
+      ),
+      React.createElement('button',{
+        onClick:runGpxScan,disabled:gpxApplying,
+        style:{padding:'8px 16px',borderRadius:6,border:'none',background:gpxApplying?'var(--border)':'var(--info)',color:'#fff',fontWeight:700,fontSize:13,cursor:gpxApplying?'default':'pointer'}
+      },'🔍 Tara (yazmaz)'),
+      gpxApplied!=null&&React.createElement('div',{style:{marginTop:16,padding:16,background:'var(--success-bg,#f0fdf4)',borderRadius:8,color:'var(--success,#22c55e)',fontWeight:600,fontSize:13}},
+        `✓ ${gpxApplied} kayıt düzeltildi ve kaydedildi.`
+      ),
+      gpxPending!==null&&gpxApplied==null&&React.createElement('div',{style:{marginTop:16}},
+        gpxPending.length===0
+          ?React.createElement('div',{style:{padding:16,background:'var(--success-bg,#f0fdf4)',borderRadius:8,color:'var(--success,#22c55e)',fontWeight:600,fontSize:13}},'✓ Bozuk GPX zon dağılımı bulunamadı.')
+          :React.createElement('div',null,
+            React.createElement('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10,flexWrap:'wrap',gap:10}},
+              React.createElement('div',{style:{fontSize:13,fontWeight:700,color:'#ef4444'}},gpxPending.length+' bozuk kayıt bulundu:'),
+              React.createElement('button',{
+                onClick:runGpxApply,disabled:gpxApplying,
+                style:{padding:'8px 16px',borderRadius:6,border:'none',background:gpxApplying?'var(--border)':'#22c55e',color:'#fff',fontWeight:700,fontSize:13,cursor:gpxApplying?'default':'pointer'}
+              },gpxApplying?'Uygulanıyor…':`✅ Uygula — ${gpxPending.length} kaydı düzelt`)
+            ),
+            gpxPending.map((p,i)=>React.createElement('div',{key:i,style:{
+              padding:'10px 12px',marginBottom:8,borderRadius:8,background:'var(--bg-secondary)',border:'1px solid var(--border)',fontSize:12
+            }},
+              React.createElement('div',{style:{fontWeight:700,marginBottom:4}},p.athleteName+' — '+p.date+(p.tur?' ('+p.tur+')':'')),
+              React.createElement('div',{style:{color:'var(--text-secondary)',fontSize:11}},
+                'Gerçek süre: '+p.durMin+'dk · Kayıtlı totalMin: '+p.totalMin+'dk'
+              ),
+              React.createElement('div',{style:{fontFamily:'monospace',fontSize:11,color:'#ef4444',marginTop:2}},
+                'yukObj: '+p.oldYukObj+' → '+p.newYukObj
+              )
             ))
           )
       )
@@ -26996,6 +27108,7 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
         mesafe:w.mesafe,irtifa:w.irtifa,zemin_zorluk:w.zemin_zorluk,
         ort_nabiz:w.ort_nabiz,maks_nabiz:w.maks_nabiz,rpe:w.rpe,
         sure:(w.sure_sa||'0')+':'+(w.sure_dk||'0')+':'+(w.sure_sn||'0'),
+        durMin:m.durMin,
         rowZoneDistVarMi:!!w._rowZoneDist,
         rowZoneDist:w._rowZoneDist||null,
         yapilarVarMi:!!(w.yapilar&&w.yapilar.length),
@@ -28582,7 +28695,22 @@ function gpxBuildLegPayload(baseRow,phase,liveZones,isAralikLeg){
   const distKm=phase.distKm||0;
   const durSec=Math.max(0,Math.round(phase.durSec||0));
   const hms=secToHMS(durSec);
-  const out={mesafe:Math.round(distKm*1000),h:hms.h,m:hms.m,s:hms.s};
+  // DÜZELTME (2026.09.06 — Göksel bildirimi, Tuz Gölü Ultra 80K günlük yük
+  // anomalisi, KÖK NEDEN): gpxDetectBlocks bir satırı 'repeat' değil 'single'
+  // (tekil) olarak sınıflandırdığında (ör. header/work repeatCount uyuşmazlığı
+  // yüzünden isTrueRepeat=false çıktığında), o satırın ORİJİNAL reçete/şablon
+  // satırındaki repeatCount alanı (ör. bir intervalin 'iş' satırından kalma N>1
+  // değeri) TEMİZLENMEDEN kalıyordu. Bu override flatOverrides'a yazılıp
+  // computeZoneDistFromRows'un "normal satırlar" döngüsüne girince, o döngü
+  // HER satırı kendi repeatCount'uyla çarpıyor (durMin=(durSn*repeatCount)/60) —
+  // ama burada durSn artık GERÇEK, TOPLAM (tek seferlik) analiz süresi, "bir
+  // tekrarın" süresi DEĞİL. Sonuç: gerçek süre × eski repeatCount kadar şişme
+  // (gözlenen vakada tam ~10 kat: 670dk girilen süre → 6695dk totalMin).
+  // ÇÖZÜM: bu fonksiyon GPX analizinden gerçek, TEK SEFERLİK bir süre üretiyor —
+  // artık hangi baseRow'dan geldiğinden bağımsız olarak repeatCount'u HER ZAMAN
+  // 1'e sıfırlıyoruz. Aralık (isAralikLeg=true) bacaklarında bu alan zaten
+  // kullanılmıyor (repMap kendi repCount'unu ayrıca taşır) — dokunmak zararsız.
+  const out={mesafe:Math.round(distKm*1000),h:hms.h,m:hms.m,s:hms.s,repeatCount:1};
   const paceSecRaw=(durSec>0&&distKm>0)?(durSec/distKm):null;
   if(paceSecRaw!=null){
     const pm0=Math.floor(paceSecRaw/60);
@@ -31715,7 +31843,7 @@ function App(){
         onToggleKayitAktif:()=>setKayitAktif(p=>!p)
       }),
       tab==='tani'&&React.createElement(TaniPaneliTab,{athletes,allHistory,races,workouts}),
-      tab==='kontrol'&&React.createElement(KontrolTab,{athletes}),
+      tab==='kontrol'&&React.createElement(KontrolTab,{athletes,workouts,onUpdateWorkout:handleUpdateWorkout}),
       tab==='reklam'&&React.createElement(ReklamTab,{teamName,teamLogo,athletes,adCardOverrides,onSaveAdCard:(cardId,val)=>setAdCardOverrides(prev=>{
         const next=Object.assign({},prev);
         if(val===null)delete next[cardId];else next[cardId]=val;
