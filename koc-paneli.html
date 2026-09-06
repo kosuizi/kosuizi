@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.06-1842 --><!DOCTYPE html>
+<!-- Version: v2026.09.06-1855 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.06-1842';
+const APP_VERSION='v2026.09.06-1855';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -6793,11 +6793,16 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
     // Taper başlangıcı: yarış tarihinden geriye taperW hafta.
     // taperStartDay negatifse taper zaten geçmişte — bugün taper içindeyiz.
     const taperStartDay=daysToRace-taperW*7;
+    const recentH=history.slice(-28);
+    const ctlGrowthPerDay=recentH.length>7?(last.ctl-(recentH[0]?.ctl||last.ctl))/recentH.length:0;
+    // Taper'ın başladığı gün büyüme eğrisinin nereye ulaşacağını hesapla —
+    // taper decay'i BURADAN başlatmalıyız, ctlRef'ten değil. Aksi halde taper
+    // başlangıcında büyüme kazanımları birden silinir ve grafikte yapay bir
+    // "uçurum" (ani düşüş) oluşur.
+    const ctlAtTaperStart=Math.max(1,Math.min(ctlRef*1.5,ctlRef+ctlGrowthPerDay*Math.max(0,taperStartDay)));
     const projCtlTsb=(dayOffset)=>{
       // Yarış günü geçtiyse (dayOffset >= daysToRace) → anchor ile örtüş: factor=1
       if(daysToRace<=0) return{ctl:ctlRef,tsb:tsbRef};
-      const recentH=history.slice(-28);
-      const ctlGrowthPerDay=recentH.length>7?(last.ctl-(recentH[0]?.ctl||last.ctl))/recentH.length:0;
       const inTaper=dayOffset>taperStartDay;
       if(inTaper){
         // Taper: CTL günde ~0.5% azalır, TSB günde +0.8 artar (haftalık ~5.6).
@@ -6811,7 +6816,10 @@ function ChartTargetTrend({history,race,ath,results,workouts}){
         // dayOffset limiti: taper başlangıcı geçmişte olsa bile bugünden
         // geriye doğru gidip sahte taper günü şişirmesini önler.
         const taperDays=Math.max(0,Math.min(rawTaperDays,taperW*7,dayOffset));
-        const projCtl=Math.max(ctlRef*0.85,ctlRef-ctlRef*0.005*taperDays);
+        // Decay, büyüme eğrisinin taper başlangıcında ulaştığı CTL'den başlar
+        // (ctlAtTaperStart) — ctlRef'ten değil. Böylece taper'a girişte süreklilik
+        // korunur, ani bir sıçrama/düşüş oluşmaz.
+        const projCtl=Math.max(ctlAtTaperStart*0.85,ctlAtTaperStart-ctlAtTaperStart*0.005*taperDays);
         const projTsb=Math.min(20,tsbRef+0.8*taperDays);
         return{ctl:projCtl,tsb:projTsb};
       }
