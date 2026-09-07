@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.07-1503 --><!DOCTYPE html>
+<!-- Version: v2026.09.07-1747 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.07-1503';
+const APP_VERSION='v2026.09.07-1747';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -9589,7 +9589,7 @@ async function saveCueGlobal(label, text){
 }
 
 // Aralıklar editörü — tekrarlı antrenmanlarda her bir tekrarın koşu+dinlenme pace'lerini ayrı düzenler
-function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange, paceValidation, focusIndicator, paceToZoneIdx, zones, measureZones, readOnly, isWorkoutLogged}){
+function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange, paceValidation, focusIndicator, paceToZoneIdx, liveRowColor, zones, measureZones, readOnly, isWorkoutLogged}){
   const [editKey, setEditKey] = React.useState(null); // 'rep:type:field'
   const e = React.createElement;
   // 2026.08.23 — KÖK NEDEN DÜZELTMESİ: ReceteTablosu'daki _mZones (measureZones||zones,
@@ -9845,7 +9845,18 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
           if(runData){
             const hasPaceEntryRun=overrides[rep]?.run?.pm!=null||overrides[rep]?.run?.ps!=null;
             const pv = hasPaceEntryRun ? paceValidation(runData) : null;
-            out.push(e('tr',{key:`r${rep}`,style:{background:runData.color,borderBottom:'1px solid rgba(0,0,0,.1)'}},
+            // ── Satır rengi: ReceteTablosu'ndaki liveRowColor (~satır 10929) ile AYNI
+            // fonksiyon, prop olarak geçiliyor — Göksel'in "pace her zaman Bölge Renk
+            // Haritası ile uyumlu olsun, GAP hesaplanan satırlarda GAP'e göre
+            // renklendirilsin" talebi (2026.09.07). ÖNCEDEN bu satırın rengi HİÇBİR
+            // ZAMAN girilen pace'e (veya D+'ye) göre güncellenmiyordu — updateAralikCell
+            // pm/ps/dp için .color hiç yazmadığından (bilinçli olarak hedefi değiştirmiyor,
+            // bkz. 2026.08.16 notu), satır rengi hep şablonun donmuş PLANLANAN rengiydi.
+            // Aynı closure'ı çağırmak (yeni bir kopya mantık yazmak yerine) hem GAP
+            // düzeltmesini hem de raceZoneFromPace→paceSecToZoneIdx kök neden
+            // düzeltmesini otomatik miras alır, iki görünüm arasında sapma riski kalmaz.
+            const _liveColorRun=liveRowColor?liveRowColor(runData):null;
+            out.push(e('tr',{key:`r${rep}`,style:{background:_liveColorRun?.color||runData.color,borderBottom:'1px solid rgba(0,0,0,.1)'}},
               e('td',{style:{...cellSt,color:'#000'}},rep),
               e('td',{style:{...cellSt,textAlign:'left',color:'#000'}},
                 runData.label,
@@ -9899,7 +9910,8 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
           if(restData){
             const hasPaceEntryRest=overrides[rep]?.rest?.pm!=null||overrides[rep]?.rest?.ps!=null;
             const pvR = hasPaceEntryRest ? paceValidation(restData) : null;
-            out.push(e('tr',{key:`d${rep}`,style:{background:restData.color,borderBottom:'2px solid rgba(0,0,0,.15)'}},
+            const _liveColorRest=liveRowColor?liveRowColor(restData):null; // bkz. run satırındaki aynı not
+            out.push(e('tr',{key:`d${rep}`,style:{background:_liveColorRest?.color||restData.color,borderBottom:'2px solid rgba(0,0,0,.15)'}},
               e('td',{style:{...cellSt,color:'#000'}},''),
               e('td',{style:{...cellSt,textAlign:'left',color:'#000',fontStyle:'italic',fontSize:10}},
                 '↳ '+restData.label,
@@ -10935,7 +10947,18 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     const enteredSec=(pm||0)*60+(ps||0);
     if(enteredSec<=0) return null;
     const cmpSec=gapAdjustedPaceSec(row,enteredSec);
-    const zi=raceZoneFromPace(cmpSec,_mZones||zones);
+    // KÖK NEDEN DÜZELTMESİ (2026.09.07 — Göksel'in bildirdiği "kolay koşuda pace
+    // yavaşlatınca satır rengi yeşilden sarıya dönüyor" hatası): burada ÖNCEDEN
+    // raceZoneFromPace() kullanılıyordu. O fonksiyon YARIŞ pace tahmini içindir
+    // (bkz. ~satır 16440) ve pace HİÇBİR zonun lo_ms sınırını karşılamazsa (yani
+    // Z1'in en yavaş ucundan bile daha yavaşsa — kolay koşularda tamamen normal)
+    // varsayılan olarak 3 (Z4/sarı) döner — yarış bağlamında makul, ama burada
+    // sıradan bir antrenman satırının CANLI rengini belirlerken pace her yavaşladığında
+    // döngü Z1 sınırını da geçince satır sarıya (Z4) sıçrıyordu. paceSecToZoneIdx
+    // aynı zon-eşleme mantığını kullanır ama eşleşme yoksa doğru varsayılanı (0/Z1)
+    // döner — ReceteTablosu'nun kendi paceToZoneIdx'i (~satır 10528, planlanan renk
+    // için) ile BİREBİR aynı varsayılan davranış, tutarlılık sağlanıyor.
+    const zi=paceSecToZoneIdx(cmpSec,_mZones||zones);
     const c=ZONE_COLORS_INLINE[zi];
     return c?{color:c,textColor:ZONE_TEXT_COLOR[zi]||null}:null;
   };
@@ -11673,6 +11696,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
                     paceValidation,
                     focusIndicator,
                     paceToZoneIdx,
+                    liveRowColor,
                     zones,
                     measureZones,
                     readOnly,
