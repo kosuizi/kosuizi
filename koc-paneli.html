@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.07-1830 --><!DOCTYPE html>
+<!-- Version: v2026.09.07-1859 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.07-1830';
+const APP_VERSION='v2026.09.07-1859';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -16942,20 +16942,32 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
 
     // ── BAŞLANGIÇ SEVİYESİ: Yürü-Koş programı ──────────────────────────────
     // Sporcu seviyesi 'baslangic' ise tüm koşu günleri yürü-koş antrenmanına yönlendirilir.
-    // Sıradaki seviye ARTIK ham "tamamlanan seans sayısı"na göre değil, en güncel
-    // tarihli yürü-koş kaydının GERÇEK seviyesine göre belirlenir (kayıtlı yapi_notu'dan
-    // parse edilir). Böylece koç bir seansı tekrarlatsa ya da "ata" ile geriye bir
-    // seviyeye dönse dahi, sistem her zaman "son kayıtlı seviye + 1"i önerir —
-    // toplam kayıt sayısına göre ilerlemeyi değil.
+    // KÖK NEDEN DÜZELTMESİ (2026.09.07 — Göksel talebi: "sistem sadece bir önceki
+    // yürü-koş antrenmanına bakarak öneriyordu, diğer S-seviyeli tiplerde olduğu
+    // gibi önermeli"): ÖNCEDEN sonraki seviye HER ZAMAN son kayıtlı seviye+1 idi —
+    // o seansın GERÇEKTEN nasıl geçtiğini (RPE) hiç sormuyordu. calcSeviyeFromHistory'nin
+    // (~satır 12817) diğer TÜM S-seviyeli tiplerde (tempo/esik/interval/vb.) kullandığı
+    // "kişisel RPE ortalamasına göre ilerle/sabit kal/gerile" mantığı burada da
+    // uygulanıyor — TEK FARK: Yürü-Koş DOĞRUSAL bir tamamlama programı (S1→S12, her
+    // seviye farklı/artan bir hedef) olduğundan varsayılan davranış diğer tiplerdeki
+    // "aynı seviyede sabit kal" değil, programın kendi doğası olan "sıradaki seviyeye
+    // geç"tir — sadece son seans KİŞİSEL ORTALAMASINA göre belirgin şekilde ZOR
+    // gelmişse (RPE ortalamanın 1.0+ üstünde) aynı seviye TEKRAR edilir, ileri
+    // gidilmez (calcSeviyeFromHistory'deki gerileme/-1 davranışı burada YOK — bu
+    // doğrusal programda "bir alt seviyeye dönmek" anlamsız, sadece tekrar etmek
+    // mantıklı). RPE hiç girilmemişse (veri yok) eski bootstrap davranışı (+1) korunur.
+    // Veri kaynağı (ykWorkoutsAll) legacy kayıtları da yakalayan mevcut esnek filtre
+    // olarak bilinçli olarak korunuyor — calcSeviyeFromHistory'nin katı w.tur===tur
+    // eşleşmesi bazı eski/migrasyon öncesi kayıtları atlayabilirdi.
     if((athlete.seviye||'baslangic')==='baslangic'){
       const ykWorkoutsAll=(wkStats.athWorkouts||[]).filter(w=>(w.tur==='yuru_kos'||w._isYuruKos)||(w.yapi_notu&&(w.yapi_notu.startsWith('Yürü-Koş ·')||w.yapi_notu.startsWith('🚶🏃 Yürü-Koş ·'))));
       const tamamlananYK=ykWorkoutsAll.length; // bilgi amaçlı toplam sayaç (seviye kararında kullanılmaz)
-      const sonYK=[...ykWorkoutsAll].sort((a,b)=>(b.date||'').localeCompare(a.date||''))[0];
-      let sonSeviye=0;
-      if(sonYK){
-        const m=(sonYK.yapi_notu||'').match(/·\s*S(\d+)/);
-        if(m) sonSeviye=parseInt(m[1]);
-      }
+      const ykGecmis=[...ykWorkoutsAll]
+        .map(w=>{const m=(w.yapi_notu||'').match(/·\s*S(\d+)/);return m?{date:w.date||'',sIdx:parseInt(m[1]),rpe:parseFloat(w.rpe)||null}:null;})
+        .filter(Boolean)
+        .sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+      const sonYK2=ykGecmis[0]||null;
+      const sonSeviye=sonYK2?sonYK2.sIdx:0;
       if(sonSeviye>=12){
         // Program tamamlandı — program bitişi mesajı + antrenörü bilgilendir
         kosuTpl=tplKolay(band,35,zones);
@@ -16964,10 +16976,21 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
         kosuTpl.yapilar=[{baslik:'Program Bitti 🎉',detay:'Yürü-Koş S12 tamamlandı. Artık 30 dk sürekli koşabiliyorsunuz! Antrenör, lütfen sporcu seviyesini Rekreasyonel olarak güncelleyin.'}];
         kosuUyari='Yürü-Koş programı tamamlandı (son kayıt: S12) — seviye güncellemesi gerekiyor';
       } else {
-        const sonrakiSeans=sonSeviye+1; // son kaydedilen seansın GERÇEK seviyesine göre devam
+        let sonrakiSeans=sonSeviye+1; // varsayılan: programın doğal akışı, sıradaki seviye
+        let _ykNot='';
+        if(sonYK2?.rpe!=null){
+          const oncekiRpelerYK=ykGecmis.slice(1,6).map(g=>g.rpe).filter(r=>r!=null&&r>0);
+          if(oncekiRpelerYK.length>=2){
+            const kisiselOrtYK=oncekiRpelerYK.reduce((a,b)=>a+b,0)/oncekiRpelerYK.length;
+            if(sonYK2.rpe>=kisiselOrtYK+1.0){
+              sonrakiSeans=Math.max(sonSeviye,1);
+              _ykNot=' · son seans kişisel ortalamaya göre zor geldi (RPE '+sonYK2.rpe+' vs ort. '+round1(kisiselOrtYK)+'), seviye tekrarlanıyor';
+            }
+          }
+        }
         kosuTpl=tplYuruKos(sonrakiSeans,zones);
         kosuTpl.tur='yuru_kos';
-        kosuUyari='Başlangıç programı — S'+sonrakiSeans+'/12 · Son kayıt: '+(sonSeviye>0?('S'+sonSeviye):'yok')+' · Toplam kayıt: '+tamamlananYK+' seans';
+        kosuUyari='Başlangıç programı — S'+sonrakiSeans+'/12 · Son kayıt: '+(sonSeviye>0?('S'+sonSeviye):'yok')+' · Toplam kayıt: '+tamamlananYK+' seans'+_ykNot;
       }
 
     } else if((cokYorgun||yukYuksek||acwrOverloadPlan)&&!(isSimulatedFuture&&haftaGunTipi==='kaliteli')){
@@ -18685,7 +18708,7 @@ function resolveEffectiveTip(tip, yapiNotu, baslik){
 }
 
 // Koşu yapılarını al — çapraz/kuvvet ve diğer koşu-dışı tipler dahil tüm non-koşu günleri dışla
-const _KOSU_TIP_SET=new Set(['kolay','serbest','aerobik','hazirlik','uzun','tempo','tempo_sureli','esik','esik_sureli','interval','piramit','kesintisiz_piramit','yokus_kisa','yokus_uzun','tirmanis','teknik','acici','progressive','cruise','yaris_tempo','on_off','hill_sprint','strides','back_to_back','yuru_kos','yaris']);
+const _KOSU_TIP_SET=new Set(['kolay','serbest','aerobik','hazirlik','uzun','tempo','tempo_sureli','esik','esik_sureli','interval','piramit','kesintisiz_piramit','yokus_kisa','yokus_uzun','tirmanis','teknik','acici','progressive','cruise','yaris_tempo','on_off','hill_sprint','strides','back_to_back','yuru_kos','yaris','power_hiking','tempolu_yurume','rahat_yurume']);
 function kosuYapilarAl(day){
   // Koşu tipinde değilse VE birleşik gün (isKosuCapraz) değilse → boş döndür
   if(!day||(!_KOSU_TIP_SET.has(day.tip)&&!day.isKosuCapraz)) return [];
