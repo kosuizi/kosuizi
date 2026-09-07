@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.06-2222 --><!DOCTYPE html>
+<!-- Version: v2026.09.07-1033 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.06-2222';
+const APP_VERSION='v2026.09.07-1033';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -857,6 +857,22 @@ function acwrFazBand(phase){
     'Yarış Sonrası':{peak:0.50, lowZero:0.10, highZero:0.90, aciklama:'Yarış sonrası toparlanma — düşük yük normal'},
   };
   return cfg[phase]||cfg['Gelişme'];
+}
+
+// ── acwrTamDinlenmeGun — SADECE KOÇ PANELİ (07.09.2026 sohbeti) ─────────
+// λ_atl=1-e^(-1/7) ve λ_ctl=1-e^(-1/42) olduğundan, yük=0 girilirse ATL ve
+// CTL saf üstel sönüm yapar: ATL(t)=ATL(0)·e^(-t/7), CTL(t)=CTL(0)·e^(-t/42).
+// ACWR(t)=ATL(t)/CTL(t)=ACWR(0)·e^(-t·5/42) → hedef bir ACWR değerine (T)
+// kaç günde inileceği kapalı-form: t=(42/5)·ln(ACWR(0)/T).
+// ÖNEMLİ: Bu "bugünden itibaren TAM SIFIR antrenman" varsayımına dayanan bir
+// projeksiyondur, kesin bir tıbbi/fizyolojik süre değildir — hafif hareket
+// gerçek süreyi uzatabilir. Bilerek SporcuPlanView'a taşınmadı: sporcuya
+// "X gün dinlen" gibi kesin bir sayı sunmak, koçun devam kararını (kademeli
+// yük artışı, faz değişimi vb.) bypass edebilir — bu yüzden sadece Dashboard
+// (koç paneli) ACWR kartında gösterilir.
+function acwrTamDinlenmeGun(acwrGuncel,hedefAcwr){
+  if(!acwrGuncel||!hedefAcwr||acwrGuncel<=hedefAcwr)return 0;
+  return (42/5)*Math.log(acwrGuncel/hedefAcwr);
 }
 
 // ── isPlannedLoadReduction — TEK PAYLAŞILAN kaynak (13.08.2026 sohbeti) ──
@@ -26652,12 +26668,27 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
         else if(acwr>idealHigh) {cls='warn';  text='⚠ ACWR: '+acwr.toFixed(2)+' — '+lastH.phase+' fazının ideal aralığının ('+idealLow+'–'+idealHigh+') üstünde. Yük artışını yavaşlat, toparlanmayı önceliklendir.';}
         else if(acwr>=idealLow){cls='good';  text='✓ ACWR: '+acwr.toFixed(2)+' — '+lastH.phase+' fazı için ideal aralıkta ('+idealLow+'–'+idealHigh+'). Yük dengesi sağlıklı, sakatlık riski düşük.';}
         else              {cls='info';  text='💤 ACWR: '+acwr.toFixed(2)+' — '+lastH.phase+' fazı için yük düşük. Kondisyon kazanımı için antrenman yükünü artırabilirsin.';}
-        return React.createElement('div',{style:{
-          marginTop:8,fontSize:12,padding:'7px 11px',borderRadius:'var(--radius)',
-          background:cls==='danger'?'var(--danger-bg)':cls==='warn'?'var(--warn-bg)':cls==='good'?'var(--success-bg)':'var(--info-bg)',
-          color:cls==='danger'?'var(--danger)':cls==='warn'?'var(--warn)':cls==='good'?'var(--success)':'var(--info)',
-          borderLeft:'3px solid '+(cls==='danger'?'var(--danger)':cls==='warn'?'var(--warn)':cls==='good'?'var(--success)':'var(--info)')
-        }},text);
+        const msgs=[{cls,text}];
+        // ── Tam dinlenme projeksiyonu — SADECE bu kartta (koç paneli).
+        // acwrTamDinlenmeGun: bugünden itibaren SIFIR antrenman varsayımıyla,
+        // ACWR'nin verilen eşiğe kaç günde ineceğini hesaplar (bkz. tanım).
+        if(cls==='danger'){
+          const gunHighZero=acwrTamDinlenmeGun(acwr,fazCfg.highZero);
+          const gunIdeal=acwrTamDinlenmeGun(acwr,idealHigh);
+          msgs.push({cls:'danger',text:'🛑 Tam dinlenmeyle risk bölgesinden çıkış (ACWR<'+round2(fazCfg.highZero)+'): en az ~'+Math.ceil(gunHighZero)+' gün. Antrenman bilimi: bu aralıkta yük azaltımı gerekli, AMA döngüye geri dönüş de kademeli olmalı — ATL, CTL\'den çok daha hızlı söndüğü için ani/tam yükle dönüş yeni bir ACWR sıçramasına yol açabilir (uzun süreli aradan sonra dönüşte bilinen bir yaralanma riski).'});
+          msgs.push({cls:'warn',text:'🟢 Tam dinlenmeyle ideal banda dönüş (ACWR<'+idealHigh+'): ~'+Math.ceil(gunIdeal)+' gün. Bu sadece "sıfır antrenman" varsayımıyla üst sınır bir projeksiyon — kesin bir süre değil.'});
+        } else if(cls==='warn'){
+          const gunIdeal=acwrTamDinlenmeGun(acwr,idealHigh);
+          msgs.push({cls:'info',text:'🟢 Tam dinlenmeyle ideal banda dönüş (ACWR<'+idealHigh+'): ~'+Math.ceil(gunIdeal)+' gün. Not: bu bantta tam durmak genellikle şart değil — antrenman bilimine göre hacim/yoğunluğu kademeli azaltmak, kondisyonu (CTL) daha az düşürerek aynı sonuca ulaştırabilir.'});
+        }
+        return React.createElement('div',{style:{marginTop:8,display:'flex',flexDirection:'column',gap:5}},
+          msgs.map((m,i)=>React.createElement('div',{key:i,style:{
+            fontSize:12,padding:'7px 11px',borderRadius:'var(--radius)',
+            background:m.cls==='danger'?'var(--danger-bg)':m.cls==='warn'?'var(--warn-bg)':m.cls==='good'?'var(--success-bg)':'var(--info-bg)',
+            color:m.cls==='danger'?'var(--danger)':m.cls==='warn'?'var(--warn)':m.cls==='good'?'var(--success)':'var(--info)',
+            borderLeft:'3px solid '+(m.cls==='danger'?'var(--danger)':m.cls==='warn'?'var(--warn)':m.cls==='good'?'var(--success)':'var(--info)')
+          }},m.text))
+        );
       })()
     ),
 
