@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.07-2234 --><!DOCTYPE html>
+<!-- Version: v2026.09.07-2256 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.07-2234';
+const APP_VERSION='v2026.09.07-2256';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -10720,7 +10720,19 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     // tek yönlü kontrol: sadece "yeterince düşmedi mi" sorusu var, "çok düşük" diye bir sorun yok.
     // Eşik = satırın kendi atanmış bölgesinin üst sınırı (genelde Z1, ama coach farklı atadıysa ona
     // saygı duyar). Tolerans, aktif eforla aynı üst-yön kademesini yeniden kullanır.
-    if(!isWarmup&&!isCooldown&&(row.type==='rest'||row.type==='walk')){
+    // 2026.09.07 — Göksel talebi/gözlemi ("nabız kontrolü 'min' — ortalama olması
+    // gerekmez miydi?"): ÖNCEDEN type='walk' olan HER satır (Isınma/Soğuma hariç)
+    // "Toparlanma" (min-bazlı, tek yönlü) mantığına giriyordu — bu, Yürü-Koş'un
+    // KOŞU ARALARINDAKİ kısa yürüyüş molaları için doğru (amaç bir sonraki tekrara
+    // hazır olacak kadar toparlanmak), ama YENİ Rahat Yürüyüş gibi TEK BAŞINA,
+    // tam bir antrenman seansı oluşturan yürüyüşler için YANLIŞ — onlarda hedef
+    // normal antrenmanlardaki gibi bir ORTALAMA bölge, "yeterince toparlandın mı"
+    // sorusu değil. Ayırt edici: gerçek aralık molaları (Yürü-Koş, Tempolu Yürüyüş'ün
+    // Aralıklı varyantındaki Rahat Yürüyüş molaları) HER ZAMAN tekrar mekanizmasından
+    // (din_sn/tekrar) gelir ve repeatCount taşır; tek başına bir seansın satırları
+    // asla repeatCount taşımaz. type='rest' (repeatCount'suz "Blok Arası Dinlenme"
+    // dahil) davranışı DEĞİŞMEDİ — sadece 'walk' koluna repeatCount şartı eklendi.
+    if(!isWarmup&&!isCooldown&&(row.type==='rest'||(row.type==='walk'&&row.repeatCount>1))){
       if(bpm<=hi_bpm) return{label:'Toparlanma Sağlandı',color:'#22c55e',bg:'#f0fdf4',icon:'✓'};
       const over=bpm-hi_bpm;
       if(over<=targetUp)  return{label:'Toparlanma Sağlandı', color:'#22c55e',bg:'#f0fdf4',icon:'✓'};
@@ -11909,9 +11921,12 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
                 const avgBpm=(r._aralikAveraged&&r.bpm!=null)?r.bpm:null;
                 const effectiveBpm=manualBpm!=null?manualBpm:avgBpm;
                 const _sugBpmRaw=suggestedBpm(r);
-                // Recovery walk satırları (yürüyüş araları): lo_bpm göster → "bu değerin altına in"
-                // Isınma/Soğuma yürüyüşü hariç (orada ortalama hedef)
-                const _isRecoveryWalk=(r.type==='walk')&&!(/[iı]sınma|isinma|soğuma|soguma/i.test(r.label||''));
+                // Recovery walk satırları (koşu/tekrar ARALARINDAKİ kısa yürüyüş molaları):
+                // lo_bpm göster → "bu değerin altına in". Isınma/Soğuma hariç (orada ortalama
+                // hedef) VE tek başına bir seans oluşturan yürüyüşler (repeatCount yok) hariç
+                // — bkz. bpmValidation'daki aynı 2026.09.07 notu (Göksel: "ortalama olması
+                // gerekmez miydi?", Rahat Yürüyüş gibi tek-seans yürüyüşler için haklı çıktı).
+                const _isRecoveryWalk=(r.type==='walk'&&r.repeatCount>1)&&!(/[iı]sınma|isinma|soğuma|soguma/i.test(r.label||''));
                 const sugBpm=_isRecoveryWalk?(_mZones?.hrZones?.[r._origZIdx??0]?.lo_bpm??_sugBpmRaw):_sugBpmRaw;
                 // run/walk satırları: LTHR tanımlı olmasa da bpm girişi aktif (placeholder '—')
                 const alwaysEditable=r.type==='run'||r.type==='walk';
@@ -11920,11 +11935,12 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
                 // Aralık ortalaması: salt gösterim
                 if(avgBpm!=null&&manualBpm==null) return avgBpm;
                 // Süreye göre giriş ipucu: ≤30 sn → tepe nabzı, >30 sn → ort. nabzı
-                // Toparlanma amaçlı satırlar (dinlenme/yürüyüş): en düşük nabız girilir
-                // Isınma/Soğuma Yürüyüşü (type='walk') hariç — bunlarda hedef ORTALAMA'dır (bkz. bpmValidation)
+                // Toparlanma amaçlı satırlar (koşu/tekrar arası dinlenme/yürüyüş): en düşük
+                // nabız girilir. Isınma/Soğuma Yürüyüşü VE tek-seans yürüyüşler (repeatCount
+                // yok — bkz. yukarıdaki _isRecoveryWalk notu) hariç, onlarda hedef ORTALAMA'dır.
                 const _hintLabel=r.label||'';
                 const _hintIsWarmupCooldown=/[iı]sınma|isinma|soğuma|soguma/i.test(_hintLabel);
-                const isRecoveryRow=(r.type==='rest'||r.type==='walk')&&!_hintIsWarmupCooldown;
+                const isRecoveryRow=r.type==='rest'||(r.type==='walk'&&r.repeatCount>1&&!_hintIsWarmupCooldown);
                 const durSec=rowDurSec(r);
                 const isShortRow=!r.rpe&&!r._isSprint&&durSec>0&&durSec<=SHORT_ROW_MAX_SEC;
                 const bpmHint=isRecoveryRow?'min':(!r.rpe&&!r._isSprint&&r.type!=='header'&&durSec>0)
@@ -12641,22 +12657,36 @@ function tplFromYapiNotu(tur, yapiNotu, band, sure_dk, zones, disiplin, phase, c
   // "Aralıklı" varyantta dinlenme/rahat fazı bilinçli olarak _walkRow:true (mavi,
   // Nabız Odaklı) — iş/dinlenme kontrastı görsel olarak korunur (diğer tüm interval
   // tiplerindeki iş/dinlenme renk kontrastı kuralıyla aynı).
+  // ── Tempolu Yürüyüş / Rahat Yürüyüş — RPE yerine hissiyat metni (2026.09.07 —
+  // Göksel talebi): "yürüyüşün en yoğunu (RPE 5-6) bile kolay bir koşu kadar
+  // eforlu olmayacaktır" — koşu ve yürüyüş RPE'leri aynı 1-10 ölçeğinde
+  // gösterildiğinde birbiriyle KIYASLANABİLİR görünüyor ama fizyolojik olarak
+  // değiller (aynı sayı farklı şeyler ifade ediyor). Sayısal RPE tamamen
+  // kaldırıldı; onun yerine `_cue`/`_dinCue` (satırın altında görünen, koçun da
+  // düzenleyebildiği metinsel ipucu — bkz. ~satır 11810) ile sporcu pace
+  // değerinden BAĞIMSIZ, hissiyata dayalı bir yönerge görüyor. rpe alanının
+  // kaldırılmasının yan etkisi: paceActive artık Tempolu Yürüyüş'ün ana
+  // satırlarında baskılanmıyor (bkz. ~satır 10860 kapı koşulu, "row.rpe" kontrolü)
+  // — yani bu tip artık gerçekten tam pace+nabız validasyonu alıyor, ilk
+  // tasarımdaki niyet buydu.
   if(tur==='tempolu_yurume'){
     const tPace=getTempoluYurumePace(zones);
     const rPace=getRahatYurumePace(zones);
     const isAralikli=yapiNotu.includes('Aralıklı');
     const isNegatif=yapiNotu.includes('Negatif Split');
+    const CUE_TEMPOLU='Canlı, amaçlı tempoda — sohbet zorlaşır ama nefes düzenli kalır';
+    const CUE_RAHAT='Tamamen rahat — sohbet rahatça sürdürülebilmeli';
     if(isAralikli){
       return{tip:'tempolu_yurume',sure_dk,yapi_notu:yapiNotu,yapilar:[
-        {baslik:'Isınma',detay:'5 dk rahat yürüyüş — RPE 2–3',
-          _rows:[{label:'Isınma',sure_sn:300,zIdx:0,pSec:rPace,rpe:'2–3',_walkRow:true}]},
+        {baslik:'Isınma',detay:'5 dk rahat yürüyüş',
+          _rows:[{label:'Isınma',sure_sn:300,zIdx:0,pSec:rPace,_cue:CUE_RAHAT,_walkRow:true}]},
         {baslik:'Tempolu/Rahat Yürüyüş Aralıkları — 6 Set',
           detay:`6×(4 dk tempolu / 2 dk rahat) · Tempolu ${fmtPaceLbl(tPace)}/km · Rahat ${fmtPaceLbl(rPace)}/km`,
-          _rows:[{label:'Tempolu Yürüyüş (4dk)',sure_sn:240,zIdx:0,pSec:tPace,tekrar:6,rpe:'5–6',
+          _rows:[{label:'Tempolu Yürüyüş (4dk)',sure_sn:240,zIdx:0,pSec:tPace,tekrar:6,_cue:CUE_TEMPOLU,
             din_sn:120,dinPSec:rPace,dinZIdx:0,dinType:'walk',dinColor:'#93c5fd',dinTextColor:'#1e3a5f',
-            dinLabel:'Rahat Yürüyüş',dinRpe:'2–3'}]},
-        {baslik:'Soğuma',detay:'5 dk rahat yürüyüş — RPE 2–3',
-          _rows:[{label:'Soğuma',sure_sn:300,zIdx:0,pSec:rPace,rpe:'2–3',_walkRow:true}]},
+            dinLabel:'Rahat Yürüyüş',_dinCue:CUE_RAHAT}]},
+        {baslik:'Soğuma',detay:'5 dk rahat yürüyüş',
+          _rows:[{label:'Soğuma',sure_sn:300,zIdx:0,pSec:rPace,_cue:CUE_RAHAT,_walkRow:true}]},
       ]};
     }
     if(isNegatif){
@@ -12664,14 +12694,14 @@ function tplFromYapiNotu(tur, yapiNotu, band, sure_dk, zones, disiplin, phase, c
       const ikinci=Math.max(10,sure_dk-yari);
       return{tip:'tempolu_yurume',sure_dk,yapi_notu:yapiNotu,yapilar:[
         {baslik:'1. Yarı — Rahat',detay:`${yari} dk — Rahat ${fmtPaceLbl(rPace)}/km`,
-          _rows:[{label:'1. Yarı (Rahat)',sure_sn:yari*60,zIdx:0,pSec:rPace,rpe:'3–4',_walkRow:true}]},
+          _rows:[{label:'1. Yarı (Rahat)',sure_sn:yari*60,zIdx:0,pSec:rPace,_cue:CUE_RAHAT,_walkRow:true}]},
         {baslik:'2. Yarı — Tempolu',detay:`${ikinci} dk — Tempolu ${fmtPaceLbl(tPace)}/km`,
-          _rows:[{label:'2. Yarı (Tempolu)',sure_sn:ikinci*60,zIdx:0,pSec:tPace,rpe:'5–6'}]},
+          _rows:[{label:'2. Yarı (Tempolu)',sure_sn:ikinci*60,zIdx:0,pSec:tPace,_cue:CUE_TEMPOLU}]},
       ]};
     }
     return{tip:'tempolu_yurume',sure_dk,yapi_notu:yapiNotu,yapilar:[
-      {baslik:'Tempolu Yürüyüş',detay:`${sure_dk} dk — Tempolu ${fmtPaceLbl(tPace)}/km · RPE 5–6`,
-        _rows:[{label:'Tempolu Yürüyüş',sure_sn:sure_dk*60,zIdx:0,pSec:tPace,rpe:'5–6'}]},
+      {baslik:'Tempolu Yürüyüş',detay:`${sure_dk} dk — Tempolu ${fmtPaceLbl(tPace)}/km`,
+        _rows:[{label:'Tempolu Yürüyüş',sure_sn:sure_dk*60,zIdx:0,pSec:tPace,_cue:CUE_TEMPOLU}]},
     ]};
   }
 
@@ -12682,27 +12712,31 @@ function tplFromYapiNotu(tur, yapiNotu, band, sure_dk, zones, disiplin, phase, c
   // kapı koşulları, "row.type!=='walk'"), gerçek yürüyüş antrenmanlarında beklendiği
   // gibi. "Uzun" varyantın son bölümü kasıtlı olarak tempolu (type:'run') — bu
   // segment artık nabız/pace validasyonuna girer, tıpkı 'uzun' koşunun son bölüm
-  // tempo artışı gibi.
+  // tempo artışı gibi. Sayısal RPE yerine hissiyat metni (_cue) kullanılıyor —
+  // bkz. tempolu_yurume dalındaki 2026.09.07 notu (aynı gerekçe).
   if(tur==='rahat_yurume'){
     const rPace=getRahatYurumePace(zones);
     const tPace=getTempoluYurumePace(zones);
     const isToparlanma=yapiNotu.includes('Toparlanma');
     const isUzun=yapiNotu.includes('Uzun');
+    const CUE_TEMPOLU='Canlı, amaçlı tempoda — sohbet zorlaşır ama nefes düzenli kalır';
+    const CUE_RAHAT='Tamamen rahat — sohbet rahatça sürdürülebilmeli';
+    const CUE_TOPARLANMA='Çok hafif, aktif dinlenme amaçlı — hiç zorlanma hissi olmamalı';
     if(isUzun){
       const anaBolum=Math.max(10,Math.round(sure_dk*0.75));
       const tempoBolum=Math.max(5,sure_dk-anaBolum);
       return{tip:'rahat_yurume',sure_dk,yapi_notu:yapiNotu,yapilar:[
         {baslik:'Rahat Yürüyüş',detay:`${anaBolum} dk — Rahat ${fmtPaceLbl(rPace)}/km`,
-          _rows:[{label:'Rahat Yürüyüş',sure_sn:anaBolum*60,zIdx:0,pSec:rPace,rpe:'2–3',_walkRow:true}]},
+          _rows:[{label:'Rahat Yürüyüş',sure_sn:anaBolum*60,zIdx:0,pSec:rPace,_cue:CUE_RAHAT,_walkRow:true}]},
         {baslik:'Son Bölüm — Tempolu',detay:`${tempoBolum} dk — Tempolu ${fmtPaceLbl(tPace)}/km`,
-          _rows:[{label:'Son Bölüm (Tempolu)',sure_sn:tempoBolum*60,zIdx:0,pSec:tPace,rpe:'5–6'}]},
+          _rows:[{label:'Son Bölüm (Tempolu)',sure_sn:tempoBolum*60,zIdx:0,pSec:tPace,_cue:CUE_TEMPOLU}]},
       ]};
     }
-    const rpe=isToparlanma?'1–2':'2–3';
+    const cue=isToparlanma?CUE_TOPARLANMA:CUE_RAHAT;
     const baslikTxt=isToparlanma?'Toparlanma Yürüyüşü':'Rahat Yürüyüş';
     return{tip:'rahat_yurume',sure_dk,yapi_notu:yapiNotu,yapilar:[
-      {baslik:baslikTxt,detay:`${sure_dk} dk — Rahat ${fmtPaceLbl(rPace)}/km · RPE ${rpe}`,
-        _rows:[{label:baslikTxt,sure_sn:sure_dk*60,zIdx:0,pSec:rPace,rpe,_walkRow:true}]},
+      {baslik:baslikTxt,detay:`${sure_dk} dk — Rahat ${fmtPaceLbl(rPace)}/km`,
+        _rows:[{label:baslikTxt,sure_sn:sure_dk*60,zIdx:0,pSec:rPace,_cue:cue,_walkRow:true}]},
     ]};
   }
 
