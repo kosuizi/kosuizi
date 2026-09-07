@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.07-1033 --><!DOCTYPE html>
+<!-- Version: v2026.09.07-1154 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.07-1033';
+const APP_VERSION='v2026.09.07-1154';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -859,20 +859,54 @@ function acwrFazBand(phase){
   return cfg[phase]||cfg['Gelişme'];
 }
 
-// ── acwrTamDinlenmeGun — SADECE KOÇ PANELİ (07.09.2026 sohbeti) ─────────
-// λ_atl=1-e^(-1/7) ve λ_ctl=1-e^(-1/42) olduğundan, yük=0 girilirse ATL ve
-// CTL saf üstel sönüm yapar: ATL(t)=ATL(0)·e^(-t/7), CTL(t)=CTL(0)·e^(-t/42).
-// ACWR(t)=ATL(t)/CTL(t)=ACWR(0)·e^(-t·5/42) → hedef bir ACWR değerine (T)
-// kaç günde inileceği kapalı-form: t=(42/5)·ln(ACWR(0)/T).
+// ── ewmaOranHedefGun — TEK PAYLAŞILAN kaynak, SADECE KOÇ PANELİ (07.09.2026 sohbeti) ──
+// Herhangi bir EWMA akut/kronik ORAN göstergesi (ACWR, mekanik ATL/CTL oranı)
+// için genel formül. τ_akut ve τ_kronik farklı sönüm sabitleriyle, yük=0
+// girilirse akut ve kronik bileşen saf üstel sönüm yapar:
+//   Akut(t)=Akut(0)·e^(-t/τ_akut), Kronik(t)=Kronik(0)·e^(-t/τ_kronik)
+//   Oran(t)=Oran(0)·e^(-t·(1/τ_akut - 1/τ_kronik))
+// → hedef bir orana (T) kaç günde inileceği kapalı-form:
+//   t = ln(Oran(0)/T) / (1/τ_akut - 1/τ_kronik)
 // ÖNEMLİ: Bu "bugünden itibaren TAM SIFIR antrenman" varsayımına dayanan bir
 // projeksiyondur, kesin bir tıbbi/fizyolojik süre değildir — hafif hareket
 // gerçek süreyi uzatabilir. Bilerek SporcuPlanView'a taşınmadı: sporcuya
 // "X gün dinlen" gibi kesin bir sayı sunmak, koçun devam kararını (kademeli
 // yük artışı, faz değişimi vb.) bypass edebilir — bu yüzden sadece Dashboard
-// (koç paneli) ACWR kartında gösterilir.
+// (koç paneli) kartlarında gösterilir.
+function ewmaOranHedefGun(oranGuncel,hedefOran,tauAkut,tauKronik){
+  if(!oranGuncel||!hedefOran||oranGuncel<=hedefOran)return 0;
+  const k=1/tauAkut-1/tauKronik;
+  if(k<=0)return null; // akut sabiti kronikten yavaşsa oran zamanla düşmez (bu uygulamada hep tauAkut<tauKronik)
+  return Math.log(oranGuncel/hedefOran)/k;
+}
+// ACWR (τ_akut=7, τ_kronik=42) — bkz. λ_atl/λ_ctl tanımı.
 function acwrTamDinlenmeGun(acwrGuncel,hedefAcwr){
-  if(!acwrGuncel||!hedefAcwr||acwrGuncel<=hedefAcwr)return 0;
-  return (42/5)*Math.log(acwrGuncel/hedefAcwr);
+  return ewmaOranHedefGun(acwrGuncel,hedefAcwr,7,42);
+}
+// Mekanik ATL/CTL oranı (τ_akut=14, τ_kronik=60) — bkz. λ_matl/λ_mctl tanımı.
+// Not: mekanik doku (tendon/kemik) kardiyovasküler sistemden daha yavaş adapte
+// olur (satır ~644 yorumu) — bu yüzden mekanik sönüm her zaman ACWR'den yavaş
+// ilerler, "final karar" sentezinde çoğunlukla belirleyici (bottleneck) sistem
+// mekanik olur.
+function mechOranTamDinlenmeGun(oranGuncel,hedefOran){
+  return ewmaOranHedefGun(oranGuncel,hedefOran,14,60);
+}
+// ── tsbHedefGun — SADECE KOÇ PANELİ ─────────────────────────────────────
+// TSB=CTL-ATL bir ORAN değil FARK olduğu için yukarıdaki kapalı-form formül
+// uygulanamaz (iki farklı hızda sönen üstelin farkı). Gün gün simülasyon
+// (mevcut "Pazartesi projeksiyonu" bloğuyla — satır ~22150 — aynı yöntem)
+// kullanılır: ATL hızlı söndüğü (τ=7) için TSB önce YÜKSELİR (toparlanma),
+// hedefe ulaşınca döngü durur. maxGun sınırı sonsuz döngüyü önler.
+function tsbHedefGun(atlGuncel,ctlGuncel,hedefTsb,maxGun){
+  maxGun=maxGun||60;
+  if((ctlGuncel-atlGuncel)>=hedefTsb)return 0;
+  let atl=atlGuncel,ctl=ctlGuncel;
+  for(let t=1;t<=maxGun;t++){
+    atl=atl*(1-λ_atl);
+    ctl=ctl*(1-λ_ctl);
+    if((ctl-atl)>=hedefTsb)return t;
+  }
+  return null; // maxGun içinde hedefe ulaşılamadı
 }
 
 // ── isPlannedLoadReduction — TEK PAYLAŞILAN kaynak (13.08.2026 sohbeti) ──
@@ -26494,6 +26528,80 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
 
   return React.createElement('div',null,
 
+    // ── Genel Toparlanma Değerlendirmesi — ACWR + TSB + Mekanik Yük'ü birleştiren
+    // final karar bildirimi. SADECE koç paneli (07.09.2026 sohbeti) — bkz.
+    // ewmaOranHedefGun/tsbHedefGun/mechOranTamDinlenmeGun tanımları (satır ~862).
+    // Sayfanın EN ÜSTÜNDE gösterilir (RestWarningBanner'dan bile önce).
+    (()=>{
+      const lastH=last;
+      if(!lastH)return null;
+      const acwr=lastH.acwr,phase=lastH.phase;
+      const atl=lastH.atl||0,ctl=lastH.ctl||0;
+      const tsb=lastH.tsb!=null?lastH.tsb:(ctl-atl);
+      const mAtl=lastH.mechAtl||0,mCtl=lastH.mechCtl||0;
+      const sistemler=[];
+      // ACWR — bkz. acwrFazBand (TEK PAYLAŞILAN kaynak)
+      if(acwr){
+        const fazCfg=acwrFazBand(phase);
+        const idealHigh=round2(fazCfg.peak+0.15);
+        let st='ok';
+        if(acwr>fazCfg.highZero)st='danger';else if(acwr>idealHigh)st='warn';
+        sistemler.push({ad:'ACWR',st,
+          gunRisk:st==='danger'?acwrTamDinlenmeGun(acwr,fazCfg.highZero):0,
+          gunIdeal:st!=='ok'?acwrTamDinlenmeGun(acwr,idealHigh):0});
+      }
+      // TSB — bkz. ATL/CTL kartındaki aynı eşikler (5/-10/-25)
+      {
+        let st='ok';
+        if(tsb<-25)st='danger';else if(tsb<-10)st='warn';
+        sistemler.push({ad:'TSB (Yorgunluk)',st,
+          gunRisk:st==='danger'?tsbHedefGun(atl,ctl,-25):0,
+          gunIdeal:st!=='ok'?tsbHedefGun(atl,ctl,-10):0});
+      }
+      // Mekanik Yük ATL/CTL oranı — bkz. Mekanik Yük kartındaki aynı eşikler (1.1/1.3)
+      if(mCtl>0){
+        const oran=mAtl/mCtl;
+        let st='ok';
+        if(oran>1.3)st='danger';else if(oran>1.1)st='warn';
+        sistemler.push({ad:'Mekanik Yük',st,
+          gunRisk:st==='danger'?mechOranTamDinlenmeGun(oran,1.3):0,
+          gunIdeal:st!=='ok'?mechOranTamDinlenmeGun(oran,1.1):0});
+      }
+      if(!sistemler.length)return null;
+      const enKotu=sistemler.some(s=>s.st==='danger')?'danger':sistemler.some(s=>s.st==='warn')?'warn':'ok';
+      if(enKotu==='ok'){
+        return React.createElement('div',{className:'card',style:{
+          marginBottom:12,fontSize:12,padding:'10px 14px',borderRadius:'var(--radius)',
+          background:'var(--success-bg)',color:'var(--success)',borderLeft:'3px solid var(--success)'
+        }},'✓ Genel değerlendirme: ACWR, TSB ve mekanik yük dengede — tam dinlenmeye gerek yok.');
+      }
+      const fmtGun=g=>g==null?'60+':Math.ceil(g);
+      // null (maxGun'a takılan) her zaman "en uzun/belirsiz" kabul edilir — max karşılaştırmasında kazanır.
+      const enBuyuk=(arr,alan)=>arr.reduce((a,b)=>(b[alan]==null||(a[alan]!=null&&b[alan]>a[alan]))?b:a);
+      const mesajlar=[];
+      if(enKotu==='danger'){
+        const dangerSis=sistemler.filter(s=>s.st==='danger');
+        const bindingRisk=enBuyuk(dangerSis,'gunRisk');
+        const bindingIdeal=enBuyuk(sistemler,'gunIdeal');
+        const ozet=sistemler.map(s=>s.ad+' '+(s.st==='danger'?'🔴':s.st==='warn'?'🟡':'🟢')).join(', ');
+        mesajlar.push({cls:'danger',text:'🛑 Genel değerlendirme: risk bölgesinden çıkış için en az ~'+fmtGun(bindingRisk.gunRisk)+' gün tam dinlenme gerekiyor (belirleyici: '+bindingRisk.ad+'). Sistemler: '+ozet+'.'});
+        mesajlar.push({cls:'warn',text:'🟢 Üç göstergenin birden ideal banda dönmesi ~'+fmtGun(bindingIdeal.gunIdeal)+' gün sürebilir (belirleyici: '+bindingIdeal.ad+'). Bu "sıfır antrenman" varsayımıyla üst-sınır bir projeksiyon, kesin süre değil — dönüşte yükü kademeli artır.'});
+      } else {
+        const bindingIdeal=enBuyuk(sistemler,'gunIdeal');
+        const dikkatteki=sistemler.filter(s=>s.st!=='ok').map(s=>s.ad).join(' + ');
+        mesajlar.push({cls:'warn',text:'⚠ Genel değerlendirme: '+dikkatteki+' dikkat bandında. Tam durmak şart değil — kademeli yük azaltımıyla ~'+fmtGun(bindingIdeal.gunIdeal)+' gün içinde dengeye dönebilir (belirleyici: '+bindingIdeal.ad+').'});
+      }
+      return React.createElement('div',{className:'card',style:{marginBottom:12,display:'flex',flexDirection:'column',gap:6}},
+        React.createElement('div',{className:'card-title',style:{margin:0,marginBottom:2}},'🧭 Genel Toparlanma Değerlendirmesi'),
+        mesajlar.map((m,i)=>React.createElement('div',{key:i,style:{
+          fontSize:12,padding:'8px 12px',borderRadius:'var(--radius)',
+          background:m.cls==='danger'?'var(--danger-bg)':'var(--warn-bg)',
+          color:m.cls==='danger'?'var(--danger)':'var(--warn)',
+          borderLeft:'3px solid '+(m.cls==='danger'?'var(--danger)':'var(--warn)')
+        }},m.text))
+      );
+    })(),
+
     // ── Dinlenme Uyarı Bandı — Koşu İzlerim ile birebir aynı ──────────────
     RestWarningBanner({workouts,athlete,races,planSnap:restBandSnap}),
 
@@ -26637,6 +26745,16 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
         else if(tsb>=-10) msgs.push({cls:'info',text:'⚖ TSB: '+round1(tsb)+' — Dengeli yük. Normal antrenman dönemi.'});
         else if(tsb>=-25) msgs.push({cls:'warn',text:'😓 TSB: '+round1(tsb)+' — Yorgunluk birikmiş. Kaliteli antrenmanları sınırla.'});
         else msgs.push({cls:'danger',text:'🚨 TSB: '+round1(tsb)+' — Aşırı yorgunluk. Dinlenme haftası gerekli.'});
+        // Tam dinlenme projeksiyonu (SADECE bu kartta, koç paneli) — bkz. tsbHedefGun
+        if(tsb<-25){
+          const gun25=tsbHedefGun(atl,ctl,-25);
+          const gun10=tsbHedefGun(atl,ctl,-10);
+          msgs.push({cls:'danger',text:'🛑 Tam dinlenmeyle "aşırı yorgun" bölgesinden çıkış (TSB>-25): en az ~'+(gun25==null?'30+':Math.ceil(gun25))+' gün. Not: TSB ilk günlerde hızla yükselir (ATL, CTL\'den çok daha hızlı söner) — ama dönüşte yükü kademeli artır, aksi halde ATL yeniden hızla birikir.'});
+          msgs.push({cls:'warn',text:'🟢 Tam dinlenmeyle "dengeli" bölgeye dönüş (TSB>-10): ~'+(gun10==null?'30+':Math.ceil(gun10))+' gün. Bu "sıfır antrenman" varsayımıyla üst sınır bir projeksiyon — kesin bir süre değil.'});
+        } else if(tsb>=-25&&tsb<-10){
+          const gun10=tsbHedefGun(atl,ctl,-10);
+          msgs.push({cls:'info',text:'🟢 Tam dinlenmeyle "dengeli" bölgeye dönüş (TSB>-10): ~'+(gun10==null?'30+':Math.ceil(gun10))+' gün. Not: bu bantta tam durmak genellikle şart değil — kaliteli antrenmanı azaltıp hacmi korumak da TSB\'yi toparlayabilir.'});
+        }
         // ATL > CTL
         if(atl>ctl*1.2) msgs.push({cls:'warn',text:'⚠ ATL ('+round1(atl)+') CTL\'nin (%'+Math.round(atl/ctl*100)+') üzerinde — akut yük kronik ortalamanın çok üstünde. Yavaşla.'});
         return React.createElement('div',{style:{marginTop:8,display:'flex',flexDirection:'column',gap:5}},
@@ -26724,6 +26842,19 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
           msgs.push({cls:'info',text:'✨ Akut mekanik yük düşük (ATL/CTL: '+round1(atlCtlRatio)+'). Kaslar toparlanıyor — taper veya düşük yük dönemi.'});
         else
           msgs.push({cls:'good',text:'✓ Mekanik yük dengeli (ATL/CTL: '+round1(atlCtlRatio)+'). Sürdürülebilir yükleme.'});
+        // Tam dinlenme projeksiyonu (SADECE bu kartta, koç paneli) — bkz. mechOranTamDinlenmeGun.
+        // Mekanik sönüm (τ_akut=14, τ_kronik=60) ACWR'den (τ_akut=7, τ_kronik=42) daha
+        // yavaştır — tendon/kemik dokusu kardiyovasküler sistemden daha yavaş adapte
+        // olur, bu yüzden aynı "risk" seviyesinden çıkış genelde ACWR'den daha uzun sürer.
+        if(atlCtlRatio>1.3){
+          const gun13=mechOranTamDinlenmeGun(atlCtlRatio,1.3);
+          const gun11=mechOranTamDinlenmeGun(atlCtlRatio,1.1);
+          msgs.push({cls:'danger',text:'🛑 Tam dinlenmeyle risk bölgesinden çıkış (ATL/CTL<1.3): en az ~'+(gun13==null?'60+':Math.ceil(gun13))+' gün. Tendon/kemik dokusu yavaş adapte olur — dönüşte zemin/irtifa yükünü kademeli artır, aksi halde overuse riski hızla geri gelir.'});
+          msgs.push({cls:'warn',text:'🟢 Tam dinlenmeyle dengeli bölgeye dönüş (ATL/CTL<1.1): ~'+(gun11==null?'60+':Math.ceil(gun11))+' gün. "Sıfır antrenman" varsayımıyla üst sınır bir projeksiyon.'});
+        } else if(atlCtlRatio>1.1){
+          const gun11=mechOranTamDinlenmeGun(atlCtlRatio,1.1);
+          msgs.push({cls:'info',text:'🟢 Tam dinlenmeyle dengeli bölgeye dönüş (ATL/CTL<1.1): ~'+(gun11==null?'60+':Math.ceil(gun11))+' gün. Not: bu bantta tam durmak şart değil — zemin/irtifa yükünü azaltmak genelde yeterli.'});
+        }
         // Mech CTL vs Kardio CTL yorumu (normalize edilmiş)
         const _mechPlannedReduction=isPlannedLoadReduction(lastH.phase,lastH.atl,lastH.ctl);
         if(mechKardioRatio!==null){
