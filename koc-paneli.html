@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.07-1859 --><!DOCTYPE html>
+<!-- Version: v2026.09.07-1950 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.07-1859';
+const APP_VERSION='v2026.09.07-1950';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -16976,6 +16976,22 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
         kosuTpl.yapilar=[{baslik:'Program Bitti 🎉',detay:'Yürü-Koş S12 tamamlandı. Artık 30 dk sürekli koşabiliyorsunuz! Antrenör, lütfen sporcu seviyesini Rekreasyonel olarak güncelleyin.'}];
         kosuUyari='Yürü-Koş programı tamamlandı (son kayıt: S12) — seviye güncellemesi gerekiyor';
       } else {
+        // KADEMELENDİRME (2026.09.07 — Göksel talebi: "çok yorgun/ACWR yüksek bir
+        // günde Yürü-Koş sporcusuna da bir hafifletme uygulanmalı"): bu dal
+        // planDay'in karar zincirinin EN BAŞINDA olduğundan, diğer TÜM tiplerin
+        // zaten sahip olduğu yorgunluk/ACWR koruması (bkz. aşağıdaki genel
+        // downgrade dalı) Yürü-Koş sporcularına hiç uygulanmıyordu. Ağır sinyalde
+        // (çok yorgun VEYA ACWR blocker eşiği) programı bugün İLERLETMEDEN Rahat
+        // Yürüyüş'e geçiliyor — bu günün yapi_notu'su ('Rahat Yürüyüş · ...')
+        // yukarıdaki ykWorkoutsAll/ykGecmis filtresiyle eşleşmediğinden bir sonraki
+        // GERÇEK Yürü-Koş seansı S seviyesini aynı yerden (S{sonSeviye+1}) devam
+        // ettirir — bu gün program sayacını hiç etkilemez.
+        if(cokYorgun||yukYuksek){
+          const rahatSure=Math.round(25*yMod);
+          kosuTpl={...tplFromYapiNotu('rahat_yurume','Rahat Yürüyüş · Toparlanma',band,rahatSure,zones,disiplin,phase,simState.ctl||0,wkStats.recentLongRuns,athlete),
+            sure_dk:rahatSure,_downgraded:true,_originalTip:'yuru_kos'};
+          kosuUyari=(yukYuksek?'ACWR '+acwr.toFixed(2)+' — yük çok yüksek':'TSB '+tsb.toFixed(1)+' — çok yorgun')+' — Yürü-Koş programı bugün durduruldu, Rahat Yürüyüş\'e geçildi (S'+sonSeviye+' bir sonraki seansta devam edecek)';
+        } else {
         let sonrakiSeans=sonSeviye+1; // varsayılan: programın doğal akışı, sıradaki seviye
         let _ykNot='';
         if(sonYK2?.rpe!=null){
@@ -16991,14 +17007,31 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
         kosuTpl=tplYuruKos(sonrakiSeans,zones);
         kosuTpl.tur='yuru_kos';
         kosuUyari='Başlangıç programı — S'+sonrakiSeans+'/12 · Son kayıt: '+(sonSeviye>0?('S'+sonSeviye):'yok')+' · Toplam kayıt: '+tamamlananYK+' seans'+_ykNot;
+        }
       }
 
     } else if((cokYorgun||yukYuksek||acwrOverloadPlan)&&!(isSimulatedFuture&&haftaGunTipi==='kaliteli')){
       // İskelet kaliteli gün seçtiyse simüle günlerde bu bloktan geç — iskelet zaten yük durumuna göre gün seçti
+      // KADEMELENDİRME (2026.09.07 — Göksel talebi: "hafif gün önerisi sıklıktan
+      // ziyade yorgunluk ve ACWR YÜKSEKLİK SEVİYESİNE göre belirlenmeli"): ÖNCEDEN
+      // bu dal sinyalin şiddetinden bağımsız HER ZAMAN Kolay Koşu'ya iniyordu. Artık
+      // İKİ kademe var: AĞIR sinyal (çok yorgun VEYA ACWR blocker eşiği — yukYuksek)
+      // → sıfır darbe etkili Rahat Yürüyüş; SADECE HAFİF/ORTA ACWR sinyali
+      // (acwrOverloadPlan tetiklendi ama henüz blocker/çok-yorgun seviyesinde değil)
+      // → Tempolu Yürüyüş (Kolay Koşu'dan daha düşük darbe etkili ama tam
+      // dinlenme de değil). YOGUN_TURLER_PLAN'a dahil edilmediklerinden aşağıdaki
+      // HRV/sakatlık indirim kontrolleri bu sonucu bir daha işlemeye çalışmaz.
+      const agirSinyal=cokYorgun||yukYuksek;
       const sure=Math.round((cokYorgun?30:40)*yMod);
-      kosuTpl=tplKolay(band,sure,zones);
-      kosuUyari=yukYuksek||acwrOverloadPlan?'ACWR '+acwr.toFixed(2)+' — yük yüksek, kolay koşuya indirildi':
-        'TSB '+tsb.toFixed(1)+' — çok yorgun, kolay koşuya indirildi';
+      if(agirSinyal){
+        kosuTpl={...tplFromYapiNotu('rahat_yurume','Rahat Yürüyüş · Toparlanma',band,sure,zones,disiplin,phase,simState.ctl||0,wkStats.recentLongRuns,athlete),
+          sure_dk:sure,_downgraded:true,_originalTip:'kolay'};
+        kosuUyari=(yukYuksek?'ACWR '+acwr.toFixed(2)+' — yük çok yüksek':'TSB '+tsb.toFixed(1)+' — çok yorgun')+', Rahat Yürüyüş\'e indirildi';
+      } else {
+        kosuTpl={...tplFromYapiNotu('tempolu_yurume','Tempolu Yürüyüş · Sabit Tempo',band,sure,zones,disiplin,phase,simState.ctl||0,wkStats.recentLongRuns,athlete),
+          sure_dk:sure,_downgraded:true,_originalTip:'kolay'};
+        kosuUyari='ACWR '+acwr.toFixed(2)+' — yük yüksek, Tempolu Yürüyüş\'e indirildi';
+      }
     } else if(daysToIntermediate!==null&&daysToIntermediate<=2){
       kosuTpl=tplAcici(25,phase);
     } else if(daysToIntermediate!==null&&daysToIntermediate<=7){
