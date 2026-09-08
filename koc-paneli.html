@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.08-1427 --><!DOCTYPE html>
+<!-- Version: v2026.09.08-1448 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.08-1427';
+const APP_VERSION='v2026.09.08-1448';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -23892,6 +23892,104 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
     );
   };
 
+  // ── Pace Bölge Cetveli (2026.09.08 — Göksel'in isteği: "hemen altında bir cetvel
+  // daha, kalibrasyon uygulamalarından sonra oluşan sınır değerlerini göstersin") ──
+  // Yukarıdaki Bölge Renk Haritası nabız (%LTHR) tarafını gösteriyordu; bu ikincisi
+  // aynı görsel dili PACE (%vLT) tarafına taşıyor. ÖNEMLİ kavramsal fark: pace
+  // bölgelerinin ORANLARI (PACE_ZONES_VLT) hiçbir zaman kişiselleştirilmez/kaymaz —
+  // yalnızca TEK bir çapa (vLT) değişir ve tüm sınırların karşılık geldiği pace
+  // DEĞERİ birlikte kayar (bkz. calcZones — her pace zonu vlt*sabit_oran). Bu yüzden
+  // burada "jenerik taban" çizgisi yok (pozisyonlar hiç kaymıyor); bunun yerine her
+  // sınırda GÜNCEL pace değeri (altta) ve — Reçete Geri Bildirim Kalibrasyonu'nda
+  // bekleyen bir öneri varsa — o öneri uygulanınca oluşacak OLASI pace değeri
+  // (üstte, applyFbCalib ile BİREBİR AYNI gradualVltUpdate hesabı) gösterilir.
+  const renderPaceRuler=()=>{
+    if(!hasPace) return null;
+    const vltCur=zones.vlt;
+    const W=1480,H=180,padLeft=15,padRight=15,padTop=58,bandH=60,padBottom=62;
+    const plotW=W-padLeft-padRight;
+    const rangeLo=PACE_ZONES_VLT[0].lo*100;                          // 60
+    const rangeHi=PACE_ZONES_VLT[PACE_ZONES_VLT.length-1].hi*100;    // 115
+    const xFor=pct=>padLeft+((pct-rangeLo)/(rangeHi-rangeLo))*plotW;
+    const halo={paintOrder:'stroke',stroke:'rgba(0,0,0,.55)',strokeWidth:3,strokeLinejoin:'round'};
+    const nonScale={vectorEffect:'non-scaling-stroke'};
+    const FS=8;
+    // Pace zonlarının kendi 'label'ı yok (yalnızca id/lo/hi) — aynı Z-kimlikleri
+    // paylaştığı HR_ZONES_LTHR'den kısa adı ödünç alıyoruz (tek kaynak, çift yazım yok).
+    const shortNameById=Object.fromEntries(HR_ZONES_LTHR.map(z=>[z.id,(z.label||'').replace(z.id+' — ','')]));
+
+    // Bekleyen (henüz uygulanmamış) Çıpa/vLT önerisi varsa, applyFbCalib'teki AYNI
+    // formülle olası yeni vLT'yi hesapla.
+    const pendingVlt=(()=>{
+      if(!fbAnalysis?.vltAction||fbApplied||!athlete.vlt) return null;
+      const grad=gradualVltUpdate(athlete.vlt,
+        fbAnalysis.vltAction==='up'
+          ? String(round2(parseSayi(athlete.vlt)*1.015))
+          : String(round2(parseSayi(athlete.vlt)*0.985)),
+        fbAnalysis.vlt?.confidence ?? 0.5
+      );
+      return grad?grad.newVlt:null;
+    })();
+    const pendingDir=fbAnalysis?.vltAction;
+    const dirColor=pendingDir==='up'?'#60a5fa':'#f97316';
+
+    const bandEls=[];
+    zones.paceZones.forEach((z,i)=>{
+      const xL=xFor(z.lo*100), xR=xFor(z.hi*100);
+      const w=Math.max(0,xR-xL);
+      const cx=(xL+xR)/2, cy=padTop+bandH/2;
+      bandEls.push(React.createElement('rect',{
+        key:'pband'+i,x:xL,y:padTop,width:w,height:bandH,fill:ZONE_COLORS[z.id]||'#888'
+      }));
+      if(i>0) bandEls.push(React.createElement('line',{
+        key:'psep'+i,x1:xL,x2:xL,y1:padTop,y2:padTop+bandH,stroke:'rgba(0,0,0,.35)',strokeWidth:1,...nonScale
+      }));
+      const widthPct=round1((z.hi-z.lo)*100);
+      bandEls.push(React.createElement('text',{key:'pnm'+i,x:cx,y:cy,textAnchor:'middle',dominantBaseline:'middle',fontSize:FS,fontWeight:800,fill:'#fff',...halo},(shortNameById[z.id]||z.id)+' · %'+widthPct));
+    });
+
+    // 8 sınır noktası: 6 iç (bölgeler arası paylaşılan) + 2 sabit dış (Z1 altı=%60, Z5c üstü=%115).
+    // Pace tarafında hiçbiri "kişiselleştirilmiş" değildir — hepsi aynı muameleyi görür.
+    const boundaryPcts=[rangeLo,...zones.paceZones.slice(0,-1).map(z=>z.hi*100),rangeHi];
+    const boundaryEls=[];
+    boundaryPcts.forEach((pct,bi)=>{
+      const x=xFor(pct);
+      const curPace=fmtPaceFromMS(vltCur*(pct/100));
+      const isEdge=bi===0||bi===boundaryPcts.length-1;
+      const lblDx=bi===boundaryPcts.length-1?-4:4;
+      boundaryEls.push(React.createElement('line',{
+        key:'pcur'+bi,x1:x,x2:x,y1:padTop,y2:padTop+bandH,stroke:'#fff',strokeWidth:1.5,opacity:0.9,...nonScale
+      }));
+      boundaryEls.push(React.createElement('text',{
+        key:'pcurlbl'+bi,x:x+lblDx,y:padTop+bandH+8,fontSize:FS,fontFamily:'monospace',fill:'var(--text-secondary)',
+        textAnchor:'start',transform:'rotate(90 '+(x+lblDx)+' '+(padTop+bandH+8)+')'
+      },curPace));
+      if(pendingVlt){
+        const potPace=fmtPaceFromMS(pendingVlt*(pct/100));
+        boundaryEls.push(React.createElement('text',{
+          key:'ppotlbl'+bi,x:x+lblDx,y:padTop-6,fontSize:FS,fontFamily:'monospace',fontWeight:700,fill:dirColor,
+          textAnchor:'start',transform:'rotate(-90 '+(x+lblDx)+' '+(padTop-6)+')'
+        },(pendingDir==='up'?'⬆':'⬇')+potPace));
+      }
+    });
+
+    return React.createElement('div',{style:{marginTop:16}},
+      React.createElement('div',{style:{fontSize:11,fontWeight:600,color:'var(--text-secondary)',marginBottom:6}},'Pace Bölge Cetveli'),
+      React.createElement('svg',{width:'100%',viewBox:'0 0 '+W+' '+H,style:{display:'block'}},
+        ...bandEls,
+        React.createElement('rect',{x:padLeft,y:padTop,width:plotW,height:bandH,fill:'none',stroke:'var(--border)',strokeWidth:1,...nonScale}),
+        ...boundaryEls
+      ),
+      React.createElement('div',{style:{display:'flex',gap:16,flexWrap:'wrap',fontSize:10,color:'var(--text-tertiary)',marginTop:6}},
+        React.createElement('span',null,'▬ güncel pace'),
+        pendingVlt&&React.createElement('span',{style:{color:'var(--info)'}},'┅ olası yeni pace (bekliyor)')
+      ),
+      React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',marginTop:6,lineHeight:1.5}},
+        'Pace bölgeleri %vLT bazlı (Friel/Coggan model) — Z1 %60–75\'ten Z5c %105–115\'e, oranlar SABİTTİR ve kişiselleştirilmez. Kayan tek şey vLT\'nin kendisi (Reçete Geri Bildirim Kalibrasyonu / Çıpa) — değiştiğinde her sınırın karşılık geldiği pace burada birlikte kayar.'
+      )
+    );
+  };
+
 
   return React.createElement('div',null,
 
@@ -24319,7 +24417,8 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
           )
         )
       ),
-      renderBoundaryRuler()
+      renderBoundaryRuler(),
+      renderPaceRuler()
     )
   );
 }
