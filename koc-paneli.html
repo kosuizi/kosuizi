@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.08-1015 --><!DOCTYPE html>
+<!-- Version: v2026.09.08-1032 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.08-1015';
+const APP_VERSION='v2026.09.08-1032';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -23752,6 +23752,95 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
     )
   );
 
+  // ── Nabız Sınır Cetveli (2026.09.08 — Göksel'in isteği) ─────────────────────
+  // "Antrenman Bölgeleri" tablosunun yanına, dikey bir SVG cetvel: her nabız
+  // bölgesinin GENİŞLİĞİNİ (65%LTHR–115%LTHR aralığında orantılı) ve 6 iç
+  // sınırın üç durumunu aynı anda gösterir:
+  //   ┄ jenerik taban (HR_BOUNDARY_BASE_PCT)      — yalnızca güncelden farklıysa çizilir
+  //   ▬ güncel/son uygulanan sınır (zones.hrZones) — bant renk geçişiyle zaten örtüşür,
+  //                                                   ayrıca beyaz çizgiyle vurgulanır
+  //   ┅ olası yeni sınır (bekleyen Sınır Kalibrasyonu önerisi, henüz uygulanmamış)
+  // Yalnızca %LTHR yöntemi için anlamlı (Sınır Kalibrasyonu mekanizması bu yöntemi
+  // hedefler) — %HRR (Karvonen) sporcularda gizlenir.
+  const renderBoundaryRuler=()=>{
+    if(!hasHR||zones.hrZones[0]?.method!=='%LTHR') return null;
+    const lthr=zones.lthr;
+    const W=176,H=440,padTop=12,padBottom=12,padLeft=8,padRight=54;
+    const plotH=H-padTop-padBottom;
+    const rangeLo=HR_ZONES_LTHR[0].lo*100;                         // 65
+    const rangeHi=HR_ZONES_LTHR[HR_ZONES_LTHR.length-1].hi*100;    // 115
+    const yFor=pct=>padTop+((pct-rangeLo)/(rangeHi-rangeLo))*plotH;
+
+    // Bekleyen (henüz uygulanmamış) Sınır Kalibrasyonu önerisi varsa "olası" değerleri hesapla.
+    const preview=(bcAnalysis&&!bcApplied)?applyBoundaryCalibration(athlete,bcAnalysis):null;
+
+    const bandEls=[];
+    zones.hrZones.forEach((z,i)=>{
+      const y1=yFor(z.hi*100), y2=yFor(z.lo*100);
+      const bandH=Math.max(0,y2-y1);
+      bandEls.push(React.createElement('rect',{
+        key:'band'+i,x:padLeft,y:y1,width:W-padLeft-padRight,height:bandH,
+        fill:ZONE_COLORS[z.id]||'#888',opacity:0.85
+      }));
+      if(bandH>=14){
+        bandEls.push(React.createElement('text',{
+          key:'lbl'+i,x:padLeft+(W-padLeft-padRight)/2,y:(y1+y2)/2,
+          textAnchor:'middle',dominantBaseline:'middle',fontSize:10,fontWeight:700,fill:'#fff'
+        },z.id+' · %'+round1((z.hi-z.lo)*100)));
+      }
+    });
+
+    const boundaryEls=[];
+    HR_BOUNDARY_KEYS.forEach((k,i)=>{
+      const genericPct=HR_BOUNDARY_BASE_PCT[k]*100;
+      const curPct=zones.hrZones[i].hi*100;
+      const curBpm=zones.hrZones[i].hi_bpm;
+      const yGeneric=yFor(genericPct), yCur=yFor(curPct);
+      const drifted=Math.round(genericPct*10)!==Math.round(curPct*10);
+      if(drifted){
+        boundaryEls.push(React.createElement('line',{
+          key:'gen'+k,x1:padLeft,x2:W-padRight,y1:yGeneric,y2:yGeneric,
+          stroke:'var(--text-tertiary)',strokeWidth:1,strokeDasharray:'2,2',opacity:0.6
+        }));
+      }
+      boundaryEls.push(React.createElement('line',{
+        key:'cur'+k,x1:padLeft,x2:W-padRight,y1:yCur,y2:yCur,stroke:'#fff',strokeWidth:1.5,opacity:0.9
+      }));
+      boundaryEls.push(React.createElement('text',{
+        key:'curlbl'+k,x:W-padRight+4,y:yCur,dominantBaseline:'middle',
+        fontSize:9,fontFamily:'monospace',fill:'var(--text-secondary)'
+      },curBpm+''));
+
+      const change=preview?.changeLog?.find(c=>c.key===k);
+      if(change){
+        const potPct=HR_BOUNDARY_BASE_PCT[k]*100+change.to;
+        const potBpm=Math.round(lthr*potPct/100);
+        const yPot=yFor(potPct);
+        const dirColor=change.dir==='up'?'#60a5fa':'#f97316';
+        boundaryEls.push(React.createElement('line',{
+          key:'pot'+k,x1:padLeft,x2:W-padRight,y1:yPot,y2:yPot,
+          stroke:dirColor,strokeWidth:1.5,strokeDasharray:'4,2'
+        }));
+        boundaryEls.push(React.createElement('text',{
+          key:'potlbl'+k,x:W-padRight+4,y:yPot,dominantBaseline:'middle',
+          fontSize:9,fontFamily:'monospace',fontWeight:700,fill:dirColor
+        },(change.dir==='up'?'⬆':'⬇')+potBpm));
+      }
+    });
+
+    return React.createElement('div',{style:{flex:'0 0 auto',display:'flex',flexDirection:'column',alignItems:'center',minWidth:W}},
+      React.createElement('div',{style:{fontSize:11,fontWeight:600,color:'var(--text-secondary)',marginBottom:6,textAlign:'center'}},'Nabız Sınır Cetveli'),
+      React.createElement('svg',{width:W,height:H,viewBox:'0 0 '+W+' '+H,style:{display:'block'}},
+        ...bandEls,...boundaryEls
+      ),
+      React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',marginTop:8,lineHeight:1.7,textAlign:'left',alignSelf:'stretch'}},
+        React.createElement('div',null,'┄ jenerik taban'),
+        React.createElement('div',null,'▬ güncel (son) sınır'),
+        preview&&React.createElement('div',{style:{color:'var(--info)'}},'┅ olası yeni sınır (bekliyor)')
+      )
+    );
+  };
+
 
   return React.createElement('div',null,
 
@@ -24166,18 +24255,21 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
         React.createElement('div',{className:'card-title',style:{margin:0}},'Antrenman Bölgeleri'),
         React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)'}},hasHR?('Yöntem: '+zones.hrZones[0].method):'')
       ),
-      React.createElement('div',{className:'table-wrap'},
-        React.createElement('table',{style:{width:'100%',borderCollapse:'collapse'}},
-          React.createElement('thead',null,React.createElement('tr',{style:{background:'var(--bg-secondary)'}},
-            React.createElement('th',{style:{padding:'8px 10px',fontSize:11,fontWeight:600,textAlign:'left',textTransform:'uppercase',letterSpacing:'.4px',color:'var(--text-secondary)'}},'Bölge'),
-            hasHR&&React.createElement('th',{style:{padding:'8px 10px',fontSize:11,fontWeight:600,textAlign:'center',textTransform:'uppercase',letterSpacing:'.4px',color:'var(--text-secondary)'}},'Nabız (bpm)'),
-            hasPace&&React.createElement('th',{style:{padding:'8px 10px',fontSize:11,fontWeight:600,textAlign:'center',textTransform:'uppercase',letterSpacing:'.4px',color:'var(--text-secondary)'}},'Pace Aralığı'),
-            hasPace&&React.createElement('th',{style:{padding:'8px 10px',fontSize:11,fontWeight:600,textAlign:'center',textTransform:'uppercase',letterSpacing:'.4px',color:'var(--text-secondary)'}},'Hedef Pace')
-          )),
-          React.createElement('tbody',null,
-            (zones.hrZones||PACE_ZONES_VLT.map((z,i)=>({...z,label:z.id,lo_bpm:null,hi_bpm:null}))).map((z,i)=>zoneRow(z,i,!!hasPace))
+      React.createElement('div',{style:{display:'flex',gap:20,flexWrap:'wrap',alignItems:'flex-start'}},
+        React.createElement('div',{className:'table-wrap',style:{flex:'1 1 320px'}},
+          React.createElement('table',{style:{width:'100%',borderCollapse:'collapse'}},
+            React.createElement('thead',null,React.createElement('tr',{style:{background:'var(--bg-secondary)'}},
+              React.createElement('th',{style:{padding:'8px 10px',fontSize:11,fontWeight:600,textAlign:'left',textTransform:'uppercase',letterSpacing:'.4px',color:'var(--text-secondary)'}},'Bölge'),
+              hasHR&&React.createElement('th',{style:{padding:'8px 10px',fontSize:11,fontWeight:600,textAlign:'center',textTransform:'uppercase',letterSpacing:'.4px',color:'var(--text-secondary)'}},'Nabız (bpm)'),
+              hasPace&&React.createElement('th',{style:{padding:'8px 10px',fontSize:11,fontWeight:600,textAlign:'center',textTransform:'uppercase',letterSpacing:'.4px',color:'var(--text-secondary)'}},'Pace Aralığı'),
+              hasPace&&React.createElement('th',{style:{padding:'8px 10px',fontSize:11,fontWeight:600,textAlign:'center',textTransform:'uppercase',letterSpacing:'.4px',color:'var(--text-secondary)'}},'Hedef Pace')
+            )),
+            React.createElement('tbody',null,
+              (zones.hrZones||PACE_ZONES_VLT.map((z,i)=>({...z,label:z.id,lo_bpm:null,hi_bpm:null}))).map((z,i)=>zoneRow(z,i,!!hasPace))
+            )
           )
-        )
+        ),
+        renderBoundaryRuler()
       )
     ),
 
