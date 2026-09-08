@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.09-0050 --><!DOCTYPE html>
+<!-- Version: v2026.09.09-0102 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.09-0050';
+const APP_VERSION='v2026.09.09-0102';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -14818,10 +14818,27 @@ function effectiveDisiplin(athlete, primaryRace){
 // (back-to-back günler dahil) nedeniyle pay biraz daha yüksek tutulur.
 // Mevcut/gelecek hafta gün üretimindeki sabit %28 kuralının yerini alır —
 // tek kaynak burası, hem tablo gösterimi hem gerçek üretim aynı oranı kullanır.
-function uzunKosuPayOrani(phase, disiplin){
-  const tablo={'Temel':0.25,'Gelişme':0.28,'Zirve':0.32,'Taper':0.22,'Yarış Sonrası':0};
-  let pay=tablo[phase];
-  if(pay===undefined) pay=0.28;
+// Yarışsız (_isNoRace) sporcularda periyotlama fazı hiç ilerlemez — wt.phase
+// kalıcı olarak 'Temel' kalır (bkz. calcWeeklyTargetsNoRace), yani tablodaki
+// EN DÜŞÜK pay (0.25) sporcunun hacmi ne kadar artsa da sonsuza kadar sabit
+// kalırdı. noRaceCtx verildiğinde ({avg4km, artisOrani}) pay bunun yerine
+// HACİM KADEMESİNE (maxKaliteliNoRaceTiered ile aynı eşikler: <15/<25/≥25)
+// göre belirlenir, ardından ANTRENMAN AMACINA (artisOrani'nin 1.00'dan
+// sapması, UZUN_PAY_AMAC_DAMP ile yumuşatılarak) ince ayar yapılır — D+
+// düzeltmesindeki damp mantığıyla tutarlı. (09.09.2026 — Göksel onayı)
+const UZUN_PAY_AMAC_DAMP=0.15;
+function uzunKosuPayOrani(phase, disiplin, noRaceCtx=null){
+  let pay;
+  if(noRaceCtx){
+    const avg4km=noRaceCtx.avg4km||0;
+    const artisOrani=noRaceCtx.artisOrani??1.0;
+    const tierBase=avg4km<15?0.25:avg4km<25?0.28:0.30;
+    pay=tierBase+(artisOrani-1)*UZUN_PAY_AMAC_DAMP;
+  } else {
+    const tablo={'Temel':0.25,'Gelişme':0.28,'Zirve':0.32,'Taper':0.22,'Yarış Sonrası':0};
+    pay=tablo[phase];
+    if(pay===undefined) pay=0.28;
+  }
   if(disiplin==='ultra') pay+=0.04;
   else if(disiplin==='patika'||disiplin==='karma') pay+=0.02;
   return pay;
@@ -14962,8 +14979,8 @@ function computeRampProjection(weekTargets, rampModeOn, rampRatePct){
   return proj;
 }
 
-function estimateUzunKosuHedefi(targetKm, targetDp, phase, disiplin, zones, band, raceKm=0){
-  const pay=uzunKosuPayOrani(phase, disiplin);
+function estimateUzunKosuHedefi(targetKm, targetDp, phase, disiplin, zones, band, raceKm=0, noRaceCtx=null){
+  const pay=uzunKosuPayOrani(phase, disiplin, noRaceCtx);
   let km=round1((targetKm||0)*pay);
   const effBand=band||proxyBandFromWeeklyKm(targetKm||0);
   const bandCapKm=uzunKosuBandMaxKm(effBand, disiplin, zones, raceKm);
@@ -18143,7 +18160,7 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       const _uzunDisiplin=effectiveDisiplin(athlete,primary);
       const _uzunZonesCap=calcZones(athlete);
       const _uzunBandCap=uzunKosuBandMaxKm(band,_uzunDisiplin,_uzunZonesCap,primary?.mesafe);
-      let uzunGunKm=uzunKalanSayi>0?round1(kalanTargetKm*uzunKosuPayOrani(fazPhase,_uzunDisiplin)):0;
+      let uzunGunKm=uzunKalanSayi>0?round1(kalanTargetKm*uzunKosuPayOrani(fazPhase,_uzunDisiplin,wt?._isNoRace?{avg4km:wt._avg4km,artisOrani:wt._artisOrani}:null)):0;
       if(_uzunBandCap>0&&uzunGunKm>_uzunBandCap) uzunGunKm=_uzunBandCap;
       // Kolay/aerobik günlere kalan km'yi eşit dağıt
       const kolayKalanToplam=Math.max(0,kalanTargetKm-uzunGunKm-tahminiKaliteliKm);
@@ -21942,7 +21959,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                 :(_frozenNextDecision?.currentRampRatePct??_decCurrentRatePct);
               const _uzunHedefRaw=wt.isRaceWeek||wt.phase==='Yarış Sonrası'
                 ?null
-                :estimateUzunKosuHedefi(_dispKmForUzun,_dispDpForUzun,wt.phase,_uzunDisiplin,_uzunZones,wt.isCurrent?_uzunRealBand:null,plan.primary?.mesafe);
+                :estimateUzunKosuHedefi(_dispKmForUzun,_dispDpForUzun,wt.phase,_uzunDisiplin,_uzunZones,wt.isCurrent?_uzunRealBand:null,plan.primary?.mesafe,wt?._isNoRace?{avg4km:wt._avg4km,artisOrani:wt._artisOrani}:null);
               // TABAN (13.07.2026 sohbeti — Göksel'in önerisi): revize/rampa mekanizması
               // haftanın uzunu hedefini, BİR ÖNCEKİ haftada zaten koşulmuş en uzun tekil
               // mesafenin ALTINA düşürmemeli — o mesafe fiziksel olarak zaten kanıtlanmış,
@@ -21977,7 +21994,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               // uzun koşu için de farkı göstermek için kullanılır.
               const _uzunHedefOrijinal=wt.isRaceWeek||wt.phase==='Yarış Sonrası'
                 ?null
-                :estimateUzunKosuHedefi(wt.targetKm,wt.targetDp,wt.phase,_uzunDisiplin,_uzunZones,null,plan.primary?.mesafe);
+                :estimateUzunKosuHedefi(wt.targetKm,wt.targetDp,wt.phase,_uzunDisiplin,_uzunZones,null,plan.primary?.mesafe,wt?._isNoRace?{avg4km:wt._avg4km,artisOrani:wt._artisOrani}:null);
 
               const diffKm=round1(act.km-wt.targetKm);
               const diffDp=Math.round(act.dp-wt.targetDp);
@@ -22500,7 +22517,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                 const _p1=round1((displayCurWeekEff.effKm||0)*(1+rampRatePct/100));
                 if(_p1>0&&_p1<weekOrigKm*0.99)_dKm=_p1;
               }
-              const _uzunHedefHaftaRaw=estimateUzunKosuHedefi(_dKm,_dDp,week.wt.phase,effectiveDisiplin(athlete,plan.primary),_uzunZonesHafta,_uzunBandHafta,plan.primary?.mesafe);
+              const _uzunHedefHaftaRaw=estimateUzunKosuHedefi(_dKm,_dDp,week.wt.phase,effectiveDisiplin(athlete,plan.primary),_uzunZonesHafta,_uzunBandHafta,plan.primary?.mesafe,week.wt?._isNoRace?{avg4km:week.wt._avg4km,artisOrani:week.wt._artisOrani}:null);
               // TABAN (13.07.2026 sohbeti — Göksel'in önerisi): ana tablodaki (HaftalikPlanTab
               // satırları) ile AYNI mantık — bkz. tablodaki "TABAN" notu. Bu kart AYRI bir kod
               // yolu olduğu için (farklı değişken adları, aynı weekTargets kaynağı) taban orada
@@ -22527,7 +22544,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     flooredByPrevWeek:true
                   }
                 :_uzunHedefHaftaRaw;
-              const _uzunHedefHaftaOrijinal=estimateUzunKosuHedefi(weekOrigKm,weekOrigDp,week.wt.phase,effectiveDisiplin(athlete,plan.primary),_uzunZonesHafta,null,plan.primary?.mesafe);
+              const _uzunHedefHaftaOrijinal=estimateUzunKosuHedefi(weekOrigKm,weekOrigDp,week.wt.phase,effectiveDisiplin(athlete,plan.primary),_uzunZonesHafta,null,plan.primary?.mesafe,week.wt?._isNoRace?{avg4km:week.wt._avg4km,artisOrani:week.wt._artisOrani}:null);
               const _haftalikDegisti=_uzunHedefHaftaOrijinal.km!==_uzunHedefHafta.km;
               const _haftalikDpDegisti=_uzunHedefHaftaOrijinal.dp>0&&_uzunHedefHaftaOrijinal.dp!==_uzunHedefHafta.dp;
               return _uzunHedefHafta.km>0&&React.createElement('span',{
