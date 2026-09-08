@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.08-2352 --><!DOCTYPE html>
+<!-- Version: v2026.09.09-0050 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.08-2352';
+const APP_VERSION='v2026.09.09-0050';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -14567,10 +14567,20 @@ function calcWeeklyTargetsNoRace(athlete, workouts, history=[]){
   }
 
   // Son 4 hafta ortalaması (cari hafta hariç, hafta -1 ile -4)
+  // DÜZELTME (09.09.2026 — Göksel): 0 km'lik (antrenman yapılmamış) haftalar
+  // ortalamayı /4 sabit bölenle yapay olarak aşağı çekiyordu → düzensiz
+  // antrenman eden yarışsız sporcularda hedef, tek bir antrenmanla trivial
+  // şekilde geçilebilecek kadar düşük çıkıyordu. Artık ortalama SADECE
+  // antrenman yapılan (km>0) haftalar üzerinden alınır — km ve D+ için AYNI
+  // hafta seti kullanılır (D+=0 ama km>0 olan düz parkur haftası veriden
+  // ATILMAZ, sadece gerçekten boş/dinlenme haftası atılır).
   const last4=weeklyData.slice(1,5); // -4,-3,-2,-1 offset
-  const avg4km=round1(last4.reduce((s,w)=>s+w.km,0)/4);
-  const lastWeekKm=last4[3]?.km??0; // en yakın geçmiş hafta (-1)
+  const last4Active=last4.filter(w=>w.km>0);
+  const avg4km=round1(last4Active.length?last4Active.reduce((s,w)=>s+w.km,0)/last4Active.length:0);
+  const avg4dp=last4Active.length?Math.round(last4Active.reduce((s,w)=>s+w.dp,0)/last4Active.length):0;
+  const lastWeekKm=last4[3]?.km??0; // en yakın geçmiş hafta (-1) — sıfır cezası kasıtlı olarak ham (filtresiz) veriye bakar
   const peak6=Math.max(...weeklyData.map(w=>w.km),0);
+  const peak6dp=Math.max(...weeklyData.map(w=>w.dp),0);
 
   // Amaca göre artış oranı (10% rule — Daniels/Pfitzinger)
   const amaci=athlete.antrenman_amaci||'hacim_koru';
@@ -14607,6 +14617,24 @@ function calcWeeklyTargetsNoRace(athlete, workouts, history=[]){
 
   // Alt sınır: koşu geçmişi varsa en az 2km (sistem sıfır önermez)
   if(peak6>0&&targetKm<2) targetKm=2;
+
+  // Hedef D+ (09.09.2026 — Göksel onayı): önceden SABİT 0 idi — bu, D+'ı
+  // gerçek bir hedef değil boş bir alan yapıyordu. Artık km ile AYNI mantık
+  // (aktif haftaların D+ ortalaması × artış oranı) kullanılır, ancak artış
+  // oranının 1.00'dan sapması DP_ARTIS_DAMP ile yumuşatılır: D+ artışı,
+  // özellikle inişte, düz mesafeden orantısız daha fazla eksantrik/kas-iskelet
+  // yükü bindirir; yarışsız ve gözetimsiz sporcularda bunu km ile aynı hızda
+  // ilerletmek gereksiz risk taşır. Alt sınır YOK — düz parkurda koşan bir
+  // sporcuya yapay bir D+ hedefi dayatılmaz, gerçek ortalaması 0 ise hedef de 0 kalır.
+  const DP_ARTIS_DAMP=0.40;
+  const dpArtisOrani=1+(artisOrani-1)*DP_ARTIS_DAMP;
+  let targetDp=Math.round(avg4dp*dpArtisOrani);
+
+  // Emniyet kilidi: km'dekiyle aynı mantık — son 6 haftanın D+ zirvesinin %110'unu geçme
+  if(peak6dp>0){
+    const safeCapDp=Math.round(peak6dp*1.10);
+    if(targetDp>safeCapDp) targetDp=safeCapDp;
+  }
 
   // Cari hafta gerçekleşen
   const cariHafta=weeklyData.find(w=>w.isCurrent);
@@ -14661,13 +14689,14 @@ function calcWeeklyTargetsNoRace(athlete, workouts, history=[]){
     return{
       weekIdx:offset+2,weekStart:ws,weekEnd:we,
       phase:'Temel',isRecovery:false,isRaceWeek:false,
-      targetKm,targetDp:0,daysToRace:null,
+      targetKm,targetDp,daysToRace:null,
       isPast:we<today,isCurrent:isCurr,
       actualKm:actKm,actualDp:actDp,kmRatio:kRatio,
       weekStatus:'normal',
-      _kmPct:artisOrani,_baseKm:avg4km,_baseDp:0,
+      _kmPct:artisOrani,_baseKm:avg4km,_baseDp:avg4dp,
       _isNoRace:true,
       _avg4km:avg4km,_lastWeekKm:lastWeekKm,_peak6km:peak6,
+      _avg4dp:avg4dp,_peak6dp:peak6dp,_dpArtisOrani:round2(dpArtisOrani),
       _artisOrani:artisOrani,_acwr:round2(currentAcwr),
       _noRaceMaxGunlukKm:noRaceMaxGunlukKm,
       _maxKaliteli:maxKaliteliNoRaceTiered,
