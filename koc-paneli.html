@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.07-2256 --><!DOCTYPE html>
+<!-- Version: v2026.09.08-1015 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.07-2256';
+const APP_VERSION='v2026.09.08-1015';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -2317,7 +2317,21 @@ const FAST_TRIGGER_SCORE=8; // tek günlük hızlı tetik eşiği (≥1 gün VE 
 // analyzeRecipeFeedbackSignals içinde closure'dı). Artık HEM Çıpa (vLT) HEM Sınır
 // kalibrasyonu bu AYNI iki fonksiyonu (toVltDir + dayAggregateSignal) kullanıyor —
 // tek kaynak, iki farklı gruplama (tümü-birleşik vs. zon-bazlı) ve eşik seçeneği.
-function toVltDir(paceDir,hrDir,paceOk,zi=0){
+// relaxChannelB (2026.09.08 — Göksel'in kararı): Kanal B'nin Z3+ kısıtını
+// isteğe bağlı olarak kaldırır. Sınır Kalibrasyonu ÇAĞRISI bunu true geçer —
+// zon fark etmeksizin (Z1/Z2 dahil) "pace hedefte, nabız sapıyor" sinyali
+// üretilsin isteniyor. Çıpa (vLT — Reçete Geri Bildirim Kalibrasyonu) ÇAĞRISI
+// bu parametreyi GEÇMİYOR (varsayılan false) — gerekçe: vLT TEK bir skaler
+// değer ve TÜM pace zonları (Z1'den en üste kadar) bu değerin çarpanı olarak
+// hesaplanıyor (bkz. calcZones). Z1/Z2 kaynaklı gürültülü bir sinyal (cardiac
+// drift, aerobik taban/eşik karışması) bu tek çapayı kaydırırsa Z4/Z5 gibi
+// o veriyle hiç ilgisi olmayan zonlar da kayar — bu yüzden vLT'yi besleyen
+// Kanal B, Z3+ ile (eşiğe yakın, daha güvenilir) sınırlı tutuluyor. Sınır
+// Kalibrasyonu'nda ise her sınır KENDİ bağımsız delta'sını taşıyor (bkz.
+// analyzeBoundarySignals — sınır başına ayrı sonuç), yani Z1/Z2 sinyali
+// yalnızca Z1/Z2'nin kendi sınırını etkiliyor, başka zona sızmıyor — bu
+// yüzden orada Z3+ kısıtına gerek yok.
+function toVltDir(paceDir,hrDir,paceOk,zi=0,relaxChannelB=false){
   // A) Çapraz doğrulama — iki bağımsız kanıt (tüm zonlar geçerli)
   if(paceDir&&hrDir){
     if(paceDir==='fast'&&hrDir!=='high') return 'up';
@@ -2330,16 +2344,14 @@ function toVltDir(paceDir,hrDir,paceOk,zi=0){
     }
     return null; // diğer çakışmalar (slow+high Z3+, slow+low Z3+ vb.) belirsiz → filtrele
   }
-  // B) Pace hedefte, nabız sapıyor — YALNIZCA Z3+ (zi≥2)
-  // Z1–Z2 kolay koşu nabzı vLT için tek başına güvenilmez: aerobik taban ≠ eşik kapasitesi.
+  // B) Pace hedefte, nabız sapıyor.
+  // Varsayılan (relaxChannelB=false): YALNIZCA Z3+ (zi≥2) — Z1–Z2 kolay koşu
+  // nabzı vLT için tek başına güvenilmez: aerobik taban ≠ eşik kapasitesi.
   // Aerobik bazı iyi ama eşiği zayıf sporcu Z2'yi düşük nabızla rahat koşabilir
   // → yanlış 'up' sinyali üretir. Z3 (Tempo) ve üstü zone'lar bu kanalı besleyebilir.
-  // NOT (Sınır Kalibrasyonu kapsam kararı): bu Z3+ kısıtı Z1/Z2 SINIRLARI için de
-  // aynen korunuyor — Z1/Z2'nin kendi payına düşen Kanal B sinyali şu an üretilmiyor.
-  // Bilinçli bir temkinlilik tercihi: aynı fizyolojik gerekçe (kolay-bölge nabzının
-  // tek başına güvenilmezliği) sınır kalibrasyonu için de geçerli sayıldı. İleride
-  // Z1/Z2'ye özel ayrı bir kanal istenirse burası gözden geçirilebilir.
-  if(zi>=2&&paceOk&&hrDir&&!paceDir){
+  // relaxChannelB=true iken bu Z3+ kısıtı kaldırılır — pace hedefteyken nabız
+  // sapan HER faz (zon fark etmeksizin) sinyal üretir.
+  if((relaxChannelB||zi>=2)&&paceOk&&hrDir&&!paceDir){
     if(hrDir==='high') return 'down'; // doğru pace'e gereğinden fazla efor → eşik sanılandan yavaş
     if(hrDir==='low')  return 'up';   // doğru pace'i kolayca sürdürüyor → eşik sanılandan hızlı
   }
@@ -2428,9 +2440,12 @@ function analyzeRecipeFeedbackSignals(signals){
 // Pencere/eşik Çıpa'dan (Reçete Geri Bildirim Kalibrasyonu) KASITLI olarak daha
 // sıkı: bölge başına veri yoğunluğu çok daha düşük (özellikle Z5 grubunda), bu
 // yüzden en az HR_BOUNDARY_MIN_DAYS (3) farklı gün şartı aranır.
+// relaxChannelB=true (2026.09.08): her sınır kendi bağımsız delta'sını taşıdığı
+// için (Çıpa'daki tek-skaler-vlt cascade riski burada yok) Kanal B'nin Z3+
+// kısıtı burada aranmıyor — Z1/Z2 sınırları da kendi Kanal B sinyalini alabilir.
 function analyzeBoundarySignals(signals){
   if(!signals||signals.length===0) return null;
-  const withDir=signals.map(s=>({...s,_dir:toVltDir(s.paceDir,s.hrDir,s.paceOk,s.zi??0)})).filter(s=>s._dir);
+  const withDir=signals.map(s=>({...s,_dir:toVltDir(s.paceDir,s.hrDir,s.paceOk,s.zi??0,true)})).filter(s=>s._dir);
   const result={};
   HR_BOUNDARY_KEYS.forEach(k=>{
     const [loZi,hiZi]=HR_BOUNDARY_ZONE_PAIRS[k];
