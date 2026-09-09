@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.09-1730 --><!DOCTYPE html>
+<!-- Version: v2026.09.09-1740 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.09-1730';
+const APP_VERSION='v2026.09.09-1740';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -7218,6 +7218,19 @@ function getWeekKeyForDate(dateStr){
 }
 // Türkiye 22:00 = UTC 19:00 — bugünkü dondurma zamanı
 function turkey22Today(){ const s=localDateStr(new Date()); return new Date(s+'T19:00:00Z'); } // yerel tarihin 22:00 TR'si (UTC+3 → T19:00Z)
+
+// Bir antrenmanın gerçekleştirilme anını (tarih+saat) epoch ms olarak döndürür.
+// Sadece w.date'e göre sıralama, aynı güne ait birden fazla antrenmanı Firebase
+// ekleme sırasına göre karışık gösteriyordu (bkz. calcMergedRecovery yorumu,
+// ~satır 602). w.time varsa (GPX/manuel giriş) kullanılır; yoksa gün ortası
+// (12:00) baz alınır — eksik/bozuk tarih için 0 döner (liste sonuna düşer,
+// sıralama çökmez). Geçmiş/Koşu İzlerim listelerinde "en günceli en üstte"
+// için b-a şeklinde kullanılmalı.
+function workoutDateTimeMs(w){
+  if(!w||!w.date) return 0;
+  const ms=new Date(w.date+'T'+(w.time||'12:00')+':00').getTime();
+  return Number.isFinite(ms)?ms:0;
+}
 
 function weekLabel(offset){
   if(offset===0)return'Bu Hafta';
@@ -30388,7 +30401,8 @@ function Gecmis({workouts,athletes,races,onDelete,onBulkDelete,onUpdate}){
     setSnapLoading(s=>({...s,[cacheKey]:false}));
   };
   const athMap=Object.fromEntries(athletes.map(a=>[a.id,a]));
-  const sorted=[...workouts].sort((a,b)=>new Date(b.date)-new Date(a.date));
+  // Tarih+saate göre (sadece tarihe göre değil) en günceli en üstte sırala.
+  const sorted=[...workouts].sort((a,b)=>workoutDateTimeMs(b)-workoutDateTimeMs(a));
   const orphanIds=workouts.filter(w=>!athMap[w.athleteId]).map(w=>w.id);
   // Hafta seçenekleri — antrenmanlardan benzersiz Pazartesi tarihlerini çıkar
   const _AYLAR_W=['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'];
@@ -34552,7 +34566,8 @@ function SporcuPlanView(){
         // Sadece koşu antrenmanları
         const kosuWorkouts=workouts.filter(w=>!w.spor||w.spor==='kosu');
         if(!kosuWorkouts.length) return null;
-        const sortedAll=[...kosuWorkouts].sort((a,b)=>new Date(b.date)-new Date(a.date));
+        // Panel paritesi: Koç Panelindeki Geçmiş listesiyle aynı tarih+saat sıralaması.
+        const sortedAll=[...kosuWorkouts].sort((a,b)=>workoutDateTimeMs(b)-workoutDateTimeMs(a));
         const weekOptsH=[...new Set(sortedAll.map(w=>getWeekKeyForDate(w.date)))].sort((a,b)=>b.localeCompare(a));
         // Mevcut koşu antrenmanlarından kullanılan türleri çıkar
         const usedTurler=ANTRENMAN_TURLERI.filter(t=>t.v&&(t.spor==='kosu'||t.v==='yaris')&&sortedAll.some(w=>w.tur===t.v));
