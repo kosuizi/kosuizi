@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.09-0918 --><!DOCTYPE html>
+<!-- Version: v2026.09.09-0945 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.09-0918';
+const APP_VERSION='v2026.09.09-0945';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -17696,6 +17696,16 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
     // seviyesine (S1) düşülür — fizyolojik amaç korunur; S1 bile bütçeye
     // sığmıyorsa (yalnızca bu durumda) Aerobik Koşu'ya geçilir. ±%20 tolerans
     // (WEEKLY_VOL_TOL_HIGH) haftalık hacim toleransıyla aynı ilkeyi kullanır.
+    // KÖK NEDEN DÜZELTMESİ (09.09.2026 — Göksel onayı, Çağatay Yılmaz örneği):
+    // bütçe km→dakika'ya `tahminiPace` (band bazlı, KOLAY tempo tahmini, ör.
+    // band≤1→7.5dk/km) ile çevriliyordu — ama kaliteli tipler Z3/Z4/Z5'te,
+    // sporcunun GERÇEK (çok daha hızlı) bölge temposuyla koşuluyor. Sonuç:
+    // "S1, 57dk" gibi dakika bazında bütçeye sığan bir sonuç, gerçekte (hızlı
+    // tempo yüzünden) bütçenin çok üzerinde mesafeye denk geliyordu (57dk →
+    // ~10km, bütçe ~6.3km). Artık karşılaştırma dakika değil GERÇEK MESAFE
+    // (gunOneriMesafeKm — sporcunun kendi zone temposuyla hesaplar) üzerinden
+    // yapılıyor; ilk S1 denemesi hâlâ bütçeyi aşarsa, ölçülen gerçek mesafe
+    // hatasına göre ipucu TEK SEFER yeniden ölçeklenip tekrar üretiliyor.
     if(kosuTpl&&S_SEVIYELI_TIPLER.includes(kosuTpl.tip)){
       // Yarışsız düşük hacim sporcularında (_noRaceMaxGunlukKm) zaten DAHA SIKI,
       // onaylanmış bir günlük bütçe var — çakışan/gevşek bir ikinci bütçeyle
@@ -17705,11 +17715,16 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
       // (AYNI bütçeyle) düzgün şekilde kapatır.
       const _kaliteliBudgetKm=_noRaceMaxGunlukKm>0?_noRaceMaxGunlukKm:(wkStats.kaliteliGunKm||0);
       if(_kaliteliBudgetKm>0){
-        const _kaliteliMaxSureDk=Math.max(20,Math.round(_kaliteliBudgetKm*tahminiPace*WEEKLY_VOL_TOL_HIGH));
-        const _gercekSureDk=toplamSureDkFromYapilar(kosuTpl.yapilar)||kosuTpl.sure_dk||0;
-        if(_gercekSureDk>_kaliteliMaxSureDk){
+        const _kaliteliMaxKm=_kaliteliBudgetKm*WEEKLY_VOL_TOL_HIGH;
+        const _tplKm=(tpl)=>{
+          try{
+            return tpl?gunOneriMesafeKm({tip:tpl.tip,yapilar:tpl.yapilar,yapi_notu:tpl.yapi_notu,sure_dk:tpl.sure_dk,date:'2000-01-01'},zones,[],disiplin,{}):0;
+          }catch(e){return 0;}
+        };
+        const _gercekKm=_tplKm(kosuTpl);
+        if(_gercekKm>_kaliteliMaxKm){
           const _origTip=kosuTpl.tip;
-          const _s1Hint=Math.max(20,Math.round(_kaliteliBudgetKm*tahminiPace));
+          let _s1Hint=Math.max(20,Math.round(_kaliteliBudgetKm*tahminiPace));
           const _athWorkoutsPlan=wkStats.athWorkouts||[];
           // Aynı tipi S1'de (en küçük seviye) yeniden üret — bkz. _PLANDAY_FORCE_MIN_SEVIYE
           const _minSeviyeTpl=(tip,sureDkHint)=>{
@@ -17732,11 +17747,22 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
             _PLANDAY_FORCE_MIN_SEVIYE=false;
             return t;
           };
-          const _s1Tpl=_minSeviyeTpl(_origTip,_s1Hint);
+          let _s1Tpl=_minSeviyeTpl(_origTip,_s1Hint);
+          let _s1Km=_tplKm(_s1Tpl);
+          // Tek düzeltme turu: dakika→km çevirisi yanlış tempo tahminiyle sapmışsa,
+          // ÖLÇÜLEN gerçek km hatasına göre ipucunu yeniden ölçekle ve tekrar üret.
+          if(_s1Tpl&&_s1Km>_kaliteliMaxKm&&_s1Km>0){
+            const _duzeltilmisHint=Math.max(20,Math.round(_s1Hint*(_kaliteliMaxKm/_s1Km)));
+            if(_duzeltilmisHint<_s1Hint){
+              const _s1Tpl2=_minSeviyeTpl(_origTip,_duzeltilmisHint);
+              const _s1Km2=_tplKm(_s1Tpl2);
+              if(_s1Tpl2&&_s1Km2>0){_s1Tpl=_s1Tpl2;_s1Km=_s1Km2;_s1Hint=_duzeltilmisHint;}
+            }
+          }
           const _s1Sure=_s1Tpl?(toplamSureDkFromYapilar(_s1Tpl.yapilar)||_s1Tpl.sure_dk||0):0;
-          if(_s1Tpl&&_s1Sure>0&&_s1Sure<=_kaliteliMaxSureDk){
+          if(_s1Tpl&&_s1Km>0&&_s1Km<=_kaliteliMaxKm){
             kosuTpl={..._s1Tpl,sure_dk:_s1Sure,_rightSized:true,_originalTip:_origTip};
-            kosuUyari=(TUR_LABELS[_origTip]||_origTip)+' — hacim bütçesi dar (~'+Math.round(_kaliteliBudgetKm*10)/10+'km/gün), en küçük seviyeye (S1, '+_s1Sure+'dk) düşürüldü.';
+            kosuUyari=(TUR_LABELS[_origTip]||_origTip)+' — hacim bütçesi dar (~'+Math.round(_kaliteliBudgetKm*10)/10+'km/gün), en küçük seviyeye (S1, ~'+_s1Km+'km) düşürüldü.';
           } else {
             kosuTpl={...tplAerobik(band,_s1Hint,zones,disiplin),sure_dk:_s1Hint,_downgraded:true,_originalTip:_origTip};
             kosuUyari=(TUR_LABELS[_origTip]||_origTip)+' antrenmanı (hacim bütçesi dar, S1 bile sığmadı) yerine Aerobik Koşu seçildi.';
