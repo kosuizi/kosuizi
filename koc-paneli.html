@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.09-1020 --><!DOCTYPE html>
+<!-- Version: v2026.09.09-1529 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.09-1020';
+const APP_VERSION='v2026.09.09-1529';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -20435,10 +20435,10 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
 
   // planSnap'e weekEff yaz — Koşu İzlerim bu alanı okur, kendi hesap yapmaz
   // Dondurma kuralı:
-  //   effKm/effDp hafta boyunca sabit kalmalı — antrenman girişi, plan güncellemesi,
-  //   koşu günü değişimi hiçbir koşulda revize hedefi değiştirmemeli.
-  //   ANAHTAR: weekKey eşleşiyorsa → dondurulmuş, aşağı yönlü güncelleme yok
-  //   (yukarı yönlü istisna için aşağıdaki DÜZELTME 2'ye bkz).
+  //   effKm/effDp hafta boyunca MUTLAK SABİT kalmalı — antrenman girişi, plan
+  //   güncellemesi, koşu günü değişimi, rampa/backoff hiçbir koşulda revize
+  //   hedefi değiştirmemeli (ne yukarı ne aşağı).
+  //   ANAHTAR: weekKey eşleşiyorsa → dondurulmuş, HİÇBİR yönde güncelleme yok.
   //   weekKey farklıysa (yeni hafta) → ilk kez yaz ve dondur.
   //   (Eski origKm/origDp kontrolü: telafi/backoff nedeniyle targetKm hafta içi değişebilir
   //    ve dondurma kırılıyordu → weekKey tabanlı kontrol bu sorunu köklü çözer.)
@@ -20451,22 +20451,22 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
   // başında 45km, hafta sonunda 23.7km). Artık kilit YALNIZCA weekKey'e bakar — bir kere
   // yazıldıktan sonra o hafta için _v ne olursa olsun bir daha ASLA otomatik değişmez.
   // WEEK_EFF_VERSION alanı sadece bilgi/denetim amacıyla kaydedilmeye devam eder.
-  // DÜZELTME 2 (13.07.2026 sohbeti — Göksel'in "52.3 yerine 81.6" talebi):
-  // "kesinlikle güncelleme yok" kuralı, rampa tabanının (computeRampProjection)
-  // ZATEN dondurulmuş bir haftayı yükseltmesini de engelliyordu — H26 bu
-  // düzeltmeden ÖNCE dondurulmuşse, artık daha yüksek hesaplanan curWeekEffective
-  // hiç yazılmıyordu. Kilit artık YALNIZCA aşağı yönlü değişimi engelliyor:
-  // yeni hesap donmuş değerden KESİNLİKLE DAHA YÜKSEKSE üzerine yazılır (rampa
-  // tabanı veya geçmiş hafta verisi düzeltmesi gibi iyileştirici durumlar için),
-  // daha düşük veya eşitse hiç dokunulmaz — erime riski hâlâ sıfır.
+  // DÜZELTME 2 (13.07.2026 sohbeti, Göksel'in "52.3 yerine 81.6" talebi) — GERİ ALINDI
+  // (09.09.2026, Göksel onayı, Çağatay Yılmaz örneği): bu düzeltme, canlı hesap donmuş
+  // değerden yüksek çıktığında kilidi otomatik olarak yukarı kırıyordu (rampa tabanı gibi
+  // "iyileştirici" durumlar için). Ama bu, "hafta başında belirlenen hedef, Planı Güncelle
+  // dahil hiçbir şekilde hafta içinde değişmemeli" ilkesiyle çelişiyordu — sporcunun hacmi
+  // arttığında rozet, koç bir şey yapmadan kendiliğinden yükselebiliyordu. Artık kilit
+  // YÖNDEN BAĞIMSIZ: aynı weekKey için bir kez yazıldıktan sonra ne yukarı ne aşağı
+  // hiçbir otomatik güncelleme yapılmaz — sadece yeni bir hafta başladığında yeniden yazılır.
   React.useEffect(()=>{
     if(!curWeekEffective||!athlete||!weekKey)return;
     const snap=planSnapRef.current;
     if(!snap)return;
     const ex=snap.weekEff;
-    // Dondurma koşulu: aynı hafta VE yeni hesap daha yüksek DEĞİLSE dokunma.
-    if(ex&&ex._weekKey===weekKey&&curWeekEffective.effKm<=ex.effKm) return;
-    // İlk yazım, yeni hafta VEYA iyileştirici yukarı düzeltme → yaz/dondur
+    // Dondurma koşulu: aynı hafta ise YÖNDEN BAĞIMSIZ dokunma — yeni hafta değilse hiç yazma.
+    if(ex&&ex._weekKey===weekKey) return;
+    // İlk yazım (yeni hafta) → yaz/dondur
     const newWeekEff={...curWeekEffective,_v:WEEK_EFF_VERSION,_weekKey:weekKey};
     const updated={...snap,weekEff:newWeekEff};
     
@@ -20809,6 +20809,9 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     // weekEff hafta başında bir kez yazılır ve weekKey damgasıyla dondurulur.
     // newSnap sıfırdan üretildiğinden weekEff yoktur; curSnap'ten taşımazsak
     // weekEff useEffect kilidi boş görür ve güncel curWeekEffective'i üzerine yazar.
+    // (09.09.2026 — Göksel'in "yukarı yönlü de değişmemeli" talebiyle YUKARI
+    // yönlü güncelleme denemesi GERİ ALINDI — haftalık hedef hafta başında
+    // belirlenip donmalı, ne yukarı ne aşağı Planı Güncelle ile değişmemeli.)
     if(curSnap.weekEff) newSnap.weekEff=curSnap.weekEff;
 
     // Koşu günleri senkronizasyonu — kaliteli antrenmanları redistribute et
