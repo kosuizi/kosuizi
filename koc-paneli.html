@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.09-1529 --><!DOCTYPE html>
+<!-- Version: v2026.09.09-1554 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.09-1529';
+const APP_VERSION='v2026.09.09-1554';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -1616,7 +1616,11 @@ function extractFeedbackSignals(allSnapsObj, athlete){
               }
             }
           }
-          if(mesafeDir||mesafeOk||hrDir||hrOk) signals.push({date,label:row.label||null,mesafeDir,mesafeOk,mesafeDiffPct,mesZoneKolay,hrDir,hrOk,hrWeight,zi:row._origZIdx??0,zoneId:null});
+          // type/_rep: 2026.09.09 — Göksel talebi (Rengin Ece Kaya vakası, Pace fazı 6/14
+          // tutarsızlığı teşhisi). Skora hiçbir etkisi yok — sadece Liderlik'teki "Ham Faz
+          // Verisi" panelinin, bu satırın Firebase'de HANGİ ham `type` değeriyle kayıtlı
+          // olduğunu (ve hangi tekrar no'sunda) gösterebilmesi için eklendi.
+          if(mesafeDir||mesafeOk||hrDir||hrOk) signals.push({date,label:row.label||null,_rep:_rep??null,type:row.type??null,mesafeDir,mesafeOk,mesafeDiffPct,mesZoneKolay,hrDir,hrOk,hrWeight,zi:row._origZIdx??0,zoneId:null});
           return;
         }
         let paceDir=null, hrDir=null, paceOk=false, hrOk=false, paceDiff=null, paceTol=null;
@@ -1806,7 +1810,8 @@ function extractFeedbackSignals(allSnapsObj, athlete){
             } else hrOk=true; // zone içinde
           }
         }
-        if(paceDir||hrDir||paceOk||hrOk||mesafeDir||mesafeOk) signals.push({date,label:row.label||null,_rep:_rep??null,paceDir,hrDir,paceOk,hrOk,hrWeight,zi:zi??0,zoneId:hr?.id||null,paceDiff,paceTol,mesafeDir,mesafeOk,mesafeDiffPct,mesZoneKolay});
+        // type: 2026.09.09 — Göksel talebi, bkz. yukarıdaki SKIP_RE dalındaki AYNI not.
+        if(paceDir||hrDir||paceOk||hrOk||mesafeDir||mesafeOk) signals.push({date,label:row.label||null,_rep:_rep??null,type:row.type??null,paceDir,hrDir,paceOk,hrOk,hrWeight,zi:zi??0,zoneId:hr?.id||null,paceDiff,paceTol,mesafeDir,mesafeOk,mesafeDiffPct,mesZoneKolay});
       };
 
       Object.values(rowOvs).forEach(scanRow);
@@ -7649,6 +7654,13 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races,leaderboardWeigh
   // değerleri gösteren bir döküm açılır — data-no-export ile paylaşım kartından
   // hariç tutulur (bkz. showWeightPanel benzeri, aşağıdaki satır render'ı).
   const [expandedAthId,setExpandedAthId]=useState(null);
+  // ── Ham Faz Verisi paneli (2026.09.09 — Göksel talebi, Rengin Ece Kaya vakası) ──
+  // Skor dökümü paneli SADECE toplam/oranları gösteriyor — "hangi faz neden pace
+  // sinyaline dahil oldu" sorusunu cevaplayamıyordu. Bu state, athId başına o
+  // haftanın HAM extractFeedbackSignals çıktısını (fetch edilene kadar null, fetch
+  // sonrası dizi) tutar — skor hesabına HİÇBİR etkisi yok, sadece teşhis amaçlı.
+  const [rawDump,setRawDump]=useState({});
+  const [rawDumpLoading,setRawDumpLoading]=useState(null);
   const cardRef=React.useRef();
   const athCardRefs=React.useRef({});
 
@@ -8263,7 +8275,48 @@ function LiderlikTab({athletes,workouts,teamName,teamLogo,races,leaderboardWeigh
                   React.createElement('span',{style:{color:'#cbd5e1'}},val)
                 )
               ));
-            })()
+            })(),
+            // ── Ham Faz Verisi (2026.09.09 — Göksel talebi, bkz. rawDump state tanımı notu) ──
+            // Skor toplamları değil, extractFeedbackSignals'ın HER FAZ için ürettiği ham
+            // sinyali (özellikle Firebase'de kayıtlı `type` alanı) tek tek gösterir — "bu faz
+            // neden pace hesabına dahil oldu/olmadı" sorusunu doğrudan cevaplar. İlk tıklamada
+            // (o hafta için) bir kez fetch edilir, sonraki tıklamalarda cache'ten okunur.
+            React.createElement('div',{key:'rawdump',style:{marginTop:10,paddingTop:8,borderTop:'1px solid rgba(255,255,255,.08)'}},
+              React.createElement('button',{
+                'data-no-export':true,
+                onClick:async ev=>{
+                  ev.stopPropagation();
+                  if(rawDump[row.ath.id]) return;
+                  setRawDumpLoading(row.ath.id);
+                  try{
+                    const wk=getWeekKey(weekOffset);
+                    const snap=await fbGet('plan_snapshots/'+row.ath.id+'/'+wk);
+                    const sigs=snap?extractFeedbackSignals({[wk]:snap},row.ath):[];
+                    setRawDump(prev=>({...prev,[row.ath.id]:sigs}));
+                  }catch(err){setRawDump(prev=>({...prev,[row.ath.id]:[]}));}
+                  setRawDumpLoading(null);
+                },
+                style:{
+                  background:'rgba(56,189,248,.12)',border:'1px solid rgba(56,189,248,.3)',borderRadius:6,
+                  padding:'4px 8px',cursor:'pointer',color:'#38bdf8',fontSize:10,fontFamily:'system-ui,sans-serif'
+                }
+              },rawDumpLoading===row.ath.id?'Yükleniyor…':(rawDump[row.ath.id]?'🔍 Ham Faz Verisi ('+rawDump[row.ath.id].length+' sinyal)':'🔍 Ham Faz Verisini Getir ('+weekLabel(weekOffset)+')')),
+              rawDump[row.ath.id]&&React.createElement('div',{style:{marginTop:6,maxHeight:280,overflowY:'auto'}},
+                rawDump[row.ath.id].length===0
+                  ?React.createElement('div',{style:{color:'#64748b',fontStyle:'italic'}},'Bu haftaya ait sinyal bulunamadı.')
+                  :rawDump[row.ath.id].map((s,si)=>React.createElement('div',{
+                      key:si,
+                      style:{display:'flex',gap:6,fontSize:10,padding:'3px 0',borderBottom:'1px solid rgba(255,255,255,.04)',flexWrap:'wrap'}
+                    },
+                      React.createElement('span',{style:{color:'#64748b',minWidth:66}},s.date),
+                      React.createElement('span',{style:{minWidth:150,color:'#e2e8f0'}},(s.label||'—')+(s._rep!=null?' #'+(s._rep+1):'')),
+                      React.createElement('span',{style:{minWidth:78,color:'#94a3b8'}},'type: '+(s.type==null?'—':String(s.type))),
+                      React.createElement('span',{style:{minWidth:44,color:'#94a3b8'}},'zi:'+s.zi),
+                      React.createElement('span',{style:{minWidth:90,color:s.paceOk?'#22c55e':s.paceDir?'#f59e0b':'#475569'}},s.paceOk?'pace: uyum':s.paceDir?'pace: '+s.paceDir:'pace: —'),
+                      React.createElement('span',{style:{minWidth:90,color:s.hrOk?'#22c55e':s.hrDir?'#f59e0b':'#475569'}},s.hrOk?'nabız: uyum':s.hrDir?'nabız: '+s.hrDir:'nabız: —')
+                    ))
+              )
+            )
           );
           return React.createElement(React.Fragment,{key:row.ath.id+'-frag'},mainRow,detailPanel);
         }).filter(Boolean)
