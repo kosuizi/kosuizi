@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.09-1725 --><!DOCTYPE html>
+<!-- Version: v2026.09.09-1730 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.09-1725';
+const APP_VERSION='v2026.09.09-1730';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -28652,6 +28652,25 @@ function gpxAutoFillPatch(rawParsed,norm){
 }
 // HR eğrisi + faz şeritleri — antrenman-analiz.html'deki drawChart ile aynı çizim,
 // closure yerine açık parametre alır (React component'ten canvas ref ile çağrılır).
+// ── Anlık Pace Serisi (2026.09.09 — Göksel talebi: grafikte nabız YANINDA pace da
+// olsun) ────────────────────────────────────────────────────────────────────────
+// Ham ardışık nokta farkından pace hesaplamak (GPS gürültüsü yüzünden) anlamsız
+// sıçramalar üretir. Bunun yerine KAYAN bir zaman penceresi (windowSec) içindeki
+// toplam mesafe/süre kullanılır. Pencere içinde yeterli mesafe/süre yoksa (durma,
+// çok kısa pencere) null döner — grafikte bu nokta çizilmez (çizgi kırılır), sıfıra
+// bölme kaynaklı sahte pikler üretilmez.
+function gpxInstantPaceSeries(points,windowSec){
+  windowSec=windowSec||20;
+  const out=[];
+  let j=0;
+  for(let i=0;i<points.length;i++){
+    while(j<i&&(points[i].t-points[j].t)>windowSec) j++;
+    const dt=points[i].t-points[j].t;
+    const dd=(points[i].d||0)-(points[j].d||0);
+    out.push({t:points[i].t,paceSec:(dt>=Math.min(windowSec,5)&&dd>3)?(dt/(dd/1000)):null});
+  }
+  return out;
+}
 function drawGpxChart(canvas,points,phases){
   const dpr=window.devicePixelRatio||1;
   const w=canvas.clientWidth,h=220;
@@ -28660,34 +28679,77 @@ function drawGpxChart(canvas,points,phases){
   ctx.scale(dpr,dpr);
   ctx.clearRect(0,0,w,h);
   const hrPts=points.filter(p=>p.hr!=null);
-  if(hrPts.length===0) return;
+  // Pace: nokta zaten önceden hesaplanmış `pace` taşıyorsa (Geçmiş sekmesinden yeniden
+  // çizilen kompakt/kalıcı kayıt) direkt onu kullanır; canlı analizde (ham `d` mesafesi
+  // mevcut) kayan pencereyle YENİDEN hesaplar — bkz. gpxInstantPaceSeries üstündeki not.
+  const paceSeries=points.some(p=>p.pace!=null)
+    ?points.map(p=>({t:p.t,paceSec:p.pace}))
+    :gpxInstantPaceSeries(points,20);
+  const pacePts=paceSeries.filter(p=>p.paceSec!=null);
+  if(hrPts.length===0&&pacePts.length===0) return;
   const tMax=points[points.length-1].t||1;
-  const hrMin=Math.min(...hrPts.map(p=>p.hr))-5;
-  const hrMax=Math.max(...hrPts.map(p=>p.hr))+5;
-  const padL=38,padR=10,padT=10,padB=18;
+  const showBoth=hrPts.length>0&&pacePts.length>0;
+  const padL=38,padR=pacePts.length?42:10,padT=showBoth?22:10,padB=18;
   const plotW=w-padL-padR,plotH=h-padT-padB;
   const xOf=t=>padL+(t/tMax)*plotW;
-  const yOf=hr=>padT+(1-(hr-hrMin)/(hrMax-hrMin))*plotH;
   phases.forEach(p=>{
     if(p.kind==='run') ctx.fillStyle='rgba(240,217,168,0.55)';
     else if(p.kind==='walk') ctx.fillStyle='rgba(219,230,240,0.55)';
     else ctx.fillStyle='rgba(120,120,120,0.08)';
     ctx.fillRect(xOf(p.t0),padT,Math.max(0,xOf(p.t1)-xOf(p.t0)),plotH);
   });
-  ctx.strokeStyle='#c94f33';
-  ctx.lineWidth=1.6;
-  ctx.beginPath();
-  hrPts.forEach((p,i)=>{
-    const x=xOf(p.t),y=yOf(p.hr);
-    if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
-  });
-  ctx.stroke();
-  ctx.fillStyle='#8a8375';
-  ctx.font='11px monospace';
-  ctx.textAlign='right';
-  [hrMin+5,Math.round((hrMin+hrMax)/2),hrMax-5].forEach(v=>{
-    ctx.fillText(String(Math.round(v)),padL-6,yOf(v)+3);
-  });
+  // ── Nabız (sol eksen, kırmızı) ──
+  if(hrPts.length){
+    const hrMin=Math.min(...hrPts.map(p=>p.hr))-5;
+    const hrMax=Math.max(...hrPts.map(p=>p.hr))+5;
+    const yOf=hr=>padT+(1-(hr-hrMin)/(hrMax-hrMin))*plotH;
+    ctx.strokeStyle='#c94f33';
+    ctx.lineWidth=1.6;
+    ctx.beginPath();
+    hrPts.forEach((p,i)=>{
+      const x=xOf(p.t),y=yOf(p.hr);
+      if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    });
+    ctx.stroke();
+    ctx.fillStyle='#c94f33';
+    ctx.font='11px monospace';
+    ctx.textAlign='right';
+    [hrMin+5,Math.round((hrMin+hrMax)/2),hrMax-5].forEach(v=>{
+      ctx.fillText(String(Math.round(v)),padL-6,yOf(v)+3);
+    });
+  }
+  // ── Pace (sağ eksen, mavi — hızlı pace ÜSTTE gösterilir, "iyi=yukarı" nabızla
+  // aynı okunuş yönü) ──
+  if(pacePts.length){
+    const paceMin=Math.min(...pacePts.map(p=>p.paceSec));
+    const paceMax=Math.max(...pacePts.map(p=>p.paceSec));
+    const padPace=Math.max(2,(paceMax-paceMin)*0.08);
+    const pMin=paceMin-padPace, pMax=paceMax+padPace;
+    const yPaceOf=ps=>padT+((ps-pMin)/(pMax-pMin))*plotH;
+    ctx.strokeStyle='#2563eb';
+    ctx.lineWidth=1.6;
+    ctx.beginPath();
+    let drawing=false;
+    paceSeries.forEach(p=>{
+      if(p.paceSec==null){drawing=false;return;}
+      const x=xOf(p.t),y=yPaceOf(p.paceSec);
+      if(!drawing){ctx.moveTo(x,y);drawing=true;} else ctx.lineTo(x,y);
+    });
+    ctx.stroke();
+    ctx.fillStyle='#2563eb';
+    ctx.font='11px monospace';
+    ctx.textAlign='left';
+    [pMin+padPace*0.3,(pMin+pMax)/2,pMax-padPace*0.3].forEach(v=>{
+      ctx.fillText(fmtPaceLbl(v),padL+plotW+6,yPaceOf(v)+3);
+    });
+  }
+  // ── Lejant (yalnızca ikisi de varken — tek seri zaten rengiyle açık) ──
+  if(showBoth){
+    ctx.font='10px system-ui,sans-serif';
+    ctx.textAlign='left';
+    ctx.fillStyle='#c94f33';ctx.fillText('● Nabız',padL,12);
+    ctx.fillStyle='#2563eb';ctx.fillText('● Pace',padL+55,12);
+  }
 }
 
 // ── GPX grafiğini KALICI hale getirme (Göksel talebi — Geçmiş sekmesinde görüntülenip
@@ -28701,22 +28763,27 @@ function drawGpxChart(canvas,points,phases){
 function gpxDownsamplePoints(points,maxPoints){
   maxPoints=maxPoints||250;
   if(!points||!points.length) return [];
-  if(points.length<=maxPoints) return points.map(p=>({t:Math.round(p.t),hr:p.hr!=null?Math.round(p.hr):null}));
+  if(points.length<=maxPoints) return points.map(p=>({t:Math.round(p.t),hr:p.hr!=null?Math.round(p.hr):null,pace:p.pace!=null?Math.round(p.pace):null}));
   const step=points.length/maxPoints;
   const out=[];
   for(let i=0;i<maxPoints;i++){
     const idx=Math.min(points.length-1,Math.round(i*step));
     const p=points[idx];
-    out.push({t:Math.round(p.t),hr:p.hr!=null?Math.round(p.hr):null});
+    out.push({t:Math.round(p.t),hr:p.hr!=null?Math.round(p.hr):null,pace:p.pace!=null?Math.round(p.pace):null});
   }
   const last=points[points.length-1];
-  if(out[out.length-1].t!==Math.round(last.t)) out.push({t:Math.round(last.t),hr:last.hr!=null?Math.round(last.hr):null});
+  if(out[out.length-1].t!==Math.round(last.t)) out.push({t:Math.round(last.t),hr:last.hr!=null?Math.round(last.hr):null,pace:last.pace!=null?Math.round(last.pace):null});
   return out;
 }
 // GPX analizi sonrası antrenman kaydına yazılacak kompakt grafik verisi.
+// Pace (2026.09.09 — Göksel talebi): ham mesafe hiçbir zaman saklanmıyor (depo
+// tasarrufu, bkz. üstteki not) — smoothed pace TAM ÇÖZÜNÜRLÜKTE bir kere hesaplanıp
+// (gpxInstantPaceSeries) noktalara gömülüyor, downsample bu hazır değeri hr gibi taşır.
 function gpxBuildChartData(points,phaseRows,fileName){
+  const paceSeries=gpxInstantPaceSeries(points,20);
+  const pointsWithPace=points.map((p,i)=>({...p,pace:paceSeries[i]?paceSeries[i].paceSec:null}));
   return{
-    points:gpxDownsamplePoints(points,250),
+    points:gpxDownsamplePoints(pointsWithPace,250),
     phases:(phaseRows||[]).map(p=>({name:p.name,kind:p.kind,t0:Math.round(p.t0),t1:Math.round(p.t1)})),
     totalEndT:Math.round(points&&points.length?points[points.length-1].t:0),
     fileName:fileName||'',
