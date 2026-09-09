@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.09-0102 --><!DOCTYPE html>
+<!-- Version: v2026.09.09-0918 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.09-0102';
+const APP_VERSION='v2026.09.09-0918';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -14544,13 +14544,23 @@ function applyWellnessAndCollectReasons(weeks, athlete){
 //   Emniyet kilidi 1 = son 6 haftanın en yüksek haftasının %110'u
 //   Emniyet kilidi 2 = geçen hafta 0 km → artış uygulanmaz (sıfırdan başla)
 //   ACWR > 1.3 → hacim azaltılır; CTL değil gerçek yük baz alınır
-function calcWeeklyTargetsNoRace(athlete, workouts, history=[]){
+// ── Haftalık Hacim Eşiği — Tek Kaynak (09.09.2026 — Göksel onayı) ───────────
+// Hem no-race hedef hesaplarında (uzun koşu payı, kaliteli gün limiti) HEM DE
+// SporcuAnketi'nin "Uzun Koşu Günü" seçim engelinde AYNI eşik kullanılır —
+// yarışlı/yarışsız FARK ETMEKSİZİN: düşük hacimli haftalarda (Temel fazdaki
+// yarışlı sporcular dahil) uzun koşu günü kavramı anlamsızlaşır.
+const UZUN_GUN_MIN_HAFTALIK_KM=15;
+
+// ── Son 6 Haftalık Gerçek Hacim İstatistiği — Tek Kaynak (09.09.2026) ───────
+// calcWeeklyTargetsNoRace VE SporcuAnketi'nin uzun-gün engeli AYNI ham veriyi
+// kullanır — sporcunun GERÇEKTE koştuğu son haftalar, yarış/faz durumundan
+// bağımsız nesnel bir hacim ölçüsüdür. Ortalama SADECE antrenman yapılan
+// (km>0) haftalar üzerinden alınır (0 km'lik haftalar yapay olarak aşağı
+// çekmesin diye — bkz. calcWeeklyTargetsNoRace'teki asıl düzeltme notu).
+function computeRecentWeeklyStats(athlete, workouts){
   const athWks=(workouts||[]).filter(w=>
     w.athleteId===athlete.id&&(w.spor==='kosu'||!w.spor)
   );
-  const today=new Date();
-
-  // Son 6 haftanın gerçek haftalık km'leri (sıfırlar dahil)
   const weeklyData=[];
   for(let w=5;w>=0;w--){
     const {start,end}=getWeekBounds(-w);
@@ -14562,18 +14572,8 @@ function calcWeeklyTargetsNoRace(athlete, workouts, history=[]){
     });
     const km=round1(wWks.reduce((s,wk)=>s+(parseFloat(wk.mesafe)||0),0));
     const dp=Math.round(wWks.reduce((s,wk)=>s+(parseFloat(wk.irtifa)||0),0));
-    const actualKm=isCurrent?km:km; // geçmiş haftalar için gerçek
     weeklyData.push({weekOffset:-w,start,end,km,dp,isPast,isCurrent});
   }
-
-  // Son 4 hafta ortalaması (cari hafta hariç, hafta -1 ile -4)
-  // DÜZELTME (09.09.2026 — Göksel): 0 km'lik (antrenman yapılmamış) haftalar
-  // ortalamayı /4 sabit bölenle yapay olarak aşağı çekiyordu → düzensiz
-  // antrenman eden yarışsız sporcularda hedef, tek bir antrenmanla trivial
-  // şekilde geçilebilecek kadar düşük çıkıyordu. Artık ortalama SADECE
-  // antrenman yapılan (km>0) haftalar üzerinden alınır — km ve D+ için AYNI
-  // hafta seti kullanılır (D+=0 ama km>0 olan düz parkur haftası veriden
-  // ATILMAZ, sadece gerçekten boş/dinlenme haftası atılır).
   const last4=weeklyData.slice(1,5); // -4,-3,-2,-1 offset
   const last4Active=last4.filter(w=>w.km>0);
   const avg4km=round1(last4Active.length?last4Active.reduce((s,w)=>s+w.km,0)/last4Active.length:0);
@@ -14581,6 +14581,21 @@ function calcWeeklyTargetsNoRace(athlete, workouts, history=[]){
   const lastWeekKm=last4[3]?.km??0; // en yakın geçmiş hafta (-1) — sıfır cezası kasıtlı olarak ham (filtresiz) veriye bakar
   const peak6=Math.max(...weeklyData.map(w=>w.km),0);
   const peak6dp=Math.max(...weeklyData.map(w=>w.dp),0);
+  return {weeklyData,last4,last4Active,avg4km,avg4dp,lastWeekKm,peak6,peak6dp};
+}
+
+function calcWeeklyTargetsNoRace(athlete, workouts, history=[]){
+  const athWks=(workouts||[]).filter(w=>
+    w.athleteId===athlete.id&&(w.spor==='kosu'||!w.spor)
+  );
+  const today=new Date();
+
+  // DÜZELTME (09.09.2026 — Göksel): 0 km'lik (antrenman yapılmamış) haftalar
+  // ortalamayı /4 sabit bölenle yapay olarak aşağı çekiyordu → düzensiz
+  // antrenman eden yarışsız sporcularda hedef, tek bir antrenmanla trivial
+  // şekilde geçilebilecek kadar düşük çıkıyordu. Artık computeRecentWeeklyStats
+  // SADECE antrenman yapılan (km>0) haftalar üzerinden ortalama alıyor.
+  const {weeklyData,avg4km,avg4dp,lastWeekKm,peak6,peak6dp}=computeRecentWeeklyStats(athlete,workouts);
 
   // Amaca göre artış oranı (10% rule — Daniels/Pfitzinger)
   const amaci=athlete.antrenman_amaci||'hacim_koru';
@@ -14677,8 +14692,8 @@ function calcWeeklyTargetsNoRace(athlete, workouts, history=[]){
   // kademeli geri dönüş) ters düşer. Bu yüzden right-size mekanizması bu kotayı
   // GEREKSİZ KILMAZ; ikisi farklı sorunları çözüyor (biri seans boyutu, diğeri
   // haftalık kolay/zor oranı) ve birbirinin yerine geçmiyor.
-  const maxKaliteliNoRaceTiered=avg4km<15?1:avg4km<25?1:2;
-  const maxYuksekKaliteliNoRace=avg4km<15?0:avg4km<25?1:2;
+  const maxKaliteliNoRaceTiered=avg4km<UZUN_GUN_MIN_HAFTALIK_KM?1:avg4km<25?1:2;
+  const maxYuksekKaliteliNoRace=avg4km<UZUN_GUN_MIN_HAFTALIK_KM?0:avg4km<25?1:2;
 
   const mkNoRaceWeek=(offset,isCurr)=>{
     const {start:ws,end:we}=getWeekBounds(offset);
@@ -14832,7 +14847,7 @@ function uzunKosuPayOrani(phase, disiplin, noRaceCtx=null){
   if(noRaceCtx){
     const avg4km=noRaceCtx.avg4km||0;
     const artisOrani=noRaceCtx.artisOrani??1.0;
-    const tierBase=avg4km<15?0.25:avg4km<25?0.28:0.30;
+    const tierBase=avg4km<UZUN_GUN_MIN_HAFTALIK_KM?0.25:avg4km<25?0.28:0.30;
     pay=tierBase+(artisOrani-1)*UZUN_PAY_AMAC_DAMP;
   } else {
     const tablo={'Temel':0.25,'Gelişme':0.28,'Zirve':0.32,'Taper':0.22,'Yarış Sonrası':0};
@@ -17274,24 +17289,24 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
         :tplUzun(band,simState.ctl||0,zones,disiplin,dpGun,wkStats.recentLongRuns,race?.mesafe);
       // ── Haftalık uzun koşu hedefini ÜSTTEN sınırla (alt sınır değil) ─────
       // Progresyon tarihçesi haftalık hedefin üzerinde bir uzun koşu önerirse
-      // (özellikle taper/zirve haftalarında gereksiz yük) hedefle kısıtla.
-      // Alt sınır uygulanmaz — progresyon güvenlik kuralı korunur (sporcu
-      // hedefin altındaysa zorla artırma, kademeli ilerle).
+      // hedefle kısıtla. Alt sınır uygulanmaz — progresyon güvenlik kuralı
+      // korunur (sporcu hedefin altındaysa zorla artırma, kademeli ilerle).
       // Trail kolu (tplTirmanisAcik) kendi hedefini zaten dpGun üzerinden alır.
-      // DÜZELTME (31.08.2026 — Göksel onayı, "Uzun: 3.1km ama sporcunun geçmişi
-      // daha uzunu destekliyor" bildirimi): bu tavan ÖNCEDEN fazdan bağımsız her
-      // zaman uygulanıyordu — Temel/Gelişme'de bile geçmişe dayalı kademeli
-      // ilerlemeyi (tplUzun'ün recentLongRuns hesabı) haftalık %'lik orantısal
-      // tahminin (estimateUzunKosuHedefi/uzunGunKm — geçmişe hiç bakmaz) altına
-      // bastırıyordu. Artık SADECE Taper/Zirve'de uygulanır — bu fazlarda gerçekten
-      // istenmeyen yükü önlemek asıl amaç; Temel/Gelişme'de ise geçmişe göre
-      // yukarı esnemesi (üstteki tplUzun sonucu) korunur.
+      // DÜZELTME (09.09.2026 — Göksel onayı, kök neden bulundu): tplUzun'un
+      // kendisi HİÇBİR ZAMAN haftalık km bütçesini görmüyor — süresi tamamen
+      // band tavanı + geçmiş uzun koşu progresyonundan geliyor. Bu tavan
+      // ÖNCEDEN sadece Taper/Zirve'de uygulanıyordu (31.08.2026 kararı —
+      // Temel/Gelişme'de geçmişe dayalı yukarı esnemeyi bastırmasın diye).
+      // Ama Temel fazı (yarışsız sporcular DAİMA burada) hiç reconciliation
+      // görmüyordu — "Önerilen" (reçete toplamı) haftalık hedefi ciddi
+      // aşabiliyordu (bkz. 07.09 Çağatay Yılmaz örneği, ~16km/12.6km).
+      // Artık HER FAZDA uygulanır — ama hâlâ SADECE üst sınır: tplUzun'ün
+      // sonucu bütçenin altındaysa hiç dokunulmaz (yukarı esneme korunur,
+      // 31.08 kararının ruhu bozulmaz), sadece bütçeyi AŞARSA kısıtlanır.
       // Not: "Yarış Sonrası" da tavana dahil — bu kod tabanında her yerde
       // (ör. phaseStep sıfırlama, ~satır 15423) Taper ile aynı "yük azaltma
-      // dönemi" grubunda ele alınıyor; Göksel'in onayladığı Taper/Zirve
-      // ayrımına tutarlı bir uzantı.
-      const _uzunTavanFazAktif=(phase==='Taper'||phase==='Zirve'||phase==='Yarış Sonrası');
-      if(_uzunTavanFazAktif&&!isTrail&&wkStats.uzunGunKm>0&&kosuTpl.sure_dk>0){
+      // dönemi" grubunda ele alınıyor.
+      if(!isTrail&&wkStats.uzunGunKm>0&&kosuTpl.sure_dk>0){
         const _z2Sec=getPaceSec(zones,1)||360;
         const _hedefDk=Math.round(wkStats.uzunGunKm*_z2Sec/60);
         if(_hedefDk>10&&kosuTpl.sure_dk>_hedefDk){
@@ -21969,9 +21984,11 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               // değil. Band tavanı (bandCapKm) hâlâ üstünde geçerlidir — kanıtlanmış
               // mesafe bu güvenlik sınırını aşıyorsa taban oraya kadar uygulanır.
               const _prevWt=weekTargets[i-1]||null;
-              // DÜZELTME (31.08.2026 — Göksel onayı): "Zirve" de hariç — bkz. planDay
-              // içindeki _uzunTavanFazAktif ve aşağıdaki haftalık özet kartındaki aynı
-              // düzeltme notu. Üçü de artık aynı faz setini kullanıyor (parite).
+              // DÜZELTME (31.08.2026 — Göksel onayı): "Zirve" de hariç — taper/deload
+              // haftalarında bir düşüş istenmeyen "gerileme" değil, kasıtlıdır; bu yüzden
+              // TABAN burada uygulanmaz. (09.09.2026 notu: gerçek gün üretimindeki ÜST
+              // sınır artık her fazda uygulanıyor — bkz. planDay — ama bu TABAN kuralı
+              // ayrı bir amaca hizmet ettiği için kendi faz istisnasını korur.)
               const _prevWeekLongestKm=(_prevWt&&!wt.isRecovery&&wt.phase!=='Taper'&&wt.phase!=='Zirve'&&!wt.isRaceWeek&&wt.phase!=='Yarış Sonrası')
                 ?(()=>{
                     const _pwWks=athWks.filter(w=>{
@@ -22524,9 +22541,10 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               // uygulansa bile burada ayrıca uygulanması gerekiyordu — aksi halde kart ile tablo
               // aynı hafta için FARKLI bir "haftanın uzunu" sayısı gösterebilirdi (görsel parite).
               const _prevWtHafta=weekTargets.find(w=>w.weekIdx===(week.wt.weekIdx-1))||null;
-              // DÜZELTME (31.08.2026 — Göksel onayı): "Zirve" de hariç tutuluyor — gerçek
-              // gün üretimindeki tavan-esnetme kuralıyla (planDay, _uzunTavanFazAktif)
-              // birebir aynı faz seti (yalnızca Temel/Gelişme'de geçmişe göre esner).
+              // DÜZELTME (31.08.2026 — Göksel onayı): "Zirve" de hariç tutuluyor — taper/
+              // deload haftalarında düşüş kasıtlıdır, TABAN burada uygulanmaz. (09.09.2026
+              // notu: gerçek gün üretimindeki ÜST sınır artık her fazda uygulanıyor — bkz.
+              // planDay — ama bu TABAN kuralı ayrı bir amaca hizmet eder, kendi istisnasını korur.)
               const _prevWeekLongestKmHafta=(_prevWtHafta&&!week.wt.isRecovery&&week.wt.phase!=='Taper'&&week.wt.phase!=='Zirve'&&!week.wt.isRaceWeek&&week.wt.phase!=='Yarış Sonrası')
                 ?(()=>{
                     const _pwWks=athWks.filter(w=>{
@@ -32159,6 +32177,10 @@ function parseSayi(v){ return parseFloat((v||'').toString().replace(',','.'))||0
 function SporcuAnketi(){
   const [athletes,setAthletes]=useState([]);
   const [races,setRaces]=useState([]);
+  // "Uzun Koşu Günü" seçim engeli için (09.09.2026 — Göksel onayı): haftalık
+  // hacim eşiğini hesaplayabilmek amacıyla antrenman geçmişi de çekilir —
+  // öncesinde bu form sadece profil verisiyle çalışıyordu.
+  const [workouts,setWorkouts]=useState([]);
   const [selId,setSelId]=useState('');
   // "Adını Seç" listesi search edilebilir olsun diye (2026.09.01 Göksel talebi)
   const [nameQuery,setNameQuery]=useState('');
@@ -32185,9 +32207,10 @@ function SporcuAnketi(){
       const cfg=await fbGet('app_config');
       if(cfg&&cfg.teamName)setAppName(cfg.teamName);
       if(cfg&&cfg.teamLogo)setLogo(cfg.teamLogo);
-      const [aths,rcs]=await Promise.all([fbGet('ath2'),fbGet('races')]);
+      const [aths,rcs,wks]=await Promise.all([fbGet('ath2'),fbGet('races'),fbGet('wks')]);
       setAthletes(aths||[]);
       setRaces(rcs||[]);
+      setWorkouts(wks||[]);
       setDataLoadedAt(new Date());
       return aths||[];
     }catch(e){console.warn(e);return [];}
@@ -32706,6 +32729,13 @@ function SporcuAnketi(){
       React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',marginBottom:6}},'Haftanın en uzun koşusunu hangi gün yapıyorsun? (En fazla 2 gün · Sadece koşu günlerinden seçilebilir)'),
       (function(){
         var curUzun=form.uzun_gun||[];
+        // Düşük hacim engeli (09.09.2026 — Göksel onayı): son 4 haftanın gerçek
+        // ortalaması eşiğin altındaysa (yarışlı/yarışsız FARK ETMEKSİZİN — Temel
+        // fazdaki düşük hacimli yarış sporcuları da dahil), "uzun koşu günü"
+        // kavramı anlamsız — seçim engellenir. computeWeeklyTargetsNoRace ile
+        // AYNI kaynak (computeRecentWeeklyStats) kullanılır.
+        var _uzunStats=_selAth?computeRecentWeeklyStats(_selAth,workouts):{avg4km:0};
+        var _uzunGunEngelli=_uzunStats.avg4km<UZUN_GUN_MIN_HAFTALIK_KM;
         var isArdisik=(function(){
           if(curUzun.length!==2)return false;
           var idx0=GUNLER_LIST.indexOf(curUzun[0]);
@@ -32714,20 +32744,29 @@ function SporcuAnketi(){
           return Math.abs(idx0-idx1)===1;
         })();
         return React.createElement('div',null,
+          _uzunGunEngelli?React.createElement('div',{style:{
+            fontSize:11,color:'var(--warn)',marginBottom:8,padding:'8px 10px',
+            background:'var(--warn-bg)',border:'1px solid var(--warn)',borderRadius:6
+          }},'⚠️ Haftalık toplam mesafeniz ('+_uzunStats.avg4km+'km, son 4 hafta ortalaması) uzun antrenman günü için uygun değil (min '+UZUN_GUN_MIN_HAFTALIK_KM+'km/hafta). Hacminiz arttıkça bu seçenek tekrar açılacak.'):null,
           React.createElement('div',{className:'days-grid'},
             GUNLER_LIST.map(function(g){
               var isKosuGunu=form.kosu_gunleri.includes(g);
               var isSelected=curUzun.includes(g);
+              var isSelectable=isKosuGunu&&!_uzunGunEngelli;
               return React.createElement('div',{
                 key:g,
                 className:'day-btn '+(isSelected?'run-active':''),
                 style:{
-                  opacity:isKosuGunu?1:0.3,
-                  cursor:isKosuGunu?'pointer':'not-allowed',
+                  opacity:isSelectable?1:0.3,
+                  cursor:isSelectable?'pointer':'not-allowed',
                   border:isSelected?'2px solid var(--info)':''
                 },
                 onClick:function(){
                   if(!isKosuGunu)return;
+                  if(_uzunGunEngelli&&!isSelected){
+                    alert('⚠️ Haftalık toplam mesafeniz uzun antrenman için uygun değil ('+_uzunStats.avg4km+'km / min '+UZUN_GUN_MIN_HAFTALIK_KM+'km).');
+                    return;
+                  }
                   if(!isSelected&&curUzun.length>=2){
                     alert('⚠️ En fazla 2 uzun koşu günü seçilebilir. Önce mevcut bir seçimi kaldırın.');
                     return;
