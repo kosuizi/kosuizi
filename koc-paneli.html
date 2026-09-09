@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.09-0945 --><!DOCTYPE html>
+<!-- Version: v2026.09.09-1020 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.09-0945';
+const APP_VERSION='v2026.09.09-1020';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -16908,7 +16908,18 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
   //   - kolay/aerobik gün: wkStats.gunlukKolayKm (kalan ÷ kolay/aerobik gün sayısı)
   //   - kaliteli gün: 0 → kmSureMod=1.0 (şablon süresi korunur, S2: fizyolojik bütünlük)
   //   - iskelet yoksa: eski eşit bölme fallback'i
-  const _noRaceMaxGunlukKm=wkStats._noRaceMaxGunlukKm||0;
+  let _noRaceMaxGunlukKm=wkStats._noRaceMaxGunlukKm||0;
+  // KÖK NEDEN DÜZELTMESİ (09.09.2026 — Göksel onayı, Çağatay Yılmaz örneği):
+  // _noRaceMaxGunlukKm eşit bölüşüme dayanır (targetKm / koşu günü sayısı) —
+  // bu, "uzun" günün payına göre hesaplanan wkStats.uzunGunKm'den (haftalık payın
+  // ~%25'i, genelde eşit bölüşümden DAHA KÜÇÜK) BÜYÜK olabiliyordu. Sonuç:
+  // aerobik/kaliteli bir gün, haftanın uzun koşusundan daha uzun çıkabiliyordu
+  // — periyotlama ilkesine aykırı. Artık uzun-dışı günlerde bu tavan asla
+  // wkStats.uzunGunKm'yi aşamaz; "uzun" günün kendisi bu değişkeni zaten
+  // kullanmıyor (tplUzun + bugünkü tavan düzeltmesi kendi bütçesini ayrı yönetir).
+  if(haftaGunTipi!=='uzun'&&wkStats.uzunGunKm>0&&_noRaceMaxGunlukKm>wkStats.uzunGunKm){
+    _noRaceMaxGunlukKm=wkStats.uzunGunKm;
+  }
   let gunlukKmHedef=0;
   if(_noRaceMaxGunlukKm>0){
     // Yarışsız düşük hacim: TÜM gün tipleri (kaliteli dahil) km tavanına tabi
@@ -18696,10 +18707,58 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
         if(_uzunMaxKm>0){
           // %5 tolerans — yuvarlama farklarını yanlış pozitif saymamak için
           const _esik=_uzunMaxKm*1.05;
+          // DÜZELTME (09.09.2026 — Göksel onayı, Çağatay Yılmaz örneği: Perşembe
+          // Aerobik 7.1km, Pazar Uzun 4.9km): önceden bu blok SADECE uyarı
+          // yazıyordu, ihlali fiilen düzeltmiyordu. Artık önce "uzun" günü
+          // BÜYÜTÜLEREK invariant fiilen sağlanmaya çalışılır — diğer günü daha
+          // fazla küçültmek yerine (o kendi bütçesinde zaten makul bir sonuç),
+          // uzun koşunun kendi esnekliğinden (sürekli Z2 blok, kolayca uzatılabilir)
+          // yararlanılır. Sadece tip==='uzun' (tplUzun) ve henüz yapılmamış günler
+          // büyütülür — tirmanis/back_to_back kendi D+ bazlı mantığını korur,
+          // geçmiş/bugün yapılmış antrenmanlar asla geriye dönük değiştirilmez.
+          let _digerMaxKm=0;
           for(const d of days){
             if(_uzunTipSet.has(d.tip)||d.tip==='dinlenme'||d.tip==='capraz'||d.tip==='yaris') continue;
             const km=_dayKmCache[d.date];
-            if(km>_esik){
+            if(km>_digerMaxKm) _digerMaxKm=km;
+          }
+          if(_digerMaxKm>_esik){
+            const _uzunDay=days.find(d=>d.tip==='uzun'&&!d.isPast);
+            if(_uzunDay){
+              const _uzunGercekDk=toplamSureDkFromYapilar(_uzunDay.yapilar)||_uzunDay.sure_dk||0;
+              const _uzunGercekKm=_dayKmCache[_uzunDay.date]||0;
+              if(_uzunGercekDk>0&&_uzunGercekKm>0){
+                const _gercekPaceMinKm=_uzunGercekDk/_uzunGercekKm;
+                const _hedefKm=round1(_digerMaxKm*1.05);
+                const _ekstraDk=Math.round((_hedefKm-_uzunGercekKm)*_gercekPaceMinKm);
+                if(_ekstraDk>0){
+                  const _yeniDk=_uzunGercekDk+_ekstraDk;
+                  const _yeniMainDk=Math.max(10,_yeniDk-20); // 15 ısınma + 5 soğuma
+                  _uzunDay.sure_dk=_yeniDk;
+                  _uzunDay.yapilar=(_uzunDay.yapilar||[]).map(y=>{
+                    if((y.baslik||'').includes('Z2 Uzun')){
+                      return{...y,
+                        detay:y.detay.replace(/\d+(?= dk)/,String(_yeniMainDk)),
+                        _rows:[{label:'Z2 Uzun Koşu',sure_sn:_yeniMainDk*60,zIdx:1}]
+                      };
+                    }
+                    return y;
+                  });
+                  _dayKmCache[_uzunDay.date]=gunOneriMesafeKm(_uzunDay,_sanityZones,_sanityRaces,effDisiplinPlan);
+                  _uzunMaxKm=_dayKmCache[_uzunDay.date];
+                  const _msgBuyut='Haftanın uzunu, hafta-içi bir antrenmandan (~'+_digerMaxKm+'km) kısa kalmıştı — periyotlama ilkesini korumak için ~'+_uzunMaxKm+'km\'ye büyütüldü.';
+                  _uzunDay.uyari=_uzunDay.uyari?_uzunDay.uyari+' · '+_msgBuyut:_msgBuyut;
+                }
+              }
+            }
+          }
+          // Büyütme uygulanamadıysa (tip uygun değil, geçmiş gün, veri eksik) hâlâ
+          // ihlal varsa eskisi gibi uyarı bırak — güncellenmiş _uzunMaxKm/_esik ile.
+          const _esikGuncel=_uzunMaxKm*1.05;
+          for(const d of days){
+            if(_uzunTipSet.has(d.tip)||d.tip==='dinlenme'||d.tip==='capraz'||d.tip==='yaris') continue;
+            const km=_dayKmCache[d.date];
+            if(km>_esikGuncel){
               const _msg=`Bu günün mesafesi (~${km}km) haftanın uzun koşusundan (~${_uzunMaxKm}km) fazla — periyotlama prensibine aykırı, kontrol edilmeli`;
               d.uyari=d.uyari?d.uyari+' · '+_msg:_msg;
             }
