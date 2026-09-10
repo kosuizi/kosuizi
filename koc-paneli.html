@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.09-1928 --><!DOCTYPE html>
+<!-- Version: v2026.09.10-1451 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.09-1928';
+const APP_VERSION='v2026.09.10-1451';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -10628,7 +10628,15 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     // (veya karşılaştırılamıyorsa çünkü satırın kendi _origZIdx'i yoksa) override reddedilir.
     const _zMatch=_ovForRow?._origZIdx==null||r._origZIdx==null||_ovForRow._origZIdx===r._origZIdx;
     const _pMatch=_ovForRow?._origPaceSec==null||r._origPaceSec==null||_ovForRow._origPaceSec===r._origPaceSec;
-    const _ovStale=!!(_ovForRow&&!(_zMatch&&_pMatch));
+    // ÜÇÜNCÜ PARMAK İZİ (2026.09.10 — OP-9 tekrar sayısı kalıcılığı düzeltmesi): header
+    // satırlarının _origZIdx/_origPaceSec'i yoktur (her ikisi de null → yukarıdaki iki
+    // kontrol header'lar için hep "eşleşti" sayılır), bu yüzden header'a özel repeatCount
+    // override'ı kendi parmak izini (_origHeaderLabel, bkz. updateRepeatCount) taşır —
+    // antrenman türü değişip aynı index'e alakasız bir header geldiğinde eski tekrar
+    // sayısının sızmasını önler. Header taşımayan / bu alanı hiç içermeyen override'larda
+    // (mesafe/pace gibi mevcut kullanımlar) etkisizdir.
+    const _hMatch=_ovForRow?._origHeaderLabel==null||r.type!=='header'||_ovForRow._origHeaderLabel===r.label;
+    const _ovStale=!!(_ovForRow&&!(_zMatch&&_pMatch&&_hMatch));
     let row=(_ovForRow&&!_ovStale)?{...r,...rowOverrides[i]}:r;
     // OP-9: Header için repeatOverrides varsa uygula
     if(row.type==='header'&&repeatOverrides[i]){
@@ -11155,6 +11163,21 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
   };
 
   // ── OP-9: Tekrar sayısı değiştirme ──
+  // KÖK NEDEN DÜZELTMESİ (2026.09.10 — Göksel'in bildirdiği "Ekle sonrası tekrar sayısı
+  // orijinaline dönüyor" hatası, Yürü-Koş S4 örneği: 6→5 düzenlemesi, sonraki gün
+  // gerçekleşen veri girilirken tekrar 6'ya döndü): Bu fonksiyon ÖNCEDEN yeni sayıyı
+  // sadece (a) repeatOverrides state'ine — component-local useState({}), KALICI DEĞİL,
+  // her yeniden mount'ta {}'a sıfırlanır — ve (b) header'dan SONRAKİ run/rest satırlarının
+  // rowOverrides'ına yazıyordu; header'ın KENDİ satırına (rowOverrides[headerIdx]) hiçbir
+  // şey yazılmıyordu. Mesafe/pace'in Firebase'e kalıcı yazılıp her mount'ta rowOverrides
+  // üzerinden geri yüklenmesinin (bkz. _initial/_splitOv, satır ~10464) AKSİNE, ekranda
+  // tekrar sayısını belirleyen kaynak (origCount/effCount, ~satır 11838) repeatOverrides'a
+  // bakıyordu — o kalıcı olmadığından, coach o günden ayrılıp (ör. antrenman sonrası
+  // gerçekleşen veriyi girmeye) geri döndüğünde şablonun ORİJİNAL sayısına (6) geri
+  // dönüyordu. Çözüm: header'ın kendi satırına da repeatCount yazılır — artık mesafe/
+  // pace ile AYNI kalıcı kaynaktan besleniyor, antrenman yapılana kadar (ve GÜVENLİK
+  // KİLİDİ parmak izi eşleştiği sürece süresiz) kalıcı olur. _origHeaderLabel: yukarıdaki
+  // ÜÇÜNCÜ PARMAK İZİ kontrolünün kullandığı fingerprint.
   const updateRepeatCount=(headerIdx, newCount)=>{
     if(newCount<1||newCount>30) return;
     const newRepeatOv={...repeatOverrides,[headerIdx]:newCount};
@@ -11162,6 +11185,8 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     setEditingRepeat(null);
     // Sonraki run ve rest satırlarının repeatCount'ını güncelle
     const newRowOv={...rowOverrides};
+    // Header'ın KENDİ satırı — kalıcı kaynak (bkz. yukarıdaki KÖK NEDEN notu)
+    newRowOv[headerIdx]={...(newRowOv[headerIdx]||{}),repeatCount:newCount,_origHeaderLabel:baseRows[headerIdx]?.label};
     for(let ri=headerIdx+1;ri<baseRows.length;ri++){
       const br=baseRows[ri];
       if(br.type==='header') break; // bir sonraki header'a gelince dur
