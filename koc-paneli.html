@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.12-2152 --><!DOCTYPE html>
+<!-- Version: v2026.09.12-2322 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.12-2152';
+const APP_VERSION='v2026.09.12-2322';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -29112,16 +29112,23 @@ async function gpxResolveDayPlan(athlete,dateStr,allHistory,races,workouts,testP
   }
   const existingKosuActual=(workouts||[]).find(w=>w.athleteId===athlete.id&&w.date===dateStr&&(w.spor||'kosu')==='kosu')||null;
   const liveZones=calcZones(athlete);
-  let baseRows=[],displayTip='aerobik';
+  let baseRows=[],displayTip='aerobik',oneriYapilar=[];
   if(dayLike){
     try{
       const kosuGorunum=buildEffectiveKosuYapilar(dayLike,existingKosuActual,liveZones,athlete?.disiplin,athlete);
       const finalYapilar=injectRowsFromTpl(kosuGorunum.displayYapilar,kosuGorunum.displayTip,dayLike.yapi_notu,dayLike.sure_dk,liveZones,athlete?.disiplin);
       displayTip=kosuGorunum.displayTip;
-      baseRows=buildBaseReceteRows(finalYapilar,liveZones).baseRows||[];
+      // buildBaseReceteRows'un ayrıca döndürdüğü oneriYapilar (💡 ile başlayan, ör.
+      // "Strides Önerisi") baseRows'a HİÇ girmiyor (bkz. buildBaseReceteRows — bilerek
+      // filtreleniyor) — yani gpxDetectBlocks bunları asla göremez. GPX Analiz modalı
+      // Strides gibi GERÇEK GPS süresi/mesafesi olan (yani _rows taşıyan) önerileri
+      // coach'a hatırlatabilsin diye burada ayrıca taşınıyor (Göksel talebi, 2026.09.12).
+      const _built=buildBaseReceteRows(finalYapilar,liveZones);
+      baseRows=_built.baseRows||[];
+      oneriYapilar=_built.oneriYapilar||[];
     }catch(e){console.warn('GPX Analiz — reçete satırı üretme hatası:',e);}
   }
-  return {ok:true,dayLike,displayTip,baseRows,weekKey,snap,existingKosuActual};
+  return {ok:true,dayLike,displayTip,baseRows,oneriYapilar,weekKey,snap,existingKosuActual};
 }
 
 // ── Bir günün baseRows'undan Isınma/Tekrar-bloğu/Ana-Bölüm/Soğuma yapısını tespit et ──
@@ -29633,6 +29640,14 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
   },[phaseResult,points]);
 
   const totalDistKm=phaseResult?phaseResult.rows.reduce((a,r)=>a+r.distKm,0):0;
+  // Strides Önerisi (2026.09.12, Göksel talebi) — bu öneri _rows taşıdığı için GERÇEK
+  // bir GPS süresi/mesafesi ifade eder ama buildBaseReceteRows onu bilerek baseRows'un
+  // DIŞINDA tutar (bkz. gpxResolveDayPlan notu) — yani gpxDetectBlocks bunu hiç göremez.
+  // Sporcu yaptıysa bu süre/mesafe GERÇEKTE Isınma'dan sonra, ilk gerçek bloktan önce
+  // yaşanmıştır; coach'un bunu bilerek Isınma alanına (yapıldıysa) dahil etmesi ya da
+  // (yapılmadıysa) olduğu gibi bırakması gerekir — otomatik/varsayılan bir çözüm YOK
+  // çünkü sistem GPX'ten sporcunun o gün fiilen yapıp yapmadığını bilemez.
+  const stridesOneri=(planInfo?.oneriYapilar||[]).find(y=>(y.baslik||'').includes('Strides'));
   const distWarn=(()=>{
     if(!phaseResult||!knownDist) return null;
     const known=parseFloat(knownDist);
@@ -29811,6 +29826,11 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
         React.createElement('div',{className:'card-title'},'2 — Antrenman Reçetesi'),
         React.createElement('div',{style:{fontSize:10.5,color:'var(--text-tertiary)',marginBottom:12}},
           'Aşağıdaki alanlar bu günün reçetesindeki GERÇEK sırayı yansıtır — her aşamayı süre ya da mesafe olarak tanımlayabilirsin.'),
+        stridesOneri&&React.createElement('div',{style:{fontSize:11.5,color:'var(--warn)',background:'var(--warn-bg)',
+          border:'1px solid var(--warn)',borderRadius:'var(--radius)',padding:'8px 10px',marginBottom:12}},
+          '⚠️ Bu günün planında "'+stridesOneri.detay+'" önerisi var (opsiyonel — sporcu yapmış olabilir de olmayabilir de). '+
+          'Sporcu YAPTIYSA aşağıdaki Isınma süresini/mesafesini bunu kapsayacak şekilde büyüt; YAPMADIYSA olduğu gibi bırak — '+
+          'aksi halde strides bölümü yanlışlıkla bir sonraki bloğa (ör. ilk tekrar) karışıp o bloğun pace/nabız ölçümünü, dolayısıyla kardiyak drift hesabını bozabilir.'),
         // ── Dinamik blok listesi — Göksel talebi (2026.09.04): sabit/gereksiz alan
         // yok, sadece bu günün yapısında GERÇEKTEN var olan bloklar gösterilir.
         // Tekrar blokları (↻), tekil bloklardan (Isınma/Soğuma/Ana) farklı renkte
