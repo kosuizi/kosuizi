@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.12-2110 --><!DOCTYPE html>
+<!-- Version: v2026.09.12-2124 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.12-2110';
+const APP_VERSION='v2026.09.12-2124';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -29622,6 +29622,20 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
       const hrVals=points.filter(p=>p.hr!=null).map(p=>p.hr);
       const ortNabiz=hrVals.length?Math.round(hrVals.reduce((a,b)=>a+b,0)/hrVals.length):null;
       const maksNabiz=hrVals.length?Math.round(Math.max(...hrVals)):null;
+      // Kardiyac Drift (2026.09.12, Göksel talebi) — GPX Analiz'in otomatik hesapladığı
+      // sonuç (driftResult state, birden fazla blok varsa ilki esas alınır), manuel
+      // giriştekiyle (withDriftComputed) AYNI alan adlarıyla kaydedilir ki tek bir okuyucu
+      // ikisini de aynı şekilde tüketebilsin. Burada withDriftComputed ÇAĞRILMAZ — o
+      // fonksiyon ham drift_*_pace_dk/sn girişlerinden yeniden hesaplar, GPX kaydında
+      // böyle ham alanlar yok; sonuç zaten gpxComputeCardiacDrift'ten hazır geliyor.
+      const _driftPrimary=driftResult&&driftResult[0]||null;
+      const driftPatch=_driftPrimary?{
+        drift_yapi:_driftPrimary.tip,
+        drift_kosu_pct:_driftPrimary.kosuPct??null,
+        drift_toparlanma_nabiz_pct:_driftPrimary.toparlanmaNabizPct??null,
+        drift_toparlanma_ef_pct:_driftPrimary.toparlanmaEFPct??null,
+        drift_surekli_pct:_driftPrimary.surekliPct??null
+      }:{};
 
       if(isNewWorkout){
         // DÜZELTME (Göksel — 2026.08.31): Ekle sekmesinde GPX Analiz'e geçmeden ÖNCE
@@ -29647,6 +29661,7 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
           sure_sa:String(hms.h),sure_dk:String(hms.m),sure_sn:String(hms.s),
           ort_nabiz:ortNabiz?String(ortNabiz):(base.ort_nabiz||''),
           maks_nabiz:maksNabiz?String(maksNabiz):(base.maks_nabiz||''),
+          ...driftPatch,
           notlar:mergedNotlar,savedAt:new Date().toISOString()
         });
         // KÖK NEDEN NOTU: yeni antrenman kaydı onSaveWorkout (App seviyesi) üzerinden
@@ -29672,6 +29687,11 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
         // altında görüntülenebilsin/paylaşılabilsin diye kompakt (indirgenmiş) hâliyle
         // kaydediliyor; ham GPX verisi hiçbir zaman Firebase'e yazılmıyor.
         patch._gpxChartData=gpxBuildChartData(points,phaseResult.rows,fileName);
+        // Kardiyak drift, updateAggregate işaretinden BAĞIMSIZ her zaman yazılır —
+        // o işaret önceden var olan (mesafe/nabız gibi) toplu alanların üzerine
+        // yazılıp yazılmayacağını yönetir; drift bu özellikten önce hiç yoktu,
+        // üzerine yazılacak eski bir coach kararı yok (Göksel talebi, 2026.09.12).
+        Object.assign(patch,driftPatch);
         if(updateAggregate&&!isNewWorkout){
           patch.mesafe=totalDistKm?totalDistKm.toFixed(2):planInfo.existingKosuActual.mesafe;
           patch.sure_sa=String(hms.h);patch.sure_dk=String(hms.m);patch.sure_sn=String(hms.s);
