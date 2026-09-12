@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.12-2322 --><!DOCTYPE html>
+<!-- Version: v2026.09.12-2350 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.12-2322';
+const APP_VERSION='v2026.09.12-2350';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -813,6 +813,35 @@ function buildHistory(wks,ath,races){
       mechAtl:round1(mAtl),mechCtl:round1(mCtl),phase,aerEff
     };
   });
+}
+
+// ── Aerobik Analiz Dahil Etme Kontrolü (Ekle/Düzenle formlarında geri bildirim için) ──
+// buildHistory() içindeki aerEff hesaplama koşullarıyla (isKosu, km>2, durMin>15,
+// nabız bandı) birebir aynı mantığı kullanır. "Analize dahil et" checkbox'ı işaretli
+// olsa bile bu sert koşullardan biri sağlanmazsa antrenman yine de dahil edilmez —
+// bu fonksiyon hangi koşul(lar)ın sağlanmadığını kullanıcıya göstermek için kullanılır.
+function aerobikDahilDurumu(w,ath){
+  ath=ath||{}; // sporcu henüz seçilmemiş/bulunamamışsa çökmesin — fallback bant (120–165) devreye girer
+  const _zones=calcZones(ath);
+  const _hrz=_zones.hrZones;
+  const aerBandLow =_hrz?(_hrz.find(z=>z.id==='Z1')?.lo_bpm??120):120;
+  const aerBandHigh=_hrz?(_hrz.find(z=>z.id==='Z2')?.hi_bpm??165):165;
+  const m=calcMetrics(w,ath);
+  const km=parseFloat(w.mesafe)||0;
+  const hr=parseFloat(w.ort_nabiz)||0;
+  const durMin=m.durSec/60;
+  const KОSU_SPORLAR=['kosu','trail','yol','ultra'];
+  const isKosu=KОSU_SPORLAR.includes(w.spor||'kosu');
+  const sebepler=[];
+  if(!isKosu) sebepler.push('Spor türü koşu/trail/yol/ultra değil');
+  if(km<=0) sebepler.push('Mesafe girilmemiş');
+  else if(km<=2) sebepler.push('Mesafe 2 km veya altı');
+  if(durMin<=0) sebepler.push('Süre girilmemiş');
+  else if(durMin<=15) sebepler.push('Süre 15 dakika veya altı');
+  if(hr<=0) sebepler.push('Ort. nabız girilmemiş');
+  else if(hr<=aerBandLow) sebepler.push(`Nabız bandın altında (aerobik bant: ${aerBandLow}–${aerBandHigh} bpm)`);
+  else if(hr>=aerBandHigh) sebepler.push(`Nabız bandın üstünde (aerobik bant: ${aerBandLow}–${aerBandHigh} bpm)`);
+  return{dahil:sebepler.length===0,sebepler,aerBandLow,aerBandHigh};
 }
 
 // ── Hedef Süre Motoru (Excel modelinden port edildi) ─────────────────────────
@@ -30239,6 +30268,18 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,wor
           React.createElement('span',null,'📊 Aerobik Analize Dahil Et'),
           React.createElement('span',{style:{fontSize:10,color:'var(--text-tertiary)',marginLeft:2}},'(sistem dışında kalan sabit antrenmanlar için)')
         ),
+        // İşaretli olsa bile sert koşullar (spor türü/mesafe/süre/nabız bandı) sağlanmazsa
+        // antrenman yine de analize dahil edilmez — nedeni burada göster.
+        (()=>{
+          if(!form.analiz_icin)return null;
+          const durum=aerobikDahilDurumu(form,selectedAth||athlete);
+          if(durum.dahil)return null;
+          return React.createElement('div',{style:{width:'100%',fontSize:11,color:'var(--warn,#b45309)',
+            background:'var(--warn-bg,#fef3c7)',border:'1px solid var(--warn,#b45309)',borderRadius:'var(--radius)',
+            padding:'6px 10px',marginTop:2}},
+            '⚠ Dahil edilmedi — '+durum.sebepler.join(', ')
+          );
+        })(),
         // Yol yarışı
         React.createElement('label',{style:{display:'flex',alignItems:'center',gap:6,fontSize:12,cursor:'pointer',
           padding:'6px 10px',borderRadius:'var(--radius)',
@@ -31133,7 +31174,7 @@ function Gecmis({workouts,athletes,races,onDelete,onBulkDelete,onUpdate}){
         React.createElement('div',{style:{display:'flex',flexWrap:'wrap',gap:8,marginBottom:4}},
           React.createElement('label',{style:{display:'flex',alignItems:'center',gap:6,fontSize:13,padding:'6px 10px',border:'1px solid '+(editForm.analiz_icin?'var(--info)':'var(--border)'),borderRadius:'var(--radius)',background:editForm.analiz_icin?'var(--info-bg)':'var(--bg-secondary)',cursor:'pointer'}},
             React.createElement('input',{type:'checkbox',checked:!!editForm.analiz_icin,onChange:e=>setF('analiz_icin',e.target.checked)}),
-            '🔬 Analiz için seç'
+            '📊 Aerobik Analize Dahil Et'
           ),
           React.createElement('label',{style:{display:'flex',alignItems:'center',gap:6,fontSize:13,padding:'6px 10px',border:'1px solid '+(editForm.yol_yarisi?'var(--info)':'var(--border)'),borderRadius:'var(--radius)',background:editForm.yol_yarisi?'var(--info-bg)':'var(--bg-secondary)',cursor:'pointer'}},
             React.createElement('input',{type:'checkbox',checked:!!editForm.yol_yarisi,onChange:e=>setF('yol_yarisi',e.target.checked)}),
@@ -31144,6 +31185,19 @@ function Gecmis({workouts,athletes,races,onDelete,onBulkDelete,onUpdate}){
             '⛰️ Trail yarışı'
           )
         ),
+        // İşaretli olsa bile sert koşullar (spor türü/mesafe/süre/nabız bandı) sağlanmazsa
+        // antrenman yine de analize dahil edilmez — nedeni burada göster.
+        (()=>{
+          if(!editForm.analiz_icin)return null;
+          const ath=athletes.find(a=>a.id===(editForm.athleteId||editW.athleteId));
+          const durum=aerobikDahilDurumu(editForm,ath);
+          if(durum.dahil)return null;
+          return React.createElement('div',{style:{fontSize:11,color:'var(--warn,#b45309)',
+            background:'var(--warn-bg,#fef3c7)',border:'1px solid var(--warn,#b45309)',borderRadius:'var(--radius)',
+            padding:'6px 10px',marginBottom:8}},
+            '⚠ Dahil edilmedi — '+durum.sebepler.join(', ')
+          );
+        })(),
         React.createElement('div',{className:'flex-gap',style:{marginTop:12}},
           React.createElement('button',{className:'btn btn-primary',onClick:saveEdit},'Kaydet'),
           React.createElement('button',{className:'btn',onClick:()=>setEditW(null)},'İptal')
