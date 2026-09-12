@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.12-1151 --><!DOCTYPE html>
+<!-- Version: v2026.09.12-1206 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.12-1151';
+const APP_VERSION='v2026.09.12-1206';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -5737,7 +5737,7 @@ const AD_CARDS=[
   }
 ];
 
-function ReklamTab({teamName,teamLogo,athletes,adCardOverrides,onSaveAdCard}){
+function ReklamTab({teamName,teamLogo,athletes,adCardOverrides,onSaveAdCard,allHistory}){
   return React.createElement('div',{style:{padding:16,maxWidth:1400,margin:'0 auto'}},
     React.createElement('h2',{style:{margin:'0 0 4px 0',fontSize:18}},'📣 Reklam'),
     React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',lineHeight:1.5,marginBottom:18,maxWidth:820}},
@@ -5749,14 +5749,15 @@ function ReklamTab({teamName,teamLogo,athletes,adCardOverrides,onSaveAdCard}){
           key:cardDef.id,
           cardDef:cardDef,teamName:teamName,teamLogo:teamLogo,athletes:athletes,
           override:(adCardOverrides||{})[cardDef.id]||null,
-          onSave:function(val){onSaveAdCard(cardDef.id,val);}
+          onSave:function(val){onSaveAdCard(cardDef.id,val);},
+          allHistory:allHistory
         });
       })
     )
   );
 }
 
-function AdCardItem({cardDef,teamName,teamLogo,athletes,override,onSave}){
+function AdCardItem({cardDef,teamName,teamLogo,athletes,override,onSave,allHistory}){
   const cardRef=useRef();
   const [sharing,setSharing]=useState(false);
   // App bileşeni 'loaded' olmadan bu sekme hiç mount olmadığından (bkz.
@@ -5828,24 +5829,6 @@ function AdCardItem({cardDef,teamName,teamLogo,athletes,override,onSave}){
     return ath?Object.assign({},r,{ad:((ath.ad||'')+' '+(ath.soyad||'')).trim(),foto:ath.foto||null,gercek:true}):r;
   });
 
-  // ── Kart 2 — Antrenman yükü grafiği mockup verisi (gerçek ChartATLCTL ile
-  // AYNI dil: 'Günlük yük' bar + 'CTL'/'ATL' çizgileri) ────────────────────
-  const yukLoadArr=[22,38,15,52,26,61,12,47,55,30];
-  const ctlArr=[28,29,30,31,33,34,36,37,39,45];
-  const atlArr=[24,34,18,44,28,50,14,40,46,38];
-  const chartMax=70,chartW=340,chartH=90,barGap=8;
-  // Form/ACWR rozeti (KURAL A — gerçek tsbStatus/acwrStatus fonksiyonları): TSB=CTL-ATL,
-  // ACWR=ATL/CTL AYNI mock CTL/ATL'den türetilir — birbirinden bağımsız uydurulmuş
-  // değerler DEĞİL, matematiksel olarak tutarlı bir çift (Göksel'in 2026.09.12 kontrolü).
-  const _formCtl=ctlArr[ctlArr.length-1],_formAtl=atlArr[atlArr.length-1];
-  const _tsbMock=_formCtl-_formAtl;
-  const _acwrMock=round2(_formAtl/_formCtl);
-  const _statusRenk=function(cls){return{good:'#34d399',info:'#60a5fa',warn:'#fbbf24',danger:'#f87171'}[cls]||'rgba(255,255,255,0.5)';};
-  const barCount=yukLoadArr.length;
-  const barW=(chartW-(barCount-1)*barGap)/barCount;
-  const xAt=function(i){return i*(barW+barGap)+barW/2;};
-  const yAt=function(v){return chartH-(v/chartMax*chartH);};
-  const toPolyPoints=function(arr){return arr.map(function(v,i){return xAt(i)+','+yAt(v);}).join(' ');};
   // Kartı "anlatan" tek sporcu (mockup ya da seçilen gerçek sporcu) — TEK
   // SPORCU deseni 'yukGrafik' ile 'tutarlilikKart' arasında paylaşılır (bkz.
   // dosya başındaki KURAL C: tekli-kişi kartlarında tek seçim).
@@ -5853,11 +5836,40 @@ function AdCardItem({cardDef,teamName,teamLogo,athletes,override,onSave}){
   const secilenSporcu=TEK_SPORCU_GORSELLER.includes(cardDef.gorsel)&&sporcuSecim?izinliSporcular.find(function(a){return a.id===sporcuSecim;}):null;
   const yukAdSoyad=secilenSporcu?((secilenSporcu.ad||'')+' '+(secilenSporcu.soyad||'')).trim():'Sporcu A';
   const yukFoto=secilenSporcu?secilenSporcu.foto||null:null;
+
+  // ── Kart 2 — Antrenman yükü grafiği (gerçek ChartATLCTL ile AYNI dil:
+  // 'Günlük yük' bar + 'CTL'/'ATL' çizgileri) ─────────────────────────────
+  // 2026.09.12 — Göksel talebi: sporcu seçimi değiştiğinde grafik ve TSB/ACWR
+  // rozeti de değişsin diye artık gerçek allHistory (buildHistory çıktısı, TEK
+  // PAYLAŞILAN kaynak) kullanılır — son 10 gün. Sporcu seçilmemişse veya o
+  // sporcunun henüz hiç antrenman geçmişi yoksa, önceki illüstratif mock
+  // diziye (ve ondan türetilmiş tutarlı TSB +7/ACWR 0.84 çiftine) düşer —
+  // boş/kırık kart göstermemek için.
+  const _gercekGecmis=secilenSporcu?(allHistory?.[secilenSporcu.id]||[]).slice(-10):[];
+  const _gercekSon=_gercekGecmis.length?_gercekGecmis[_gercekGecmis.length-1]:null;
+  const yukLoadArr=_gercekGecmis.length?_gercekGecmis.map(function(h){return h.load||0;}):[22,38,15,52,26,61,12,47,55,30];
+  const ctlArr=_gercekGecmis.length?_gercekGecmis.map(function(h){return h.ctl||0;}):[28,29,30,31,33,34,36,37,39,45];
+  const atlArr=_gercekGecmis.length?_gercekGecmis.map(function(h){return h.atl||0;}):[24,34,18,44,28,50,14,40,46,38];
+  const chartW=340,chartH=90,barGap=8;
+  const chartMax=Math.max.apply(null,yukLoadArr.concat(ctlArr,atlArr,[1]))*1.15;
+  // Form/ACWR rozeti — gerçek sporcu seçiliyse SON gerçek gün (tsb/acwr zaten
+  // buildHistory'de hesaplı, TEK PAYLAŞILAN kaynak); yoksa mock CTL/ATL'den
+  // türetilmiş tutarlı çift (bkz. yukarıdaki not — Göksel'in 2026.09.12 kontrolü).
+  const _tsbMock=_gercekSon?_gercekSon.tsb:(ctlArr[ctlArr.length-1]-atlArr[atlArr.length-1]);
+  const _acwrMock=_gercekSon?_gercekSon.acwr:round2(atlArr[atlArr.length-1]/ctlArr[ctlArr.length-1]);
+  const _statusRenk=function(cls){return{good:'#34d399',info:'#60a5fa',warn:'#fbbf24',danger:'#f87171'}[cls]||'rgba(255,255,255,0.5)';};
+  const barCount=yukLoadArr.length;
+  const barW=(chartW-(barCount-1)*barGap)/barCount;
+  const xAt=function(i){return i*(barW+barGap)+barW/2;};
+  const yAt=function(v){return chartH-(v/chartMax*chartH);};
+  const toPolyPoints=function(arr){return arr.map(function(v,i){return xAt(i)+','+yAt(v);}).join(' ');};
   // TEK KAYNAK: tsbStatus/acwrStatus — Dashboard'daki "TSB / Form" ve "ACWR (EWMA)"
   // metrik kartlarıyla (~satır 27577/27580) BİREBİR AYNI fonksiyonlar/eşikler.
-  // phase yok → acwrStatus geriye dönük sabit 0.8/1.3/1.5 bandına düşer (kanonik davranış).
+  // Gerçek gün varsa gerçek phase kullanılır (daha isabetli bant); yoksa phase
+  // yok → acwrStatus geriye dönük sabit 0.8/1.3/1.5 bandına düşer (kanonik davranış).
   const _tsbS=tsbStatus(_tsbMock,secilenSporcu);
-  const _acwrS=acwrStatus(_acwrMock,null,secilenSporcu);
+  const _acwrS=acwrStatus(_acwrMock,_gercekSon?_gercekSon.phase:null,secilenSporcu);
+
 
   // ── Kart 3 — Tutarlılık/disiplin mockup verisi (gerçek MotivasyonTab →
   // "🔥 Süreklilik & Hacim" bölümündeki AYNI dil: 'Plan Tutarlılığı (8 hafta)'
@@ -6109,12 +6121,12 @@ function AdCardItem({cardDef,teamName,teamLogo,athletes,override,onSave}){
       cardDef.gorsel==='yukGrafik'&&React.createElement('div',{style:{display:'flex',gap:8,marginBottom:22}},
         React.createElement('div',{style:{flex:1,background:'rgba(255,255,255,0.06)',borderRadius:12,padding:'12px 6px',border:'1px solid rgba(255,255,255,0.1)',textAlign:'center'}},
           React.createElement('div',{style:{fontSize:9,letterSpacing:1,color:'rgba(255,255,255,0.4)',marginBottom:6}},'TSB / FORM'),
-          React.createElement('div',{style:{fontSize:22,fontWeight:800,color:_statusRenk(_tsbS.cls),lineHeight:1}},(_tsbMock>0?'+':'')+_tsbMock),
+          React.createElement('div',{style:{fontSize:22,fontWeight:800,color:_statusRenk(_tsbS.cls),lineHeight:1}},(_tsbMock>0?'+':'')+(_tsbMock!=null?_tsbMock.toFixed(1):'—')),
           React.createElement('div',{style:{fontSize:10,color:_statusRenk(_tsbS.cls),marginTop:4}},_tsbS.label)
         ),
         React.createElement('div',{style:{flex:1,background:'rgba(255,255,255,0.06)',borderRadius:12,padding:'12px 6px',border:'1px solid rgba(255,255,255,0.1)',textAlign:'center'}},
           React.createElement('div',{style:{fontSize:9,letterSpacing:1,color:'rgba(255,255,255,0.4)',marginBottom:6}},'ACWR'),
-          React.createElement('div',{style:{fontSize:22,fontWeight:800,color:_statusRenk(_acwrS.cls),lineHeight:1}},_acwrMock.toFixed(2)),
+          React.createElement('div',{style:{fontSize:22,fontWeight:800,color:_statusRenk(_acwrS.cls),lineHeight:1}},_acwrMock!=null?_acwrMock.toFixed(2):'—'),
           React.createElement('div',{style:{fontSize:10,color:_statusRenk(_acwrS.cls),marginTop:4}},_acwrS.label)
         )
       ),
@@ -32337,7 +32349,7 @@ function App(){
         onToggleKayitAktif:()=>setKayitAktif(p=>!p)
       }),
       tab==='tani'&&React.createElement(TaniPaneliTab,{athletes,allHistory,races,workouts}),
-      tab==='reklam'&&React.createElement(ReklamTab,{teamName,teamLogo,athletes,adCardOverrides,onSaveAdCard:(cardId,val)=>setAdCardOverrides(prev=>{
+      tab==='reklam'&&React.createElement(ReklamTab,{teamName,teamLogo,athletes,adCardOverrides,allHistory,onSaveAdCard:(cardId,val)=>setAdCardOverrides(prev=>{
         const next=Object.assign({},prev);
         if(val===null)delete next[cardId];else next[cardId]=val;
         return next;
