@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.12-1919 --><!DOCTYPE html>
+<!-- Version: v2026.09.12-2110 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.12-1919';
+const APP_VERSION='v2026.09.12-2110';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -4685,6 +4685,15 @@ function withDriftComputed(w){
     drift_toparlanma_ef_pct:d.toparlanmaEFPct??null,
     drift_surekli_pct:d.surekliPct??null};
 }
+// Paylaşılan rozet — manuel giriş önizlemesi VE GPX Analiz sonucu AYNI görseli kullanır.
+function driftPctBadge(v,label){
+  if(v==null) return null;
+  return React.createElement('span',{style:{fontSize:12,padding:'3px 8px',borderRadius:'var(--radius)',
+    background:Math.abs(v)>=10?'var(--danger-bg)':(Math.abs(v)>=5?'var(--warn-bg)':'var(--success-bg)'),
+    border:'1px solid '+(Math.abs(v)>=10?'var(--danger)':(Math.abs(v)>=5?'var(--warn)':'var(--success)')),
+    display:'inline-block',marginRight:6,marginTop:4}},
+    label+': '+(v>0?'+':'')+v+'%');
+}
 // Paylaşılan UI — hem AntrenmanEkle (yeni kayıt) hem Gecmis (düzenleme) tarafından
 // aynı şekilde çağrılır (bkz. proje notu — panel/form paritesi). form: herhangi bir
 // {tur,drift_*} şeklindeki state; onChange:(key,val)=>void.
@@ -4696,14 +4705,10 @@ function driftFieldsUI(form,onChange){
     React.createElement('span',{style:{fontSize:11,minWidth:100,color:'var(--text-secondary)'}},label),
     numIn(baseKey+'_pace_dk','dk'),React.createElement('span',{style:{fontSize:11}},':'),numIn(baseKey+'_pace_sn','sn'),
     React.createElement('span',{style:{fontSize:10,color:'var(--text-tertiary)'}},'dk/km'),
-    numIn(baseKey+'_nabiz','bpm',60),React.createElement('span',{style:{fontSize:10,color:'var(--text-tertiary)'}},'bpm')
+    numIn(baseKey+'_nabiz','bpm',60),React.createElement('span',{style:{fontSize:10,color:'var(--text-tertiary)'}},'bpm (ort.)')
   );
   const d=calcCardiacDrift(form);
-  const pctBadge=(v,label)=>v==null?null:React.createElement('span',{style:{fontSize:12,padding:'3px 8px',borderRadius:'var(--radius)',
-    background:Math.abs(v)>=10?'var(--danger-bg)':(Math.abs(v)>=5?'var(--warn-bg)':'var(--success-bg)'),
-    border:'1px solid '+(Math.abs(v)>=10?'var(--danger)':(Math.abs(v)>=5?'var(--warn)':'var(--success)')),
-    display:'inline-block',marginRight:6,marginTop:4}},
-    label+': '+(v>0?'+':'')+v+'%');
+  const pctBadge=driftPctBadge;
   return React.createElement('div',{style:{marginTop:4}},
     React.createElement('div',{style:{display:'flex',gap:12,marginBottom:8,flexWrap:'wrap'}},
       React.createElement('label',{style:{fontSize:11,display:'flex',alignItems:'center',gap:4,cursor:'pointer'}},
@@ -29256,6 +29261,53 @@ function gpxComputePhases(points,blockCfgs){
   });
   return {rows,totalEndT,totalEndD};
 }
+// ── Kardiyak Drift — GPX Analiz otomatik tespiti (2026.09.12, Göksel talebi) ──────
+// Antrenmanın YAPISINI (tekrarlı/interval mi, sürekli/tek parça mı) blockCfgs'ten
+// KENDİ çıkarır — coach hiçbir şey seçmez/girmez (manuel giriş özelliğinden farkı budur,
+// bkz. driftFieldsUI). Burada HER ZAMAN ort. nabız (hr.avg) kullanılır — ders kitabı
+// EF/decoupling standardına birebir uyum için bilinçli tercih (Göksel, 2026.09.12).
+// NOT: gpxBuildLegPayload'ın toparlanma bacakları için sakladığı hr.min BURADA
+// KULLANILMAZ — o alan başka bir amaç için (toparlanmanın ne kadar derine indiği)
+// bilinçli olarak min. tutuluyor ve dokunulmadı; bu fonksiyon phaseRows'un HAM
+// hr.avg'ını doğrudan okur. Tek bir dosyada birden fazla uygun blok olabileceğinden
+// dönen değer bir dizidir.
+function gpxComputeCardiacDrift(points,blocks,phaseRows){
+  if(!points||!blocks||!phaseRows) return [];
+  const out=[];
+  blocks.forEach((b,bi)=>{
+    if(b.kind==='repeat'){
+      const reps=Math.max(1,parseInt(b.repCount)||1);
+      if(reps<2) return; // tek tekrarda ilk/son kıyası anlamsız
+      const wF=phaseRows.find(p=>p.blockIdx===bi&&p.legKind==='work'&&p.repIndex===1);
+      const wL=phaseRows.find(p=>p.blockIdx===bi&&p.legKind==='work'&&p.repIndex===reps);
+      const kosuPct=(wF&&wL)?_driftPct(_driftEF(wF.pace,wF.hr?.avg),_driftEF(wL.pace,wL.hr?.avg)):null;
+      let toparlanmaNabizPct=null,toparlanmaEFPct=null;
+      if(b.hasRest){
+        const rF=phaseRows.find(p=>p.blockIdx===bi&&p.legKind==='rest'&&p.repIndex===1);
+        const rL=phaseRows.find(p=>p.blockIdx===bi&&p.legKind==='rest'&&p.repIndex===reps);
+        if(rF&&rL){
+          toparlanmaNabizPct=_driftPct(rF.hr?.avg,rL.hr?.avg);
+          toparlanmaEFPct=_driftPct(_driftEF(rF.pace,rF.hr?.avg),_driftEF(rL.pace,rL.hr?.avg));
+        }
+      }
+      if(kosuPct!=null||toparlanmaNabizPct!=null||toparlanmaEFPct!=null){
+        out.push({blockIdx:bi,tip:'tekrarli',label:(b.workLabel||'Koşu')+' — 1↔'+reps,kosuPct,toparlanmaNabizPct,toparlanmaEFPct});
+      }
+    } else if(b.kind==='single'&&b.role==='main'){
+      const row=phaseRows.find(p=>p.blockIdx===bi);
+      if(!row||row.durSec<60) return; // <1dk bloklarda yarı-yarı gürültülü, atlanır
+      const mid=row.t0+(row.t1-row.t0)/2;
+      const d1=(gpxDistAtTime(points,mid)-gpxDistAtTime(points,row.t0))/1000;
+      const d2=(gpxDistAtTime(points,row.t1)-gpxDistAtTime(points,mid))/1000;
+      const dur1=mid-row.t0,dur2=row.t1-mid;
+      const pace1=(dur1>0&&d1>0)?dur1/d1:0,pace2=(dur2>0&&d2>0)?dur2/d2:0;
+      const hr1=gpxHrStatsWindow(points,row.t0,mid),hr2=gpxHrStatsWindow(points,mid,row.t1);
+      const surekliPct=_driftPct(_driftEF(pace1,hr1.avg),_driftEF(pace2,hr2.avg));
+      if(surekliPct!=null) out.push({blockIdx:bi,tip:'surekli',label:b.label||'Ana Bölüm',surekliPct});
+    }
+  });
+  return out;
+}
 // ── Bir faz satırının EKRANDA gösterilecek etiketi — blockCfgs'teki gerçek reçete
 // adını kullanır (ör. "🏃 Son Koşu Bloğu", "Z3 Tempo Bloğu 2", "Koşu 3").
 function gpxPhaseLabel(row,blockCfgs){
@@ -29423,6 +29475,7 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
   const [points,setPoints]=useState(null);
   const [status,setStatus]=useState(null);
   const [phaseResult,setPhaseResult]=useState(null);
+  const [driftResult,setDriftResult]=useState([]);
   const [applying,setApplying]=useState(false);
   const [applyMsg,setApplyMsg]=useState(null);
   const [updateAggregate,setUpdateAggregate]=useState(false);
@@ -29433,6 +29486,7 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
     let cancelled=false;
     setLoadingPlan(true);
     setPhaseResult(null);
+    setDriftResult([]);
     setApplyMsg(null);
     gpxResolveDayPlan(athlete,date,allHistory,races,workouts,testPlanlar).then(info=>{
       if(cancelled) return;
@@ -29484,6 +29538,7 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
     setFileName(file.name);
     setStatus({msg:'Okunuyor…',type:''});
     setPhaseResult(null);
+    setDriftResult([]);
     setApplyMsg(null);
     const reader=new FileReader();
     reader.onload=(ev)=>{
@@ -29526,6 +29581,7 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
     if(!points) return;
     const result=gpxComputePhases(points,blocks);
     setPhaseResult(result);
+    setDriftResult(gpxComputeCardiacDrift(points,blocks,result.rows));
     setApplyMsg(null);
   };
 
@@ -29765,6 +29821,15 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
               ))
             )
           )
+        ),
+        driftResult.length>0&&React.createElement('div',{style:{marginTop:14,paddingTop:12,borderTop:'1px solid var(--border)'}},
+          React.createElement('div',{style:{fontSize:12,fontWeight:600,marginBottom:6,color:'var(--text-secondary)'}},'📉 Kardiyak Drift (otomatik — ort. nabız ile)'),
+          driftResult.map((d,i)=>React.createElement('div',{key:i,style:{marginBottom:6}},
+            React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:2}},d.label),
+            d.tip==='tekrarli'
+              ?React.createElement('div',null,driftPctBadge(d.kosuPct,'Koşu Drift'),driftPctBadge(d.toparlanmaNabizPct,'Toparlanma Drift (nabız)'),driftPctBadge(d.toparlanmaEFPct,'Toparlanma Drift (EF)'))
+              :React.createElement('div',null,driftPctBadge(d.surekliPct,'Drift'))
+          ))
         ),
         React.createElement('canvas',{ref:chartRef,style:{width:'100%',height:180,display:'block',marginTop:10}}),
 
