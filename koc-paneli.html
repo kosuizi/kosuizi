@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.12-2350 --><!DOCTYPE html>
+<!-- Version: v2026.09.13-0016 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.12-2350';
+const APP_VERSION='v2026.09.13-0016';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -19090,6 +19090,9 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       plannedKaliteliCarry=[...(wkStats.buHaftaKaliteli||[])];
     }
   }
+  // Test-antrenman eşleşme önerileri — günleri değiştirmez, sadece rozet ekler
+  // (bkz. attachTestSuggestions tanımı, TEST_TURLERI motorunun yanında).
+  try{ attachTestSuggestions(weeks,athlete,history,races,actualWorkouts); }catch(e){}
   return{weeks,primary,intermediate};
 }
 
@@ -20280,7 +20283,7 @@ function PickDebugInfo({debug}){
   );
 }
 
-function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapInit,onPlanSnapChange,onAthletesRefresh,onWorkoutsRefresh,onSaveWorkout,onUpdateWorkout,onUpdateAthlete}){  const [showLoading,setShowLoading]=useState(false);
+function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapInit,onPlanSnapChange,onAthletesRefresh,onWorkoutsRefresh,onSaveWorkout,onUpdateWorkout,onUpdateAthlete,onSaveTestPlan}){  const [showLoading,setShowLoading]=useState(false);
   const [selectedPrimary,setSelectedPrimary]=useState(null);
   const [planMode,setPlanModeLocal]=useState('optimize');
   const [expandDay,setExpandDay]=useState(null);
@@ -20302,6 +20305,18 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
   const [snapReady,setSnapReady]=useState(!!planSnapInit);
   const snapFetchOkRef=useRef(false);
   const [reviewMsg,setReviewMsg]=useState(null);
+  // Test-antrenman öneri rozeti onayı — TestTab'daki "Planla" akışıyla AYNI
+  // mekanizma (onSaveTestPlan → testPlanlar). Günü hemen değiştirmez; sadece
+  // testPlanlar'a kayıt ekler. Diğer "Planla" kayıtlarıyla tam tutarlı olması
+  // için koç sonrasında "Planı Güncelle"ye basmalı — bu, mevcut Test sekmesi
+  // akışıyla birebir aynı beklenti, ayrı bir yeniden-üretme yolu icat edilmedi.
+  const handleApplyTestSuggestion=(day)=>{
+    if(!day?.testSuggestion||!onSaveTestPlan)return;
+    const {testId,ad}=day.testSuggestion;
+    onSaveTestPlan({id:uid(),athId:athlete.id,testTur:testId,testAd:ad,date:day.date,olusturuldu:new Date().toISOString()});
+    const _dp=day.date.split('-');
+    setReviewMsg(`🧪 ${_dp[2]}.${_dp[1]} — ${ad} olarak planlandı. Uygulamak için 'Planı Güncelle'ye bas.`);
+  };
   const weekKey=getWeekKey(0);
   const prevWeekKey=getWeekKey(-1);
   // Rampa-vs-İdeal karar rozetinin sayısal önerisi (bkz. ~satır 16770 civarı,
@@ -23522,6 +23537,15 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     fontSize:9,fontWeight:700,color:'var(--warn)',textAlign:'center',
                     marginBottom:3,padding:'2px 4px',background:'var(--warn-bg)',borderRadius:3
                   }},'🧪 '+testPlan.testAd.split('(')[0].trim()),
+                  // Test-antrenman öneri rozeti — sadece OTOMATİK üretilmiş öneri
+                  // için (testPlan yoksa, geçmiş/iptal değilse). Tıklanınca günü
+                  // DEĞİŞTİRMEZ, sadece testPlanlar'a ekler (bkz. handleApplyTestSuggestion).
+                  !testPlan&&!isCancelled&&!day.isPast&&day.testSuggestion&&React.createElement('div',{
+                    title:`Bu günün antrenman etkisi "${day.testSuggestion.ad}" testine yakın${day.testSuggestion.neden?' ('+day.testSuggestion.neden+')':''}. Onaylarsan bu gün için test planlanır — uygulamak için ayrıca "Planı Güncelle" gerekir.`,
+                    style:{fontSize:9,fontWeight:700,color:'var(--info)',textAlign:'center',
+                      marginBottom:3,padding:'2px 4px',background:'var(--info-bg)',borderRadius:3,cursor:'pointer'},
+                    onClick:function(e){e.stopPropagation();handleApplyTestSuggestion(day);}
+                  },'🧪❓ '+day.testSuggestion.ad.split('(')[0].trim()),
                   React.createElement('div',{style:{fontSize:18,textAlign:'center'}},
                     dayEmoji(day)
                   ),
@@ -26105,6 +26129,62 @@ function calcTestTiming(athlete, history, races, workouts){
   });
 
   return oneriler;
+}
+
+// ── Test-Antrenman Eşleştirme (Öneri Rozeti) ────────────────────────────────
+// Göksel'in isteği (13.09.2026): "Programı Güncelle" bir gün için Eşik/İnterval/
+// Aerobik türü bir antrenman ürettiğinde, eğer o günün etkisine yakın bir test
+// (ör. Laktat Eşiği Testi ~ Eşik günü) ZATEN ZAMANI GELMİŞSE, günü OTOMATİK
+// DEĞİŞTİRMEDEN sadece bir öneri rozeti gösterilir. Koç onaylarsa (Test
+// sekmesindeki mevcut "Planla" akışıyla aynı yolla) test resmi olarak planlanır;
+// sonraki "Planı Güncelle" o günü gerçek teste çevirir. Otomatik/sessiz
+// değişiklik YOK — bu bilinçli bir tasarım kararı (Göksel'in seçimi).
+const TEST_TUR_ESLESME={
+  esik:['lthr_test','zaman_5k'],
+  esik_sureli:['lthr_test','zaman_5k'],
+  tempo:['zaman_5k'],
+  tempo_sureli:['zaman_5k'],
+  cruise:['zaman_5k'],
+  interval:['cooper','lthr_test'],
+  kolay:['maf'],
+  aerobik:['maf'],
+};
+// Bir önceki gün bunlardan biriyse, test günü için "önceki gün yoğun" sayılır
+// (calcTestDayUygunluk ile aynı liste mantığı — panel paritesi).
+const TEST_ONCEKI_GUN_YOGUN_TIPLERI=['interval','esik','esik_sureli','tempo','tempo_sureli','yokus_kisa','yokus_uzun','tirmanis','cruise','piramit','kesintisiz_piramit','on_off','progressive'];
+
+// weeks (generateTwoWeekPlan'ın ürettiği hafta dizisi) üzerinde, henüz
+// yapılmamış/test olmayan günlere day.testSuggestion ekler. Hata olursa
+// sessizce hiçbir şey eklemez — plan üretimini asla bozmaz.
+function attachTestSuggestions(weeks,athlete,history,races,actualWorkouts){
+  if(!athlete||!Array.isArray(weeks)||!weeks.length)return weeks;
+  let timing;
+  try{ timing=calcTestTiming(athlete,history,races,actualWorkouts); }catch(e){ return weeks; }
+  const onerilir={};
+  (timing||[]).forEach(t=>{ if(t&&t.durum==='onerilir'&&t.id) onerilir[t.id]=t; });
+  if(!Object.keys(onerilir).length)return weeks;
+
+  const allDays=[];
+  weeks.forEach(w=>(w?.days||[]).forEach(d=>allDays.push(d)));
+
+  allDays.forEach((day,idx)=>{
+    try{
+      if(!day||!day.date||day.isPast||day.isTest)return;
+      if(day.actual&&day.actual.length>0)return; // zaten yapılmış/kayıtlı
+      const adaylar=TEST_TUR_ESLESME[day.tip];
+      if(!adaylar||!adaylar.length)return;
+      const testId=adaylar.find(id=>onerilir[id]);
+      if(!testId)return;
+      const oncekiGun=allDays[idx-1];
+      const dunkuYogunPlanlanan=!!(oncekiGun&&TEST_ONCEKI_GUN_YOGUN_TIPLERI.includes(oncekiGun.tip));
+      const gunUygunluk=calcTestDayUygunluk(day.date,athlete,history,races,actualWorkouts,dunkuYogunPlanlanan);
+      if(gunUygunluk&&gunUygunluk.uygun===false)return; // bu gün için özel bir engel var (yarış yakın, ACWR/TSB vb.)
+      const testDef=TEST_TURLERI[testId];
+      if(!testDef)return;
+      day.testSuggestion={testId,ad:testDef.ad,icon:testDef.icon,neden:onerilir[testId].neden||null};
+    }catch(e){ /* bir günde hata olursa sadece o günü atla */ }
+  });
+  return weeks;
 }
 
 // Koşu dinamikleri analizi
@@ -32568,7 +32648,7 @@ function App(){
       tab==='anketler'&&React.createElement(AnketlerTab,{athletes,onUpdateAthlete:handleUpdateAthlete}),
       tab==='dashboard'&&React.createElement(Dashboard,{workouts:athWks,athlete,history,races,teamLogo,teamName,planSnap}),
       tab==='motivasyon'&&React.createElement(ErrorBoundary,null,React.createElement(MotivasyonTab,{athlete,workouts:athWks,history})),
-      tab==='plan'&&React.createElement(ErrorBoundary,null,React.createElement(HaftalikPlanTab,{athlete,history,races,workouts,testPlanlar,planSnapInit:planSnap,onPlanSnapChange:setPlanSnapApp,onAthletesRefresh:freshList=>setAthletes(freshList),onWorkoutsRefresh:freshWks=>setWorkouts(freshWks),onUpdateAthlete:handleUpdateAthlete,onUpdateWorkout:handleUpdateWorkout,onSaveWorkout:w=>{const ath=athletes.find(a=>a.id===w.athleteId);const m=calcMetrics(w,ath);const rec=calcRecovery(w,ath,m.yukObj);const mergedHedef=mergeRecoveryHedef(rec.hedefISO,rec.saatler,workouts,w.athleteId);setWorkouts(p=>[...p,{...w,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:mergedHedef}]);}})),
+      tab==='plan'&&React.createElement(ErrorBoundary,null,React.createElement(HaftalikPlanTab,{athlete,history,races,workouts,testPlanlar,planSnapInit:planSnap,onPlanSnapChange:setPlanSnapApp,onAthletesRefresh:freshList=>setAthletes(freshList),onWorkoutsRefresh:freshWks=>setWorkouts(freshWks),onUpdateAthlete:handleUpdateAthlete,onUpdateWorkout:handleUpdateWorkout,onSaveWorkout:w=>{const ath=athletes.find(a=>a.id===w.athleteId);const m=calcMetrics(w,ath);const rec=calcRecovery(w,ath,m.yukObj);const mergedHedef=mergeRecoveryHedef(rec.hedefISO,rec.saatler,workouts,w.athleteId);setWorkouts(p=>[...p,{...w,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:mergedHedef}]);},onSaveTestPlan:p=>setTestPlanlar(prev=>[...prev.filter(x=>!(x.athId===p.athId&&x.testTur===p.testTur)),p])})),
       tab==='lider'&&React.createElement(LiderlikTab,{athletes,workouts,teamName,teamLogo,races,leaderboardWeights,setLeaderboardWeights,leaderboardVisible,setLeaderboardVisible}),
       tab==='bolge'&&React.createElement(BolgeTab,{athlete,workouts:athWks,onUpdateAthlete:handleUpdateAthlete}),
       tab==="test"&&React.createElement(TestTab,{athlete,history,races,workouts,onUpdateAthlete:handleUpdateAthlete,onSaveWorkout:w=>setWorkouts(p=>[...p,w]),onUpdateWorkout:handleUpdateWorkout,onDeleteWorkout:id=>setWorkouts(p=>p.filter(x=>x.id!==id)),testPlanlar,onSaveTestPlan:p=>setTestPlanlar(prev=>[...prev.filter(x=>!(x.athId===p.athId&&x.testTur===p.testTur)),p]),onDeleteTestPlan:id=>setTestPlanlar(p=>p.filter(x=>x.id!==id))}),
