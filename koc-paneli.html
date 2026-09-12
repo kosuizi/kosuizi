@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.12-2124 --><!DOCTYPE html>
+<!-- Version: v2026.09.12-2152 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.12-2124';
+const APP_VERSION='v2026.09.12-2152';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -4634,56 +4634,66 @@ const YAPI_NOTLARI={
 
 
 const EMPTY_W={date:new Date().toISOString().split('T')[0],time:'',spor:'kosu',tur:'',yapi_notu:'',sure_sa:'0',sure_dk:'0',sure_sn:'0',mesafe:'',irtifa:'',ort_nabiz:'',maks_nabiz:'',rpe:'',kadans:'',yer_kontak:'',dikey_salinim:'',zemin_dengesi:'',zemin_zorluk:'1',ort_guc:'',maks_guc:'',notlar:'',analiz_icin:false,yol_yarisi:false,trail_yarisi:false,
-  drift_yapi:'',
-  drift_ilkkosu_pace_dk:'',drift_ilkkosu_pace_sn:'',drift_ilkkosu_nabiz:'',
-  drift_sonkosu_pace_dk:'',drift_sonkosu_pace_sn:'',drift_sonkosu_nabiz:'',
-  drift_ilktoparlanma_pace_dk:'',drift_ilktoparlanma_pace_sn:'',drift_ilktoparlanma_nabiz:'',
-  drift_sontoparlanma_pace_dk:'',drift_sontoparlanma_pace_sn:'',drift_sontoparlanma_nabiz:'',
-  drift_yari1_pace_dk:'',drift_yari1_pace_sn:'',drift_yari1_nabiz:'',
-  drift_yari2_pace_dk:'',drift_yari2_pace_sn:'',drift_yari2_nabiz:''
+  drift_bloklar:[]
 };
 
-// ── Kardiyak Drift — manuel giriş (2026.09.12, Göksel talebi) ──────────────────
-// Antrenman türüne göre iki yapı: 'tekrarli' (interval — ilk/son tekrar VE ilk/son
-// toparlanma kıyası, 3 ayrı % değer) veya 'surekli' (tek parça — ilk/son yarı kıyası,
-// tek % değer). Yapı, form.tur'a göre varsayılan seçilir ama coach elle değiştirebilir
-// (ör. bir "tempo" antrenmanı blok+toparlanma şeklinde koşulduysa).
-// Formül (Pa:HR / EF decoupling — standart aerobik decoupling yöntemi): her segment
-// için EF=pace(sn/km)/ortNabız hesaplanır; drift%=((EF_son-EF_ilk)/EF_ilk)×100.
-// Toparlanma "sadece nabız" değeri ise EF kullanmaz, doğrudan ortNabız'ın kendi
-// yüzdesel değişimidir: ((nabiz_son-nabiz_ilk)/nabiz_ilk)×100.
+// ── Kardiyak Drift — ÇOK BLOKLU yapı (2026.09.12, Göksel talebi) ──────────────────
+// Bir antrenman günü BİRDEN FAZLA ayrı analiz edilebilir bölümden oluşabilir (ör.
+// 6×400 interval + ayrıca 4×1km tempo) — bu yüzden drift tek bir sabit alan seti
+// değil, w.drift_bloklar DİZİSİ olarak tutulur. Her blok kendi içinde ya 'tekrarli'
+// (interval — ilk/son tekrar VE ilk/son toparlanma, 3 % değeri) ya 'surekli' (tek
+// parça — ilk/son yarı, 1 % değeri). Bu dizi ÜÇ farklı yoldan doldurulabilir/okunabilir
+// — hepsi AYNI şekli kullanır, bu yüzden tek bir okuyucu/yazıcı (bu dosya) yeterli:
+//   1) Manuel giriş (driftFieldsUI, AntrenmanEkle/Gecmis) — coach elle "+ Blok Ekle"
+//   2) GPX Analiz (gpxComputeCardiacDrift) — otomatik tespit, aynı şekilde dolu bloklar üretir
+//   3) GPX'ten kaydedilmiş bir antrenman Geçmiş'te düzenlenirken — drift_bloklar zaten
+//      dolu geldiği için driftFieldsUI onu OLDUĞU GİBİ (doğru blok sayısı ve tipiyle) render eder
+// Formül (Pa:HR / EF decoupling — standart aerobik decoupling): her segment için
+// EF=pace(sn/km)/ortNabız; drift%=((EF_son-EF_ilk)/EF_ilk)×100. Toparlanma "sadece
+// nabız" değeri EF kullanmaz, doğrudan ortNabız'ın kendi yüzdesel değişimidir.
 const DRIFT_TEKRARLI_TURLER=['interval','piramit','kesintisiz_piramit','on_off','cruise','yaris_tempo','hill_sprint','yokus_kisa','strides','depar'];
 function driftYapiVarsayilan(tur){ return DRIFT_TEKRARLI_TURLER.includes(tur||'')?'tekrarli':'surekli'; }
 function _driftPaceSec(dk,sn){ const d=parseFloat(dk)||0,s=parseFloat(sn)||0; return (d>0||s>0)?d*60+s:0; }
 function _driftPct(a,b){ return (a>0&&b>0)?Math.round(((b-a)/a)*1000)/10:null; }
 function _driftEF(paceSec,hr){ return (paceSec>0&&hr>0)?paceSec/hr:0; }
-function calcCardiacDrift(w){
-  if(!w) return {yapi:'surekli'};
-  const yapi=w.drift_yapi||driftYapiVarsayilan(w.tur||'');
-  if(yapi==='tekrarli'){
-    const p1=_driftPaceSec(w.drift_ilkkosu_pace_dk,w.drift_ilkkosu_pace_sn),h1=parseFloat(w.drift_ilkkosu_nabiz)||0;
-    const p2=_driftPaceSec(w.drift_sonkosu_pace_dk,w.drift_sonkosu_pace_sn),h2=parseFloat(w.drift_sonkosu_nabiz)||0;
-    const kosuPct=_driftPct(_driftEF(p1,h1),_driftEF(p2,h2));
-    const th1=parseFloat(w.drift_ilktoparlanma_nabiz)||0,th2=parseFloat(w.drift_sontoparlanma_nabiz)||0;
-    const toparlanmaNabizPct=_driftPct(th1,th2);
-    const tp1=_driftPaceSec(w.drift_ilktoparlanma_pace_dk,w.drift_ilktoparlanma_pace_sn);
-    const tp2=_driftPaceSec(w.drift_sontoparlanma_pace_dk,w.drift_sontoparlanma_pace_sn);
-    const toparlanmaEFPct=_driftPct(_driftEF(tp1,th1),_driftEF(tp2,th2));
-    return {yapi,kosuPct,toparlanmaNabizPct,toparlanmaEFPct};
-  }
-  const p1=_driftPaceSec(w.drift_yari1_pace_dk,w.drift_yari1_pace_sn),h1=parseFloat(w.drift_yari1_nabiz)||0;
-  const p2=_driftPaceSec(w.drift_yari2_pace_dk,w.drift_yari2_pace_sn),h2=parseFloat(w.drift_yari2_nabiz)||0;
-  return {yapi,surekliPct:_driftPct(_driftEF(p1,h1),_driftEF(p2,h2))};
+// sn → {dk,sn} string parçaları — GPX tarafının ham saniyeyi manuel alan şekline
+// (pace_dk/pace_sn) çevirmesi için (bkz. gpxComputeCardiacDrift).
+function _secToPaceParts(sec){
+  if(!sec||sec<=0) return {dk:'',sn:''};
+  const dk=Math.floor(sec/60),sn=Math.round(sec%60);
+  return {dk:String(dk),sn:String(sn)};
 }
-// Kaydetme anında ham girişlere ek olarak hesaplanmış %'leri de kalıcı alanlara yazar
-// (drift_yapi çözümlenmiş haliyle — sonradan tur değişirse varsayılan da değişmesin diye).
+// Tek bir bloğun ham alanlarından %'lerini hesaplar — kaynağı fark etmez (manuel/GPX).
+function _driftBlokHesapla(blok){
+  if(!blok) return {};
+  if(blok.tip==='tekrarli'){
+    const p1=_driftPaceSec(blok.ilkkosu_pace_dk,blok.ilkkosu_pace_sn),h1=parseFloat(blok.ilkkosu_nabiz)||0;
+    const p2=_driftPaceSec(blok.sonkosu_pace_dk,blok.sonkosu_pace_sn),h2=parseFloat(blok.sonkosu_nabiz)||0;
+    const kosuPct=_driftPct(_driftEF(p1,h1),_driftEF(p2,h2));
+    const th1=parseFloat(blok.ilktoparlanma_nabiz)||0,th2=parseFloat(blok.sontoparlanma_nabiz)||0;
+    const toparlanmaNabizPct=_driftPct(th1,th2);
+    const tp1=_driftPaceSec(blok.ilktoparlanma_pace_dk,blok.ilktoparlanma_pace_sn);
+    const tp2=_driftPaceSec(blok.sontoparlanma_pace_dk,blok.sontoparlanma_pace_sn);
+    const toparlanmaEFPct=_driftPct(_driftEF(tp1,th1),_driftEF(tp2,th2));
+    return {kosuPct,toparlanmaNabizPct,toparlanmaEFPct};
+  }
+  const p1=_driftPaceSec(blok.yari1_pace_dk,blok.yari1_pace_sn),h1=parseFloat(blok.yari1_nabiz)||0;
+  const p2=_driftPaceSec(blok.yari2_pace_dk,blok.yari2_pace_sn),h2=parseFloat(blok.yari2_nabiz)||0;
+  return {surekliPct:_driftPct(_driftEF(p1,h1),_driftEF(p2,h2))};
+}
+// Kaydetme anında: HER bloğun %'lerini ham alanlardan yeniden hesaplayıp bloğun
+// içine yazar (coach GPX'in doldurduğu bir değeri elle değiştirmiş olabilir — o
+// yüzden burada asla eski/önceden hesaplanmış bir %'ye güvenilmez), ayrıca geriye
+// dönük uyumluluk için İLK bloğun sonucunu eski tekil alanlara da yansıtır.
 function withDriftComputed(w){
-  const d=calcCardiacDrift(w);
-  return {...w,drift_yapi:d.yapi,
-    drift_kosu_pct:d.kosuPct??null,
-    drift_toparlanma_nabiz_pct:d.toparlanmaNabizPct??null,
-    drift_toparlanma_ef_pct:d.toparlanmaEFPct??null,
-    drift_surekli_pct:d.surekliPct??null};
+  const bloklar=(w.drift_bloklar||[]).map(b=>({...b,..._driftBlokHesapla(b)}));
+  const ilk=bloklar[0]||null;
+  return {...w,drift_bloklar:bloklar,
+    drift_yapi:ilk?ilk.tip:null,
+    drift_kosu_pct:ilk?ilk.kosuPct??null:null,
+    drift_toparlanma_nabiz_pct:ilk?ilk.toparlanmaNabizPct??null:null,
+    drift_toparlanma_ef_pct:ilk?ilk.toparlanmaEFPct??null:null,
+    drift_surekli_pct:ilk?ilk.surekliPct??null:null};
 }
 // Paylaşılan rozet — manuel giriş önizlemesi VE GPX Analiz sonucu AYNI görseli kullanır.
 function driftPctBadge(v,label){
@@ -4695,40 +4705,58 @@ function driftPctBadge(v,label){
     label+': '+(v>0?'+':'')+v+'%');
 }
 // Paylaşılan UI — hem AntrenmanEkle (yeni kayıt) hem Gecmis (düzenleme) tarafından
-// aynı şekilde çağrılır (bkz. proje notu — panel/form paritesi). form: herhangi bir
-// {tur,drift_*} şeklindeki state; onChange:(key,val)=>void.
+// aynı şekilde çağrılır (bkz. proje notu — panel/form paritesi). form: {tur,
+// drift_bloklar:[...]} şeklinde herhangi bir state; onChange:(key,val)=>void — YALNIZCA
+// form seviyesindeki 'drift_bloklar' anahtarını günceller, dış bileşenlerin set/setF'i
+// DEĞİŞMEDEN kullanılabilir. GPX'ten gelen bloklar (ilkkosu_pace_dk vb. ham alanlarla
+// ZATEN dolu) burada OLDUĞU GİBİ, doğru blok sayısı/tipiyle render edilir.
 function driftFieldsUI(form,onChange){
-  const yapi=form.drift_yapi||driftYapiVarsayilan(form.tur||'');
-  const numIn=(key,ph,w)=>React.createElement('input',{type:'number',value:form[key]??'',placeholder:ph||'',
-    onChange:e=>onChange(key,e.target.value),style:{width:w||50,fontSize:12,padding:'4px 6px'}});
-  const seg=(baseKey,label)=>React.createElement('div',{style:{display:'flex',alignItems:'center',gap:4,flexWrap:'wrap',marginBottom:6}},
+  const bloklar=(form.drift_bloklar&&form.drift_bloklar.length)?form.drift_bloklar:[{tip:driftYapiVarsayilan(form.tur||'')}];
+  const setBloklar=(next)=>onChange('drift_bloklar',next);
+  const updateBlok=(idx,key,val)=>setBloklar(bloklar.map((b,i)=>i===idx?{...b,[key]:val}:b));
+  const addBlok=()=>setBloklar([...bloklar,{tip:driftYapiVarsayilan(form.tur||'')}]);
+  const removeBlok=(idx)=>setBloklar(bloklar.filter((_,i)=>i!==idx));
+
+  const numIn=(blok,idx,key,ph,w)=>React.createElement('input',{type:'number',value:blok[key]??'',placeholder:ph||'',
+    onChange:e=>updateBlok(idx,key,e.target.value),style:{width:w||50,fontSize:12,padding:'4px 6px'}});
+  const seg=(blok,idx,baseKey,label)=>React.createElement('div',{style:{display:'flex',alignItems:'center',gap:4,flexWrap:'wrap',marginBottom:6}},
     React.createElement('span',{style:{fontSize:11,minWidth:100,color:'var(--text-secondary)'}},label),
-    numIn(baseKey+'_pace_dk','dk'),React.createElement('span',{style:{fontSize:11}},':'),numIn(baseKey+'_pace_sn','sn'),
+    numIn(blok,idx,baseKey+'_pace_dk','dk'),React.createElement('span',{style:{fontSize:11}},':'),numIn(blok,idx,baseKey+'_pace_sn','sn'),
     React.createElement('span',{style:{fontSize:10,color:'var(--text-tertiary)'}},'dk/km'),
-    numIn(baseKey+'_nabiz','bpm',60),React.createElement('span',{style:{fontSize:10,color:'var(--text-tertiary)'}},'bpm (ort.)')
+    numIn(blok,idx,baseKey+'_nabiz','bpm',60),React.createElement('span',{style:{fontSize:10,color:'var(--text-tertiary)'}},'bpm (ort.)')
   );
-  const d=calcCardiacDrift(form);
-  const pctBadge=driftPctBadge;
+
   return React.createElement('div',{style:{marginTop:4}},
-    React.createElement('div',{style:{display:'flex',gap:12,marginBottom:8,flexWrap:'wrap'}},
-      React.createElement('label',{style:{fontSize:11,display:'flex',alignItems:'center',gap:4,cursor:'pointer'}},
-        React.createElement('input',{type:'radio',checked:yapi==='tekrarli',onChange:()=>onChange('drift_yapi','tekrarli')}),'Tekrarlı (interval — ilk/son tekrar)'),
-      React.createElement('label',{style:{fontSize:11,display:'flex',alignItems:'center',gap:4,cursor:'pointer'}},
-        React.createElement('input',{type:'radio',checked:yapi==='surekli',onChange:()=>onChange('drift_yapi','surekli')}),'Sürekli (tek parça — ilk/son yarı)')
-    ),
-    yapi==='tekrarli'?React.createElement('div',null,
-      seg('drift_ilkkosu','İlk Koşu'),seg('drift_sonkosu','Son Koşu'),
-      seg('drift_ilktoparlanma','İlk Toparlanma'),seg('drift_sontoparlanma','Son Toparlanma')
-    ):React.createElement('div',null,
-      seg('drift_yari1','1. Yarı'),seg('drift_yari2','2. Yarı')
-    ),
-    (d.kosuPct!=null||d.toparlanmaNabizPct!=null||d.toparlanmaEFPct!=null||d.surekliPct!=null)&&
-      React.createElement('div',{style:{marginTop:4}},
-        pctBadge(d.kosuPct,'Koşu Drift'),
-        pctBadge(d.toparlanmaNabizPct,'Toparlanma Drift (nabız)'),
-        pctBadge(d.toparlanmaEFPct,'Toparlanma Drift (EF)'),
-        pctBadge(d.surekliPct,'Drift')
-      )
+    bloklar.map((blok,idx)=>{
+      const d=_driftBlokHesapla(blok);
+      return React.createElement('div',{key:idx,style:{border:'1px solid var(--border)',borderRadius:'var(--radius)',padding:8,marginBottom:8}},
+        React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}},
+          React.createElement('span',{style:{fontSize:11,fontWeight:600,color:'var(--text-tertiary)'}},
+            bloklar.length>1?('Blok '+(idx+1)+(blok.label?' — '+blok.label:'')):(blok.label||'')),
+          bloklar.length>1&&React.createElement('button',{type:'button',className:'btn',style:{fontSize:10,padding:'2px 8px'},onClick:()=>removeBlok(idx)},'Sil')
+        ),
+        React.createElement('div',{style:{display:'flex',gap:12,marginBottom:8,flexWrap:'wrap'}},
+          React.createElement('label',{style:{fontSize:11,display:'flex',alignItems:'center',gap:4,cursor:'pointer'}},
+            React.createElement('input',{type:'radio',checked:blok.tip==='tekrarli',onChange:()=>updateBlok(idx,'tip','tekrarli')}),'Tekrarlı (interval — ilk/son tekrar)'),
+          React.createElement('label',{style:{fontSize:11,display:'flex',alignItems:'center',gap:4,cursor:'pointer'}},
+            React.createElement('input',{type:'radio',checked:blok.tip==='surekli',onChange:()=>updateBlok(idx,'tip','surekli')}),'Sürekli (tek parça — ilk/son yarı)')
+        ),
+        blok.tip==='tekrarli'?React.createElement('div',null,
+          seg(blok,idx,'ilkkosu','İlk Koşu'),seg(blok,idx,'sonkosu','Son Koşu'),
+          seg(blok,idx,'ilktoparlanma','İlk Toparlanma'),seg(blok,idx,'sontoparlanma','Son Toparlanma')
+        ):React.createElement('div',null,
+          seg(blok,idx,'yari1','1. Yarı'),seg(blok,idx,'yari2','2. Yarı')
+        ),
+        (d.kosuPct!=null||d.toparlanmaNabizPct!=null||d.toparlanmaEFPct!=null||d.surekliPct!=null)&&
+          React.createElement('div',{style:{marginTop:4}},
+            driftPctBadge(d.kosuPct,'Koşu Drift'),
+            driftPctBadge(d.toparlanmaNabizPct,'Toparlanma Drift (nabız)'),
+            driftPctBadge(d.toparlanmaEFPct,'Toparlanma Drift (EF)'),
+            driftPctBadge(d.surekliPct,'Drift')
+          )
+      );
+    }),
+    React.createElement('button',{type:'button',className:'btn',style:{fontSize:11},onClick:addBlok},'+ Blok Ekle')
   );
 }
 
@@ -29263,14 +29291,18 @@ function gpxComputePhases(points,blockCfgs){
 }
 // ── Kardiyak Drift — GPX Analiz otomatik tespiti (2026.09.12, Göksel talebi) ──────
 // Antrenmanın YAPISINI (tekrarlı/interval mi, sürekli/tek parça mı) blockCfgs'ten
-// KENDİ çıkarır — coach hiçbir şey seçmez/girmez (manuel giriş özelliğinden farkı budur,
-// bkz. driftFieldsUI). Burada HER ZAMAN ort. nabız (hr.avg) kullanılır — ders kitabı
-// EF/decoupling standardına birebir uyum için bilinçli tercih (Göksel, 2026.09.12).
-// NOT: gpxBuildLegPayload'ın toparlanma bacakları için sakladığı hr.min BURADA
-// KULLANILMAZ — o alan başka bir amaç için (toparlanmanın ne kadar derine indiği)
-// bilinçli olarak min. tutuluyor ve dokunulmadı; bu fonksiyon phaseRows'un HAM
-// hr.avg'ını doğrudan okur. Tek bir dosyada birden fazla uygun blok olabileceğinden
-// dönen değer bir dizidir.
+// KENDİ çıkarır — coach hiçbir şey seçmez/girmez. Burada HER ZAMAN ort. nabız (hr.avg)
+// kullanılır — ders kitabı EF/decoupling standardına birebir uyum için bilinçli tercih
+// (Göksel, 2026.09.12). NOT: gpxBuildLegPayload'ın toparlanma bacakları için sakladığı
+// hr.min BURADA KULLANILMAZ — o alan başka bir amaç için (toparlanmanın ne kadar derine
+// indiği) bilinçli olarak min. tutuluyor ve dokunulmadı.
+// Dönen her blok, driftFieldsUI'nin (manuel giriş) beklediği AYNI ham alan şeklinde
+// (ör. ilkkosu_pace_dk/sn, ilkkosu_nabiz) üretilir — sadece %'ler değil, girdi
+// değerlerinin KENDİSİ de dk:sn/bpm'e çevrilip yazılır. Böylece bu dizi doğrudan
+// w.drift_bloklar'a yazıldığında, Geçmiş'te düzenlemeye açıldığında driftFieldsUI
+// bloğu OLDUĞU GİBİ (doğru sayı/tip, dolu ve düzenlenebilir alanlarla) render eder —
+// GPX ile manuel giriş arasında tek, ortak bir veri şekli (Göksel talebi, 2026.09.12).
+// Tek bir dosyada birden fazla uygun blok olabileceğinden dönen değer bir dizidir.
 function gpxComputeCardiacDrift(points,blocks,phaseRows){
   if(!points||!blocks||!phaseRows) return [];
   const out=[];
@@ -29280,19 +29312,24 @@ function gpxComputeCardiacDrift(points,blocks,phaseRows){
       if(reps<2) return; // tek tekrarda ilk/son kıyası anlamsız
       const wF=phaseRows.find(p=>p.blockIdx===bi&&p.legKind==='work'&&p.repIndex===1);
       const wL=phaseRows.find(p=>p.blockIdx===bi&&p.legKind==='work'&&p.repIndex===reps);
-      const kosuPct=(wF&&wL)?_driftPct(_driftEF(wF.pace,wF.hr?.avg),_driftEF(wL.pace,wL.hr?.avg)):null;
-      let toparlanmaNabizPct=null,toparlanmaEFPct=null;
+      if(!wF||!wL) return;
+      const blok={tip:'tekrarli',label:(b.workLabel||'Koşu')+' — 1↔'+reps};
+      const p1=_secToPaceParts(wF.pace); blok.ilkkosu_pace_dk=p1.dk; blok.ilkkosu_pace_sn=p1.sn;
+      blok.ilkkosu_nabiz=wF.hr?.avg!=null?String(Math.round(wF.hr.avg)):'';
+      const p2=_secToPaceParts(wL.pace); blok.sonkosu_pace_dk=p2.dk; blok.sonkosu_pace_sn=p2.sn;
+      blok.sonkosu_nabiz=wL.hr?.avg!=null?String(Math.round(wL.hr.avg)):'';
       if(b.hasRest){
         const rF=phaseRows.find(p=>p.blockIdx===bi&&p.legKind==='rest'&&p.repIndex===1);
         const rL=phaseRows.find(p=>p.blockIdx===bi&&p.legKind==='rest'&&p.repIndex===reps);
         if(rF&&rL){
-          toparlanmaNabizPct=_driftPct(rF.hr?.avg,rL.hr?.avg);
-          toparlanmaEFPct=_driftPct(_driftEF(rF.pace,rF.hr?.avg),_driftEF(rL.pace,rL.hr?.avg));
+          const rp1=_secToPaceParts(rF.pace); blok.ilktoparlanma_pace_dk=rp1.dk; blok.ilktoparlanma_pace_sn=rp1.sn;
+          blok.ilktoparlanma_nabiz=rF.hr?.avg!=null?String(Math.round(rF.hr.avg)):'';
+          const rp2=_secToPaceParts(rL.pace); blok.sontoparlanma_pace_dk=rp2.dk; blok.sontoparlanma_pace_sn=rp2.sn;
+          blok.sontoparlanma_nabiz=rL.hr?.avg!=null?String(Math.round(rL.hr.avg)):'';
         }
       }
-      if(kosuPct!=null||toparlanmaNabizPct!=null||toparlanmaEFPct!=null){
-        out.push({blockIdx:bi,tip:'tekrarli',label:(b.workLabel||'Koşu')+' — 1↔'+reps,kosuPct,toparlanmaNabizPct,toparlanmaEFPct});
-      }
+      Object.assign(blok,_driftBlokHesapla(blok));
+      if(blok.kosuPct!=null||blok.toparlanmaNabizPct!=null||blok.toparlanmaEFPct!=null){ out.push({blockIdx:bi,...blok}); }
     } else if(b.kind==='single'&&b.role==='main'){
       const row=phaseRows.find(p=>p.blockIdx===bi);
       if(!row||row.durSec<60) return; // <1dk bloklarda yarı-yarı gürültülü, atlanır
@@ -29302,8 +29339,13 @@ function gpxComputeCardiacDrift(points,blocks,phaseRows){
       const dur1=mid-row.t0,dur2=row.t1-mid;
       const pace1=(dur1>0&&d1>0)?dur1/d1:0,pace2=(dur2>0&&d2>0)?dur2/d2:0;
       const hr1=gpxHrStatsWindow(points,row.t0,mid),hr2=gpxHrStatsWindow(points,mid,row.t1);
-      const surekliPct=_driftPct(_driftEF(pace1,hr1.avg),_driftEF(pace2,hr2.avg));
-      if(surekliPct!=null) out.push({blockIdx:bi,tip:'surekli',label:b.label||'Ana Bölüm',surekliPct});
+      const blok={tip:'surekli',label:b.label||'Ana Bölüm'};
+      const p1=_secToPaceParts(pace1); blok.yari1_pace_dk=p1.dk; blok.yari1_pace_sn=p1.sn;
+      blok.yari1_nabiz=hr1.avg!=null?String(Math.round(hr1.avg)):'';
+      const p2=_secToPaceParts(pace2); blok.yari2_pace_dk=p2.dk; blok.yari2_pace_sn=p2.sn;
+      blok.yari2_nabiz=hr2.avg!=null?String(Math.round(hr2.avg)):'';
+      Object.assign(blok,_driftBlokHesapla(blok));
+      if(blok.surekliPct!=null) out.push({blockIdx:bi,...blok});
     }
   });
   return out;
@@ -29622,19 +29664,24 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
       const hrVals=points.filter(p=>p.hr!=null).map(p=>p.hr);
       const ortNabiz=hrVals.length?Math.round(hrVals.reduce((a,b)=>a+b,0)/hrVals.length):null;
       const maksNabiz=hrVals.length?Math.round(Math.max(...hrVals)):null;
-      // Kardiyac Drift (2026.09.12, Göksel talebi) — GPX Analiz'in otomatik hesapladığı
-      // sonuç (driftResult state, birden fazla blok varsa ilki esas alınır), manuel
-      // giriştekiyle (withDriftComputed) AYNI alan adlarıyla kaydedilir ki tek bir okuyucu
-      // ikisini de aynı şekilde tüketebilsin. Burada withDriftComputed ÇAĞRILMAZ — o
-      // fonksiyon ham drift_*_pace_dk/sn girişlerinden yeniden hesaplar, GPX kaydında
-      // böyle ham alanlar yok; sonuç zaten gpxComputeCardiacDrift'ten hazır geliyor.
-      const _driftPrimary=driftResult&&driftResult[0]||null;
-      const driftPatch=_driftPrimary?{
-        drift_yapi:_driftPrimary.tip,
-        drift_kosu_pct:_driftPrimary.kosuPct??null,
-        drift_toparlanma_nabiz_pct:_driftPrimary.toparlanmaNabizPct??null,
-        drift_toparlanma_ef_pct:_driftPrimary.toparlanmaEFPct??null,
-        drift_surekli_pct:_driftPrimary.surekliPct??null
+      // Kardiyak Drift (2026.09.12, Göksel talebi) — GPX Analiz'in otomatik hesapladığı
+      // TÜM bloklar (driftResult, artık ham pace_dk/sn+nabız alanlarını da taşıyor —
+      // bkz. gpxComputeCardiacDrift) w.drift_bloklar'a AYNEN yazılır; hiçbir blok
+      // kaybolmaz (önceki sürümde sadece ilk blok kaydediliyordu). Geriye dönük
+      // uyumluluk için İLK bloğun %'leri eski tekil alanlara da yansıtılır. Bu dizi
+      // hesaplanır) — Geçmiş'te düzenlemeye açıldığında driftFieldsUI tarafından OLDUĞU
+      // GİBİ (doğru blok sayısı/tipiyle, dolu ve düzenlenebilir) render edilir. Burada
+      // withDriftComputed ÇAĞRILMAZ — gereksiz olurdu, %'ler zaten aynı hesapla
+      // (gpxComputeCardiacDrift → _driftBlokHesapla) üretildi; coach Geçmiş'te bu
+      // değerleri elle değiştirirse, saveEdit zaten withDriftComputed ile yeniden
+      // hesaplayıp üzerine yazar.
+      const driftPatch=(driftResult&&driftResult.length)?{
+        drift_bloklar:driftResult,
+        drift_yapi:driftResult[0].tip,
+        drift_kosu_pct:driftResult[0].kosuPct??null,
+        drift_toparlanma_nabiz_pct:driftResult[0].toparlanmaNabizPct??null,
+        drift_toparlanma_ef_pct:driftResult[0].toparlanmaEFPct??null,
+        drift_surekli_pct:driftResult[0].surekliPct??null
       }:{};
 
       if(isNewWorkout){
