@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.12-1220 --><!DOCTYPE html>
+<!-- Version: v2026.09.12-1919 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.12-1220';
+const APP_VERSION='v2026.09.12-1919';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -4633,7 +4633,99 @@ const YAPI_NOTLARI={
 };
 
 
-const EMPTY_W={date:new Date().toISOString().split('T')[0],time:'',spor:'kosu',tur:'',yapi_notu:'',sure_sa:'0',sure_dk:'0',sure_sn:'0',mesafe:'',irtifa:'',ort_nabiz:'',maks_nabiz:'',rpe:'',kadans:'',yer_kontak:'',dikey_salinim:'',zemin_dengesi:'',zemin_zorluk:'1',ort_guc:'',maks_guc:'',notlar:'',analiz_icin:false,yol_yarisi:false,trail_yarisi:false};
+const EMPTY_W={date:new Date().toISOString().split('T')[0],time:'',spor:'kosu',tur:'',yapi_notu:'',sure_sa:'0',sure_dk:'0',sure_sn:'0',mesafe:'',irtifa:'',ort_nabiz:'',maks_nabiz:'',rpe:'',kadans:'',yer_kontak:'',dikey_salinim:'',zemin_dengesi:'',zemin_zorluk:'1',ort_guc:'',maks_guc:'',notlar:'',analiz_icin:false,yol_yarisi:false,trail_yarisi:false,
+  drift_yapi:'',
+  drift_ilkkosu_pace_dk:'',drift_ilkkosu_pace_sn:'',drift_ilkkosu_nabiz:'',
+  drift_sonkosu_pace_dk:'',drift_sonkosu_pace_sn:'',drift_sonkosu_nabiz:'',
+  drift_ilktoparlanma_pace_dk:'',drift_ilktoparlanma_pace_sn:'',drift_ilktoparlanma_nabiz:'',
+  drift_sontoparlanma_pace_dk:'',drift_sontoparlanma_pace_sn:'',drift_sontoparlanma_nabiz:'',
+  drift_yari1_pace_dk:'',drift_yari1_pace_sn:'',drift_yari1_nabiz:'',
+  drift_yari2_pace_dk:'',drift_yari2_pace_sn:'',drift_yari2_nabiz:''
+};
+
+// ── Kardiyak Drift — manuel giriş (2026.09.12, Göksel talebi) ──────────────────
+// Antrenman türüne göre iki yapı: 'tekrarli' (interval — ilk/son tekrar VE ilk/son
+// toparlanma kıyası, 3 ayrı % değer) veya 'surekli' (tek parça — ilk/son yarı kıyası,
+// tek % değer). Yapı, form.tur'a göre varsayılan seçilir ama coach elle değiştirebilir
+// (ör. bir "tempo" antrenmanı blok+toparlanma şeklinde koşulduysa).
+// Formül (Pa:HR / EF decoupling — standart aerobik decoupling yöntemi): her segment
+// için EF=pace(sn/km)/ortNabız hesaplanır; drift%=((EF_son-EF_ilk)/EF_ilk)×100.
+// Toparlanma "sadece nabız" değeri ise EF kullanmaz, doğrudan ortNabız'ın kendi
+// yüzdesel değişimidir: ((nabiz_son-nabiz_ilk)/nabiz_ilk)×100.
+const DRIFT_TEKRARLI_TURLER=['interval','piramit','kesintisiz_piramit','on_off','cruise','yaris_tempo','hill_sprint','yokus_kisa','strides','depar'];
+function driftYapiVarsayilan(tur){ return DRIFT_TEKRARLI_TURLER.includes(tur||'')?'tekrarli':'surekli'; }
+function _driftPaceSec(dk,sn){ const d=parseFloat(dk)||0,s=parseFloat(sn)||0; return (d>0||s>0)?d*60+s:0; }
+function _driftPct(a,b){ return (a>0&&b>0)?Math.round(((b-a)/a)*1000)/10:null; }
+function _driftEF(paceSec,hr){ return (paceSec>0&&hr>0)?paceSec/hr:0; }
+function calcCardiacDrift(w){
+  if(!w) return {yapi:'surekli'};
+  const yapi=w.drift_yapi||driftYapiVarsayilan(w.tur||'');
+  if(yapi==='tekrarli'){
+    const p1=_driftPaceSec(w.drift_ilkkosu_pace_dk,w.drift_ilkkosu_pace_sn),h1=parseFloat(w.drift_ilkkosu_nabiz)||0;
+    const p2=_driftPaceSec(w.drift_sonkosu_pace_dk,w.drift_sonkosu_pace_sn),h2=parseFloat(w.drift_sonkosu_nabiz)||0;
+    const kosuPct=_driftPct(_driftEF(p1,h1),_driftEF(p2,h2));
+    const th1=parseFloat(w.drift_ilktoparlanma_nabiz)||0,th2=parseFloat(w.drift_sontoparlanma_nabiz)||0;
+    const toparlanmaNabizPct=_driftPct(th1,th2);
+    const tp1=_driftPaceSec(w.drift_ilktoparlanma_pace_dk,w.drift_ilktoparlanma_pace_sn);
+    const tp2=_driftPaceSec(w.drift_sontoparlanma_pace_dk,w.drift_sontoparlanma_pace_sn);
+    const toparlanmaEFPct=_driftPct(_driftEF(tp1,th1),_driftEF(tp2,th2));
+    return {yapi,kosuPct,toparlanmaNabizPct,toparlanmaEFPct};
+  }
+  const p1=_driftPaceSec(w.drift_yari1_pace_dk,w.drift_yari1_pace_sn),h1=parseFloat(w.drift_yari1_nabiz)||0;
+  const p2=_driftPaceSec(w.drift_yari2_pace_dk,w.drift_yari2_pace_sn),h2=parseFloat(w.drift_yari2_nabiz)||0;
+  return {yapi,surekliPct:_driftPct(_driftEF(p1,h1),_driftEF(p2,h2))};
+}
+// Kaydetme anında ham girişlere ek olarak hesaplanmış %'leri de kalıcı alanlara yazar
+// (drift_yapi çözümlenmiş haliyle — sonradan tur değişirse varsayılan da değişmesin diye).
+function withDriftComputed(w){
+  const d=calcCardiacDrift(w);
+  return {...w,drift_yapi:d.yapi,
+    drift_kosu_pct:d.kosuPct??null,
+    drift_toparlanma_nabiz_pct:d.toparlanmaNabizPct??null,
+    drift_toparlanma_ef_pct:d.toparlanmaEFPct??null,
+    drift_surekli_pct:d.surekliPct??null};
+}
+// Paylaşılan UI — hem AntrenmanEkle (yeni kayıt) hem Gecmis (düzenleme) tarafından
+// aynı şekilde çağrılır (bkz. proje notu — panel/form paritesi). form: herhangi bir
+// {tur,drift_*} şeklindeki state; onChange:(key,val)=>void.
+function driftFieldsUI(form,onChange){
+  const yapi=form.drift_yapi||driftYapiVarsayilan(form.tur||'');
+  const numIn=(key,ph,w)=>React.createElement('input',{type:'number',value:form[key]??'',placeholder:ph||'',
+    onChange:e=>onChange(key,e.target.value),style:{width:w||50,fontSize:12,padding:'4px 6px'}});
+  const seg=(baseKey,label)=>React.createElement('div',{style:{display:'flex',alignItems:'center',gap:4,flexWrap:'wrap',marginBottom:6}},
+    React.createElement('span',{style:{fontSize:11,minWidth:100,color:'var(--text-secondary)'}},label),
+    numIn(baseKey+'_pace_dk','dk'),React.createElement('span',{style:{fontSize:11}},':'),numIn(baseKey+'_pace_sn','sn'),
+    React.createElement('span',{style:{fontSize:10,color:'var(--text-tertiary)'}},'dk/km'),
+    numIn(baseKey+'_nabiz','bpm',60),React.createElement('span',{style:{fontSize:10,color:'var(--text-tertiary)'}},'bpm')
+  );
+  const d=calcCardiacDrift(form);
+  const pctBadge=(v,label)=>v==null?null:React.createElement('span',{style:{fontSize:12,padding:'3px 8px',borderRadius:'var(--radius)',
+    background:Math.abs(v)>=10?'var(--danger-bg)':(Math.abs(v)>=5?'var(--warn-bg)':'var(--success-bg)'),
+    border:'1px solid '+(Math.abs(v)>=10?'var(--danger)':(Math.abs(v)>=5?'var(--warn)':'var(--success)')),
+    display:'inline-block',marginRight:6,marginTop:4}},
+    label+': '+(v>0?'+':'')+v+'%');
+  return React.createElement('div',{style:{marginTop:4}},
+    React.createElement('div',{style:{display:'flex',gap:12,marginBottom:8,flexWrap:'wrap'}},
+      React.createElement('label',{style:{fontSize:11,display:'flex',alignItems:'center',gap:4,cursor:'pointer'}},
+        React.createElement('input',{type:'radio',checked:yapi==='tekrarli',onChange:()=>onChange('drift_yapi','tekrarli')}),'Tekrarlı (interval — ilk/son tekrar)'),
+      React.createElement('label',{style:{fontSize:11,display:'flex',alignItems:'center',gap:4,cursor:'pointer'}},
+        React.createElement('input',{type:'radio',checked:yapi==='surekli',onChange:()=>onChange('drift_yapi','surekli')}),'Sürekli (tek parça — ilk/son yarı)')
+    ),
+    yapi==='tekrarli'?React.createElement('div',null,
+      seg('drift_ilkkosu','İlk Koşu'),seg('drift_sonkosu','Son Koşu'),
+      seg('drift_ilktoparlanma','İlk Toparlanma'),seg('drift_sontoparlanma','Son Toparlanma')
+    ):React.createElement('div',null,
+      seg('drift_yari1','1. Yarı'),seg('drift_yari2','2. Yarı')
+    ),
+    (d.kosuPct!=null||d.toparlanmaNabizPct!=null||d.toparlanmaEFPct!=null||d.surekliPct!=null)&&
+      React.createElement('div',{style:{marginTop:4}},
+        pctBadge(d.kosuPct,'Koşu Drift'),
+        pctBadge(d.toparlanmaNabizPct,'Toparlanma Drift (nabız)'),
+        pctBadge(d.toparlanmaEFPct,'Toparlanma Drift (EF)'),
+        pctBadge(d.surekliPct,'Drift')
+      )
+  );
+}
 
 function acwrStatus(v,phase,athlete){
   if(!v)return{label:'—',cls:'',badge:''};
@@ -29786,7 +29878,7 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,wor
     if(durSec<=0&&!form.mesafe)return alert('Süre veya mesafe girin!');
     const rec=calcRecovery(form,selectedAth||athlete,calcMetrics(form,selectedAth||athlete).yukObj);
     setLastRec(rec);
-    onSave({...form,id:uid(),athleteId:selId,savedAt:new Date().toISOString()});
+    onSave(withDriftComputed({...form,id:uid(),athleteId:selId,savedAt:new Date().toISOString()}));
     setSelectedRaceForYaris(null);
     setForm({...EMPTY_W});setSaved(true);setTimeout(()=>setSaved(false),3000);
   };
@@ -29967,6 +30059,8 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,wor
         fgi('RPE (1–10)','rpe','number',{min:1,max:10}),
         fgi('Kadans (spm)','kadans','number',{min:100,max:220})
       ),
+      React.createElement('div',{className:'card-title',style:{marginTop:10}},'Kardiyak Drift (opsiyonel)'),
+      driftFieldsUI(form,set),
       React.createElement('div',{className:'card-title',style:{marginTop:10}},'Koşu Dinamikleri (opsiyonel)'),
       React.createElement('div',{className:'form-grid'},
         fgi('Yer Kontak (ms)','yer_kontak','number'),
@@ -30541,7 +30635,7 @@ function Gecmis({workouts,athletes,races,onDelete,onBulkDelete,onUpdate}){
     const ath=athletes.find(a=>a.id===(editForm.athleteId||editW.athleteId));
     const m=calcMetrics(editForm,ath);
     const rec=calcRecovery(editForm,ath,m.yukObj);
-    onUpdate(editW.id,{...editForm,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:rec.hedefISO});
+    onUpdate(editW.id,withDriftComputed({...editForm,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:rec.hedefISO}));
     setEditW(null);setEditForm({});
   };
 
@@ -30862,6 +30956,8 @@ function Gecmis({workouts,athletes,races,onDelete,onBulkDelete,onUpdate}){
           fgi('Ort. Güç (W)','ort_guc','number',{min:0}),
           fgi('Maks. Güç (W)','maks_guc','number',{min:0})
         ),
+        React.createElement('div',{className:'card-title',style:{marginTop:8}},'Kardiyak Drift (opsiyonel)'),
+        driftFieldsUI(editForm,setF),
         React.createElement('div',{className:'card-title',style:{marginTop:8}},'Koşu Dinamikleri (opsiyonel)'),
         React.createElement('div',{className:'form-grid'},
           fgi('Yer Kontak (ms)','yer_kontak','number',{min:0}),
