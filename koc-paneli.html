@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.13-1138 --><!DOCTYPE html>
+<!-- Version: v2026.09.13-1427 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.13-1138';
+const APP_VERSION='v2026.09.13-1427';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -779,15 +779,21 @@ function buildHistory(wks,ath,races){
     const YAPILI=['interval','esik','esik_sureli','tempo','tempo_sureli','yokus_kisa','yokus_uzun','tirmanis','teknik','depar','yaris'];
     const isSteady=!YAPILI.includes(tur)&&(hrRange===0||hrRange<=25)&&(parseFloat(w.rpe)||0)<=7;
     const manuelDahil=!!w.analiz_icin;
+    let powerEff=null;
     if(isKosu&&km>2&&hr>aerBandLow&&hr<aerBandHigh&&durMin>15&&(isSteady||manuelDahil)){
       const paceSec=(durMin*60)/km;
       aerEff=round1(paceSec*(hr/140));
+      // Güç verimlilik (Efficiency Factor) = NP / ortalama nabız — FTP gerektirmez
+      // (pTSS/IF'in aksine). AYNI kapıdan geçer (Z2 bandı, steady, 15dk+, km>2);
+      // yükselmesi = aynı nabızda daha fazla güç = aerobik gelişim (Göksel talebi).
+      if(m.np>0) powerEff=round2(m.np/hr);
     }
     if(day){
-      byDay[day]=byDay[day]||{load:0,mech:0,aerEffSum:0,aerEffCount:0};
+      byDay[day]=byDay[day]||{load:0,mech:0,aerEffSum:0,aerEffCount:0,powerEffSum:0,powerEffCount:0};
       byDay[day].load+=(m.yukObj||0);
       byDay[day].mech+=(m.mechLoad||0);
       if(aerEff){byDay[day].aerEffSum+=aerEff;byDay[day].aerEffCount++;}
+      if(powerEff){byDay[day].powerEffSum+=powerEff;byDay[day].powerEffCount++;}
     }
   });
   const first=new Date(sorted[0].date+'T12:00:00');
@@ -799,7 +805,7 @@ function buildHistory(wks,ath,races){
 
   let atl=0,ctl=0,mAtl=0,mCtl=0;
   return days.map(day=>{
-    const {load=0,mech=0,aerEffSum=0,aerEffCount=0}=byDay[day]||{};
+    const {load=0,mech=0,aerEffSum=0,aerEffCount=0,powerEffSum=0,powerEffCount=0}=byDay[day]||{};
     atl=load*λ_atl+atl*(1-λ_atl);
     ctl=load*λ_ctl+ctl*(1-λ_ctl);
     mAtl=mech*λ_matl+mAtl*(1-λ_matl);
@@ -807,10 +813,11 @@ function buildHistory(wks,ath,races){
     const acwr=ctl>1?round2(atl/ctl):null;
     const phase=calcPhase(day,nextRace?.tarih,nextRace?.prep_weeks,nextRace||{},getAthRaceOverride(ath,nextRace?.id));
     const aerEff=aerEffCount>0?round1(aerEffSum/aerEffCount):null;
+    const powerEff=powerEffCount>0?round2(powerEffSum/powerEffCount):null;
     return{
       date:day,load:round1(load),mech:round1(mech),
       atl:round1(atl),ctl:round1(ctl),tsb:round1(ctl-atl),acwr,
-      mechAtl:round1(mAtl),mechCtl:round1(mCtl),phase,aerEff
+      mechAtl:round1(mAtl),mechCtl:round1(mCtl),phase,aerEff,powerEff
     };
   });
 }
@@ -25225,6 +25232,168 @@ function AerobikVerimlilikKarti({history,athlete}){
   );
 }
 
+// ── Güç Verimlilik Grafiği — Aerobik Verimlilik'in güç karşılığı ────────────
+// EF (Efficiency Factor) = NP / ortalama nabız. Y ekseni REVERSE DEĞİL (aerEff'in
+// tersine) — burada artış doğrudan iyi demek (aynı nabızda daha fazla güç).
+function ChartPowerEff({history}){
+  const ref=useRef();const inst=useRef();
+  useEffect(()=>{
+    if(!ref.current)return;
+    const data=history.filter(d=>d.powerEff!==null);
+    if(data.length<2){if(inst.current){inst.current.destroy();inst.current=null;}return;}
+    const isDark=window.matchMedia('(prefers-color-scheme:dark)').matches;
+    const gridColor=isDark?'rgba(255,255,255,.08)':'rgba(0,0,0,.08)';
+    const tickColor=isDark?'#777':'#888';
+
+    const SMA_PERIOD=data.length>=10?5:data.length>=6?3:2;
+    const rawVals=data.map(d=>d.powerEff);
+    const smaVals=rawVals.map((_,i)=>{
+      if(i<SMA_PERIOD-1)return null;
+      const slice=rawVals.slice(i-SMA_PERIOD+1,i+1);
+      return slice.reduce((s,v)=>s+v,0)/SMA_PERIOD;
+    });
+
+    const validSma=smaVals.filter(v=>v!==null);
+    const smaFirst=validSma.length>0?validSma[0]:null;
+    const smaLast=validSma.length>0?validSma[validSma.length-1]:null;
+    // Yükselen değer = iyileşme = yeşil (aerEff'in tersine, reverse yok)
+    const smaColor=(smaFirst!==null&&smaLast!==null)
+      ?(smaLast>smaFirst?'#16a34a':'#dc2626')
+      :'#f59e0b';
+
+    if(inst.current)inst.current.destroy();
+    inst.current=new Chart(ref.current,{
+      type:'line',
+      data:{
+        labels:data.map(d=>fmtShort(d.date)),
+        datasets:[
+          {
+            label:'EF (NP/nabız)',
+            data:rawVals,
+            borderColor:'#0891b2',borderWidth:2,pointRadius:2,
+            pointBackgroundColor:'#0891b2',tension:.3,fill:false,
+            order:2
+          },
+          {
+            label:'SMA('+SMA_PERIOD+')',
+            data:smaVals,
+            borderColor:smaColor,borderWidth:2.5,pointRadius:0,
+            borderDash:[],tension:.4,fill:false,
+            spanGaps:false,order:1
+          }
+        ]
+      },
+      options:{
+        responsive:true,maintainAspectRatio:false,
+        plugins:{
+          legend:{
+            display:true,
+            labels:{
+              color:tickColor,font:{size:10},
+              boxWidth:20,padding:12,
+              filter:(item)=>item.datasetIndex===1
+                ?Object.assign(item,{text:'Ort. eğilim (SMA'+SMA_PERIOD+') '+(smaLast>smaFirst?'↑ İyileşiyor':'↓ Geriyor')})||true
+                :true
+            }
+          },
+          tooltip:{callbacks:{
+            label:ctx=>{
+              const v=ctx.raw;
+              if(v==null)return null;
+              if(ctx.datasetIndex===1)return`SMA(${SMA_PERIOD}): ${v.toFixed(2)} W/bpm`;
+              return`EF: ${v.toFixed(2)} W/bpm`;
+            }
+          }}
+        },
+        scales:{
+          x:{ticks:{color:tickColor,font:{size:10},maxTicksLimit:8},grid:{color:gridColor},border:{display:false}},
+          y:{
+            ticks:{color:tickColor,font:{size:10}},
+            grid:{color:gridColor},border:{display:false},
+            title:{display:true,text:'↑ Daha fazla güç/nabız (daha iyi)',color:tickColor,font:{size:10}}
+          }
+        }
+      }
+    });
+    return()=>{if(inst.current)inst.current.destroy();};
+  },[history]);
+  const dataCount=history.filter(d=>d.powerEff!==null).length;
+  if(dataCount<2)return React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',padding:'20px 0',textAlign:'center'}},'Seçilen dönemde güç verimliliği için yeterli veri yok — Z2 bölgesinde (HR 120–165) 15dk+, güç verisi girilmiş en az 2 koşu gerekiyor.');
+  return React.createElement('div',{style:{position:'relative',height:180}},React.createElement('canvas',{ref}));
+}
+
+// ── Güç Verimlilik Kartı (1H/2H/4H/8H/12H periyot seçimli) ──────────────────
+// Aerobik Verimlilik Kartı'nın güç karşılığı: "aynı nabızda daha fazla güç mü
+// üretiliyor?" sorusuna cevap verir (Göksel talebi, 2026.09.13). EF=NP/ortalama
+// nabız — FTP'ye bağlı değildir (pTSS/IF'in aksine), sadece güç verisi girilmiş
+// ve aerEff ile AYNI kapıdan geçen (Z2 bandı, steady, 15dk+, km>2) antrenmanlarda
+// hesaplanır. Mutlak EF değeri kişiye/cihaza göre değiştiğinden (evrensel bir
+// "iyi pace" eşiği gibi) yorum SADECE trend üzerinden yapılır, mutlak eşik yok.
+function GucVerimlilikKarti({history,athlete}){
+  const [period,setPeriod]=React.useState(4);
+  const cardRef=React.useRef();
+  const e=React.createElement;
+
+  const histFiltered=React.useMemo(()=>history.slice(-period*7),[history,period]);
+  const histOlder=React.useMemo(()=>history.slice(-period*14,-period*7),[history,period]);
+
+  const PeriodBtn=({w,l})=>e('button',{
+    onClick:()=>setPeriod(w),
+    style:{
+      padding:'3px 8px',fontSize:11,fontWeight:600,borderRadius:4,border:'1px solid',cursor:'pointer',
+      background:period===w?'var(--info)':'transparent',
+      color:period===w?'#fff':'var(--text-secondary)',
+      borderColor:period===w?'var(--info)':'var(--border)',
+      transition:'all .15s'
+    }
+  },l);
+
+  return e('div',{ref:cardRef,className:'card'},
+    e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4,flexWrap:'wrap',gap:8}},
+      e('div',{className:'card-title',style:{margin:0}},'Güç Verimlilik — NP / Ortalama Nabız (EF)'),
+      e('div',{style:{display:'flex',alignItems:'center',gap:6}},
+        e('div',{style:{display:'flex',gap:3}},
+          [{w:1,l:'1H'},{w:2,l:'2H'},{w:4,l:'4H'},{w:8,l:'8H'},{w:12,l:'12H'}].map(({w,l})=>
+            e(PeriodBtn,{key:w,w,l})
+          )
+        ),
+        e(ShareBtn,{elRef:cardRef,filename:'guc_verimlilik.png',title:'Güç Verimlilik',text:athlete?.ad+' güç bazlı aerobik gelişim'})
+      )
+    ),
+    e('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:8}},
+      'Son '+period+' hafta · Z2 antrenmanlarında NP/ortalama nabız (EF) oranı. Grafik yukarı çıkıyorsa aynı nabızda daha fazla güç üretiliyor — aerobik taban güçleniyor. FTP gerektirmez.'
+    ),
+    e(ChartPowerEff,{history:histFiltered}),
+    (()=>{
+      const recent=histFiltered.filter(d=>d.powerEff!=null).map(d=>d.powerEff);
+      const older=histOlder.filter(d=>d.powerEff!=null).map(d=>d.powerEff);
+      if(recent.length<3)return e('div',{style:{fontSize:12,color:'var(--text-tertiary)',marginTop:8}},'Yorum için seçilen dönemde güç verisi girilmiş en az 3 Z2 antrenmanı gerekiyor.');
+      const avgRecent=round2(recent.reduce((s,v)=>s+v,0)/recent.length);
+      const avgOlder=older.length>=3?round2(older.reduce((s,v)=>s+v,0)/older.length):null;
+      const msgs=[];
+
+      if(avgOlder!==null){
+        const diff=round2(avgRecent-avgOlder); // pozitif = iyileşme (daha fazla güç/nabız)
+        const pct=avgOlder!==0?Math.round(Math.abs(diff)/Math.abs(avgOlder)*100):0;
+        if(diff>0.02)        msgs.push({cls:'good', text:'📈 Son '+period+' haftada güç verimliliği %'+pct+' arttı (+'+diff+' W/bpm) — aynı nabızda daha fazla güç üretiyorsun. Aerobik taban güçleniyor.'});
+        else if(diff>-0.02)  msgs.push({cls:'info', text:'➡ Son '+period+' haftada verimlilik stabil ('+(diff>=0?'+':'')+diff+' W/bpm).'});
+        else                 msgs.push({cls:'warn', text:'⚠ Son '+period+' haftada güç verimliliği %'+pct+' geriledi ('+diff+' W/bpm) — yorgunluk, hastalık veya yüksek şiddet ağırlığı olabilir.'});
+      }else{
+        msgs.push({cls:'info', text:'ℹ Trend karşılaştırması için önceki '+period+' haftalık dönemde güç verisi girilmiş en az 3 Z2 antrenmanı gerekiyor.'});
+      }
+
+      return e('div',{style:{marginTop:8,display:'flex',flexDirection:'column',gap:5}},
+        msgs.map((m,i)=>e('div',{key:i,style:{
+          fontSize:12,padding:'7px 11px',borderRadius:'var(--radius)',
+          background:m.cls==='danger'?'var(--danger-bg)':m.cls==='warn'?'var(--warn-bg)':m.cls==='good'?'var(--success-bg)':'var(--info-bg)',
+          color:m.cls==='danger'?'var(--danger)':m.cls==='warn'?'var(--warn)':m.cls==='good'?'var(--success)':'var(--info)',
+          borderLeft:'3px solid '+(m.cls==='danger'?'var(--danger)':m.cls==='warn'?'var(--warn)':m.cls==='good'?'var(--success)':'var(--info)')
+        }},m.text))
+      );
+    })()
+  );
+}
+
 // ── Verilen Antrenmanı Yapabilme Puanı Kartı (1H/2H/4H/8H/12H/Tümü periyot seçimli) ──
 // Aerobik Verimlilik kartının hemen altında — "sporcu koçun verdiği pace'i ne kadar
 // dinliyor" sorusuna doğrudan cevap verir. Veri kaynağı plan_snapshots/rowOverrides
@@ -28202,6 +28371,8 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
 
     // Aerobik verimlilik (1H/2H/4H/8H/12H periyot seçimli)
     React.createElement(AerobikVerimlilikKarti,{history,athlete}),
+    // Güç verimlilik — EF=NP/nabız, aynı nabızda daha fazla güç mü üretiliyor (Göksel talebi, 2026.09.13)
+    React.createElement(GucVerimlilikKarti,{history,athlete}),
     // Verilen Antrenmanı Yapabilme Puanı — pace uyum/disiplin (1H/2H/4H/8H/12H/Tümü)
     React.createElement(VerilenAntrenmaniYapabilmePuaniKarti,{athlete}),
     // Verilen Antrenmanı Yapabilme Puanı — haftalık gelişim grafiği (8H/12H/26H/52H)
