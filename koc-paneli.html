@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.13-1427 --><!DOCTYPE html>
+<!-- Version: v2026.09.13-1441 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.13-1427';
+const APP_VERSION='v2026.09.13-1441';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -25394,6 +25394,107 @@ function GucVerimlilikKarti({history,athlete}){
   );
 }
 
+// ── Aerobik-Güç Karşılaştırma Kartı ──────────────────────────────────────────
+// Aerobik Verimlilik (pace/nabız) ve Güç Verimlilik (NP/nabız) trendlerini
+// BİRLİKTE okur (Göksel talebi, 2026.09.13). Paralel gitmeleri iki bağımsız
+// ölçümün birbirini doğrulaması demektir (güçlü sinyal); ayrışmaları ise koşu
+// ekonomisi değişimi ya da parkur/rüzgar/kalibrasyon etkisi olasılığını işaret
+// eder. Eşikler kasıtlı olarak AerobikVerimlilikKarti/GucVerimlilikKarti'ndaki
+// good/warn sınırlarıyla BİREBİR aynı (diff<-5 / diff>0.02 vb.) — panel/kart
+// tutarlılığı için ayrı bir eşik icat edilmedi.
+function classifyAerEff(avgRecent,avgOlder){
+  if(avgRecent==null||avgOlder==null)return null;
+  const diff=round1(avgRecent-avgOlder); // negatif=iyileşme (pace küçülüyor)
+  if(diff<-5) return 'gelisiyor';
+  if(diff>=5) return 'geriliyor';
+  return 'stabil';
+}
+function classifyPowerEff(avgRecent,avgOlder){
+  if(avgRecent==null||avgOlder==null)return null;
+  const diff=round2(avgRecent-avgOlder); // pozitif=iyileşme (EF büyüyor)
+  if(diff>0.02) return 'gelisiyor';
+  if(diff<=-0.02) return 'geriliyor';
+  return 'stabil';
+}
+const AG_YORUM={
+  'gelisiyor|gelisiyor':{cls:'good',text:'✅ Paralel gelişim: Hem pace hem güç aynı yönde iyileşiyor — iki bağımsız ölçüm birbirini doğruluyor. Aerobik taban gerçekten gelişiyor; yükü kademeli artırmak için güvenilir bir sinyal.'},
+  'geriliyor|geriliyor':{cls:'danger',text:'🚨 Paralel gerileme: Hem pace hem güç aynı yönde kötüleşiyor — iki bağımsız ölçüm aynı uyarıyı veriyor. Yorgunluk birikimi, hastalık ya da yetersiz toparlanma olasılığı yüksek; yükü azaltmayı ve HRV/uykuyu kontrol etmeyi düşün.'},
+  'stabil|stabil':{cls:'info',text:'➡ Paralel plato: İkisi de sabit — mevcut form korunuyor, gelişmiyor. Taper/idame döneminde normal; build döneminde ise mevcut uyaran yeterli overload sağlamıyor olabilir.'},
+  'gelisiyor|stabil':{cls:'good',text:'🔧 Pace hızlanıyor, güç sabit: Aynı gücü daha hızlı hıza çeviriyor — koşu ekonomisi (teknik/nöromüsküler verimlilik) gelişiyor olabilir. Alternatif: parkur/rüzgar pace\'i olduğundan hızlı gösteriyor olabilir, koşu koşullarını kontrol et.'},
+  'gelisiyor|geriliyor':{cls:'good',text:'🚀 Pace hızlanıyor, güç düşüyor: Aynı hızı daha AZ güçle üretiyor — en olumlu senaryolardan biri, belirgin koşu ekonomisi kazancı. Güç ölçer kalibrasyonunun kaymamış olduğunu da bir kontrol et.'},
+  'stabil|gelisiyor':{cls:'warn',text:'⚠ Pace sabit, güç artıyor: Aynı hızı üretmek için daha FAZLA güç harcıyor — koşu ekonomisi kötüleşiyor olabilir (yorgunluk, form bozulması) YA DA parkur/rüzgar koşulları zorlaşmış olabilir. Bağlamı (parkur/hava) kontrol et.'},
+  'geriliyor|gelisiyor':{cls:'danger',text:'🔻 Pace yavaşlıyor, güç artıyor: Daha fazla güç harcayarak daha YAVAŞ gidiyor — koşu ekonomisi belirgin kötüleşiyor, dikkatle izlenmesi gereken senaryolardan biri. Yorgunluk/aşırı yüklenme ya da zorlu hava/parkur olabilir.'},
+  'geriliyor|stabil':{cls:'warn',text:'📉 Pace yavaşlıyor, güç sabit: Aynı gücü daha yavaş hıza çeviriyor — koşu ekonomisi kötüleşiyor olabilir (yorgunluk, zemin/parkur zorluğu ya da form bozulması).'},
+  'stabil|geriliyor':{cls:'good',text:'🔧 Pace sabit, güç düşüyor: Daha AZ güçle aynı hızı koruyor — net bir koşu ekonomisi kazancı, olumlu bir sinyal.'}
+};
+function AerobikGucKarsilastirmaKarti({history}){
+  const [period,setPeriod]=React.useState(4);
+  const e=React.createElement;
+  const histFiltered=React.useMemo(()=>history.slice(-period*7),[history,period]);
+  const histOlder=React.useMemo(()=>history.slice(-period*14,-period*7),[history,period]);
+
+  const PeriodBtn=({w,l})=>e('button',{
+    onClick:()=>setPeriod(w),
+    style:{
+      padding:'3px 8px',fontSize:11,fontWeight:600,borderRadius:4,border:'1px solid',cursor:'pointer',
+      background:period===w?'var(--info)':'transparent',
+      color:period===w?'#fff':'var(--text-secondary)',
+      borderColor:period===w?'var(--info)':'var(--border)',
+      transition:'all .15s'
+    }
+  },l);
+
+  const aerRecent=histFiltered.filter(d=>d.aerEff!=null).map(d=>d.aerEff);
+  const aerOlder=histOlder.filter(d=>d.aerEff!=null).map(d=>d.aerEff);
+  const pwrRecent=histFiltered.filter(d=>d.powerEff!=null).map(d=>d.powerEff);
+  const pwrOlder=histOlder.filter(d=>d.powerEff!=null).map(d=>d.powerEff);
+
+  const aerAvgR=aerRecent.length>=3?round1(aerRecent.reduce((s,v)=>s+v,0)/aerRecent.length):null;
+  const aerAvgO=aerOlder.length>=3?round1(aerOlder.reduce((s,v)=>s+v,0)/aerOlder.length):null;
+  const pwrAvgR=pwrRecent.length>=3?round2(pwrRecent.reduce((s,v)=>s+v,0)/pwrRecent.length):null;
+  const pwrAvgO=pwrOlder.length>=3?round2(pwrOlder.reduce((s,v)=>s+v,0)/pwrOlder.length):null;
+
+  const aState=classifyAerEff(aerAvgR,aerAvgO);
+  const pState=classifyPowerEff(pwrAvgR,pwrAvgO);
+  const LABEL={gelisiyor:'Gelişiyor',stabil:'Stabil',geriliyor:'Geriliyor'};
+
+  let body;
+  if(aState==null||pState==null){
+    body=e('div',{style:{fontSize:12,color:'var(--text-tertiary)',marginTop:8}},
+      'Karşılaştırma için hem Aerobik Verimlilik hem Güç Verimlilik grafiklerinde seçilen dönemde VE önceki eşit dönemde en az 3\'er Z2 antrenmanı gerekiyor.'
+    );
+  }else{
+    const y=AG_YORUM[aState+'|'+pState]||{cls:'info',text:'Yorumlanamadı.'};
+    body=e('div',{style:{marginTop:8}},
+      e('div',{style:{display:'flex',gap:8,marginBottom:8,fontSize:12,flexWrap:'wrap'}},
+        e('div',{style:{padding:'4px 10px',borderRadius:6,background:'var(--bg-secondary)'}},'Pace: '+LABEL[aState]),
+        e('div',{style:{padding:'4px 10px',borderRadius:6,background:'var(--bg-secondary)'}},'Güç: '+LABEL[pState])
+      ),
+      e('div',{style:{
+        fontSize:12,padding:'8px 11px',borderRadius:'var(--radius)',
+        background:y.cls==='danger'?'var(--danger-bg)':y.cls==='warn'?'var(--warn-bg)':y.cls==='good'?'var(--success-bg)':'var(--info-bg)',
+        color:y.cls==='danger'?'var(--danger)':y.cls==='warn'?'var(--warn)':y.cls==='good'?'var(--success)':'var(--info)',
+        borderLeft:'3px solid '+(y.cls==='danger'?'var(--danger)':y.cls==='warn'?'var(--warn)':y.cls==='good'?'var(--success)':'var(--info)')
+      }},y.text)
+    );
+  }
+
+  return e('div',{className:'card'},
+    e('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4,flexWrap:'wrap',gap:8}},
+      e('div',{className:'card-title',style:{margin:0}},'Aerobik-Güç Karşılaştırma'),
+      e('div',{style:{display:'flex',gap:3}},
+        [{w:1,l:'1H'},{w:2,l:'2H'},{w:4,l:'4H'},{w:8,l:'8H'},{w:12,l:'12H'}].map(({w,l})=>
+          e(PeriodBtn,{key:w,w,l})
+        )
+      )
+    ),
+    e('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:4}},
+      'Pace ve güç trendlerinin birlikte okunması — paralel gitmeleri doğrulanmış bir sinyal, ayrışmaları koşu ekonomisi değişimi ya da parkur/ölçüm etkisi olasılığını gösterir.'
+    ),
+    body
+  );
+}
+
 // ── Verilen Antrenmanı Yapabilme Puanı Kartı (1H/2H/4H/8H/12H/Tümü periyot seçimli) ──
 // Aerobik Verimlilik kartının hemen altında — "sporcu koçun verdiği pace'i ne kadar
 // dinliyor" sorusuna doğrudan cevap verir. Veri kaynağı plan_snapshots/rowOverrides
@@ -28373,6 +28474,8 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
     React.createElement(AerobikVerimlilikKarti,{history,athlete}),
     // Güç verimlilik — EF=NP/nabız, aynı nabızda daha fazla güç mü üretiliyor (Göksel talebi, 2026.09.13)
     React.createElement(GucVerimlilikKarti,{history,athlete}),
+    // Aerobik-Güç Karşılaştırma — iki trendi birlikte okuyup çıkarım üretir (Göksel talebi, 2026.09.13)
+    React.createElement(AerobikGucKarsilastirmaKarti,{history}),
     // Verilen Antrenmanı Yapabilme Puanı — pace uyum/disiplin (1H/2H/4H/8H/12H/Tümü)
     React.createElement(VerilenAntrenmaniYapabilmePuaniKarti,{athlete}),
     // Verilen Antrenmanı Yapabilme Puanı — haftalık gelişim grafiği (8H/12H/26H/52H)
