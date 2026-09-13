@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.13-1441 --><!DOCTYPE html>
+<!-- Version: v2026.09.13-1752 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.13-1441';
+const APP_VERSION='v2026.09.13-1752';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -10833,7 +10833,21 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
 
   // Satırları üret — header satırları toplama dahil edilmez
   const baseRows=normalYapilar.flatMap(y=>{try{return adimToRows(y,zones).map(r=>({...r,_srcBaslik:y.baslik}));}catch(e){console.warn('adimToRows error:',e,y);return[];};});
-  if(!baseRows.length&&!oneriYapilar.length) return null;
+  // KÖK NEDEN DÜZELTMESİ (2026.09.13 — "Minified React error #300" / plan sekmesinde
+  // görüntüleme hatası): burada duran "if(!baseRows.length&&!oneriYapilar.length)
+  // return null;" bu bileşenin İKİ hook grubu arasındaydı — üstte 11 useState + 2
+  // useEffect, altta (~satır 11883) bir useRef + useEffect daha var. Aynı gün/slot için
+  // aynı ReceteTablosu örneği bir render'da dolu (erken dönüş devreye girmiyor, TÜM
+  // hook'lar çağrılıyor), bir sonraki render'da boş (erken dönüş devreye giriyor, alttaki
+  // useRef+useEffect ATLANIYOR) geldiğinde, React aynı bileşen örneği için render'lar
+  // arası farklı sayıda hook görüyor → "Rendered fewer hooks than expected" hatası.
+  // React kuralı: hook'lar HİÇBİR KOŞULA BAĞLI OLMADAN, her render'da aynı sırada
+  // çağrılmalı — early return'lar hook'lardan SONRA olmalı. Çözüm: bu erken dönüşü
+  // kaldırıp aynı koşulu TÜM hook'lardan sonra, JSX return'ünden hemen önce tekrar
+  // kontrol ediyoruz (bkz. aşağıda "return React.createElement('div'..." öncesi).
+  // Aradaki kod (satır satır üretimi, handler tanımları, toplam hesaplama) baseRows
+  // boşken de güvenle çalışır (boş dizi üzerinde map/forEach/some no-op'tur) — bu yüzden
+  // güvenlik amaçlı ek bir kod değişikliği gerekmedi, sadece dönüşün YERİ değişti.
 
   // Override'ları uygula + OP-9: repeatOverrides'dan tekrar sayılarını güncelle
   const rows=baseRows.map((r,i)=>{
@@ -12065,6 +12079,8 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
 
   const hasPaceRows=rows.some(r=>r.type!=='header'&&(r.pm>0||r.ps>0));
   const fmtPs=(s)=>{const t=Math.max(0,Math.round(s));return Math.floor(t/60)+':'+String(t%60).padStart(2,'0');};
+  // (2026.09.13) Erken dönüş burada, TÜM hook'lardan sonra — yukarıdaki kök neden notuna bkz.
+  if(!baseRows.length&&!oneriYapilar.length) return null;
   return React.createElement('div',{style:{marginTop:10}},
     hasPaceRows&&!readOnly&&React.createElement('div',{'data-no-export':true,style:{display:'flex',alignItems:'center',gap:6,marginBottom:6,padding:'5px 10px',background:'var(--bg-secondary)',borderRadius:6,border:'1px solid var(--border)',fontSize:11,color:'var(--text-secondary)'}},
       React.createElement('span',{style:{fontWeight:600}},'Pace Toleransı:'),
