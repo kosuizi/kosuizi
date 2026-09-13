@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.13-0035 --><!DOCTYPE html>
+<!-- Version: v2026.09.13-1138 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.13-0035';
+const APP_VERSION='v2026.09.13-1138';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -5524,7 +5524,7 @@ const BUGUN_TIP_RENK={
 };
 function getBugunRenk(tip){return BUGUN_TIP_RENK[tip]||{bg:'#f8fafc',border:'#cbd5e1',text:'#475569',emoji:'🏃'};}
 
-function BugunTab({athletes,workouts,onSelChange,onTabChange}){
+function BugunTab({athletes,workouts,onSelChange,onTabChange,onEkleSeed}){
   // Pasif işaretli sporcular Liderlik/seçim listelerinde olduğu gibi burada da
   // gizlenir (kodun geneldeki yerleşik deseni: athletes.filter(a=>!a.pasif) —
   // bkz. SporcularTab lider listesi ~satır 3872, dropdown'lar vb.). Öncesinde
@@ -5661,7 +5661,16 @@ function BugunTab({athletes,workouts,onSelChange,onTabChange}){
       style:{background:cardBg,border:`1.5px solid ${cardBorder}`,borderRadius:'var(--radius-lg)',
         padding:'12px 14px',display:'flex',gap:12,alignItems:'flex-start',
         cursor:isDinlenme?'default':'pointer',transition:'.15s',opacity:(isDinlenme&&!hasActual)?.65:1},
-      onClick:isDinlenme?undefined:()=>{onSelChange(ath.id);onTabChange(dayPlan?._planBayat?'plan':'ekle');}
+      onClick:isDinlenme?undefined:()=>{
+        onSelChange(ath.id);
+        const toPlan=!!dayPlan?._planBayat;
+        onTabChange(toPlan?'plan':'ekle');
+        // Göksel talebi (Eylül 2026): karttaki Yapısal Tür/Süre/Yapı Notu zaten
+        // belliyken Ekle formuna geçince bu alanlar otomatik doldurulsun.
+        if(!toPlan&&onEkleSeed){
+          onEkleSeed(buildEkleSeedFromDayPlan(dayPlan,viewDay==='today'?todayStr:tomorrowStr));
+        }
+      }
     },
       // Avatar
       React.createElement('div',{
@@ -28804,6 +28813,32 @@ function planDayToForm(day){
   return{tur,yapi_notu};
 }
 
+// ── Bugün/Yarın kartından Ekle formuna otomatik alan aktarımı (Göksel talebi,
+//    Eylül 2026): Kart zaten günün planını (tip/süre/yapı notu) gösteriyor —
+//    "Ekle"ye geçerken bu veriyi YENİDEN HESAPLAMAK yerine (planOneri'nin
+//    bağımsız üretimi gibi) doğrudan kartta GÖRÜNEN dayPlan'dan aktarıyoruz,
+//    böylece formda görünen alanlar kartla birebir tutarlı olur.
+function buildEkleSeedFromDayPlan(dayPlan,dateStr){
+  if(!dayPlan||dayPlan.tip==='dinlenme'||dayPlan._planBayat) return null;
+  const turRaw=planTipToTur(dayPlan.tip,dayPlan.baslik||'');
+  // 'capraz' spor='kosu' için geçerli bir Yapısal Tür seçeneği DEĞİL (getTurlerForSpor
+  // bunu bilerek hariç tutuyor) — bu durumda tur boş bırakılır, koç sporu kendi seçer.
+  const tur=(turRaw&&turRaw!=='capraz')?turRaw:'';
+  const toplamDk=dayPlan.sure_dk||0;
+  const seed={
+    date:dateStr,
+    tur,
+    sure_sa:String(Math.floor(toplamDk/60)),
+    sure_dk:String(toplamDk%60),
+    sure_sn:'0'
+  };
+  // Yarış günü: "Yapı Notu" alanı serbest metin değil, sporcunun kendi yarış
+  // listesinden seçtiği bir dropdown'dur (bkz. AntrenmanEkle) — burada metin
+  // yazmak ekranda görünmeyeceği için yapi_notu boş bırakılır, koç yarışı seçer.
+  if(tur!=='yaris') seed.yapi_notu=dayPlan.yapi_notu||'';
+  return seed;
+}
+
 // ══════════════════════════════════════════════════════════════════════════
 // ── GPX ANALİZ — Ekle sekmesi entegrasyonu (Göksel talebi) ──────────────────
 // Ayrı bir "antrenman-analiz.html" aracının GPX/TCX faz analiz mantığını Ekle
@@ -30059,8 +30094,13 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
 }
 
 
-function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,workouts,races,testPlanlar,onUpdateWorkout}){
-  const [form,setForm]=useState({...EMPTY_W});
+function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,workouts,races,testPlanlar,onUpdateWorkout,seed}){
+  // Bugün/Yarın kartından gelen otomatik doldurma verisi (seed) varsa, ilk
+  // render'da EMPTY_W üzerine uygulanır (bkz. buildEkleSeedFromDayPlan). Bu
+  // bileşen tab değişince tamamen unmount/mount olduğundan (App'te sadece
+  // tab==='ekle' iken oluşturuluyor) lazy initializer tek seferlik uygulama
+  // için yeterli — seed App tarafında ekle sekmesinden çıkılınca temizlenir.
+  const [form,setForm]=useState(()=>seed?{...EMPTY_W,...seed}:{...EMPTY_W});
   const [saved,setSaved]=useState(false);
   const [lastRec,setLastRec]=useState(null);
   const [planOneri,setPlanOneri]=useState(null);
@@ -32049,6 +32089,13 @@ function App(){
   const [planSnap,setPlanSnapApp]=useState(null); // App level — HaftalikPlan erişir
   const [selId,setSelId]=useState('');
   const [tab,setTab]=useState('sporcular');
+  // Bugün/Yarın kartından "Ekle"ye geçerken taşınan otomatik doldurma verisi
+  // (Göksel talebi, Eylül 2026) — bkz. buildEkleSeedFromDayPlan.
+  const [ekleSeed,setEkleSeed]=useState(null);
+  // Ekle sekmesinden ayrılınca seed temizlenir — aksi halde koç sonradan
+  // "➕ Ekle" sekmesine ELLE tıkladığında önceki karttan kalan veri yanlışlıkla
+  // tekrar uygulanır.
+  React.useEffect(()=>{if(tab!=='ekle')setEkleSeed(null);},[tab]);
   const [loaded,setLoaded]=useState(false);
   const [darkMode,setDarkMode]=useState(false);
   const [teamName,setTeamName]=useState('Koşu İzi');
@@ -32658,7 +32705,7 @@ function App(){
       TABS.map(t=>React.createElement('div',{key:t.id,className:'tab'+(tab===t.id?' active':''),onClick:()=>setTab(t.id)},t.label))
     ),
     React.createElement('div',{className:'content',style:tab==='tani'?{maxWidth:'none',width:'100%'}:(pcView?{width:PCV_WIDTH,maxWidth:PCV_WIDTH,zoom:pcZoom}:undefined)},
-      tab==='bugun'&&React.createElement(BugunTab,{athletes,workouts,onSelChange:setSelId,onTabChange:setTab}),
+      tab==='bugun'&&React.createElement(BugunTab,{athletes,workouts,onSelChange:setSelId,onTabChange:setTab,onEkleSeed:setEkleSeed}),
       tab==='anketler'&&React.createElement(AnketlerTab,{athletes,onUpdateAthlete:handleUpdateAthlete}),
       tab==='dashboard'&&React.createElement(Dashboard,{workouts:athWks,athlete,history,races,teamLogo,teamName,planSnap}),
       tab==='motivasyon'&&React.createElement(ErrorBoundary,null,React.createElement(MotivasyonTab,{athlete,workouts:athWks,history})),
@@ -32708,7 +32755,7 @@ function App(){
           persistFreshFormSnap(ath,athWksNew,races,baseSnapForForm)
             .then(merged=>{if(merged&&selId===ath.id)setPlanSnapApp(merged);});
         }
-      },athlete,athletes,selId,onSelChange:setSelId,allHistory,workouts,races,testPlanlar,onUpdateWorkout:handleUpdateWorkout}),
+      },athlete,athletes,selId,onSelChange:setSelId,allHistory,workouts,races,testPlanlar,onUpdateWorkout:handleUpdateWorkout,seed:ekleSeed}),
       tab==='antrenmanlar'&&React.createElement(AntrenmanlarTab,{athlete,workouts}),
       tab==='gecmis'&&React.createElement(Gecmis,{workouts,athletes,races,onDelete:id=>setWorkouts(p=>p.filter(x=>x.id!==id)),onBulkDelete:ids=>setWorkouts(p=>p.filter(x=>!ids.includes(x.id))),onUpdate:handleUpdateWorkout}),
       tab==='analiz'&&React.createElement(AntrenmanAnalizTab,{workouts,athletes,races,raceResults,ctlCalibration,onUpdateCtlAnchors:handleUpdateCtlAnchors}),
