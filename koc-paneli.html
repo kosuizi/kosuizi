@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.14-0757 --><!DOCTYPE html>
+<!-- Version: v2026.09.14-1434 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.14-0757';
+const APP_VERSION='v2026.09.14-1434';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -9875,6 +9875,26 @@ function adimToRowsFallback(adim, zones){
   let totalSn=adim.sure_dk>0?adim.sure_dk*60:0;
   if(!totalSn){const m=detay.match(/(\d+(?:[.,]\d+)?)\s*dk/i);if(m)totalSn=Math.round(parseFloat(m[1].replace(',','.'))*60);}
   if(!totalSn){const m=detay.match(/(\d+)\s*sn/i);if(m)totalSn=parseInt(m[1]);}
+  // KÖK NEDEN DÜZELTMESİ (14.09.2026 — Göksel'in bulduğu hata: MAF/5K test satırında
+  // metin "5 km"/"5000m" DİYE BAŞLADIĞI HALDE reçetede ~185m gibi anlamsız bir mesafe
+  // görünüyordu): yukarıdaki iki regex sadece dk/sn arıyor — bu satırın niceliği
+  // DAKİKA/SANİYE değil MESAFE olarak yazılmışsa (TEST_TURLERI.maf ve mafNabizDetay'in
+  // ürettiği "5 km — ..." metni gibi) hiçbiri eşleşmiyor ve totalSn sessizce 60sn
+  // varsayılanına düşüyordu — bu da 60sn'lik pace karşılığı kadar (örn. ~185m) yanlış
+  // bir mesafe göstermeye yol açıyordu. Bu satırların TÜMÜ (bkz. TEST_TURLERI,
+  // mafNabizDetay) asıl niceliği METNİN EN BAŞINDA taşır — bu yüzden SADECE metnin
+  // başındaki bir mesafe ifadesi aranıyor (metnin ortasında geçebilecek "Hedef D+:
+  // ~150m" gibi tırmanış notlarıyla çakışmasın diye ^ ile başa sabitlendi). Mesafe
+  // bulunursa, o an hesaplanan blok pace'i (blokPaceSec) ile süreye çevrilir; altta
+  // calcRow bu süreyi AYNI pace'le tekrar mesafeye çevireceğinden (round-trip) sonuç
+  // her zaman doğru mesafeyi verir — hangi zon/pace tahmin edilmiş olursa olsun.
+  if(!totalSn){
+    const dm=detay.match(/^\s*(\d+(?:[.,]\d+)?)\s*(km|m)\b/i);
+    if(dm){
+      const distM=parseFloat(dm[1].replace(',','.'))*(dm[2].toLowerCase()==='km'?1000:1);
+      if(distM>0) totalSn=Math.round(distM/1000*blokPaceSec);
+    }
+  }
   if(!totalSn) totalSn=60;
   // Tırmanış ana bloğu: tek kaynak — detay metnindeki ortalama pace'i oku
   let effectivePaceSec=blokPaceSec;
@@ -9913,7 +9933,24 @@ function adimToRowsFallback(adim, zones){
   const _rowClr=_gapColorZIdx!==undefined
     ?{color:ZONE_COLORS_INLINE[_gapColorZIdx]||color,textColor:ZONE_TEXT_COLOR[_gapColorZIdx]||textColor}
     :clrFromPace(effectivePaceSec);
-  rows.push({type:'single',label:tirLabel,..._rowClr,...csb,rpe,_isSprint:isSprintType,_origPaceSec:(csb.pm||0)*60+(csb.ps||0),_origZIdx:zIdx});
+  // KÖK NEDEN DÜZELTMESİ (14.09.2026 — Göksel'in bulduğu hata: MAF Test Koşusu
+  // satırında NABIZ sütunu 144 (MAF hedefi) yerine ~153 (genel Z2 bölge ortalaması)
+  // gösteriyordu): NABIZ önerisi normalde suggestedBpm() ile satırın zone'undaki
+  // lo_bpm/hi_bpm ortasından hesaplanır — ama MAF testinde asıl hedef "180−yaş"tan
+  // (veya LTHR×%80-85'ten) gelen ÖZEL bir değerdir, bu satırın genel Z2 bölgesiyle
+  // örtüşmeyebilir. mafNabizDetay() bu değeri zaten metne yazıyor ("MAF nabzı: 144
+  // bpm ..."); burada aynı sayı geri okunup satıra iliştiriliyor ki suggestedBpm()
+  // zone ortalaması yerine BU değeri önersin — metinde yazan ile önerilen HER ZAMAN
+  // aynı sayı olur, ayrı bir hesaplama tekrarlanmaz.
+  let _mafBpmOverride=null;
+  const _mafSingleM=detay.match(/MAF nabzı:\s*(\d+)\s*bpm/i);
+  if(_mafSingleM){
+    _mafBpmOverride=parseInt(_mafSingleM[1]);
+  } else {
+    const _mafRangeM=detay.match(/MAF nabzı[^:]*:\s*(\d+)[\u2013\-](\d+)\s*bpm/i);
+    if(_mafRangeM) _mafBpmOverride=Math.round((parseInt(_mafRangeM[1])+parseInt(_mafRangeM[2]))/2);
+  }
+  rows.push({type:'single',label:tirLabel,..._rowClr,...csb,rpe,_isSprint:isSprintType,_origPaceSec:(csb.pm||0)*60+(csb.ps||0),_origZIdx:zIdx,...(_mafBpmOverride!=null?{_sugBpmOverride:_mafBpmOverride}:{})});
   return rows;
 }
 
@@ -10974,6 +11011,12 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
 
   // Satır için zone'dan hesaplanan önerilen ortalama nabız (yukarı yuvarla)
   const suggestedBpm=(row)=>{
+    // KÖK NEDEN DÜZELTMESİ (14.09.2026): MAF gibi testlerde satırın kendi özel
+    // hedefi (adimToRowsFallback'te detay metninden okunan _sugBpmOverride —
+    // bkz. ~satır 9900 civarı) varsa, bu satırın genel zone ortalamasından HER
+    // ZAMAN önceliklidir — aksi halde MAF hedefi (ör. 180−yaş=144) yerine o
+    // satırın (Z2 gibi) genel bölge ortalaması (ör. ~153) önerilmiş olurdu.
+    if(row._sugBpmOverride!=null) return row._sugBpmOverride;
     const zi=row._origZIdx;
     if(zi==null) return null;
     const hr=_mZones?.hrZones?.[zi];
