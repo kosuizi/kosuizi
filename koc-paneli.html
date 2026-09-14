@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.14-2019 --><!DOCTYPE html>
+<!-- Version: v2026.09.14-2036 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.14-2019';
+const APP_VERSION='v2026.09.14-2036';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -29482,15 +29482,27 @@ function gpxAutoFillPatch(rawParsed,norm){
 // toplam mesafe/süre kullanılır. Pencere içinde yeterli mesafe/süre yoksa (durma,
 // çok kısa pencere) null döner — grafikte bu nokta çizilmez (çizgi kırılır), sıfıra
 // bölme kaynaklı sahte pikler üretilmez.
+// DÜZELTME (Göksel bildirimi — grafikte pace zirvelerinin tekrar/Yokuş Sprint
+// sütunlarından kaymış görünmesi, 2026.09.14): pencere ÖNCEDEN sadece GERİYE bakıyordu
+// (t noktasının pace'i, [t-windowSec, t] aralığından hesaplanıp t'ye çiziliyordu) —
+// bu, gerçek bir hızlanmayı SİSTEMATİK olarak ileri kaydırıyordu (kısa efor bitince
+// bile pencere hâlâ o hızlı veriyi içerdiğinden, etki eforun dışına taşıyordu). Artık
+// pencere t'nin İKİ YANINA (t-windowSec/2, t+windowSec/2) simetrik açılıyor — kayma
+// kalkar, kalan tek etki pencere boyunca (windowSec, sabit 20sn) kaçınılmaz bir
+// yumuşama/bulanıklık, artık YÖNSÜZ. Dosya başı/sonunda pencere mevcut veriyle sınırlı
+// kalır (asimetrik açılır), aralık taşması olmaz.
 function gpxInstantPaceSeries(points,windowSec){
   windowSec=windowSec||20;
+  const half=windowSec/2;
   const out=[];
-  let j=0;
+  let lo=0,hi=0;
   for(let i=0;i<points.length;i++){
-    while(j<i&&(points[i].t-points[j].t)>windowSec) j++;
-    const dt=points[i].t-points[j].t;
-    const dd=(points[i].d||0)-(points[j].d||0);
-    out.push({t:points[i].t,paceSec:(dt>=Math.min(windowSec,5)&&dd>3)?(dt/(dd/1000)):null});
+    const tC=points[i].t;
+    while(lo<i&&tC-points[lo].t>half) lo++;
+    while(hi<points.length-1&&points[hi+1].t-tC<=half) hi++;
+    const dt=points[hi].t-points[lo].t;
+    const dd=(points[hi].d||0)-(points[lo].d||0);
+    out.push({t:tC,paceSec:(dt>=Math.min(windowSec,5)&&dd>3)?(dt/(dd/1000)):null});
   }
   return out;
 }
