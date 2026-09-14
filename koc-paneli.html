@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.14-2101 --><!DOCTYPE html>
+<!-- Version: v2026.09.14-2130 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.14-2101';
+const APP_VERSION='v2026.09.14-2130';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -10029,7 +10029,7 @@ async function saveCueGlobal(label, text){
 }
 
 // Aralıklar editörü — tekrarlı antrenmanlarda her bir tekrarın koşu+dinlenme pace'lerini ayrı düzenler
-function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange, paceValidation, focusIndicator, paceToZoneIdx, liveRowColor, zones, measureZones, readOnly, isWorkoutLogged}){
+function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange, paceValidation, focusIndicator, paceToZoneIdx, liveRowColor, gapZoneColor, zones, measureZones, readOnly, isWorkoutLogged}){
   const [editKey, setEditKey] = React.useState(null); // 'rep:type:field'
   const e = React.createElement;
   // 2026.08.23 — KÖK NEDEN DÜZELTMESİ: ReceteTablosu'daki _mZones (measureZones||zones,
@@ -10296,7 +10296,8 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
             // düzeltmesini hem de raceZoneFromPace→paceSecToZoneIdx kök neden
             // düzeltmesini otomatik miras alır, iki görünüm arasında sapma riski kalmaz.
             const _liveColorRun=liveRowColor?liveRowColor(runData):null;
-            out.push(e('tr',{key:`r${rep}`,style:{background:_liveColorRun?.color||runData.color,borderBottom:'1px solid rgba(0,0,0,.1)'}},
+            const _gapColorRun=gapZoneColor?gapZoneColor(runData):null;
+            out.push(e('tr',{key:`r${rep}`,style:{background:_gapColorRun?.color||_liveColorRun?.color||runData.color,borderBottom:'1px solid rgba(0,0,0,.1)'}},
               e('td',{style:{...cellSt,color:'#000'}},rep),
               e('td',{style:{...cellSt,textAlign:'left',color:'#000'}},
                 runData.label,
@@ -10351,7 +10352,8 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
             const hasPaceEntryRest=overrides[rep]?.rest?.pm!=null||overrides[rep]?.rest?.ps!=null;
             const pvR = hasPaceEntryRest ? paceValidation(restData) : null;
             const _liveColorRest=liveRowColor?liveRowColor(restData):null; // bkz. run satırındaki aynı not
-            out.push(e('tr',{key:`d${rep}`,style:{background:_liveColorRest?.color||restData.color,borderBottom:'2px solid rgba(0,0,0,.15)'}},
+            const _gapColorRest=gapZoneColor?gapZoneColor(restData):null;
+            out.push(e('tr',{key:`d${rep}`,style:{background:_gapColorRest?.color||_liveColorRest?.color||restData.color,borderBottom:'2px solid rgba(0,0,0,.15)'}},
               e('td',{style:{...cellSt,color:'#000'}},''),
               e('td',{style:{...cellSt,textAlign:'left',color:'#000',fontStyle:'italic',fontSize:10}},
                 '↳ '+restData.label,
@@ -11199,6 +11201,30 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
       if(gap) return Math.round(rawSec/gap.factor);
     }
     return rawSec;
+  };
+
+  // ── GAP bölgesi rengi (Göksel talebi, 2026.09.14 — "her satırda D+ girildikten sonra
+  // hesaplanan GAP değerine göre reçetelerin renklendirilmesi gerekiyor") ─────────────
+  // liveRowColor İLE KASITLI OLARAK AYRI tutuldu: liveRowColor "pace hedefe uygun mu"
+  // (paceValidation'la aynı kaynak) sinyalidir ve bu yüzden hedefi olmayan satırları
+  // (sprint/RPE, walk, ısınma/soğuma, yarış/serbest) bilerek dışlar — o dışlamalar BU
+  // fonksiyon için anlamsız, çünkü burada "hedefe uygunluk" değil sadece "GAP-düzeltmeli
+  // pace hangi bölgeye denk geliyor" bilgisi aranıyor. Bu yüzden satır tipinden TAMAMEN
+  // bağımsız: SADECE geçerli bir D+ + mesafe (→ hesaplanabilir bir GAP) şartına bakar.
+  // D+ girilmemiş/eğim %0.5 altındaysa (calcGAP null) null döner — çağıran yer o zaman
+  // mevcut renk kaynağına (liveRowColor/statik .color) düşer, bu satırlarda davranış
+  // DEĞİŞMEZ.
+  const gapZoneColor=(row)=>{
+    if(!row||!(row.dp>0)||!(row.mesafe>0)||row._isGapRow) return null;
+    const rawSec=(row.pm||0)*60+(row.ps||0);
+    if(rawSec<=0) return null;
+    const distKmForGap=((row._dpIsSum?(row.repeatCount||1):1)*row.mesafe)/1000;
+    const gap=calcGAP(row.dp,distKmForGap,0);
+    if(!gap) return null;
+    const gapSec=Math.round(rawSec/gap.factor);
+    const zi=paceSecToZoneIdx(gapSec,_mZones||zones);
+    const c=ZONE_COLORS_INLINE[zi];
+    return c?{color:c,textColor:ZONE_TEXT_COLOR[zi]||null}:null;
   };
 
   const paceValidation=(row)=>{
@@ -12150,9 +12176,10 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
             // Aralıklar tablosu için bu header'ın altındaki run+rest satırlarını bul
             const runRow=rows[i+1];
             const restRow=(rows[i+2]&&(rows[i+2].type==='rest'||rows[i+2].type==='walk'))?rows[i+2]:null;
+            const _gapColorH=gapZoneColor(r);
             return React.createElement(React.Fragment,{key:'h'+i},
-              React.createElement('tr',{style:{background:r.color}},
-                React.createElement('td',{colSpan:colSpanN,style:{padding:'4px 8px',fontWeight:700,fontSize:11,color:r.textColor,letterSpacing:'.3px',display:'flex',alignItems:'center',gap:6}},
+              React.createElement('tr',{style:{background:_gapColorH?.color||r.color}},
+                React.createElement('td',{colSpan:colSpanN,style:{padding:'4px 8px',fontWeight:700,fontSize:11,color:_gapColorH?.textColor||r.textColor,letterSpacing:'.3px',display:'flex',alignItems:'center',gap:6}},
                   readOnly?repeatLabel:React.createElement(React.Fragment,null,
                     repeatLabel.split(/\d+/).shift(),
                     editingRepeat===i
@@ -12176,7 +12203,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
                     style:{
                       marginLeft:'auto',fontSize:10,padding:'2px 8px',
                       background:isAralikOpen?'#fbbf24':'rgba(255,255,255,0.1)',
-                      color:isAralikOpen?'#000':r.textColor,
+                      color:isAralikOpen?'#000':(_gapColorH?.textColor||r.textColor),
                       border:'1px solid '+(isAralikOpen?'#fbbf24':'rgba(255,255,255,0.3)'),
                       borderRadius:3,cursor:'pointer',fontWeight:700
                     }
@@ -12196,6 +12223,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
                     focusIndicator,
                     paceToZoneIdx,
                     liveRowColor,
+                    gapZoneColor,
                     zones,
                     measureZones,
                     readOnly,
@@ -12208,8 +12236,9 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
           const _showRange=paceTol>0&&!r.rpe&&!r._isSprint&&(r.pm>0||r.ps>0);
           const _rangeTxt=_showRange?(fmtPs(Math.max(120,(r.pm||0)*60+(r.ps||0)-paceTol))+' – '+fmtPs((r.pm||0)*60+(r.ps||0)+paceTol)):null;
           const _liveColor=liveRowColor(r);
+          const _gapColor=gapZoneColor(r);
           return React.createElement(React.Fragment,{key:i},
-          React.createElement('tr',{style:{background:_liveColor?.color||r.color,borderBottom:'1px solid rgba(0,0,0,.08)'}},
+          React.createElement('tr',{style:{background:_gapColor?.color||_liveColor?.color||r.color,borderBottom:'1px solid rgba(0,0,0,.08)'}},
             React.createElement('td',{style:{padding:'5px 6px',fontWeight:700,fontSize:11,color:'#000',display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:6}},
               React.createElement('div',{style:{flex:1,minWidth:0}},
               r.label,
