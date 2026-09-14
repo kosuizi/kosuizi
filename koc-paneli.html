@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.14-1434 --><!DOCTYPE html>
+<!-- Version: v2026.09.14-1510 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.14-1434';
+const APP_VERSION='v2026.09.14-1510';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -26378,7 +26378,30 @@ const TEST_TURLERI={
 
 // Test zamanlama: Bu sporcu için şu an test önerilmeli mi?
 // Belirli bir tarih için test uygunluğunu değerlendir
-function calcTestDayUygunluk(testDate, athlete, history, races, workouts, dunkuYogunPlanlanan=false){
+// ── Test Günü Sert Engelleri — TEK PAYLAŞILAN KAYNAK (14.09.2026, Göksel onayı) ──
+// HRV/sakatlık eşiği, kaliteli-gün engellemesinde kullanılan AYNI eşik (bkz.
+// ~satır 6500 kaliteliEngelSebep, ~satır 6525 blokNeden) — yeni bir sayı icat
+// edilmedi. Bunlara ek olarak: bazı testler (Cooper/5K Zaman Denemesi/LTHR —
+// gerçek maksimal efor) öncesinde günün GERÇEKTEN dinlenme olmasını şart koyar;
+// MAF testi submaksimal/aerobik olduğundan bu şarttan muaftır (sadece "önceki
+// gün yoğun olmasın" yeterli — bkz. dunkuYogun kontrolü).
+// Hem otomatik rozet (attachTestSuggestions → calcTestDayUygunluk) HEM DE Test
+// sekmesindeki manuel gün seçici (TestTab → takvimGunleri) BU FONKSİYONU çağırır
+// — iki yer birbirinden bağımsız sonuç üretmesin diye (panel paritesi).
+const TEST_TAM_DINLENME_GEREKTIREN=['cooper','zaman_5k','lthr_test'];
+function testGunSertEngeller(testId, athlete, oncekiGunDinlenmeydi){
+  const engeller=[];
+  if(!athlete)return engeller;
+  const sakInt=parseInt(athlete.sakatlık)||1;
+  if(athlete.hrv_durum==='düşük')engeller.push('HRV düşük');
+  else if(athlete.hrv_durum==='dengesiz')engeller.push('HRV dengesiz');
+  if(sakInt>=4)engeller.push('sakatlık '+sakInt+'/10');
+  if(testId&&TEST_TAM_DINLENME_GEREKTIREN.includes(testId)&&oncekiGunDinlenmeydi===false){
+    engeller.push((TEST_TURLERI[testId]?.ad||testId)+' öncesi tam dinlenme günü gerekir');
+  }
+  return engeller;
+}
+function calcTestDayUygunluk(testDate, athlete, history, races, workouts, dunkuYogunPlanlanan=false, testId=null, oncekiGunDinlenmePlanli=null){
   if(!testDate||!athlete)return null;
   const testD=new Date(testDate+'T12:00:00');
   const {primary}=selectRaces(athlete,races);
@@ -26391,6 +26414,11 @@ function calcTestDayUygunluk(testDate, athlete, history, races, workouts, dunkuY
   const oncekiAntrenman=athWks.find(w=>w.date===oncekiGunStr);
   const dunkuYogunKayitli=oncekiAntrenman&&['interval','esik','yokus_kisa','yokus_uzun','tirmanis'].includes(oncekiAntrenman.tur);
   const dunkuYogun=dunkuYogunKayitli||dunkuYogunPlanlanan;
+  // Önceki gün GERÇEKTEN dinlenme miydi? Kayıtlı bir antrenman varsa (türü ne
+  // olursa olsun) kesinlikle dinlenme değildi. Yoksa çağıranın (gelecek gün için
+  // üretilmiş plandan) verdiği bayrağa güvenilir; o da yoksa (geçmiş gün, veri
+  // yok) kanıt olmadığından dinlenme kabul edilir.
+  const oncekiGunDinlenmeydi=oncekiAntrenman?false:(oncekiGunDinlenmePlanli!=null?oncekiGunDinlenmePlanli:true);
 
   // O güne yakın geçmişteki TSB tahmini
   const last=history[history.length-1];
@@ -26405,7 +26433,7 @@ function calcTestDayUygunluk(testDate, athlete, history, races, workouts, dunkuY
   if(daysToRace<14)sorunlar.push('Yarışa '+daysToRace+' gün kaldı — test yorgunluğu yarışı etkileyebilir');
   if(acwr>1.3)sorunlar.push('ACWR '+acwr.toFixed(2)+' — yük birikimi yüksek');
   if(tsb<_tsbBTest.riskAlt)sorunlar.push('TSB '+tsb.toFixed(1)+' — yorgunluk fazla, test sonuçları güvenilmez');
-  if(athlete.hrv_durum==='düşük')sorunlar.push('HRV düşük — toparlanma yetersiz');
+  sorunlar.push(...testGunSertEngeller(testId,athlete,oncekiGunDinlenmeydi));
 
   // Önerilen alternatif günler (önümüzdeki 14 gün, uygunluk sırasıyla)
   const oneriler=[];
@@ -26538,8 +26566,12 @@ function attachTestSuggestions(weeks,athlete,history,races,actualWorkouts){
       if(!testId)return;
       const oncekiGun=allDays[idx-1];
       const dunkuYogunPlanlanan=!!(oncekiGun&&TEST_ONCEKI_GUN_YOGUN_TIPLERI.includes(oncekiGun.tip));
-      const gunUygunluk=calcTestDayUygunluk(day.date,athlete,history,races,actualWorkouts,dunkuYogunPlanlanan);
-      if(gunUygunluk&&gunUygunluk.uygun===false)return; // bu gün için özel bir engel var (yarış yakın, ACWR/TSB vb.)
+      // Gelecek gün için planlanmış önceki günün GERÇEKTEN dinlenme olup olmadığı
+      // (14.09.2026, Göksel onayı) — Cooper/5K/LTHR gibi maksimal-efor testleri
+      // öncesi tam dinlenme şartı için (bkz. testGunSertEngeller/TEST_TAM_DINLENME_GEREKTIREN).
+      const oncekiGunDinlenmePlanli=oncekiGun?(oncekiGun.tip==='dinlenme'):null;
+      const gunUygunluk=calcTestDayUygunluk(day.date,athlete,history,races,actualWorkouts,dunkuYogunPlanlanan,testId,oncekiGunDinlenmePlanli);
+      if(gunUygunluk&&gunUygunluk.uygun===false)return; // bu gün için özel bir engel var (yarış yakın, ACWR/TSB, HRV/sakatlık, dinlenme şartı vb.)
       const testDef=TEST_TURLERI[testId];
       if(!testDef)return;
       day.testSuggestion={testId,ad:testDef.ad,icon:testDef.icon,neden:onerilir[testId].neden||null};
@@ -26727,6 +26759,19 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,o
           const prevWk=(workouts||[]).find(w=>w.athleteId===athlete.id&&w.date===prevStr&&['interval','esik','yokus_kisa','yokus_uzun'].includes(w.tur));
           if(prevWk){uygunluk=uygunluk==='ideal'?'uygun':'orta';neden.push('Dün ağır antrenman vardı');}
         }
+        // SERT ENGELLER — TEK PAYLAŞILAN KAYNAK (14.09.2026, Göksel onayı): HRV/
+        // sakatlık ve (Cooper/5K/LTHR için) önceki günün gerçek dinlenme olması
+        // şartı. Otomatik rozetin kullandığı AYNI fonksiyon (testGunSertEngeller) —
+        // iki yer (bu manuel seçici + attachTestSuggestions'daki otomatik rozet)
+        // asla farklı sonuç vermesin diye. TSB/ACWR kademesi ne derse desin, sert
+        // bir engel varsa gün doğrudan "uygunsuz" olur.
+        const _prevDateSert=new Date(d);_prevDateSert.setDate(d.getDate()-1);
+        const _prevDsSert=`${_prevDateSert.getFullYear()}-${String(_prevDateSert.getMonth()+1).padStart(2,'0')}-${String(_prevDateSert.getDate()).padStart(2,'0')}`;
+        const _prevActualWkSert=(workouts||[]).find(w=>w.athleteId===athlete.id&&w.date===_prevDsSert);
+        const _prevDayShortSert=DAYS_SHORT[_prevDateSert.getDay()];
+        const _oncekiGunDinlenmeydiSert=_prevActualWkSert?false:!(kosuGunleri.includes(_prevDayShortSert)||caprazGunleri.includes(_prevDayShortSert));
+        const _sertEngeller=testGunSertEngeller(planlaTest.id,athlete,_oncekiGunDinlenmeydiSert);
+        if(_sertEngeller.length){uygunluk='uygunsuz';neden.push(..._sertEngeller);}
       }
       const renkMap={ideal:'var(--success)',uygun:'var(--info)',orta:'var(--warn)',uygunsuz:'var(--border)'};
       const bgMap={ideal:'var(--success-bg)',uygun:'var(--info-bg)',orta:'var(--warn-bg)',uygunsuz:'var(--bg-secondary)'};
