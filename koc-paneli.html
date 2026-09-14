@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.14-2010 --><!DOCTYPE html>
+<!-- Version: v2026.09.14-2019 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -243,7 +243,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.14-2010';
+const APP_VERSION='v2026.09.14-2019';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -29371,31 +29371,23 @@ function gpxTimeAtDist(points,dTarget){
 // isRecovery), o yüzden zirveyi görse de atar. Sonuç: gerçek tepe iki pencerenin
 // arasında kaybolur (Göksel bildirimi, GPX grafiğinde ~170bpm zirveler görülürken
 // reçetede tepe nabız çok düşük çıkıyor, 2026.09.14).
-// DÜZELTME (Göksel'in 2. bildirimi, aynı gün): sabit bir gecikme SÜRESİ tahmin etmek
-// yerine — "grafikte tepe görülebiliyorsa tespit de edilebilmeli" — nabız eğrisinin
-// kendisinde gerçek tepe noktası aranır: yükseliş sonrası KARARLI bir düşüşe geçiş
-// (peak/trend-reversal tespiti). DROP_BPM kadar düşüp bunu CONFIRM_SEC boyunca
-// sürdürmeyen küçük gürültüler tepe sayılmaz; yeni bir daha yüksek değer görülürse
-// tepe güncellenir ve düşüş onayı sıfırlanır. searchCeilT sadece bir GÜVENLİK tavanı
-// (asla aşılmaz) — algoritma pratikte çok daha önce durur, tavan yalnız veri
-// eksikse/çok gürültülüyse veya dinlenmesiz art arda tekrarlarda sonraki bacağa
-// taşmayı önlemek için var.
+// DÜZELTME DENEMESİ 1 (Göksel'in 2. bildirimi, aynı gün): sabit bir gecikme SÜRESİ
+// tahmin etmek yerine nabız eğrisinde "yükseliş sonrası kararlı düşüş" (trend-reversal)
+// aranan bir sürüm denendi — DROP_BPM kadar düşüp CONFIRM_SEC boyunca sürdüren bir
+// düşüş "tepe onaylandı" sayılıp arama durduruluyordu.
+// DÜZELTME DENEMESİ 2 — KALDIRILDI (Göksel'in 3. bildirimi, aynı gün, Yokuş Sprint 2
+// örneği): gerçek, gürültülü nabız verisinde (özellikle şiddetli yokuş sprintinde bilek
+// tipi optik sensör) KISA SÜRELİ bir gürültü düşüşü bile DROP_BPM+CONFIRM_SEC eşiğini
+// aşıp "tepe onaylandı" sanılabiliyordu — arama, izin verilen pencere İÇİNDE, gerçek
+// (daha sonraki, daha yüksek) tepeye ulaşmadan duruyordu. Kanıt: aynı pencerede Dinlenme
+// bacağının KENDİ ham max'ı (hiçbir yorum içermeyen düz pencere) zaten doğru zirveyi
+// gösteriyordu — yani sorun pencerenin darlığı değil, eğriyi "yorumlama" girişimiydi.
+// SON ÇÖZÜM: yorum YOK — searchCeilT'ye kadar pencerede BASİT ham maksimum. Grafik de
+// zaten hiçbir yorum yapmadan ham veriyi çiziyor ve zirve orada görünüyor; algoritmanın
+// da aynısını (arada "trend" tahmini yapmadan) yapması hem daha basit hem daha güvenilir.
 function gpxFindTruePeak(points,t0,searchCeilT){
-  const DROP_BPM=2,CONFIRM_SEC=8;
-  const pts=points.filter(p=>p.t>=t0&&p.t<=searchCeilT&&p.hr!=null);
-  if(pts.length===0) return null;
-  let peak=pts[0].hr,declineStartT=null;
-  for(let i=1;i<pts.length;i++){
-    const cur=pts[i];
-    if(cur.hr>=peak-DROP_BPM){
-      if(cur.hr>peak) peak=cur.hr;
-      declineStartT=null;
-    } else {
-      if(declineStartT==null) declineStartT=cur.t;
-      else if(cur.t-declineStartT>=CONFIRM_SEC) break;
-    }
-  }
-  return peak;
+  const vals=points.filter(p=>p.t>=t0&&p.t<=searchCeilT&&p.hr!=null).map(p=>p.hr);
+  return vals.length?Math.max(...vals):null;
 }
 function gpxHrStatsWindow(points,t0,t1){
   const vals=points.filter(p=>p.t>=t0&&p.t<t1&&p.hr!=null).map(p=>p.hr);
@@ -29887,8 +29879,8 @@ function gpxComputePhases(points,blockCfgs){
     const pace=durSec>0&&distKm>0?(durSec/distKm):null;
     const hr=gpxHrStatsWindow(points,p.t0,p.t1);
     // Gerçek tepe tespiti (bkz. gpxFindTruePeak yorumu) — kısa iş bacaklarında SADECE
-    // max, eğrinin kendisinde tepe/düşüş geçişi bulunarak yeniden aranır; avg/min
-    // yukarıdaki orijinal hr'de değişmeden kalır. searchCeilT: bir sonraki Dinlenme'nin
+    // max, güvenlik tavanına kadar genişletilen pencerede ham maksimum olarak yeniden
+    // aranır; avg/min yukarıdaki orijinal hr'de değişmeden kalır. searchCeilT: bir sonraki Dinlenme'nin
     // bitişi (varsa) ile p.t1+30sn güvenlik tavanından hangisi daha erkense.
     if(p.legKind==='work'&&durSec>0&&durSec<=SHORT_ROW_MAX_SEC){
       const next=native[idx+1];
