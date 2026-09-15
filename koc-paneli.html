@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.15-2219 --><!DOCTYPE html>
+<!-- Version: v2026.09.15-2357 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.15-2219';
+const APP_VERSION='v2026.09.15-2357';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -26541,6 +26541,103 @@ const TEST_TURLERI={
   }
 };
 
+// ── Test kıyaslama ciddiyeti — GLOBAL/PAYLAŞILAN (15.09.2026, Göksel talebi).
+// Önceleri TestTab içinde yerelken buraya taşındı: hem rozet listesi (testKarsilastir)
+// hem de yeni ChartTestKiyas (aşağıda) AYNI eşik/seviye/hız hesabını kullanmalı —
+// "grafikte görünen ile rozette yazan farklı sayı" riski oluşturmamak için tek
+// kaynak. Eşikler/çarpanlar Göksel'in coaching deneyimine göre ayarlanabilir
+// TAHMİNLERDİR, klinik/kesin değer değildir.
+const SEVERITY_ESIK={pace:[8,20,40],vo2max:[1,2.5,5],lthr:[2,5,10]};
+const SEVIYE_GELISIM_CARPANI={baslangic:2.0,rekrasyon:1.00,orta:0.75,ileri:0.5,elit:0.3};
+const GELISIM_ADI=[['🙂','Gelişim var'],['💪','Güzel gelişim'],['🎉','Harika gelişim']];
+const GERILEME_ADI=[['🙁','Hafif gerileme'],['⚠️','Belirgin gerileme'],['🚨','Ciddi gerileme']];
+const gunFarki=(d1,d2)=>Math.round((new Date(d1+'T12:00:00')-new Date(d2+'T12:00:00'))/864e5);
+const severityTier=(rate28,esikler)=>{ // rate28<0 → gelişim yönü, >0 → gerileme yönü
+  const a=Math.abs(rate28);
+  if(a<esikler[0])return null; // stabil
+  const idx=a<esikler[1]?0:(a<esikler[2]?1:2);
+  return rate28<0?GELISIM_ADI[idx]:GERILEME_ADI[idx];
+};
+// Test türü → grafikte çizilecek metrik(ler). testKarsilastir'daki alan adlarıyla
+// AYNI (_testSonuc.km1_sec vb.) — iki farklı gösterim (rozet/grafik) aynı veriden.
+const TEST_METRIK_KONFIG={
+  maf:{lines:[
+    {field:'km1_sec',ad:'1. km',renk:'#f59e0b',ana:false},
+    {field:'km5_sec',ad:'5. km',renk:'#3b82f6',ana:false},
+    {field:'ort_pace_sec',ad:'Ortalama',renk:'#22c55e',ana:true}
+  ],birim:'sn/km',esikKey:'pace',higherIsBetter:false},
+  zaman_5k:{lines:[{field:'pace_sec',ad:'Ortalama Pace',renk:'#22c55e',ana:true}],birim:'sn/km',esikKey:'pace',higherIsBetter:false},
+  cooper:{lines:[{field:'vo2max',ad:'VO₂max',renk:'#22c55e',ana:true}],birim:' ml/kg/dk',esikKey:'vo2max',higherIsBetter:true},
+  lthr_test:{lines:[{field:'lthr',ad:'LTHR',renk:'#22c55e',ana:true}],birim:' bpm',esikKey:'lthr',higherIsBetter:true}
+};
+// Test Geçmişi'nde bir test türünün 2+ kaydını süreç grafiği olarak çizer. Ana
+// metriğin nokta renkleri, testKarsilastir/deltaBadge'deki AYNI hesapla (süreye
+// normalize hız + seviye çarpanlı eşik) yeşil (gelişim)/turuncu (gerileme)/gri
+// (stabil) işaretlenir — "tespit edilen gelişim/gerileme" rozetlerle bire bir
+// tutarlı, ayrı bir hesap icat edilmez. Pace metriklerinde (düşük=iyi) Y ekseni
+// TERS çevrilir ki grafikte "yukarı" her metrikte "gelişim" anlamına gelsin.
+function ChartTestKiyas({tid,records,athlete}){
+  const ref=useRef();const inst=useRef();
+  const cfg=TEST_METRIK_KONFIG[tid];
+  useEffect(()=>{
+    if(!ref.current||!cfg)return;
+    const data=[...records].sort((a,b)=>a.date.localeCompare(b.date)); // kronolojik
+    const labels=data.map(d=>fmtShort(d.date));
+    const isDark=window.matchMedia('(prefers-color-scheme:dark)').matches;
+    const gridColor=isDark?'rgba(255,255,255,.08)':'rgba(0,0,0,.08)';
+    const tickColor=isDark?'#777':'#888';
+    const noktaGri=isDark?'#666':'#aaa';
+    if(inst.current)inst.current.destroy();
+    const carpan=SEVIYE_GELISIM_CARPANI[athlete?.seviye]??1.00;
+    const esikler=(SEVERITY_ESIK[cfg.esikKey]||[8,20,40]).map(x=>x*carpan);
+    const anaLn=cfg.lines.find(l=>l.ana)||cfg.lines[0];
+    const anaPointColors=data.map((d,i)=>{
+      if(i===0)return noktaGri;
+      const cur=d._testSonuc?.[anaLn.field],prev=data[i-1]._testSonuc?.[anaLn.field];
+      if(cur==null||prev==null)return noktaGri;
+      const raw=cur-prev;
+      const skor=cfg.higherIsBetter?-raw:raw;
+      const gunF=Math.max(gunFarki(d.date,data[i-1].date),14);
+      const rate28=skor/gunF*28;
+      if(Math.abs(rate28)<esikler[0])return noktaGri;
+      return skor<0?'#22c55e':'#f59e0b';
+    });
+    const fmtVal=v=>v==null?'—':(cfg.birim==='sn/km'?secToPace(v)+' /km':(Math.round(v*10)/10)+cfg.birim);
+    const datasets=cfg.lines.map(ln=>({
+      label:ln.ad,
+      data:data.map(d=>d._testSonuc?.[ln.field]??null),
+      borderColor:ln.renk,backgroundColor:ln.renk,
+      borderWidth:ln.ana?3:1.5,
+      pointRadius:ln.ana?5:2,
+      pointBackgroundColor:ln.ana?anaPointColors:ln.renk,
+      pointBorderColor:ln.ana?anaPointColors:ln.renk,
+      spanGaps:true,tension:.25
+    }));
+    inst.current=new Chart(ref.current,{
+      type:'line',
+      data:{labels,datasets},
+      options:{
+        responsive:true,maintainAspectRatio:false,
+        plugins:{
+          legend:{display:cfg.lines.length>1,position:'bottom',labels:{color:tickColor,font:{size:10},boxWidth:10,padding:8}},
+          tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+fmtVal(ctx.raw)}}
+        },
+        scales:{
+          x:{ticks:{color:tickColor,font:{size:10}},grid:{color:gridColor},border:{display:false}},
+          y:{
+            reverse:!cfg.higherIsBetter,
+            ticks:{color:tickColor,font:{size:10},callback:v=>cfg.birim==='sn/km'?secToPace(v):v},
+            grid:{color:gridColor},border:{display:false}
+          }
+        }
+      }
+    });
+    return()=>{if(inst.current)inst.current.destroy();};
+  },[records,tid,athlete?.seviye]);
+  if(!cfg||!records||records.length<2)return null;
+  return React.createElement('div',{style:{position:'relative',height:170,marginTop:10,marginBottom:4}},React.createElement('canvas',{ref}));
+}
+
 // Test zamanlama: Bu sporcu için şu an test önerilmeli mi?
 // Belirli bir tarih için test uygunluğunu değerlendir
 // ── Test Günü Sert Engelleri — TEK PAYLAŞILAN KAYNAK (14.09.2026, Göksel onayı) ──
@@ -27122,41 +27219,14 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,o
           if(matchingPlan)onDeleteTestPlan(matchingPlan.id);
           setEditRecord(null);setEditForm({});
         };
-        // ── Aynı tür testler arası kıyaslama — SÜREYE NORMALİZE, DERECELİ (15.09.2026,
-        // Göksel talebi): "gelişimin ciddiyeti de ifade edilsin, testler arası geçen
-        // süre düşünülerek". Mantık: ham fark yerine "28 günlük eşdeğer değişim hızı"
-        // hesaplanır (skor/gün×28) — böylece 5 ayda -57sn/km ile 3 haftada -57sn/km
-        // AYNI ciddiyette sayılmaz (ilki yavaş/istikrarlı bir hız, ikincisi çok hızlı
-        // bir sıçrama). 14 günden yakın testlerde gün sayısı 14'e sabitlenir (floor) —
-        // ayrı bir "kısa aralık" durumu icat edilmez, sadece hız hesabı gürültüyle
-        // şişmez. Eşikler (SEVERITY_ESIK) Göksel'in coaching deneyimine göre ayarlanabilir
-        // TAHMİNLERDİR, klinik/kesin değer değildir — pace: MAF+5K sn/km; vo2max: Cooper
-        // ml/kg/dk; lthr: LTHR Testi bpm. Cooper/LTHR artık dahil (öncesinde pace'i olmayan
-        // türler tamamen dışlanmıştı — Göksel'in isteğiyle kendi metrikleri üzerinden dahil
-        // edildi: VO₂max artışı=gelişim, LTHR artışı=gelişim varsayımıyla).
-        const SEVERITY_ESIK={pace:[8,20,40],vo2max:[1,2.5,5],lthr:[2,5,10]};
-        // ── Seviyeye göre eşik ölçekleme (15.09.2026, Göksel talebi) ────────────────
-        // Rekreasyonel=1.00 çapa (SEVIYE_RISK_CARPANI ile AYNI kod deseni — bkz.
-        // ~satır 4046) ama YÖN TERS: risk toleransında elit daha GEVŞEK eşik alır
-        // (büyük yük dalgalanmasına dayanıklı); burada elit daha SIKI eşik alır,
-        // çünkü elit bir sporcu için küçük bir değişim zaten büyük bir kazanım/
-        // kayıptır — "harika gelişim" demek için Başlangıç'a göre çok daha az
-        // değişim yeterli olmalı. Başlangıç'ta ise 20-30sn/km/ay gibi değişimler
-        // aerobik taban inşasında NORMAL/beklenen kazançlardır — "harika" demek
-        // için daha büyük bir eşik gerekir, yoksa etiket enflasyonu olur (her
-        // normal ilerleme "harika" çıkar, ayırt edicilik kaybolur). Çarpanlar
-        // klinik/kesin değer değil — Göksel'in coaching deneyimine göre ayarlanabilir.
-        const SEVIYE_GELISIM_CARPANI={baslangic:2.0,rekrasyon:1.00,orta:0.75,ileri:0.5,elit:0.3};
+        // ── Aynı tür testler arası kıyaslama — SÜREYE NORMALİZE, DERECELİ, SEVİYEYE
+        // ÖLÇEKLİ (15.09.2026, Göksel talebi). Eşik/çarpan/hesap mantığı artık GLOBAL
+        // (bkz. ~satır 26544 SEVERITY_ESIK/SEVIYE_GELISIM_CARPANI/severityTier) —
+        // ChartTestKiyas (aşağıda çağrılıyor) İLE AYNI kaynağı paylaşır, tekrar
+        // tanımlanmaz. "28 günlük eşdeğer değişim hızı" (skor/gün×28) — böylece
+        // 5 ayda -57sn/km ile 3 haftada -57sn/km AYNI ciddiyette sayılmaz. 14
+        // günden yakın testlerde gün sayısı 14'e sabitlenir (floor).
         const _gelisimCarpan=SEVIYE_GELISIM_CARPANI[athlete?.seviye]??1.00;
-        const GELISIM_ADI=[['🙂','Gelişim var'],['💪','Güzel gelişim'],['🎉','Harika gelişim']];
-        const GERILEME_ADI=[['🙁','Hafif gerileme'],['⚠️','Belirgin gerileme'],['🚨','Ciddi gerileme']];
-        const gunFarki=(d1,d2)=>Math.round((new Date(d1+'T12:00:00')-new Date(d2+'T12:00:00'))/864e5);
-        const severityTier=(rate28,esikler)=>{ // rate28<0 → gelişim yönü, >0 → gerileme yönü
-          const a=Math.abs(rate28);
-          if(a<esikler[0])return null; // stabil
-          const idx=a<esikler[1]?0:(a<esikler[2]?1:2);
-          return rate28<0?GELISIM_ADI[idx]:GERILEME_ADI[idx];
-        };
         const deltaBadge=(curVal,prevVal,lbl,unit,metricKey,curDate,prevDate,higherIsBetter)=>{
           if(curVal==null||prevVal==null)return null;
           const raw=curVal-prevVal;
@@ -27255,6 +27325,10 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,o
                 React.createElement('div',{style:{fontWeight:700,fontSize:14}},testDef?.ad||tid),
                 React.createElement('span',{className:'badge badge-info',style:{fontSize:11}},wkList.length+' kayıt')
               ),
+              // 15.09.2026, Göksel talebi: "tespit edilen gelişim/gerileme grafikle
+              // takip edilsin". 2'den az kayıtta trend anlamsız — gösterilmez (bkz.
+              // ChartTestKiyas'ın kendi records.length<2 koruması).
+              React.createElement(ChartTestKiyas,{tid,records:wkList,athlete}),
               wkList.map((w,wIdx)=>{
                 const isEditing=editRecord?.id===w.id;
                 const label=w._testSonuc?.label||(w.notlar?.replace('Test sonucu: ','')||'—');
