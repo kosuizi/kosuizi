@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.15-1103 --><!DOCTYPE html>
+<!-- Version: v2026.09.15-1613 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.15-1103';
+const APP_VERSION='v2026.09.15-1613';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -19309,6 +19309,14 @@ function generatePlanSnapshot(athlete,history,races,workouts,testPlanlar,targetW
         sure_dk:day.sure_dk,yukHedef:day.yukHedef||0,
         dpHedef:day.dpHedef||0,
         isKosuCapraz:day.isKosuCapraz||false,
+        // KÖK NEDEN DÜZELTMESİ (15.09.2026 — Göksel bildirimi: "MAF testi
+        // onayladım, ❤️ ikonu geldi ama antrenman adı/reçetesi eskisi kaldı"):
+        // overrideMap'e isTest/testTur hiç yazılmıyordu. planDay testi bulduğunda
+        // günü koşulsuz isTest:true olarak üretiyor, ama bu değer overrideMap'e
+        // hiç kaydedilmediği için "Planı Güncelle" sonrası bile tekrar donuk
+        // (stale) override okunduğunda isTest kayboluyordu (bkz. plan useMemo,
+        // ~satır 20784/20814'teki eşleştirme düzeltmesi — panel paritesi).
+        isTest:day.isTest||false,testTur:day.testTur||null,
         approved:false,
         yapilar:(()=>{
           // generateTwoWeekPlan _rows eklemez — injectRowsFromTpl ile tüm yapilar dizisine
@@ -20726,7 +20734,10 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                 _ovTip==='dinlenme'||_ovTip==='yaris'||
                 (_ovTip==='capraz'&&_curCapraz.includes(_dayShortPast))||
                 (_ovTip!=='dinlenme'&&_ovTip!=='yaris'&&_ovTip!=='capraz'&&_curKosu.includes(_dayShortPast));
-              if(_isStillOk) return{...day,yapilar:ov.yapilar,tip:ov.tip||day.tip,baslik:ov.baslik||day.baslik,yapi_notu:('yapi_notu' in ov)?ov.yapi_notu:(day.yapi_notu||'')};
+              // Panel paritesi/aynı kök neden düzeltmesi — tip/baslik/yapilar override'dan
+              // alınırken isTest/testTur da AYNI kaynaktan (ov) gelmeli; aksi halde
+              // isTest ham (taze) day'den miras kalıp yanlış ikon gösterebilir.
+              if(_isStillOk) return{...day,yapilar:ov.yapilar,tip:ov.tip||day.tip,baslik:ov.baslik||day.baslik,yapi_notu:('yapi_notu' in ov)?ov.yapi_notu:(day.yapi_notu||''),isTest:ov.isTest||false,testTur:ov.testTur||null};
             }
             return day;
           }
@@ -20760,12 +20771,14 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               const _ovStillOkToday=!ov||_isManualToday||athActualDates.has(day.date)||_ovTipToday==='dinlenme'||_ovTipToday==='yaris'||
                 (_ovTipToday==='capraz'&&_curCaprazToday.includes(_dayShortToday))||
                 (_ovTipToday!=='dinlenme'&&_ovTipToday!=='yaris'&&_ovTipToday!=='capraz'&&_curKosuToday.includes(_dayShortToday));
-              if(_ovStillOkToday&&ov?.yapilar?.length>0) return{...day,yapilar:ov.yapilar,tip:ov.tip||day.tip,baslik:ov.baslik||day.baslik,yapi_notu:('yapi_notu' in ov)?ov.yapi_notu:(day.yapi_notu||'')};
+              if(_ovStillOkToday&&ov?.yapilar?.length>0) return{...day,yapilar:ov.yapilar,tip:ov.tip||day.tip,baslik:ov.baslik||day.baslik,yapi_notu:('yapi_notu' in ov)?ov.yapi_notu:(day.yapi_notu||''),isTest:ov.isTest||false,testTur:ov.testTur||null};
               // İkinci güvenlik katmanı — gelecek dalındaki "Manuel atama" fallback'iyle AYNI
               // desen (bkz. aşağıda satır ~14222): ov her nedense yapılarsız/geçersizse bile
-              // manualOverrides'taki tip/baslik'i sessizce yoksayma.
+              // manualOverrides'taki tip/baslik'i sessizce yoksayma. Manuel atama her zaman
+              // testi geçersiz kılar (bkz. handleManuelAta'nın onDeleteTestPlan çağrısı) —
+              // isTest burada da açıkça false yapılır, ham day'den miras kalmaz.
               const _moToday=_isManualToday?manualOvMap[day.date]:null;
-              if(_moToday?.tip) return{...day,tip:_moToday.tip,baslik:_moToday.baslik||day.baslik};
+              if(_moToday?.tip) return{...day,tip:_moToday.tip,baslik:_moToday.baslik||day.baslik,isTest:false,testTur:null};
               return day;
             }
             // Bugün antrenman kaydı yok — koşu günüyse taze plan öncelikli kontrol
@@ -20781,7 +20794,14 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               if(day.tip==='yaris') return day;
               if(ovToday&&ovToday.tip!=='dinlenme'&&(ovToday.yapilar||[]).length>0){
                 // overrideMap'te geçerli antrenman var → kullan
-                return{...day,tip:ovToday.tip,baslik:ovToday.baslik,yapi_notu:('yapi_notu' in ovToday)?ovToday.yapi_notu:(day.yapi_notu||''),sure_dk:ovToday.sure_dk,yukHedef:ovToday.yukHedef,isKosuCapraz:ovToday.isKosuCapraz||false,yapilar:ovToday.yapilar||[]};
+                // KÖK NEDEN DÜZELTMESİ (15.09.2026): isTest/testTur burada ovToday'den
+                // AÇIKÇA alınmalı — aksi halde spread edilen ham '...day' üzerinden
+                // (bu render'ın CANLI testPlanlar hesabından) isTest:true miras kalır,
+                // ama tip/baslik/yapilar hâlâ ovToday'in DONMUŞ (test planlanmadan
+                // ÖNCEKİ) haliyle gösterilir → ❤️ ikonu çıkar ama isim/reçete/süre
+                // eskisi kalır (Göksel'in bildirdiği tam senaryo: test onaylandı ama
+                // "Planı Güncelle" henüz basılmadı).
+                return{...day,tip:ovToday.tip,baslik:ovToday.baslik,yapi_notu:('yapi_notu' in ovToday)?ovToday.yapi_notu:(day.yapi_notu||''),sure_dk:ovToday.sure_dk,yukHedef:ovToday.yukHedef,isKosuCapraz:ovToday.isKosuCapraz||false,yapilar:ovToday.yapilar||[],isTest:ovToday.isTest||false,testTur:ovToday.testTur||null};
               }
               // overrideMap yok / dinlenme / boş yapilar → taze plana bak
               if(day.tip&&day.tip!=='dinlenme'&&(day.yapilar||[]).length>0){
@@ -20811,11 +20831,13 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
             if(isAntrenmanGunu&&!isManual&&(ov.tip==='dinlenme'||ovYapilarBos)&&day.tip&&day.tip!=='dinlenme'&&day.yapilar?.length>0){
               return day; // taze generateTwoWeekPlan önerisi
             }
-            return{...day,tip:ov.tip,baslik:ov.baslik,yapi_notu:('yapi_notu' in ov)?ov.yapi_notu:(day.yapi_notu||''),sure_dk:ov.sure_dk,yukHedef:ov.yukHedef,isKosuCapraz:ov.isKosuCapraz||false,yapilar:ov.yapilar||[]};
+            // Aynı kök neden düzeltmesi (bkz. yukarıdaki "bugün" dalı notu) — gelecek
+            // günler için de isTest/testTur ov'dan açıkça alınır, ham day'den miras kalmaz.
+            return{...day,tip:ov.tip,baslik:ov.baslik,yapi_notu:('yapi_notu' in ov)?ov.yapi_notu:(day.yapi_notu||''),sure_dk:ov.sure_dk,yukHedef:ov.yukHedef,isKosuCapraz:ov.isKosuCapraz||false,yapilar:ov.yapilar||[],isTest:ov.isTest||false,testTur:ov.testTur||null};
           }
-          // Manuel atama
+          // Manuel atama — testi geçersiz kılar (bkz. handleManuelAta/onDeleteTestPlan)
           const mo=manualDates.has(day.date)?manualOvMap[day.date]:null;
-          if(mo?.tip) return{...day,tip:mo.tip,baslik:mo.baslik||day.baslik};
+          if(mo?.tip) return{...day,tip:mo.tip,baslik:mo.baslik||day.baslik,isTest:false,testTur:null};
           // Güvenlik katmanı: override yok, manuel atama yok — gün artık koşu/çapraz günü
           // değilse ve gerçek antrenman yoksa ham generated planı değil dinlenmeyi döndür.
           // Bu, approved koruma veya fbGet race condition sonucu oluşabilecek yanlış gösterimi engeller.
@@ -21684,6 +21706,10 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
             yukHedef:freshDay.yukHedef||0,
             isKosuCapraz:freshDay.isKosuCapraz||false,
             yapilar:freshDay.yapilar,
+            // isTest/testTur de taze günden yazılmalı — aksi halde bu onay kutusu
+            // yazımı overrideMap'te isTest'i sessizce siler (bkz. generatePlanSnapshot
+            // ve plan useMemo'daki 15.09.2026 kök neden düzeltmesi).
+            isTest:freshDay.isTest||false,testTur:freshDay.testTur||null,
             approved:false // henüz onaylanmadı; aşağıda toggle edilecek
           };
         }
