@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.15-2017 --><!DOCTYPE html>
+<!-- Version: v2026.09.15-2126 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.15-2017';
+const APP_VERSION='v2026.09.15-2126';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -26502,6 +26502,11 @@ const TEST_TURLERI={
         km3_pace:r.km3_pace||null,km3_sec:p3||null,
         km5_pace:r.km5_pace||null,km5_sec:p5r||null,
         ort_pace_sec:ortPaceSec,ort_pace:ortPaceSec?secToPace(ortPaceSec):null,
+        // fark: TEK testin İÇİNDEKİ 1.→son km pace değişimi (testler-arası kıyaslamadan
+        // farklı) — 15.09.2026, Göksel kararı: yön-duyarlı yorumlama için ayrıca saklanır
+        // (negatif=hızlanma normal/beklenen — kardiyak gecikme; pozitif=yavaşlama uyarı
+        // işareti — kardiyak sürüklenme/aerobik yetersizlik).
+        fark:fark,
         label:'1. km: '+r.km1_pace+(p5?' → 5. km: '+r.km5_pace+(fark?' ('+( fark>0?'+':'')+fark+'sn/km)':''):'')
       };
     },
@@ -27117,22 +27122,43 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,o
           if(matchingPlan)onDeleteTestPlan(matchingPlan.id);
           setEditRecord(null);setEditForm({});
         };
-        // ── Aynı tür testler arası kıyaslama (15.09.2026, Göksel talebi) ────────────
-        // "Gelişim ya da gerileme tespit edilsin — ortalama pace + 1./5. km bazında."
-        // Sadece pace verisi olan test türlerinde (maf, zaman_5k) gösterilir; Cooper
-        // (VO₂max, mesafe bazlı) ve LTHR testinde (nabız bazlı) km/pace metriği yok.
-        // Kıyas HER ZAMAN aynı türün bir önceki (kronolojik) kaydına göre yapılır —
-        // wkList zaten en-yeni-önce sıralı (bkz. allTestWks.sort), o yüzden
-        // wkList[i+1] = bu testten önceki aynı türdeki test.
-        const paceDeltaBadge=(curSec,prevSec,lbl)=>{
-          if(!curSec||!prevSec)return null;
-          const d=Math.round(curSec-prevSec); // negatif = hızlanma (gelişim)
-          const ayni=d===0,iyi=d<0;
+        // ── Aynı tür testler arası kıyaslama — SÜREYE NORMALİZE, DERECELİ (15.09.2026,
+        // Göksel talebi): "gelişimin ciddiyeti de ifade edilsin, testler arası geçen
+        // süre düşünülerek". Mantık: ham fark yerine "28 günlük eşdeğer değişim hızı"
+        // hesaplanır (skor/gün×28) — böylece 5 ayda -57sn/km ile 3 haftada -57sn/km
+        // AYNI ciddiyette sayılmaz (ilki yavaş/istikrarlı bir hız, ikincisi çok hızlı
+        // bir sıçrama). 14 günden yakın testlerde gün sayısı 14'e sabitlenir (floor) —
+        // ayrı bir "kısa aralık" durumu icat edilmez, sadece hız hesabı gürültüyle
+        // şişmez. Eşikler (SEVERITY_ESIK) Göksel'in coaching deneyimine göre ayarlanabilir
+        // TAHMİNLERDİR, klinik/kesin değer değildir — pace: MAF+5K sn/km; vo2max: Cooper
+        // ml/kg/dk; lthr: LTHR Testi bpm. Cooper/LTHR artık dahil (öncesinde pace'i olmayan
+        // türler tamamen dışlanmıştı — Göksel'in isteğiyle kendi metrikleri üzerinden dahil
+        // edildi: VO₂max artışı=gelişim, LTHR artışı=gelişim varsayımıyla).
+        const SEVERITY_ESIK={pace:[8,20,40],vo2max:[1,2.5,5],lthr:[2,5,10]};
+        const GELISIM_ADI=[['🙂','Gelişim var'],['💪','Güzel gelişim'],['🎉','Harika gelişim']];
+        const GERILEME_ADI=[['🙁','Hafif gerileme'],['⚠️','Belirgin gerileme'],['🚨','Ciddi gerileme']];
+        const gunFarki=(d1,d2)=>Math.round((new Date(d1+'T12:00:00')-new Date(d2+'T12:00:00'))/864e5);
+        const severityTier=(rate28,esikler)=>{ // rate28<0 → gelişim yönü, >0 → gerileme yönü
+          const a=Math.abs(rate28);
+          if(a<esikler[0])return null; // stabil
+          const idx=a<esikler[1]?0:(a<esikler[2]?1:2);
+          return rate28<0?GELISIM_ADI[idx]:GERILEME_ADI[idx];
+        };
+        const deltaBadge=(curVal,prevVal,lbl,unit,metricKey,curDate,prevDate,higherIsBetter)=>{
+          if(curVal==null||prevVal==null)return null;
+          const raw=curVal-prevVal;
+          const d=Math.round(raw);
+          const skor=higherIsBetter?-raw:raw; // negatif=gelişim yönü (normalize)
+          const gunF=Math.max(gunFarki(curDate,prevDate),14);
+          const rate28=skor/gunF*28;
+          const tier=severityTier(rate28,SEVERITY_ESIK[metricKey]||[8,20,40]);
+          const rawText=d===0?'değişim yok':((d>0?'+':'')+d+unit);
+          const kuyruk=tier?(' · '+tier[0]+' '+tier[1]):(d===0?'':' · Stabil');
+          const renk=!tier?{bg:'var(--bg-tertiary)',fg:'var(--text-tertiary)'}:(skor<0?{bg:'var(--success-bg)',fg:'var(--success)'}:{bg:'var(--warn-bg)',fg:'var(--warn)'});
           return React.createElement('span',{key:lbl,style:{
             fontSize:10,fontWeight:700,padding:'2px 7px',borderRadius:10,whiteSpace:'nowrap',
-            background:ayni?'var(--bg-tertiary)':(iyi?'var(--success-bg)':'var(--warn-bg)'),
-            color:ayni?'var(--text-tertiary)':(iyi?'var(--success)':'var(--warn)')
-          }},lbl+': '+(ayni?'değişim yok':((d>0?'+':'')+d+'sn/km '+(iyi?'✓ Gelişim':'⚠ Gerileme'))));
+            background:renk.bg,color:renk.fg
+          }},lbl+': '+rawText+kuyruk);
         };
         const testKarsilastir=(tid,cur,prev)=>{
           if(!prev)return null;
@@ -27140,14 +27166,38 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,o
           let parts=[];
           if(tid==='maf'){
             parts=[
-              paceDeltaBadge(cs.km1_sec,ps.km1_sec,'1. km'),
-              paceDeltaBadge(cs.km5_sec,ps.km5_sec,'5. km'),
-              paceDeltaBadge(cs.ort_pace_sec,ps.ort_pace_sec,'Ortalama')
+              deltaBadge(cs.km1_sec,ps.km1_sec,'1. km','sn/km','pace',cur.date,prev.date,false),
+              deltaBadge(cs.km5_sec,ps.km5_sec,'5. km','sn/km','pace',cur.date,prev.date,false),
+              deltaBadge(cs.ort_pace_sec,ps.ort_pace_sec,'Ortalama','sn/km','pace',cur.date,prev.date,false)
             ].filter(Boolean);
           } else if(tid==='zaman_5k'){
-            parts=[paceDeltaBadge(cs.pace_sec,ps.pace_sec,'Ortalama pace')].filter(Boolean);
+            parts=[deltaBadge(cs.pace_sec,ps.pace_sec,'Ortalama pace','sn/km','pace',cur.date,prev.date,false)].filter(Boolean);
+          } else if(tid==='cooper'){
+            parts=[deltaBadge(cs.vo2max,ps.vo2max,'VO₂max',' ml/kg/dk','vo2max',cur.date,prev.date,true)].filter(Boolean);
+          } else if(tid==='lthr_test'){
+            parts=[deltaBadge(cs.lthr,ps.lthr,'LTHR',' bpm','lthr',cur.date,prev.date,true)].filter(Boolean);
           }
           return parts.length?parts:null;
+        };
+        // ── MAF: TEK testin İÇİNDEKİ 1.→5. km pace değişimi yorumu (15.09.2026,
+        // Göksel kararı — yöne duyarlı): testler-arası kıyaslamadan (yukarıdaki
+        // testKarsilastir) BAĞIMSIZ, tek bir test kaydının kendi tutarlılığını
+        // değerlendirir. Negatif fark (hızlanma) kardiyak gecikme etkisiyle normal/
+        // beklenen kabul edilir — uyarı tetiklemez. Pozitif fark (yavaşlama) aynı
+        // nabız tavanında çıktının sürdürülemediğini (kardiyak sürüklenme/aerobik
+        // yetersizlik) gösterir — eşiğe göre kademeli uyarı verir.
+        const mafIcTestYorum=(w)=>{
+          const fark=w?._testSonuc?.fark;
+          if(fark==null)return null;
+          let text,variant;
+          if(fark<=10){text='✓ Tutarlı/gelişen tempo';variant='success';}
+          else if(fark<=25){text='⚠ Hafif yavaşlama';variant='warn';}
+          else{text='⚠ Belirgin yavaşlama — aerobik taban çalışması öncelikli';variant='warn';}
+          return React.createElement('span',{style:{
+            fontSize:10,fontWeight:700,padding:'2px 7px',borderRadius:10,whiteSpace:'nowrap',
+            background:variant==='success'?'var(--success-bg)':'var(--warn-bg)',
+            color:variant==='success'?'var(--success)':'var(--warn)'
+          }},text);
         };
         return React.createElement('div',null,
           siraliGruplar.map(([tid,wkList])=>{
@@ -27162,11 +27212,12 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,o
                 const isEditing=editRecord?.id===w.id;
                 const label=w._testSonuc?.label||(w.notlar?.replace('Test sonucu: ','')||'—');
                 const cmp=testKarsilastir(tid,w,wkList[wIdx+1]);
+                const icYorum=tid==='maf'?mafIcTestYorum(w):null;
                 return React.createElement('div',{key:w.id,style:{borderTop:'1px solid var(--border)',paddingTop:8,marginTop:8}},
                   !isEditing&&React.createElement('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}},
                     React.createElement('div',{style:{flex:1}},
                       React.createElement('div',{style:{fontSize:13,fontWeight:600}},fmtDate(w.date)),
-                      React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginTop:2}},label),
+                      React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginTop:2,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}},label,icYorum),
                       cmp&&React.createElement('div',{style:{display:'flex',gap:6,flexWrap:'wrap',marginTop:5}},cmp)
                     ),
                     React.createElement('div',{style:{display:'flex',gap:6}},
