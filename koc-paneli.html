@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.15-2140 --><!DOCTYPE html>
+<!-- Version: v2026.09.15-2219 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.15-2140';
+const APP_VERSION='v2026.09.15-2219';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -27135,6 +27135,19 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,o
         // türler tamamen dışlanmıştı — Göksel'in isteğiyle kendi metrikleri üzerinden dahil
         // edildi: VO₂max artışı=gelişim, LTHR artışı=gelişim varsayımıyla).
         const SEVERITY_ESIK={pace:[8,20,40],vo2max:[1,2.5,5],lthr:[2,5,10]};
+        // ── Seviyeye göre eşik ölçekleme (15.09.2026, Göksel talebi) ────────────────
+        // Rekreasyonel=1.00 çapa (SEVIYE_RISK_CARPANI ile AYNI kod deseni — bkz.
+        // ~satır 4046) ama YÖN TERS: risk toleransında elit daha GEVŞEK eşik alır
+        // (büyük yük dalgalanmasına dayanıklı); burada elit daha SIKI eşik alır,
+        // çünkü elit bir sporcu için küçük bir değişim zaten büyük bir kazanım/
+        // kayıptır — "harika gelişim" demek için Başlangıç'a göre çok daha az
+        // değişim yeterli olmalı. Başlangıç'ta ise 20-30sn/km/ay gibi değişimler
+        // aerobik taban inşasında NORMAL/beklenen kazançlardır — "harika" demek
+        // için daha büyük bir eşik gerekir, yoksa etiket enflasyonu olur (her
+        // normal ilerleme "harika" çıkar, ayırt edicilik kaybolur). Çarpanlar
+        // klinik/kesin değer değil — Göksel'in coaching deneyimine göre ayarlanabilir.
+        const SEVIYE_GELISIM_CARPANI={baslangic:2.0,rekrasyon:1.00,orta:0.75,ileri:0.5,elit:0.3};
+        const _gelisimCarpan=SEVIYE_GELISIM_CARPANI[athlete?.seviye]??1.00;
         const GELISIM_ADI=[['🙂','Gelişim var'],['💪','Güzel gelişim'],['🎉','Harika gelişim']];
         const GERILEME_ADI=[['🙁','Hafif gerileme'],['⚠️','Belirgin gerileme'],['🚨','Ciddi gerileme']];
         const gunFarki=(d1,d2)=>Math.round((new Date(d1+'T12:00:00')-new Date(d2+'T12:00:00'))/864e5);
@@ -27151,7 +27164,9 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,o
           const skor=higherIsBetter?-raw:raw; // negatif=gelişim yönü (normalize)
           const gunF=Math.max(gunFarki(curDate,prevDate),14);
           const rate28=skor/gunF*28;
-          const tier=severityTier(rate28,SEVERITY_ESIK[metricKey]||[8,20,40]);
+          const esiklerBase=SEVERITY_ESIK[metricKey]||[8,20,40];
+          const esikler=esiklerBase.map(x=>x*_gelisimCarpan);
+          const tier=severityTier(rate28,esikler);
           const rawText=d===0?'değişim yok':((d>0?'+':'')+d+unit);
           const kuyruk=tier?(' · '+tier[0]+' '+tier[1]):(d===0?'':' · Stabil');
           const renk=!tier?{bg:'var(--bg-tertiary)',fg:'var(--text-tertiary)'}:(skor<0?{bg:'var(--success-bg)',fg:'var(--success)'}:{bg:'var(--warn-bg)',fg:'var(--warn)'});
@@ -27183,7 +27198,24 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,o
                 cs.fark!=null?Math.max(cs.fark,0):null,
                 ps.fark!=null?Math.max(ps.fark,0):null,
                 'Yavaşlama eğilimi','sn/km','pace',cur.date,prev.date,false
-              )
+              ),
+              // EK (15.09.2026, Göksel: "hiçbir sorun olmasa da bir yorum yapılmalı"):
+              // iki fark da negatifse (ikisi de "sorun yok" bölgesinde) yukarıdaki
+              // rozet hep "değişim yok" gösterir — ama ham |fark| değişmiş olabilir ve
+              // bu, ısınma/pacing paterninde gerçek bir bilgi taşır: |fark| KÜÇÜLMESİ,
+              // tempo'nun daha ERKEN istikrar bulduğunu (1. km artık gerçek performansa
+              // daha yakın) gösterir; |fark| BÜYÜMESİ ise ilk kilometrenin öncekine göre
+              // daha temkinli/yavaş başladığını gösterir. Risk değil — nötr (gri) bilgi
+              // notu. 8sn/km altı değişim gürültü kabul edilip gösterilmez.
+              (()=>{
+                if(cs.fark==null||ps.fark==null||cs.fark>0||ps.fark>0)return null;
+                const absD=Math.abs(cs.fark)-Math.abs(ps.fark);
+                if(Math.abs(absD)<8)return null;
+                return React.createElement('span',{key:'farkBilgi',style:{
+                  fontSize:10,fontWeight:700,padding:'2px 7px',borderRadius:10,whiteSpace:'nowrap',
+                  background:'var(--bg-tertiary)',color:'var(--text-tertiary)'
+                }},absD<0?'ℹ️ Tempo daha erken istikrar buldu':'ℹ️ İlk km öncekine göre daha temkinli başladı');
+              })()
             ].filter(Boolean);
           } else if(tid==='zaman_5k'){
             parts=[deltaBadge(cs.pace_sec,ps.pace_sec,'Ortalama pace','sn/km','pace',cur.date,prev.date,false)].filter(Boolean);
