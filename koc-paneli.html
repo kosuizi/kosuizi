@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.14-2130 --><!DOCTYPE html>
+<!-- Version: v2026.09.15-0918 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -8,6 +8,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <style>
 :root {
   --bg-primary: #f0f4f9;
@@ -243,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.14-2130';
+const APP_VERSION='v2026.09.15-0918';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -3403,6 +3404,58 @@ const FB_EMAIL    = 'goxelcelik@gmail.com';
 const FB_PASSWORD = 'Kz#9mPw$vL2qR8!x';           // Firebase Console'd aki şifre
 // ───────────────────────────────────────────────────────────────────────────────
 
+// ─── EmailJS — Sporcu Anket Bildirimi ───────────────────────────────────────
+// Bir sporcu SporcuAnketi formunu (fizyolojik anket) kaydettiğinde, Göksel'e
+// bilgilendirme e-postası gönderilir. Tamamen client-side (bkz. head'deki
+// @emailjs/browser SDK) — bu proje statik hosting kullandığı için (GitHub
+// Pages, sunucu yok) bir Cloud Functions kurulumu yerine tercih edildi.
+// (Göksel talebi, 2026.09.15)
+const EMAILJS_CONFIG={
+  serviceId:'service_kosuizi',
+  templateId:'template_bwknesj',
+  publicKey:'13OvJP4dSU3lpefrM',
+  toEmail:'goxelcelik@gmail.com'
+};
+
+// SporcuAnketi formundan okunabilir bir metin özeti üretir (e-posta içeriği için).
+// mhrPatch/lthrPatch verilirse (onay bekleyen öneriler), bunlar ayrı satır olarak eklenir.
+function anketOzetiOlustur(formLive,mhrPatch,lthrPatch){
+  const satirlar=[];
+  const ekle=function(etiket,deger){
+    if(deger===undefined||deger===null||deger==='')return;
+    satirlar.push(etiket+': '+deger);
+  };
+  ekle('Kilo (kg)',formLive.kilo);
+  ekle('Boy (cm)',formLive.boy);
+  ekle('Dinlenik Nabız (RHR)',formLive.rhr);
+  ekle('VO2max',formLive.vo2max);
+  ekle('HRV Durumu',formLive.hrv_durum);
+  ekle('HRV (7 gün ort.)',formLive.hrv_7gun);
+  ekle('Sakatlık Durumu',formLive.sakatlık);
+  if(mhrPatch&&mhrPatch.mhr_pending!=null)ekle('MHR (öneri, onay bekliyor)',mhrPatch.mhr_pending);
+  if(lthrPatch&&lthrPatch.lthr_pending!=null)ekle('LTHR (öneri, onay bekliyor)',lthrPatch.lthr_pending);
+  ekle('Koşu Günleri',(formLive.kosu_gunleri||[]).join(', '));
+  ekle('Çapraz Antrenman Günleri',(formLive.capraz_gunleri||[]).join(', '));
+  const uzunArr=Array.isArray(formLive.uzun_gun)?formLive.uzun_gun:[formLive.uzun_gun].filter(Boolean);
+  ekle('Uzun Koşu Günü',uzunArr.join(', '));
+  return satirlar.join('\n');
+}
+
+// Anket kaydı başarılı olduktan SONRA çağrılır; e-posta gönderimi asenkron ve
+// "fire and forget"tir — başarısız olsa bile anket kaydını veya kullanıcı
+// deneyimini (Kaydedildi! mesajı) engellemez, sadece console'a uyarı basar.
+function sendAnketBildirimEmail(sporcuAdi,ozet){
+  if(typeof emailjs==='undefined'){console.warn('EmailJS SDK yüklenemedi, anket bildirim e-postası gönderilemedi.');return;}
+  emailjs.send(EMAILJS_CONFIG.serviceId,EMAILJS_CONFIG.templateId,{
+    sporcu_adi:sporcuAdi,
+    tarih:new Date().toLocaleString('tr-TR'),
+    cevap_ozeti:ozet,
+    to_email:EMAILJS_CONFIG.toEmail
+  },{publicKey:EMAILJS_CONFIG.publicKey}).catch(function(e){
+    console.warn('Anket bildirim e-postası gönderilemedi:',e);
+  });
+}
+
 let db=null;
 let _authReady=null; // Auth tamamlanınca resolve olan Promise
 
@@ -3904,6 +3957,19 @@ const GIRIS_ANKETI_FIELDS=[
   {key:'acil_kisi_ad',label:'⚠️ Acil durumda aranacak kişi (Ad Soyad)',type:'text'},
   {key:'acil_kisi_tel',label:'⚠️ Acil durumda aranacak kişinin telefon numarası',type:'text'},
 ];
+
+// Giriş Anketi (onboarding) için okunabilir metin özeti — bildirim e-postasında
+// kullanılır (bkz. handleGirisSave → sendAnketBildirimEmail).
+function girisAnketiOzetiOlustur(girisFormVal){
+  const satirlar=[];
+  GIRIS_ANKETI_FIELDS.forEach(function(f){
+    let deger=girisFormVal[f.key];
+    if(f.type==='multi_priority')deger=Array.isArray(deger)?deger.join(', '):'';
+    if(deger===undefined||deger===null||deger==='')return;
+    satirlar.push(f.label+': '+deger);
+  });
+  return satirlar.join('\n');
+}
 
 // Giriş Anketi'nde soru DEĞİL — koçtan sporcuya tek yönlü, aciliyet içermeyen
 // öneri listesi. Sporcudan yanıt istenmez, sadece bilgilendirme amaçlıdır.
@@ -33691,6 +33757,12 @@ function SporcuAnketi(){
       setDataLoadedAt(new Date());
       setSaved(true);
       setTimeout(function(){setSaved(false);},3000);
+
+      // Anket kaydı başarılı — Göksel'e bilgilendirme e-postası gönderilir
+      // (Göksel talebi, 2026.09.15). Kayıt/UI akışını engellememesi için
+      // await edilmez; hata olursa yalnızca console'a uyarı düşer.
+      const sporcuAdiEmail=((mevcut.ad||'')+' '+(mevcut.soyad||'')).trim()||'Sporcu';
+      sendAnketBildirimEmail(sporcuAdiEmail,anketOzetiOlustur(formLive,mhrPatch,lthrPatch));
     }catch(e){alert('Kayıt hatası: '+e.message);}
     setSaving(false);
   };
@@ -33717,6 +33789,7 @@ function SporcuAnketi(){
       // Race condition önlemi: kaydetmeden önce Firebase'den güncel veriyi çek
       const freshAths=await fbGet('ath2');
       const freshAll=freshAths||athletes;
+      const mevcutGiris=freshAll.find(function(a){return a.id===selId;})||athletes.find(function(a){return a.id===selId;})||{};
       const nowIso=new Date().toISOString();
       const updated=freshAll.map(function(a){
         if(a.id!==selId)return a;
@@ -33730,6 +33803,12 @@ function SporcuAnketi(){
       setDataLoadedAt(new Date());
       setGirisSaved(true);
       setTimeout(function(){setShowGiris(false);},1200);
+
+      // Giriş anketi kaydı başarılı — Göksel'e bilgilendirme e-postası
+      // (Göksel talebi, 2026.09.15 — "tüm anketler için bildirim"). Kayıt/UI
+      // akışını engellememesi için await edilmez.
+      const sporcuAdiGirisEmail=((mevcutGiris.ad||'')+' '+(mevcutGiris.soyad||'')).trim()||'Sporcu';
+      sendAnketBildirimEmail(sporcuAdiGirisEmail,girisAnketiOzetiOlustur(girisForm));
     }catch(e){alert('Kayıt hatası: '+e.message);}
     setGirisSaving(false);
   };
