@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.15-1944 --><!DOCTYPE html>
+<!-- Version: v2026.09.15-2017 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.15-1944';
+const APP_VERSION='v2026.09.15-2017';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -26461,7 +26461,8 @@ const TEST_TURLERI={
       const paceSecKm=sec/5;
       const vlt=5000/sec;
       const pb=secToPace(paceSecKm);
-      return{vlt:Math.round(vlt*1000)/1000,pb_5k:pb,label:'5K Pace: '+pb+' /km · vLT: '+(Math.round(vlt*100)/100)+' m/s'};
+      // pace_sec: aynı tür testler arası kıyaslama (gelişim/gerileme) için sayısal referans.
+      return{vlt:Math.round(vlt*1000)/1000,pb_5k:pb,pace_sec:Math.round(paceSecKm),label:'5K Pace: '+pb+' /km · vLT: '+(Math.round(vlt*100)/100)+' m/s'};
     },
     guncelle:['vlt_kalibre','pb_5k'],
     freq_hafta:4,
@@ -26483,10 +26484,26 @@ const TEST_TURLERI={
     girdi:[{k:'maf_nabiz',l:'MAF Nabzı (bpm)',type:'number',min:110,max:175,ph:'145'},{k:'km1_pace',l:'1. km Pace (dk:sn)',type:'text',ph:'6:30'},{k:'km3_pace',l:'3. km Pace (dk:sn)',type:'text',ph:'6:45'},{k:'km5_pace',l:'5. km Pace (dk:sn)',type:'text',ph:'7:00'}],
     hesapla:(r)=>{
       const p1=paceToSec(r.km1_pace);
-      const p5=paceToSec(r.km5_pace)||paceToSec(r.km3_pace);
+      const p3=paceToSec(r.km3_pace);
+      const p5r=paceToSec(r.km5_pace);
+      const p5=p5r||p3;
       if(!p1)return null;
       const fark=p5?Math.round(p5-p1):null;
-      return{maf_nabiz:parseInt(r.maf_nabiz)||0,maf_pace:r.km1_pace,label:'1. km: '+r.km1_pace+(p5?' → 5. km: '+r.km5_pace+(fark?' ('+( fark>0?'+':'')+fark+'sn/km)':''):'')};
+      // Test Geçmişi'nde aynı tür testler arası kıyaslama (15.09.2026, Göksel talebi:
+      // "gelişim ya da gerileme tespit edilsin — ortalama pace + 1./5. km") için
+      // km1/km3/km5 saniye değerleri ve ortalama pace AYRICA sayısal alan olarak
+      // saklanır (eskiden sadece label metnine gömülüydü, güvenilir kıyaslama
+      // yapılamıyordu). maf_pace/label geriye uyumluluk için değişmeden kalır.
+      const splits=[p1,p3||null,p5r||null].filter(Boolean);
+      const ortPaceSec=splits.length?Math.round(splits.reduce((a,b)=>a+b,0)/splits.length):null;
+      return{
+        maf_nabiz:parseInt(r.maf_nabiz)||0,maf_pace:r.km1_pace,
+        km1_pace:r.km1_pace||null,km1_sec:p1||null,
+        km3_pace:r.km3_pace||null,km3_sec:p3||null,
+        km5_pace:r.km5_pace||null,km5_sec:p5r||null,
+        ort_pace_sec:ortPaceSec,ort_pace:ortPaceSec?secToPace(ortPaceSec):null,
+        label:'1. km: '+r.km1_pace+(p5?' → 5. km: '+r.km5_pace+(fark?' ('+( fark>0?'+':'')+fark+'sn/km)':''):'')
+      };
     },
     guncelle:['aerobik_baseline'],
     freq_hafta:4,
@@ -27076,6 +27093,11 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,o
             if(tid==='maf'){
               if(w._testSonuc.maf_pace)preForm.km1_pace=w._testSonuc.maf_pace;
               if(w._testSonuc.maf_nabiz)preForm.maf_nabiz=String(w._testSonuc.maf_nabiz);
+              // DÜZELTME (15.09.2026): km3/km5 de _testSonuc'ta ayrıca saklanıyor
+              // artık (bkz. hesapla) — düzenlerken bunlar da geri doldurulmalı,
+              // aksi halde koç her düzenlemede km3/km5'i sıfırdan girmek zorunda kalırdı.
+              if(w._testSonuc.km3_pace)preForm.km3_pace=w._testSonuc.km3_pace;
+              if(w._testSonuc.km5_pace)preForm.km5_pace=w._testSonuc.km5_pace;
             }
           }
           setEditRecord(w);
@@ -27095,6 +27117,38 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,o
           if(matchingPlan)onDeleteTestPlan(matchingPlan.id);
           setEditRecord(null);setEditForm({});
         };
+        // ── Aynı tür testler arası kıyaslama (15.09.2026, Göksel talebi) ────────────
+        // "Gelişim ya da gerileme tespit edilsin — ortalama pace + 1./5. km bazında."
+        // Sadece pace verisi olan test türlerinde (maf, zaman_5k) gösterilir; Cooper
+        // (VO₂max, mesafe bazlı) ve LTHR testinde (nabız bazlı) km/pace metriği yok.
+        // Kıyas HER ZAMAN aynı türün bir önceki (kronolojik) kaydına göre yapılır —
+        // wkList zaten en-yeni-önce sıralı (bkz. allTestWks.sort), o yüzden
+        // wkList[i+1] = bu testten önceki aynı türdeki test.
+        const paceDeltaBadge=(curSec,prevSec,lbl)=>{
+          if(!curSec||!prevSec)return null;
+          const d=Math.round(curSec-prevSec); // negatif = hızlanma (gelişim)
+          const ayni=d===0,iyi=d<0;
+          return React.createElement('span',{key:lbl,style:{
+            fontSize:10,fontWeight:700,padding:'2px 7px',borderRadius:10,whiteSpace:'nowrap',
+            background:ayni?'var(--bg-tertiary)':(iyi?'var(--success-bg)':'var(--warn-bg)'),
+            color:ayni?'var(--text-tertiary)':(iyi?'var(--success)':'var(--warn)')
+          }},lbl+': '+(ayni?'değişim yok':((d>0?'+':'')+d+'sn/km '+(iyi?'✓ Gelişim':'⚠ Gerileme'))));
+        };
+        const testKarsilastir=(tid,cur,prev)=>{
+          if(!prev)return null;
+          const cs=cur._testSonuc||{},ps=prev._testSonuc||{};
+          let parts=[];
+          if(tid==='maf'){
+            parts=[
+              paceDeltaBadge(cs.km1_sec,ps.km1_sec,'1. km'),
+              paceDeltaBadge(cs.km5_sec,ps.km5_sec,'5. km'),
+              paceDeltaBadge(cs.ort_pace_sec,ps.ort_pace_sec,'Ortalama')
+            ].filter(Boolean);
+          } else if(tid==='zaman_5k'){
+            parts=[paceDeltaBadge(cs.pace_sec,ps.pace_sec,'Ortalama pace')].filter(Boolean);
+          }
+          return parts.length?parts:null;
+        };
         return React.createElement('div',null,
           siraliGruplar.map(([tid,wkList])=>{
             const testDef=TEST_TURLERI[tid];
@@ -27104,14 +27158,16 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,o
                 React.createElement('div',{style:{fontWeight:700,fontSize:14}},testDef?.ad||tid),
                 React.createElement('span',{className:'badge badge-info',style:{fontSize:11}},wkList.length+' kayıt')
               ),
-              wkList.map(w=>{
+              wkList.map((w,wIdx)=>{
                 const isEditing=editRecord?.id===w.id;
                 const label=w._testSonuc?.label||(w.notlar?.replace('Test sonucu: ','')||'—');
+                const cmp=testKarsilastir(tid,w,wkList[wIdx+1]);
                 return React.createElement('div',{key:w.id,style:{borderTop:'1px solid var(--border)',paddingTop:8,marginTop:8}},
                   !isEditing&&React.createElement('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}},
                     React.createElement('div',{style:{flex:1}},
                       React.createElement('div',{style:{fontSize:13,fontWeight:600}},fmtDate(w.date)),
-                      React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginTop:2}},label)
+                      React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginTop:2}},label),
+                      cmp&&React.createElement('div',{style:{display:'flex',gap:6,flexWrap:'wrap',marginTop:5}},cmp)
                     ),
                     React.createElement('div',{style:{display:'flex',gap:6}},
                       React.createElement('button',{className:'btn btn-sm',onClick:()=>handleEditOpen(w)},'✏️ Düzenle'),
