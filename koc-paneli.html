@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.16-1443 --><!DOCTYPE html>
+<!-- Version: v2026.09.16-2207 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.16-1443';
+const APP_VERSION='v2026.09.16-2207';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -19671,7 +19671,7 @@ function buildEffectiveKosuYapilar(dayLike, kosuActual, zones, disiplin, athlete
     // Fallback 1: gerçekleşen koşunun kendi türünden (tur/yapi_notu) üret
     if(kosuActual){
       try{
-        const _tur=kosuActual.tur||kosuActual.spor||'aerobik';
+        const _tur=kosuSlotTur(kosuActual,dayLike?.tip);
         const _effTur=_KOSU_TIP_SET.has(_tur)?_tur:'aerobik';
         const _yapiNotu=kosuActual.yapi_notu||'';
         const _sureDk=Math.round((toSec(kosuActual.sure_sa,kosuActual.sure_dk,kosuActual.sure_sn)||0)/60)||dayLike?.sure_dk||45;
@@ -19706,7 +19706,7 @@ function buildEffectiveKosuYapilar(dayLike, kosuActual, zones, disiplin, athlete
       if(_ykTpl?.yapilar?.length>0) displayYapilar=_ykTpl.yapilar;
     }catch(e){}
   }
-  const _rawDisplayTip=kosuActual?(kosuActual.tur||kosuActual.spor||'aerobik'):(dayLike?.tip||'aerobik');
+  const _rawDisplayTip=kosuSlotTur(kosuActual,dayLike?.tip);
   let _displayTip=_KOSU_TIP_SET.has(_rawDisplayTip)?_rawDisplayTip:'aerobik';
   if(_ykM) _displayTip='yuru_kos'; // Yürü-Koş tespit edildiyse tip de tutarlı olsun (ReceteTablosu bölge/pace hesabı için)
   return{displayYapilar,displayTip:_displayTip};
@@ -19723,13 +19723,41 @@ function buildEffectiveKosuYapilar(dayLike, kosuActual, zones, disiplin, athlete
 //   kosuDone/caprazDone: ilgili kategoride kayıt var mı
 //   fullyCompleted: kart üst rozetinin TAMAMLANDI/✔ alma şartı
 //   kosuFirst: render sırası — true=koşu üstte, false=çapraz üstte (tamamlanan üste)
+// 2026.09.16 — KÖK NEDEN DÜZELTMESİ (Göksel talebi): plan tipi yürüyüş türünde
+// (power_hiking/tempolu_yurume/rahat_yurume/yuru_kos veya başlıkta "Yürü-Koş") olan bir
+// günde sporcu antrenmanı spor='yuruyus' olarak kaydettiğinde, kayıt çapraz sayılıyor ve
+// koşu slotu "🏃 Koşu ❌ Yapılmadı" gösteriyordu. Bu tür planlarda yürüyüş kaydı, planın
+// kendisidir → koşu slotuna sayılır. Koşu tipli planlarda (tempo, interval vb.) yürüyüş
+// koşunun yerine GEÇMEZ (mevcut kural korunur). Haftalık km gibi koşuya özel toplamlar
+// bu yardımcıyı KULLANMAZ — yalnızca gün kartı/slot eşleştirmesi içindir.
+const _YURUYUS_PLAN_TIP_SET=new Set(['power_hiking','tempolu_yurume','rahat_yurume','yuru_kos']);
+function isYuruyusPlan(ov){
+  if(!ov) return false;
+  if(_YURUYUS_PLAN_TIP_SET.has(ov.tip)) return true;
+  const src=(ov.baslik||'')+' '+(ov.yapi_notu||'');
+  return /Yürü-Koş/i.test(src);
+}
+function isKosuSlotWorkout(w, ov){
+  const sp=w?.spor||'kosu';
+  if(sp==='kosu') return true;
+  return sp==='yuruyus'&&isYuruyusPlan(ov);
+}
+// Koşu slotundaki gerçek kaydın antrenman türü. Yürüyüş kayıtlarında tur alanı
+// genelde boştur; spor='yuruyus' reçete tipi olmadığı için 'aerobik'e düşüp yürüyüşü
+// koşu bölgelerine göre ("Çok Yavaş") değerlendiriyordu → plan tipine düşülür.
+function kosuSlotTur(a, planTip){
+  if(!a) return planTip||'aerobik';
+  if(a.tur) return a.tur;
+  if((a.spor||'kosu')==='yuruyus') return planTip||'aerobik';
+  return a.spor||'aerobik';
+}
 function splitDayActivities(ov, actuals){
   const isKosuCapraz=!!ov?.isKosuCapraz;
   const isCaprazOnly=ov?.tip==='capraz';
   const isRest=!ov||ov.tip==='dinlenme';
   const isRace=ov?.tip==='yaris';
-  const kosuActuals=(actuals||[]).filter(w=>(w.spor||'kosu')==='kosu');
-  const caprazActuals=(actuals||[]).filter(w=>(w.spor||'kosu')!=='kosu');
+  const kosuActuals=(actuals||[]).filter(w=>isKosuSlotWorkout(w,ov));
+  const caprazActuals=(actuals||[]).filter(w=>!isKosuSlotWorkout(w,ov));
   const kosuDone=kosuActuals.length>0;
   const caprazDone=caprazActuals.length>0;
   // Tamamlanma kararı (tick için):
@@ -23733,7 +23761,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                       // günün rowOverrides alt-yoluna yaz — kardeş tarihlere veya başka herhangi
                       // bir üst-seviye alana (weekEff, rampModeOn, formSnap vb.) asla dokunmaz.
                       fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,_multiUpdate).catch(()=>{});
-                      if((_zd||_gd)&&onUpdateWorkout){const mw=workouts.find(w=>w.date===day.date&&w.athleteId===athlete?.id&&(w.spor||'kosu')==='kosu');if(mw)onUpdateWorkout(mw.id,{...(_zd?{_rowZoneDist:_zd}:{}),...(_gd?{_rowGapData:_gd}:{})});}
+                      if((_zd||_gd)&&onUpdateWorkout){const mw=workouts.find(w=>w.date===day.date&&w.athleteId===athlete?.id&&isKosuSlotWorkout(w,day));if(mw)onUpdateWorkout(mw.id,{...(_zd?{_rowZoneDist:_zd}:{}),...(_gd?{_rowGapData:_gd}:{})});}
                     },
                     onSaveDetay: async (label, text, rowUpdate, rowLabel)=>{
                       const _lastSavedAt=new Date().toISOString();
@@ -24195,7 +24223,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   // KÖK NEDEN DÜZELTMESİ (18.07.2026) — bkz. gün kartındaki aynı not:
                   // bu "Paylaş" kartı da SADECE plan tipine bakıyordu; plan dışı gerçekleşen
                   // koşu varsa ReceteTablosu hiç render edilmiyordu.
-                  const _kosuActualH=(day.actual||[]).find(w=>(w.spor||'kosu')==='kosu')||null;
+                  const _kosuActualH=(day.actual||[]).find(w=>isKosuSlotWorkout(w,day))||null;
                   const _showKosuH=_KOSU_TIP_SET.has(day.tip)||day.isKosuCapraz===true||!!_kosuActualH;
                   if(!_showKosuH) return null;
                   const _kosuGorunumH=buildEffectiveKosuYapilar(day,_kosuActualH,calcZones(athlete),athlete?.disiplin,athlete);
@@ -24209,7 +24237,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     isWorkoutLogged:!!_kosuActualH,
                     savedOverrides:(planSnap?.rowOverrides||{})[day.date],
                     savedCuePatches:(planSnap?.overrideMap?.[day.date]?._cuePatch)||{},
-                    actualOrtNabiz:day.actual?.find(w=>(w.spor||'kosu')==='kosu'&&parseFloat(w.ort_nabiz)>0)?.ort_nabiz||null,
+                    actualOrtNabiz:day.actual?.find(w=>isKosuSlotWorkout(w,day)&&parseFloat(w.ort_nabiz)>0)?.ort_nabiz||null,
                     onSaveOverrides: async (overrides, detaySync)=>{
                     const {__zoneDist:_zd,__gapData:_gd,...cleanOverrides}=overrides;
                     const curSnap=planSnapRef.current||{};
@@ -24235,7 +24263,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     // Bkz. yukarıdaki "Haftalık Reçete" panelindeki aynı not — sadece bu günün
                     // rowOverrides alt-yoluna yaz, kayıp güncelleme (lost update) yarışını önler.
                     fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,_multiUpdate).catch(()=>{});
-                    if((_zd||_gd)&&onUpdateWorkout){const mw=workouts.find(w=>w.date===day.date&&w.athleteId===athlete?.id&&(w.spor||'kosu')==='kosu');if(mw)onUpdateWorkout(mw.id,{...(_zd?{_rowZoneDist:_zd}:{}),...(_gd?{_rowGapData:_gd}:{})});}
+                    if((_zd||_gd)&&onUpdateWorkout){const mw=workouts.find(w=>w.date===day.date&&w.athleteId===athlete?.id&&isKosuSlotWorkout(w,day));if(mw)onUpdateWorkout(mw.id,{...(_zd?{_rowZoneDist:_zd}:{}),...(_gd?{_rowGapData:_gd}:{})});}
                   },
                   onSaveDetay: async (label, text, rowUpdate, rowLabel)=>{
                   const _lastSavedAt=new Date().toISOString();
@@ -35292,7 +35320,10 @@ function SporcuPlanView(){
     // Yarış günü ise eski mantık (tek koşu reçetesi) — koşu/çapraz ayrımı uygulanmaz
     // FIX: Koşu tipi listesi — ov.tip bu listede değilse VE isKosuCapraz değilse koşu bölümü yok
     const _KOSU_TIPLERI=['kolay','serbest','aerobik','uzun','tempo','tempo_sureli','esik','esik_sureli','interval','piramit','kesintisiz_piramit','yokus_kisa','yokus_uzun','tirmanis','teknik','acici','progressive','cruise','yaris_tempo','on_off','hill_sprint','strides','back_to_back','yuru_kos'];
-    const _ovTipKosu = ov ? (_KOSU_TIPLERI.includes(ov.tip) || ov.isKosuCapraz===true) : false;
+    // 2026.09.16 — panel paritesi: yerel _KOSU_TIPLERI listesinde yürüyüş plan tipleri
+    // (power_hiking/tempolu_yurume/rahat_yurume) yoktu → bu günler Koşu İzlerim'de "saf çapraz"
+    // sayılıp boş bir "💪 Çapraz ❌ Yapılmadı" bölümü açılıyordu. Koç paneliyle AYNI küme kullanılır.
+    const _ovTipKosu = ov ? (_KOSU_TIP_SET.has(ov.tip) || ov.isKosuCapraz===true) : false;
     // KÖK NEDEN DÜZELTMESİ (18.07.2026) — bkz. koç panelindeki aynı not (showKosu, ~satır 17178):
     // ov MEVCUTSA (planlı bir hafta için her zaman mevcuttur) gösterim SADECE plan tipine
     // bakıyordu — plan dışı gerçekleşen koşu (split.kosuActuals) tamamen görmezden geliniyordu.
@@ -35310,7 +35341,7 @@ function SporcuPlanView(){
       let displayYapilar=ov?.yapilar||[];
       const _band=ctlBand(0);
       const _isKosuCapraz = ov?.isKosuCapraz===true;
-      const _kosuActual = (info.actuals||[]).find(w=>(w.spor||'kosu')==='kosu');
+      const _kosuActual = (info.actuals||[]).find(w=>isKosuSlotWorkout(w,ov));
 
       // Koç paneli yaklaşımı: plan yapilar varsa doğrudan kullan (injectRowsFromTpl zaten _rows ekler).
       // Regenerasyon yalnızca plan yapilar tamamen boşsa devreye girer.
@@ -35326,8 +35357,8 @@ function SporcuPlanView(){
         // Fallback 1: actual'dan üret (plan yoksa veya boşsa)
         if(_kosuActual){
           try{
-            const _tur=_kosuActual.tur||_kosuActual.spor||'aerobik';
-            const _effTur=_KOSU_TIPLERI.includes(_tur)?_tur:'aerobik';
+            const _tur=kosuSlotTur(_kosuActual,ov?.tip);
+            const _effTur=_KOSU_TIP_SET.has(_tur)?_tur:'aerobik';
             const _yapiNotu=_kosuActual.yapi_notu||'';
             const _sureDk=Math.round((toSec(_kosuActual.sure_sa,_kosuActual.sure_dk,_kosuActual.sure_sn)||0)/60)||ov?.sure_dk||45;
             const _tpl=tplFromYapiNotu(_effTur,_yapiNotu,_band,_sureDk,zones,athlete.disiplin||'karma','Temel',0,undefined,athlete);
@@ -35380,8 +35411,8 @@ function SporcuPlanView(){
       }
 
       // Görüntülenen tip: actual varsa actual'dan, yoksa ov'dan; koşu tipi değilse 'aerobik'
-      const _rawDisplayTip=_kosuActual?(_kosuActual.tur||_kosuActual.spor||'aerobik'):(ov?.tip||'aerobik');
-      let _displayTip=_KOSU_TIPLERI.includes(_rawDisplayTip)?_rawDisplayTip:'aerobik';
+      const _rawDisplayTip=kosuSlotTur(_kosuActual,ov?.tip);
+      let _displayTip=_KOSU_TIP_SET.has(_rawDisplayTip)?_rawDisplayTip:'aerobik';
       // Koç paneliyle parite: Yürü-Koş tespit edildiyse tip de tutarlı olsun (bkz. satır ~15702)
       if(_ykM) _displayTip='yuru_kos';
       // Eski snapshot uyumu + D+ güncelleme: detay metninden _gapAvgPaceSec hesapla ve _rows.pSec güncelle
