@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.15-2357 --><!DOCTYPE html>
+<!-- Version: v2026.09.16-0024 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.15-2357';
+const APP_VERSION='v2026.09.16-0024';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -5942,6 +5942,21 @@ function BugunTab({athletes,workouts,onSelChange,onTabChange,onEkleSeed}){
 // LiderlikTab, bkz. satır ~6974 ile AYNI gerçek özelliğin tanıtımı).
 // Kart 2 teması (2026.09.01 eklendi): antrenman yükü takibi — gerçek
 // ChartATLCTL'in (Günlük yük + CTL + ATL) AYNI dili.
+// Kart 4 teması (2026.09.16 eklendi, Göksel talebi): kalibrasyon yöntemleri
+// ile kişiselleştirilmiş nabız bölgeleri. Görsel, gerçek BolgeTab'daki
+// "Bölge Renk Haritası" (renderBoundaryRuler, ~satır 24515: %LTHR bazlı 7
+// bölgeyi gösteren yatay SVG cetvel, güncel/kalibre sınırlar SOLID, jenerik
+// tabandan farklıysa jenerik değer DASHED) ile "Jenerik Taban Cetveli"
+// (renderGenericBaselineRuler, ~satır 24647: her zaman Friel'in HAM jenerik
+// şablonu) fonksiyonlarının AYNI dilini (ZONE_COLORS, HR_ZONES_LTHR,
+// HR_BOUNDARY_BASE_PCT — hepsi paylaşılan global sabitler) üst-alt
+// karşılaştırma olarak kullanır — bkz. AdCardItem'daki 'nabizCetveli' bloğu.
+// Gerçek sporcu seçilirse calcZones(secilenSporcu) ile GERÇEK LTHR/kalibrasyon
+// durumu çizilir (kalibrasyon hiç uygulanmamışsa iki cetvel birebir aynı
+// görünür — bu da doğru/beklenen davranıştır); seçilmezse örnekleyici bir
+// mock sporcu (KALIB_MOCK_ATHLETE) üzerinden AYNI calcZones/personalizedHrZoneTable
+// fonksiyonları çalıştırılır (uydurma bir görsel biçim DEĞİL, gerçek hesaplama
+// mock girdiyle çalıştırılmış hali).
 //
 // Görsellerdeki isim/skor/yük değerleri HER ZAMAN mockup'tır — gerçek sporcu
 // verisi ASLA kullanılmaz, SADECE reklam_izni===true olan sporcular seçim
@@ -5970,6 +5985,14 @@ const AD_CARDS=[
     aciklama:'Planına ne kadar sadık kaldığını, kaç haftadır kesintisiz antrenman yaptığını otomatik hesaplıyoruz. Reçetendeki her satır — tempo, pace, nabız — tek tek takip edilir.',
     cta:'Sen de disiplinini gör 📊',
     gorsel:'tutarlilikKart'
+  },
+  {
+    id:'nabiz-kalibrasyon',
+    ikon:'📐',
+    baslik:'Bölgelerin Jenerik Değil, Senin',
+    aciklama:'Standart nabız bölgesi hesapları herkese aynı jenerik formülü uygular. Biz MAF, LTHR ve Cooper testlerinle topladığımız gerçek verinle bu sınırları SANA özel kaydırıyoruz — reçetendeki her "Z2" ya da "Eşik" senin gerçek fizyolojini yansıtır.',
+    cta:'Sana özel bölgeler 📐',
+    gorsel:'nabizCetveli'
   }
 ];
 
@@ -6068,7 +6091,7 @@ function AdCardItem({cardDef,teamName,teamLogo,athletes,override,onSave,allHisto
   // Kartı "anlatan" tek sporcu (mockup ya da seçilen gerçek sporcu) — TEK
   // SPORCU deseni 'yukGrafik' ile 'tutarlilikKart' arasında paylaşılır (bkz.
   // dosya başındaki KURAL C: tekli-kişi kartlarında tek seçim).
-  const TEK_SPORCU_GORSELLER=['yukGrafik','tutarlilikKart'];
+  const TEK_SPORCU_GORSELLER=['yukGrafik','tutarlilikKart','nabizCetveli'];
   const secilenSporcu=TEK_SPORCU_GORSELLER.includes(cardDef.gorsel)&&sporcuSecim?izinliSporcular.find(function(a){return a.id===sporcuSecim;}):null;
   const yukAdSoyad=secilenSporcu?((secilenSporcu.ad||'')+' '+(secilenSporcu.soyad||'')).trim():'Sporcu A';
   const yukFoto=secilenSporcu?secilenSporcu.foto||null:null;
@@ -6150,8 +6173,58 @@ function AdCardItem({cardDef,teamName,teamLogo,athletes,override,onSave,allHisto
     ]}
   ];
 
+  // ── Kart 4 — Nabız Bölgesi Kalibrasyon Cetveli (gerçek BolgeTab ile AYNI
+  // dil: "Bölge Renk Haritası" + "Jenerik Taban Cetveli", bkz. AD_CARDS
+  // üstündeki Kart 4 teması notu) ─────────────────────────────────────────
+  // Örnekleyici (mock) girdi — UYDURMA bir görsel biçim değil, gerçek
+  // calcZones/personalizedHrZoneTable fonksiyonlarına verilen mock bir
+  // sporcu profili. Sadece görünür bir kalibrasyon farkı garanti etmek için
+  // (gerçek sporcularda şu an bariz bir sapma az sayıda — Göksel'in notu).
+  const KALIB_MOCK_ATHLETE={lthr:172,bd_z1z2:1.5,bd_z2z3:-1,bd_z3z4:1.3,bd_z4z5a:0,bd_z5az5b:-1.5,bd_z5bz5c:1.2};
+  const _kalibRealZones=cardDef.gorsel==='nabizCetveli'&&secilenSporcu?calcZones(secilenSporcu):null;
+  // Gerçek sporcu seçili VE %LTHR yöntemi kullanıyorsa (Sınır Kalibrasyonu
+  // SADECE bu yöntemi hedefler — bkz. gerçek renderBoundaryRuler'daki aynı
+  // koşul) onun gerçek verisi kullanılır; aksi halde mock'a düşülür.
+  const kalibZones=(_kalibRealZones?.hrZones&&_kalibRealZones.hrZones[0]?.method==='%LTHR')
+    ?_kalibRealZones:calcZones(KALIB_MOCK_ATHLETE);
+  const kalibIsMock=kalibZones===_kalibRealZones?false:true;
+  const kalibLthr=kalibZones.lthr;
 
-
+  // Basit yatay bölge cetveli — gerçek renderBoundaryRuler/renderGenericBaselineRuler
+  // (BolgeTab, ~satır 24515/24647) ile AYNI dil (ZONE_COLORS bant renkleri, %LTHR
+  // aralığı 65–115, dashed=jenerik/solid=güncel sınır ayrımı); 420px kart genişliğine
+  // sığdırmak için ölçek küçültüldü ve SADECE coach iş akışına özgü "bekleyen
+  // kalibrasyon önerisi" oku (preview/changeLog) çıkarıldı — o kısım ad kartında
+  // anlamsız (henüz uygulanmamış bir tarama sonucu, mockup'ta karşılığı yok).
+  const renderKalibRuler=(hz,showGenericOverlay)=>{
+    const W=368,H=64,padLeft=4,padRight=4,padTop=4,bandH=32;
+    const plotW=W-padLeft-padRight;
+    const rangeLo=HR_ZONES_LTHR[0].lo*100,rangeHi=HR_ZONES_LTHR[HR_ZONES_LTHR.length-1].hi*100;
+    const xFor=pct=>padLeft+((pct-rangeLo)/(rangeHi-rangeLo))*plotW;
+    const halo={paintOrder:'stroke',stroke:'rgba(0,0,0,.55)',strokeWidth:2.5,strokeLinejoin:'round'};
+    const nonScale={vectorEffect:'non-scaling-stroke'};
+    const FS=7.5;
+    const bandEls=[];
+    hz.forEach((z,i)=>{
+      const xL=xFor(z.lo*100),xR=xFor(z.hi*100);
+      const w=Math.max(0,xR-xL);
+      const cx=(xL+xR)/2,cy=padTop+bandH/2;
+      bandEls.push(React.createElement('rect',{key:'b'+i,x:xL,y:padTop,width:w,height:bandH,fill:ZONE_COLORS[z.id]||'#888'}));
+      if(i>0)bandEls.push(React.createElement('line',{key:'s'+i,x1:xL,x2:xL,y1:padTop,y2:padTop+bandH,stroke:'rgba(0,0,0,.35)',strokeWidth:1,...nonScale}));
+      bandEls.push(React.createElement('text',{key:'t'+i,x:cx,y:cy,textAnchor:'middle',dominantBaseline:'middle',fontSize:FS,fontWeight:800,fill:'#fff',...halo},z.id));
+    });
+    const boundaryEls=[];
+    HR_BOUNDARY_KEYS.forEach((k,i)=>{
+      const curPct=hz[i].hi*100;
+      if(showGenericOverlay){
+        const genericPct=HR_BOUNDARY_BASE_PCT[k]*100;
+        const drifted=Math.round(genericPct*10)!==Math.round(curPct*10);
+        if(drifted)boundaryEls.push(React.createElement('line',{key:'g'+k,x1:xFor(genericPct),x2:xFor(genericPct),y1:padTop,y2:padTop+bandH,stroke:'rgba(255,255,255,0.55)',strokeWidth:1.5,strokeDasharray:'2,2',...nonScale}));
+      }
+      boundaryEls.push(React.createElement('line',{key:'c'+k,x1:xFor(curPct),x2:xFor(curPct),y1:padTop,y2:padTop+bandH,stroke:'#fff',strokeWidth:1.5,...nonScale}));
+    });
+    return React.createElement('svg',{width:'100%',viewBox:'0 0 '+W+' '+H,style:{display:'block'}},...bandEls,...boundaryEls);
+  };
 
   const handleShare=async()=>{
     if(!cardRef.current)return;
@@ -6418,6 +6491,28 @@ function AdCardItem({cardDef,teamName,teamLogo,athletes,override,onSave,allHisto
             })
           )
         )
+      ),
+      cardDef.gorsel==='nabizCetveli'&&React.createElement('div',{style:{background:'rgba(255,255,255,0.06)',borderRadius:14,padding:'14px 14px 12px',border:'1px solid rgba(255,255,255,0.1)',marginBottom:14}},
+        React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:10}},
+          React.createElement(Avatar,{foto:yukFoto,size:28}),
+          React.createElement('div',{style:{flex:1,minWidth:0}},
+            React.createElement('div',{style:{fontWeight:700,fontSize:12,color:'#f1f5f9'}},yukAdSoyad.toLocaleUpperCase('tr')),
+            React.createElement('div',{style:{fontSize:9,color:'rgba(255,255,255,0.4)'}},'LTHR '+kalibLthr+' bpm'+(kalibIsMock?' · örnek':''))
+          )
+        ),
+        React.createElement('div',{style:{fontSize:9,letterSpacing:0.5,color:'rgba(255,255,255,0.45)',marginBottom:4}},'BÖLGE RENK HARİTASI (SANA ÖZEL)'),
+        renderKalibRuler(kalibZones.hrZones,true),
+        React.createElement('div',{style:{fontSize:9,letterSpacing:0.5,color:'rgba(255,255,255,0.45)',margin:'12px 0 4px'}},'JENERİK TABAN (HERKES İÇİN AYNI)'),
+        renderKalibRuler(HR_ZONES_LTHR,false),
+        React.createElement('div',{style:{display:'flex',gap:12,marginTop:10,fontSize:8,color:'rgba(255,255,255,0.4)'}},
+          React.createElement('span',null,'┅ jenerik sınır'),
+          React.createElement('span',null,'▬ senin sınırın')
+        )
+      ),
+      cardDef.gorsel==='nabizCetveli'&&React.createElement('div',{style:{display:'flex',flexWrap:'wrap',gap:6,marginBottom:22}},
+        ['MAF Testi','LTHR Testi','Cooper','5K Zaman Denemesi'].map(function(m,i){
+          return React.createElement('span',{key:i,style:{fontSize:9,padding:'4px 9px',borderRadius:20,background:'rgba(255,255,255,0.08)',border:'1px solid rgba(255,255,255,0.15)',color:'rgba(255,255,255,0.7)'}},m);
+        })
       ),
 
       // Esnek boşluk — CTA ve footer'ı alta iter
