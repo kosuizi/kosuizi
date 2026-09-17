@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.17-1755 --><!DOCTYPE html>
+<!-- Version: v2026.09.17-2046 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.17-1755';
+const APP_VERSION='v2026.09.17-2046';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -14618,27 +14618,47 @@ function calcGAPAvgPaceSec(dpHedef, sure_dk, zones, zone_idx){
 
 
 
-function tplTirmanisAcik(band, sure_dk, zones, dpHedef){
+function tplTirmanisAcik(band, sure_dk, zones, dpHedef, maxSureDk=0){
   // D+ hedefi verilmemişse band + süreye göre otomatik hesapla (~%40 tırmanış süresi)
   if(!dpHedef||dpHedef<=0){
     dpHedef=Math.round(realisticClimbRate(band||1)/60*sure_dk*0.40);
   }
-  // Gerçekçi D+ cap: antrenman süresinin %55'i tırmanışta geçse ulaşılabilecek max
-  const maxDpForSure=Math.round(realisticClimbRate(band)/60*(sure_dk*0.55));
-  if(dpHedef>0) dpHedef=Math.min(dpHedef,maxDpForSure);
 
-  // ── Gerçekçi süre hesabı ──────────────────────────────────────────────────
+  // ── Gerçekçi süre hesabı — ÖNCE süre uzatılabilir mi bakılır ──────────────
+  // DÜZELTME (17.09.2026 — Göksel bildirimi): eskiden D+ hedefi, süre HİÇ
+  // uzatılmadan doğrudan orijinal sure_dk'nın %55'ine göre kesiliyordu (aşağıdaki
+  // maxDpForSure hesabı) — bu yüzden bu bloktaki "süreyi uzat" mantığı hiçbir
+  // zaman devreye giremiyordu (D+ zaten önceden orijinal süreye sığacak kadar
+  // kesilmiş oluyordu, minTotal>sure_dk hiç doğru olmuyordu — ölü kod). Haftalık
+  // hedefin TAMAMI tek tırmanış gününe düşünce (bkz. dpGun/planDay), o günün
+  // PLANLANAN süresi (örn. 46dk) o D+'ı gerçekçi hızla asla taşıyamıyordu ve D+
+  // sessizce çok küçük bir sayıya (örn. ~202m) düşüyordu — haftalık hedefle
+  // hiç ilgisi olmayan bir sonuç. Artık: önce D+ hedefi için GEREKEN süre
+  // hesaplanır, maxSureDk tavanına kadar (band+disiplin+yarış mesafesine göre —
+  // bkz. uzunKosuBandMaxDk) süre UZATILIR; D+ ancak bu uzatılmış süre bile
+  // yetmiyorsa (aşağıdaki maxDpForSure) kesilir.
+  const climbRatePerMin=realisticClimbRate(band)/60;
   let adjustedSure=sure_dk;
   let durationNote='';
   if(dpHedef>0){
-    const climbRatePerMin=realisticClimbRate(band)/60;
     const minDkForDp=Math.ceil(dpHedef/climbRatePerMin);
-    const minTotal=Math.ceil(minDkForDp/0.70);
+    // NOT: eskiden burada /0.70 vardı — aşağıdaki maxDpForSure ise %55 kullanıyordu.
+    // İki farklı oran birbiriyle çelişiyordu: süre 0.70 varsayımıyla uzatılıp
+    // hemen ardından 0.55 varsayımıyla tekrar kesiliyordu (uzatma sonuçsuz kalıyordu).
+    // Artık ikisi de %55 — süre bir kez uzatılınca cap gerçekten karşılanıyor.
+    const minTotal=Math.ceil(minDkForDp/0.55);
+    const sureTavani=maxSureDk>0?Math.max(maxSureDk,sure_dk):sure_dk;
     if(minTotal>sure_dk){
-      adjustedSure=minTotal;
-      durationNote=` (D+ hedefi için süre ${sure_dk}dk'dan ${minTotal}dk'ya ayarlandı — Band ${band} için tırmanış hızı ~${realisticClimbRate(band)}m/sa)`;
+      adjustedSure=Math.min(minTotal,sureTavani);
+      if(adjustedSure>sure_dk){
+        durationNote=` (D+ hedefi için süre ${sure_dk}dk'dan ${adjustedSure}dk'ya ayarlandı — Band ${band} için tırmanış hızı ~${realisticClimbRate(band)}m/sa)`;
+      }
     }
   }
+  // Gerçekçi D+ cap: (uzatılmış) antrenman süresinin %55'i tırmanışta geçse
+  // ulaşılabilecek max — sureTavan bile yetmiyorsa burada devreye girer
+  const maxDpForSure=Math.round(realisticClimbRate(band)/60*(adjustedSure*0.55));
+  if(dpHedef>0) dpHedef=Math.min(dpHedef,maxDpForSure);
 
   // Nabız hedefi — Z2–Z3
   const hrZ2=zones?.hrZones?.[1];
@@ -15576,14 +15596,20 @@ function uzunKosuMesafeCarpani(raceKm){
 // mutlak (band) tavanı uygular, ilerleme tavanını değil.
 // raceKm: hedef yarış mesafesi — verilmişse uzunKosuMesafeCarpani ile tavan
 // büyütülür (bkz. yukarıdaki fonksiyon notu); verilmezse eski davranış (×1.0).
-function uzunKosuBandMaxKm(band, disiplin, zones, raceKm=0){
+// ── Haftanın Uzunu — Band Bazlı Mutlak Tavan (dakika) ─────────────────────
+// uzunKosuBandMaxKm'nin dakika tablosu — tplTirmanisAcik'in süre uzatma
+// tavanı (17.09.2026 düzeltmesi) da AYNI tabloyu kullanır (tutarlılık).
+function uzunKosuBandMaxDk(band, disiplin, raceKm=0){
   const isUltra=disiplin==='ultra';
   const bandMaxDk=isUltra
     ?(band<=1?80:band===2?100:band===3?130:band===4?160:200)
     :(band<=1?60:band===2?75:band===3?90:band===4?110:130);
-  const mesafeCarpani=uzunKosuMesafeCarpani(raceKm);
+  return Math.round(bandMaxDk*uzunKosuMesafeCarpani(raceKm));
+}
+function uzunKosuBandMaxKm(band, disiplin, zones, raceKm=0){
+  const bandMaxDk=uzunKosuBandMaxDk(band,disiplin,raceKm);
   const paceSec=(zones&&typeof getPaceSec==='function')?(getPaceSec(zones,1)||360):360;
-  return round1((bandMaxDk*mesafeCarpani)/(paceSec/60));
+  return round1(bandMaxDk/(paceSec/60));
 }
 
 // ── Haftanın Uzunu — Mesafe ve D+ Hedefi Tahmini ──────────────────────────
@@ -17901,7 +17927,7 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
         // tplUzun kendi bandMax/progresyon mantığını kullanır — burada taper faktörünü uygula
         const taperUzunFactor=taperPeakMissed?0.75:isIkinciUzun?0.55:0.65;
         kosuTpl=isTrail&&dpGun>200
-          ?tplTirmanisAcik(band,Math.round(70*uzunYMod),zones,dpGun)
+          ?tplTirmanisAcik(band,Math.round(70*uzunYMod),zones,dpGun,uzunKosuBandMaxDk(band,disiplin,race?.mesafe))
           :tplUzun(band,simState.ctl||0,zones,disiplin,dpGun,wkStats.recentLongRuns,race?.mesafe);
         // tplUzun için taper süre indirimini uygula (tplTirmanisAcik zaten uzunYMod ile çağrılır)
         // sure_dk VE _rows.sure_sn birlikte ölçeklenmeli — estimateDayKmDp _rows'dan km hesaplar
@@ -17989,7 +18015,7 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
       const isIkinciUzun=wkStats.uzunYapildi&&isUzunGun;
       const uzunYMod=cokYorgun?0.65:yorgun?0.80:isIkinciUzun?Math.min(sureMod,0.65):sureMod;
       kosuTpl=isTrail&&dpGun>200
-        ?tplTirmanisAcik(band,Math.round(70*uzunYMod),zones,dpGun)
+        ?tplTirmanisAcik(band,Math.round(70*uzunYMod),zones,dpGun,uzunKosuBandMaxDk(band,disiplin,race?.mesafe))
         :tplUzun(band,simState.ctl||0,zones,disiplin,dpGun,wkStats.recentLongRuns,race?.mesafe);
       // ── Haftalık uzun koşu hedefini ÜSTTEN sınırla (alt sınır değil) ─────
       // Progresyon tarihçesi haftalık hedefin üzerinde bir uzun koşu önerirse
@@ -18268,7 +18294,7 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
           ];
           kosuTpl=fallbackPick(zirveSeq);
         } else if(!wkStats.uzunYapildi&&(!uzunGunTanimli||isUzunGun)){
-          kosuTpl=isTrail?tplTirmanisAcik(band,Math.round(75*yMod),zones,dpGun):tplUzun(band,simState.ctl||0,zones,disiplin,dpGun,wkStats.recentLongRuns,race?.mesafe);
+          kosuTpl=isTrail?tplTirmanisAcik(band,Math.round(75*yMod),zones,dpGun,uzunKosuBandMaxDk(band,disiplin,race?.mesafe)):tplUzun(band,simState.ctl||0,zones,disiplin,dpGun,wkStats.recentLongRuns,race?.mesafe);
         } else {
           kosuTpl=tplEsik(band,Math.round(55*yMod),zones,phase,phaseStep);
         }
