@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.17-1536 --><!DOCTYPE html>
+<!-- Version: v2026.09.17-1604 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.17-1536';
+const APP_VERSION='v2026.09.17-1604';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -10167,11 +10167,11 @@ function adimToRowsFallback(adim, zones){
     :clrFromPace(effectivePaceSec);
   // KÖK NEDEN DÜZELTMESİ (14.09.2026 — Göksel'in bulduğu hata: MAF Test Koşusu
   // satırında NABIZ sütunu 144 (MAF hedefi) yerine ~153 (genel Z2 bölge ortalaması)
-  // gösteriyordu): NABIZ önerisi normalde suggestedBpm() ile satırın zone'undaki
+  // gösteriyordu): NABIZ önerisi normalde suggestedBpmForRow() ile satırın zone'undaki
   // lo_bpm/hi_bpm ortasından hesaplanır — ama MAF testinde asıl hedef "180−yaş"tan
   // gelen ÖZEL bir değerdir, bu satırın genel Z2 bölgesiyle örtüşmeyebilir.
   // mafNabizDetay() bu değeri zaten metne yazıyor ("MAF nabzı: 144 bpm ...");
-  // burada aynı sayı geri okunup satıra iliştiriliyor ki suggestedBpm() zone
+  // burada aynı sayı geri okunup satıra iliştiriliyor ki suggestedBpmForRow() zone
   // ortalaması yerine BU değeri önersin — metinde yazan ile önerilen HER ZAMAN
   // aynı sayı olur, ayrı bir hesaplama tekrarlanmaz.
   // NOT (15.09.2026): _mafRangeM aralık-regex'i, artık üretilmeyen eski
@@ -10274,13 +10274,9 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
   // sadece nabız bu düzeltmeyi hiç almamıştı (bkz. bpmValidation'daki eşleşen not).
   const _mZones=measureZones||zones;
 
-  // Zone'dan önerilen ortalama nabız
-  const suggestedBpmForZone=(zIdx)=>{
-    if(zIdx==null) return null;
-    const hr=_mZones?.hrZones?.[zIdx];
-    if(!hr?.lo_bpm||!hr?.hi_bpm) return null;
-    return Math.ceil((hr.lo_bpm+hr.hi_bpm)/2);
-  };
+  // Zone'dan önerilen nabız — TEK PAYLAŞILAN KAYNAK (bkz. suggestedBpmForRow tanımı,
+  // ~satır 10810): ReceteTablosu ile AYNI fonksiyon, override + walk/min istisnaları dahil.
+  const suggestedFor=(row,durSec)=>suggestedBpmForRow(row,_mZones,durSec);
 
   // 2026.08.30 — KÖK NEDEN DÜZELTMESİ (Göksel'in bildirdiği "D+ girilen tekrar
   // satırlarında GAP değeri hiç görünmüyor"): ReceteTablosu'nun kapalı/özet satırında
@@ -10563,13 +10559,13 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
               e('td',{style:{...cellSt,color:overrides[rep]?.run?.bpm?'#000':'#64748b',fontStyle:overrides[rep]?.run?.bpm?'normal':'italic'}},
                 (()=>{
                   const ov=overrides[rep]?.run?.bpm;
-                  const val=ov!=null?ov:suggestedBpmForZone(runData._origZIdx)??'—';
                   const durSec=rowDurSec(runData);
-                  const isShortRow=durSec>0&&durSec<=SHORT_ROW_MAX_SEC;
-                  const bpmHint=durSec>0?(isShortRow?'tepe':'ort.'):null;
+                  const sug=suggestedFor(runData,durSec);
+                  const val=ov!=null?ov:sug.value??'—';
+                  const hintUI=sug.kind?BPM_HINT_UI[sug.kind]:null;
                   return React.createElement('div',{style:{display:'flex',flexDirection:'column',alignItems:'center',gap:0}},
                     editableCellAralik(rep,'run','bpm',val),
-                    bpmHint&&React.createElement('span',{style:{fontSize:9,fontWeight:600,color:isShortRow?'#7c3aed':'#3b82f6',lineHeight:1.3,marginTop:1}},isShortRow?'▲tepe':'~ort.')
+                    hintUI&&React.createElement('span',{style:{fontSize:9,fontWeight:600,color:hintUI.color,lineHeight:1.3,marginTop:1}},hintUI.label)
                   );
                 })()
               ),
@@ -10612,15 +10608,16 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
               e('td',{style:{...cellSt,color:overrides[rep]?.rest?.bpm?'#000':'#64748b',fontStyle:overrides[rep]?.rest?.bpm?'normal':'italic'}},
                 (()=>{
                   const ov=overrides[rep]?.rest?.bpm;
-                  // Yürüyüş (walk) molaları: midpoint yerine Z1 alt sınırını göster
-                  // → "bu değerin altına in" sinyali; S1-S4'te koşu ve yürü fazları artık farklı bpm gösterir
-                  const val=ov!=null?ov:(restData.type==='walk'
-                    ?(_mZones?.hrZones?.[restData._origZIdx??0]?.lo_bpm??'—')
-                    :suggestedBpmForZone(restData._origZIdx)??'—');
-                  const bpmHint='min';
+                  const durSecR=rowDurSec(restData);
+                  // Yürüyüş (walk) molaları: midpoint yerine Z1 alt sınırını göster → "bu değerin
+                  // altına in" sinyali — ISINMA/SOĞUMA VE tek-seans yürüyüşler hariç, artık
+                  // ReceteTablosu'nun ta kendisiyle AYNI istisnayı uygular (suggestedBpmForRow).
+                  const sug=suggestedFor(restData,durSecR);
+                  const val=ov!=null?ov:sug.value??'—';
+                  const hintUI=sug.kind?BPM_HINT_UI[sug.kind]:null;
                   return React.createElement('div',{style:{display:'flex',flexDirection:'column',alignItems:'center',gap:0}},
                     editableCellAralik(rep,'rest','bpm',val),
-                    bpmHint&&React.createElement('span',{style:{fontSize:9,fontWeight:600,color:'#10b981',lineHeight:1.3,marginTop:1}},'▼min')
+                    hintUI&&React.createElement('span',{style:{fontSize:9,fontWeight:600,color:hintUI.color,lineHeight:1.3,marginTop:1}},hintUI.label)
                   );
                 })()
               ),
@@ -10807,6 +10804,52 @@ const LAG_WIDEN_MAX={targetDown:5, warnDown:8, dangerDown:10}; // Z5a/Z5b'den al
 // seviyelerini (30/40sn) kapsar, piramit'in en kısa bacağından (60sn) ve Z5a/Z5b
 // interval kalibrasyon aralığından (120-240sn) güvenle uzak kalır.
 const SHORT_ROW_MAX_SEC=45;
+// TEK PAYLAŞILAN KAYNAK (2026.09.17 — Göksel'in "aynı gösterge farklı kod yollarında" riski
+// bildirimi üzerine): ReceteTablosu (özet satır, eski adıyla suggestedBpm) ve AralikEditor
+// (açılmış tekrar tablosu, eski adıyla suggestedBpmForZone) bu öneri-nabız hesabını önceden
+// İKİ AYRI closure'da tutuyordu. Aradaki fark sessizce sapmıştı:
+//  (1) MAF/özel test _sugBpmOverride'ı sadece ReceteTablosu kontrol ediyordu — AralikEditor
+//      sadece zIdx alıyordu, override'ı hiç görmüyordu (şu an MAF satırları 'tekrarli' yapıya
+//      girmediği için pratikte tetiklenmiyor, ama garanti değildi).
+//  (2) Yürüyüş molasında "min göster" istisnası (ısınma/soğuma VE tek-seans yürüyüşler hariç,
+//      onlarda hedef ORTALAMA'dır) sadece ReceteTablosu'nda vardı — AralikEditor her 'walk'
+//      satırını istisnasız min'e düşürüyordu.
+// Artık HER İKİ bileşen de bu tek fonksiyonu çağırır — bir yerde düzeltilip diğerinde
+// unutulma riski koddan yapısal olarak kalktı.
+//
+// row: {_origZIdx, _sugBpmOverride?, type?, repeatCount?, label?} — ReceteTablosu'nun satır
+// nesnesi VE AralikEditor'ün getRowData() çıktısı (runData/restData) AYNI şekli taşır (ikisi de
+// aynı 'rows' dizisinden türer, bkz. ~satır 12412-13'teki runRow=rows[i+1]/restRow=rows[i+2]),
+// o yüzden aynı imza ikisine de uyuyor.
+// mZones: o günün (measureZones||zones) hrZones tablosu. durSec: satırın süresi (rowDurSec).
+// Dönen: {value, kind} — value: önerilen sayı (veya null); kind: 'min'|'tepe'|'ort'|null
+// (kind, çağıran taraf için sadece görsel etiket/renk seçimidir — bkz. BPM_HINT_UI).
+function suggestedBpmForRow(row, mZones, durSec){
+  if(!row) return {value:null, kind:null};
+  const isShort=durSec>0&&durSec<=SHORT_ROW_MAX_SEC;
+  // Öncelik 1: satırın kendi sabit hedefi (örn. MAF 180−yaş) — zone ortalamasından HER ZAMAN
+  // önceliklidir (bkz. adimToRowsFallback'teki _mafBpmOverride notu).
+  if(row._sugBpmOverride!=null){
+    return {value:row._sugBpmOverride, kind:durSec>0?(isShort?'tepe':'ort'):null};
+  }
+  const zi=row._origZIdx;
+  const hr=zi!=null?mZones?.hrZones?.[zi]:null;
+  if(!hr?.lo_bpm||!hr?.hi_bpm) return {value:null, kind:null};
+  const zoneMid=Math.ceil((hr.lo_bpm+hr.hi_bpm)/2);
+  // Toparlanma amaçlı yürüyüş molaları — ortalama değil, zone'un ALT sınırı ("bu değerin altına
+  // in"). Isınma/Soğuma yürüyüşü VE tek-seans (repeatCount yok) yürüyüşler hariç — onlarda hedef
+  // ORTALAMA'dır (Göksel'in 2026.09.07 notu: "ortalama olması gerekmez miydi?").
+  const isWarmupCooldown=/[iı]sınma|isinma|soğuma|soguma/i.test(row.label||'');
+  const isRecoveryWalk=(row.type==='walk'&&row.repeatCount>1)&&!isWarmupCooldown;
+  const isRecoveryRow=row.type==='rest'||isRecoveryWalk;
+  if(isRecoveryRow) return {value:isRecoveryWalk?hr.lo_bpm:zoneMid, kind:'min'};
+  // Süreye göre: çok kısa fazlarda kalp atımı zone ortalamasına erişemez (cardiac lag) → aynı
+  // sayı "tepe" hedefi olarak yorumlanır; normal sürelerde "ortalama" hedefidir.
+  return {value:zoneMid, kind:durSec>0?(isShort?'tepe':'ort'):null};
+}
+// suggestedBpmForRow'un 'kind'ini görsel etikete çevirir — ReceteTablosu ve AralikEditor
+// AYNI haritayı kullanır, renk/metin ikisinde de tek kaynaktan gelir.
+const BPM_HINT_UI={min:{label:'▼min',color:'#10b981'},tepe:{label:'▲tepe',color:'#7c3aed'},ort:{label:'~ort.',color:'#3b82f6'}};
 function lagWidenExtra(durSec){
   if(!durSec||durSec<=0) return{targetDown:0,warnDown:0,dangerDown:0}; // süre bilinmiyor → değişiklik yok (geriye dönük uyumlu)
   if(durSec>=LAG_WIDEN_LONG_SEC) return{targetDown:0,warnDown:0,dangerDown:0};
@@ -11246,20 +11289,10 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     return 0;
   };
 
-  // Satır için zone'dan hesaplanan önerilen ortalama nabız (yukarı yuvarla)
-  const suggestedBpm=(row)=>{
-    // KÖK NEDEN DÜZELTMESİ (14.09.2026): MAF gibi testlerde satırın kendi özel
-    // hedefi (adimToRowsFallback'te detay metninden okunan _sugBpmOverride —
-    // bkz. ~satır 9900 civarı) varsa, bu satırın genel zone ortalamasından HER
-    // ZAMAN önceliklidir — aksi halde MAF hedefi (ör. 180−yaş=144) yerine o
-    // satırın (Z2 gibi) genel bölge ortalaması (ör. ~153) önerilmiş olurdu.
-    if(row._sugBpmOverride!=null) return row._sugBpmOverride;
-    const zi=row._origZIdx;
-    if(zi==null) return null;
-    const hr=_mZones?.hrZones?.[zi];
-    if(!hr?.lo_bpm||!hr?.hi_bpm) return null;
-    return Math.ceil((hr.lo_bpm+hr.hi_bpm)/2);
-  };
+  // Satır için zone'dan hesaplanan önerilen nabız — TEK PAYLAŞILAN KAYNAK (bkz.
+  // suggestedBpmForRow tanımı, ~satır 10810): AralikEditor ile AYNI fonksiyon, override +
+  // walk/min istisnaları dahil. (durSec opsiyonel — verilmezse hint hesaplanmaz, sadece value.)
+  const suggestedFor=(row,durSec)=>suggestedBpmForRow(row,_mZones,durSec??0);
 
   // Nabız validasyonu — sadece manuel bpm girildiğinde aktif
   // row.bpm: rowOverrides merge edilmiş değer (undefined=girişsiz, null=temizlenmiş, number=girilmiş)
@@ -12599,39 +12632,25 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
                 // Aralık ortalamasından gelen bpm (aralikOverrides'dan hesaplanmış)
                 const avgBpm=(r._aralikAveraged&&r.bpm!=null)?r.bpm:null;
                 const effectiveBpm=manualBpm!=null?manualBpm:avgBpm;
-                const _sugBpmRaw=suggestedBpm(r);
-                // Recovery walk satırları (koşu/tekrar ARALARINDAKİ kısa yürüyüş molaları):
-                // lo_bpm göster → "bu değerin altına in". Isınma/Soğuma hariç (orada ortalama
-                // hedef) VE tek başına bir seans oluşturan yürüyüşler (repeatCount yok) hariç
-                // — bkz. bpmValidation'daki aynı 2026.09.07 notu (Göksel: "ortalama olması
-                // gerekmez miydi?", Rahat Yürüyüş gibi tek-seans yürüyüşler için haklı çıktı).
-                const _isRecoveryWalk=(r.type==='walk'&&r.repeatCount>1)&&!(/[iı]sınma|isinma|soğuma|soguma/i.test(r.label||''));
-                const sugBpm=_isRecoveryWalk?(_mZones?.hrZones?.[r._origZIdx??0]?.lo_bpm??_sugBpmRaw):_sugBpmRaw;
-                // run/walk satırları: LTHR tanımlı olmasa da bpm girişi aktif (placeholder '—')
-                const alwaysEditable=r.type==='run'||r.type==='walk';
-                const displayVal=effectiveBpm!=null?effectiveBpm:(sugBpm!=null?sugBpm:(alwaysEditable?'—':null));
-                if(r.type==='header'||r._isSprint||(displayVal==null)) return typeof displayVal==='number'?displayVal:'—';
-                // Aralık ortalaması: salt gösterim
-                if(avgBpm!=null&&manualBpm==null) return avgBpm;
-                // Süreye göre giriş ipucu: ≤30 sn → tepe nabzı, >30 sn → ort. nabzı
-                // Toparlanma amaçlı satırlar (koşu/tekrar arası dinlenme/yürüyüş): en düşük
-                // nabız girilir. Isınma/Soğuma Yürüyüşü VE tek-seans yürüyüşler (repeatCount
-                // yok — bkz. yukarıdaki _isRecoveryWalk notu) hariç, onlarda hedef ORTALAMA'dır.
-                const _hintLabel=r.label||'';
-                const _hintIsWarmupCooldown=/[iı]sınma|isinma|soğuma|soguma/i.test(_hintLabel);
-                const isRecoveryRow=r.type==='rest'||(r.type==='walk'&&r.repeatCount>1&&!_hintIsWarmupCooldown);
-                const durSec=rowDurSec(r);
                 // KÖK NEDEN DÜZELTMESİ (bkz. gpxBuildLegPayload isShort notu, 2026.09.14):
                 // !r.rpe istisnası kaldırıldı — artık isShort/bpmValidation/bpmValidationAralik/
                 // aralık ipucuyla AYNI (sadece süre) kural. r._isSprint burada zaten satır
                 // 12349'daki early-return ile elenmiş durumda (bu noktaya hiç ulaşmaz).
-                const isShortRow=durSec>0&&durSec<=SHORT_ROW_MAX_SEC;
-                const bpmHint=isRecoveryRow?'min':(r.type!=='header'&&durSec>0)
-                  ?(isShortRow?'tepe':'ort.')
-                  :null;
+                const durSec=rowDurSec(r);
+                // Öneri (değer + etiket): TEK PAYLAŞILAN KAYNAK — bkz. suggestedFor/
+                // suggestedBpmForRow tanımı. Recovery walk / MAF override / kısa-faz "tepe"
+                // istisnaları hepsi burada, AralikEditor ile AYNI fonksiyonda.
+                const sug=suggestedFor(r,durSec);
+                // run/walk satırları: LTHR tanımlı olmasa da bpm girişi aktif (placeholder '—')
+                const alwaysEditable=r.type==='run'||r.type==='walk';
+                const displayVal=effectiveBpm!=null?effectiveBpm:(sug.value!=null?sug.value:(alwaysEditable?'—':null));
+                if(r.type==='header'||r._isSprint||(displayVal==null)) return typeof displayVal==='number'?displayVal:'—';
+                // Aralık ortalaması: salt gösterim
+                if(avgBpm!=null&&manualBpm==null) return avgBpm;
+                const hintUI=sug.kind?BPM_HINT_UI[sug.kind]:null;
                 return React.createElement('div',{style:{display:'flex',flexDirection:'column',alignItems:'center',gap:0}},
                   editableCell(i,'bpm',displayVal),
-                  bpmHint&&React.createElement('span',{style:{fontSize:9,fontWeight:600,color:isRecoveryRow?'#10b981':isShortRow?'#7c3aed':'#3b82f6',lineHeight:1.3,marginTop:1}},isRecoveryRow?'▼min':isShortRow?'▲tepe':'~ort.')
+                  hintUI&&React.createElement('span',{style:{fontSize:9,fontWeight:600,color:hintUI.color,lineHeight:1.3,marginTop:1}},hintUI.label)
                 );
               })()
             ),
