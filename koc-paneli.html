@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.17-1604 --><!DOCTYPE html>
+<!-- Version: v2026.09.17-1755 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.17-1604';
+const APP_VERSION='v2026.09.17-1755';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -15669,8 +15669,19 @@ function estimateUzunKosuHedefi(targetKm, targetDp, phase, disiplin, zones, band
   const effBand=band||proxyBandFromWeeklyKm(targetKm||0);
   const bandCapKm=uzunKosuBandMaxKm(effBand, disiplin, zones, raceKm);
   let capped=false;
-  if(bandCapKm>0&&km>bandCapKm){ km=bandCapKm; capped=true; }
-  const dp=disiplin!=='yol'?Math.round(targetDp||0):0;
+  let dp=disiplin!=='yol'?Math.round(targetDp||0):0;
+  // DÜZELTME (17.09.2026 — Göksel bildirimi): mesafe band tavanına çekildiğinde
+  // D+ ÖNCEDEN küçültülmüyordu — haftanın TAM D+ hedefi, kısalmış (tavanlı)
+  // mesafeye atfediliyor, fiziksel olarak imkansız bir eğim önerilebiliyordu
+  // (örn. 5km / D+1500m). Artık mesafe tavana çekildiği oranda D+ de ölçeklenir.
+  // NOT: tavana ÇEKİLMEYEN normal durumda dp değişmiyor — bu, gerçek üretimdeki
+  // "healthy path" dpGun formülüyle (bkz. planDay, satır ~17501) zaten örtüşüyor
+  // (tek uzun/tırmanış günü varsa haftanın TAMAMI o güne atfedilir).
+  if(bandCapKm>0&&km>bandCapKm){
+    if(km>0) dp=Math.round(dp*(bandCapKm/km));
+    km=bandCapKm;
+    capped=true;
+  }
   return {km, dp, pay, capped, bandCapKm};
 }
 
@@ -17498,7 +17509,20 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
   if(inj>=8) return{...REST,baslik:'Zorunlu Dinlenme',uyari:'Sakatlık puanı yüksek ('+inj+'/10)',yapilar:[{baslik:'Dinlenme',detay:'Sakatlık nedeniyle zorunlu dinlenme'}]};
 
   const uzunGunTanimli=(Array.isArray(athlete.uzun_gun)?athlete.uzun_gun:[athlete.uzun_gun].filter(Boolean)).length>0;
-  const dpGun=wkStats.uzunYapildi&&phase!=='Zirve'?0:Math.round((wkStats.dpHedefHafta||0)/Math.max(1,wkStats.uzunKalanSayi||1));
+  // DÜZELTME (17.09.2026 — Göksel bildirimi): "wkStats.uzunYapildi&&phase!=='Zirve'?0:…"
+  // bayrağı kaldırıldı. Bu bayrak, hafta içinde (gerçek veya planlanan) HERHANGİ bir
+  // gün 'uzun'/'tirmanis'/'back_to_back' TİPİNDE ise — o günün gerçekte kaç metre D+
+  // içerdiğine hiç bakmadan — bu günün D+ bütçesini sıfırlıyordu. Sonuç: hafta içinde
+  // ufak bir tırmanışlı gün bile olsa (veya haftanın kendi uzun günü işlenirken), asıl
+  // hedeflenen uzun/tırmanış günü haftalık D+ hedefinden kopuk, sadece tplTirmanisAcik'in
+  // kendi iç formülüne (band × süre × %40) göre üretilen bir D+ alıyordu — badge'in
+  // ("🏃 Uzun") gösterdiği haftalık D+ hedefiyle hiç ilgisi olmayan bir sayı.
+  // wkStats.dpHedefHafta (=kalanTargetDp) ZATEN bu haftaya kadar gerçekten koşulan
+  // D+'ı (tipten bağımsız, tüm antrenmanlardan — bkz. "doneDp" hesabı) hedeften düşerek
+  // hesaplanıyor; hedef zaten karşılanmışsa kalanTargetDp kendiliğinden 0'a iner. Bu
+  // yüzden ayrı bir "tip zaten görüldü mü" kontrolüne gerek yok — üstelik bu kontrol
+  // yanlış pozitif üretiyordu.
+  const dpGun=Math.round((wkStats.dpHedefHafta||0)/Math.max(1,wkStats.uzunKalanSayi||1));
   const sonYogunGun=wkStats.sonYogunGun||false;
   const haftaGunTipi=wkStats.haftaGunTipi||null;
   // phaseStep: Taper/Yarış Sonrası fazlarında sıfıra düşürülür (yük azaltma dönemi)
