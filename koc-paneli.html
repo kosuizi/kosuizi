@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.18-1841 --><!DOCTYPE html>
+<!-- Version: v2026.09.18-2001 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -108,6 +108,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
    kullanır, böylece açık/koyu tema geçişine (body.dark) otomatik uyar. Sadece
    Koşu İzlerim'de kullanılır (.card global sınıfı ve koç paneli ETKİLENMEZ). */
 .ki-card{background:linear-gradient(135deg,var(--bg-primary) 0%,var(--bg-secondary) 60%,var(--bg-primary) 100%);border:1px solid var(--border);border-radius:16px;padding:14px 16px;margin-bottom:12px}
+/* ── Deneysel akordeon animasyonu — SADECE Göksel Çelik'in test hesabında
+   kullanılır (18.09.2026 — Göksel isteği). grid-template-rows 0fr↔1fr,
+   JS ile yükseklik ölçmeden içeriğin gerçek yüksekliğine düzgün animasyonla
+   açılıp kapanmasını sağlar; iç sarmalayıcıdaki opacity/scale de "öne doğru
+   büyüme" hissini tamamlar. Diğer sporcular bu sınıfları hiç KULLANMAZ. */
+.ki-accordion-body{display:grid;grid-template-rows:0fr;transition:grid-template-rows .32s ease}
+.ki-accordion-body.open{grid-template-rows:1fr}
+.ki-accordion-inner{overflow:hidden;min-height:0;opacity:0;transform:scale(.97);transition:opacity .22s ease,transform .28s ease}
+.ki-accordion-body.open .ki-accordion-inner{opacity:1;transform:scale(1)}
 .card-title{font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:10px;text-transform:uppercase;letter-spacing:.6px}
 .section-title{font-size:14px;font-weight:600;margin-bottom:12px}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
@@ -299,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.18-1841';
+const APP_VERSION='v2026.09.18-2001';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -35607,16 +35616,64 @@ function SporcuPlanView(){
   const [snapCacheH,setSnapCacheH]=useState({});
   const [snapLoadingH,setSnapLoadingH]=useState({});
   // Koşu İzlerim özet kartlarının (📊 Durumum, 🏆 Bu Hafta Liderlik,
-  // Antrenmanlarım, 📊 Son 24 Hafta Özeti, 🏃 Geçmiş Antrenman ve Yarışlar)
-  // aç/kapa durumu — bkz. useAcilirKart tanımı (~satır 33566). Varsayılan
-  // KAPALI (18.09.2026 — Göksel isteği): sayfa ilk açıldığında sadece
-  // başlıklar görünür, sporcu istediğini tıklayıp açar.
-  const [durumAcik,toggleDurum]=useAcilirKart('durumum',false);
-  const [liderAcik,toggleLider]=useAcilirKart('liderlik',false);
-  const [antrenmanAcik,toggleAntrenman]=useAcilirKart('antrenmanlarim',false);
-  const [hafta24Acik,toggleHafta24]=useAcilirKart('hafta24',false);
-  const [gecmisAcik,toggleGecmis]=useAcilirKart('gecmis',false);
-  const [bolgelerAcik,toggleBolgeler]=useAcilirKart('bolgeler',false);
+  // Antrenmanlarım, 📊 Son 24 Hafta Özeti, 🏃 Geçmiş Antrenman ve Yarışlar,
+  // Antrenman Bölgeleri) aç/kapa durumu — bkz. useAcilirKart tanımı
+  // (~satır 33566). Varsayılan KAPALI (18.09.2026 — Göksel isteği): sayfa
+  // ilk açıldığında sadece başlıklar görünür, sporcu istediğini tıklayıp açar.
+  // Bu, HERKES için geçerli varsayılan/bağımsız davranış — aşağıdaki deneysel
+  // akordeon SADECE Göksel Çelik'in kendi hesabında bunun YERİNİ alır.
+  const [durumAcikIndep,toggleDurumIndep]=useAcilirKart('durumum',false);
+  const [liderAcikIndep,toggleLiderIndep]=useAcilirKart('liderlik',false);
+  const [antrenmanAcikIndep,toggleAntrenmanIndep]=useAcilirKart('antrenmanlarim',false);
+  const [hafta24AcikIndep,toggleHafta24Indep]=useAcilirKart('hafta24',false);
+  const [gecmisAcikIndep,toggleGecmisIndep]=useAcilirKart('gecmis',false);
+  const [bolgelerAcikIndep,toggleBolgelerIndep]=useAcilirKart('bolgeler',false);
+
+  // ── DENEYSEL akordeon — SADECE Göksel Çelik (18.09.2026 — Göksel isteği:
+  // "diğer sporculara sunmadan önce test etmem lazım, sadece benim hesabım
+  // güncellensin, hatırlanma olmasın, her seferinde Durumum açık başlasın").
+  // openCard TEK bir string tutar (aynı anda sadece bir kart açık olabilir) ve
+  // localStorage'a YAZILMAZ — bu yüzden sayfa her açıldığında (yenilemede de)
+  // her zaman 'durumum' ile başlar, önceki tercih HİÇ hatırlanmaz. Diğer
+  // sporcular yukarıdaki *Indep hook'larını (bağımsız, hatırlanan, herkes
+  // için değişmeyen eski davranış) kullanmaya devam eder — aşağıdaki
+  // isTestAthlete kontrolü bunu garantiler.
+  const isTestAthlete=athlete&&athlete.ad==='Göksel'&&athlete.soyad==='Çelik';
+  const [openCard,setOpenCard]=useState('durumum');
+  const acc=(key)=>[openCard===key,()=>setOpenCard(c=>c===key?null:key)];
+  const [durumAcikAcc,toggleDurumAcc]=acc('durumum');
+  const [liderAcikAcc,toggleLiderAcc]=acc('liderlik');
+  const [antrenmanAcikAcc,toggleAntrenmanAcc]=acc('antrenmanlarim');
+  const [hafta24AcikAcc,toggleHafta24Acc]=acc('hafta24');
+  const [gecmisAcikAcc,toggleGecmisAcc]=acc('gecmis');
+  const [bolgelerAcikAcc,toggleBolgelerAcc]=acc('bolgeler');
+
+  const durumAcik=isTestAthlete?durumAcikAcc:durumAcikIndep;
+  const toggleDurum=isTestAthlete?toggleDurumAcc:toggleDurumIndep;
+  const liderAcik=isTestAthlete?liderAcikAcc:liderAcikIndep;
+  const toggleLider=isTestAthlete?toggleLiderAcc:toggleLiderIndep;
+  const antrenmanAcik=isTestAthlete?antrenmanAcikAcc:antrenmanAcikIndep;
+  const toggleAntrenman=isTestAthlete?toggleAntrenmanAcc:toggleAntrenmanIndep;
+  const hafta24Acik=isTestAthlete?hafta24AcikAcc:hafta24AcikIndep;
+  const toggleHafta24=isTestAthlete?toggleHafta24Acc:toggleHafta24Indep;
+  const gecmisAcik=isTestAthlete?gecmisAcikAcc:gecmisAcikIndep;
+  const toggleGecmis=isTestAthlete?toggleGecmisAcc:toggleGecmisIndep;
+  const bolgelerAcik=isTestAthlete?bolgelerAcikAcc:bolgelerAcikIndep;
+  const toggleBolgeler=isTestAthlete?toggleBolgelerAcc:toggleBolgelerIndep;
+
+  // Kartın içeriğini render eder. contentFn bir THUNK'tır (parametresiz
+  // fonksiyon) — Test sporcusu DIŞINDA herkes için ESKİ davranış TAM olarak
+  // korunur: kapalıyken contentFn() HİÇ ÇAĞRILMAZ (içerik hesaplanmaz/DOM'a
+  // girmez), performans ESKİSİYLE AYNI. Test sporcusunda ise içerik HER ZAMAN
+  // hesaplanır/DOM'dadır (animasyon için gerekli) ve CSS grid-template-rows
+  // (0fr↔1fr) + opacity/scale ile animasyonlu açılıp kapanır ("öne doğru
+  // büyüyerek" hissi) — bkz. .ki-accordion-body/.ki-accordion-inner CSS'i.
+  const accordionWrap=(acik,contentFn)=>isTestAthlete
+    ?React.createElement('div',{className:'ki-accordion-body'+(acik?' open':'')},
+        React.createElement('div',{className:'ki-accordion-inner'},contentFn())
+      )
+    :(acik&&contentFn());
+
   const toggleRecipeH=async(w)=>{
     const wid=w.id||w.date;
     if(expandedRecipeH[wid]){setExpandedRecipeH(s=>({...s,[wid]:false}));return;}
@@ -36445,7 +36502,7 @@ function SporcuPlanView(){
 
         const durumKart=React.createElement('div',{className:'ki-card'},
           React.createElement(AcilirKartBaslik,{baslik:'📊 Durumum',acik:durumAcik,onToggle:toggleDurum}),
-          durumAcik&&React.createElement(React.Fragment,null,
+          accordionWrap(durumAcik,()=>React.createElement(React.Fragment,null,
 
           // Toparlanma
           recoveryInfo&&React.createElement('div',{style:{marginBottom:12,paddingBottom:10,borderBottom:'1px solid var(--border)'}},
@@ -36591,6 +36648,7 @@ function SporcuPlanView(){
               myRacesMini.map(renderMiniRaceCard)
             );
           })()
+        )
         )
         );
         // Sağ: Bu haftanın liderlik tablosu (koç panelindeki LiderlikTab ile
@@ -36744,12 +36802,12 @@ function SporcuPlanView(){
               React.createElement('div',{style:{width:'100%'}},
                 React.createElement(AcilirKartBaslik,{baslik:'🏆 Bu Hafta Liderlik',acik:liderAcik,onToggle:toggleLider})
               ),
-              liderAcik&&React.createElement(React.Fragment,null,
+              accordionWrap(liderAcik,()=>React.createElement(React.Fragment,null,
                 React.createElement('div',{style:{fontSize:22}},'🛠️'),
                 React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',lineHeight:1.5,maxWidth:220}},
                   'Skor hesaplamalarında düzeltme çalışması yapılıyor.'
                 )
-              )
+              ))
             )
           :React.createElement('div',{className:'ki-card',style:{
           color:'var(--text-primary)',fontFamily:'system-ui,sans-serif'
@@ -36771,7 +36829,7 @@ function SporcuPlanView(){
               }
             },'ⓘ Skor nasıl hesaplanıyor?')
           }),
-          liderAcik&&React.createElement(React.Fragment,null,
+          accordionWrap(liderAcik,()=>React.createElement(React.Fragment,null,
           // 2026.09.03 — Göksel talebi: sporcu "📣 Paylaşılabilir Görsellerde Yer
           // Alma İzni" kutucuğunu (ankette, reklam_izni alanı) onaylamamışsa,
           // bu widget'ın satır listesinin ÜSTÜNDE (başlığın hemen altında, skor
@@ -36818,6 +36876,7 @@ function SporcuPlanView(){
             )
           )
         )
+        )
         );
 
         // Orta: Antrenmanlarım
@@ -36835,7 +36894,7 @@ function SporcuPlanView(){
               );
         const antrenmanCard=React.createElement('div',{className:'ki-card'},
           React.createElement(AcilirKartBaslik,{baslik:'Antrenmanlarım',acik:antrenmanAcik,onToggle:toggleAntrenman}),
-          antrenmanAcik&&antrenmanIcerik
+          accordionWrap(antrenmanAcik,()=>antrenmanIcerik)
         );
 
         return React.createElement('div',{style:{
@@ -36865,7 +36924,7 @@ function SporcuPlanView(){
       // koç-içi kalibrasyon karşılaştırması) burada BİLEREK yok.
       (hasHR||hasPace)&&React.createElement('div',{className:'ki-card'},
         React.createElement(AcilirKartBaslik,{baslik:'Antrenman Bölgeleri',acik:bolgelerAcik,onToggle:toggleBolgeler}),
-        bolgelerAcik&&(()=>{
+        accordionWrap(bolgelerAcik,()=>{
           const zoneRowKI=(z,i,showPace)=>React.createElement('tr',{key:i,style:{background:i%2===0?'var(--bg-secondary)':'var(--bg-primary)'}},
             React.createElement('td',{style:{padding:'8px 10px',display:'flex',alignItems:'center',gap:8}},
               React.createElement('div',{style:{width:12,height:12,borderRadius:2,background:ZONE_COLORS[z.id]||'#888',flexShrink:0}}),
@@ -36899,7 +36958,7 @@ function SporcuPlanView(){
             ),
             renderHrBoundaryRuler({zones,hasPace})
           );
-        })()
+        })
       ),
 
       // SN-5: Kuvvet antrenmanı önerisi linkleri + açıklama
@@ -36923,7 +36982,7 @@ function SporcuPlanView(){
       // ETKİLENMEZ, orada bare geçilmiyor).
       React.createElement('div',{className:'ki-card'},
         React.createElement(AcilirKartBaslik,{baslik:'📊 Son 24 Hafta Özeti',acik:hafta24Acik,onToggle:toggleHafta24}),
-        hafta24Acik&&React.createElement(Hafta24Karti,{workouts,athlete,bare:true})
+        accordionWrap(hafta24Acik,()=>React.createElement(Hafta24Karti,{workouts,athlete,bare:true}))
       ),
 
       // ── Geçmiş Koşu Antrenmanları ─────────────────────────────────────────
@@ -36950,7 +37009,7 @@ function SporcuPlanView(){
         const selStyle={fontSize:12,padding:'5px 10px',border:'1px solid var(--border)',borderRadius:'var(--radius)',background:'var(--bg-primary)',color:'var(--text-primary)'};
         return React.createElement('div',{className:'ki-card'},
           React.createElement(AcilirKartBaslik,{baslik:'🏃 Geçmiş Antrenman ve Yarışlar',acik:gecmisAcik,onToggle:toggleGecmis}),
-          gecmisAcik&&React.createElement(React.Fragment,null,
+          accordionWrap(gecmisAcik,()=>React.createElement(React.Fragment,null,
           React.createElement('div',{style:{marginBottom:12}},
             React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}},
               React.createElement('select',{value:turFilterH,onChange:e=>setTurFilterH(e.target.value),style:selStyle},
@@ -37061,6 +37120,7 @@ function SporcuPlanView(){
               })
             )
           )
+        )
         );
       })(),
 
