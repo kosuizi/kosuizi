@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.18-1600 --><!DOCTYPE html>
+<!-- Version: v2026.09.18-1821 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -299,7 +299,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.18-1600';
+const APP_VERSION='v2026.09.18-1821';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -33632,6 +33632,24 @@ function usePcView(){
   return {pcView,zoom,toggle};
 }
 
+// ── Koşu İzlerim'e ÖZEL açık/koyu tema anahtarı (18.09.2026 — Göksel isteği) ─
+// Koç panelindeki 🌙/☀ (App'in darkMode/app_config'i) ile HİÇBİR bağlantısı
+// YOKTUR ve olmayacaktır — Koşu İzlerim bu route'da (?form=plan) koç panelinin
+// App bileşenini hiç MOUNT ETMEZ, dolayısıyla body.dark'tan da etkilenmez.
+// Bu, sporcunun kendi cihazında kendi kararı: cihaza özgü localStorage'da
+// saklanır (usePcView'daki AYNI desen), koç veya başka sporcuları etkilemez.
+function useKiTheme(){
+  const [isDark,setIsDark]=useState(()=>{
+    try{return localStorage.getItem('kosuizi_theme')==='dark';}catch{return false;}
+  });
+  const toggle=()=>setIsDark(d=>{
+    const nv=!d;
+    try{localStorage.setItem('kosuizi_theme',nv?'dark':'light');}catch{}
+    return nv;
+  });
+  return [isDark,toggle];
+}
+
 // ── Katlanabilir Kart Başlığı — Koşu İzlerim (18.09.2026 — Göksel isteği) ────
 // Koşu İzlerim'deki özet kartları (📊 Durumum, 🏆 Bu Hafta Liderlik,
 // Antrenmanlarım — ve BUNDAN SONRA EKLENECEK her yeni kart) tıklanarak
@@ -35626,7 +35644,7 @@ function SporcuPlanView(){
   const [lbVisible,setLbVisible]=useState(DEFAULT_LEADERBOARD_VISIBLE);
   const athId=new URLSearchParams(window.location.search).get('id');
   const {pcView,zoom:pcZoom,toggle:togglePcView}=usePcView();
-
+  const [kiDark,toggleKiDark]=useKiTheme();
   // Bu haftanın Pace Disiplin (Hedef Uyumu) puanları — "Bu Hafta Liderlik"
   // widget'ı için. Koç panelindeki LiderlikTab ile AYNI fonksiyon
   // (fetchWeekPaceScores) + AYNI hafta (weekOffset=0) — panel paritesi.
@@ -35701,15 +35719,6 @@ function SporcuPlanView(){
   // isteği) — Koç Panelindeki BolgeTab'daki AYNI hesap (panel paritesi).
   const hasHR=zones.hrZones!=null;
   const hasPace=zones.paceZones!=null;
-  const vlt=zones.vlt;
-  const vltSource=calcVltDetail(athlete).label;
-  const mafPaceDisplay=(()=>{
-    if(athlete.maf_pace)return athlete.maf_pace+' /km';
-    const lastMafWk=(workouts||[])
-      .filter(w=>w.athleteId===athlete.id&&(w._testTur==='maf'||w.tur==='test_maf')&&w._testSonuc?.maf_pace)
-      .sort((a,b)=>b.date.localeCompare(a.date))[0];
-    return lastMafWk?lastMafWk._testSonuc.maf_pace+' /km':'—';
-  })();
   const {start:wkStart,end:wkEnd}=getWeekBounds(0);
 
   // Koç paneli hesapladığı weekEff'i planSnap'e yazar — Koşu İzlerim direkt okur
@@ -36181,21 +36190,46 @@ function SporcuPlanView(){
     );
   };
 
-  // Koşu İzlerim'e ÖZEL arka plan koyulaştırması (2026.08.04 — Göksel talebi:
-  // koç paneli DEĞİL, sadece bu panel; mavi tonlarda, aktif temaya (açık/koyu)
-  // duyarlı). CSS custom property'ler DOM'da miras alındığı için, bu override
-  // yalnızca kendi wrapper'ının İÇİNDEKİ var(--bg-*) kullanımlarını etkiler —
-  // global :root/body.dark tanımına dokunulmuyor, koç paneli hiç etkilenmiyor.
-  // Koyu temada şimdilik dokunulmuyor (önceki denemeler algısal olarak "simsiyah"
-  // bulundu — netleşene kadar orijinal koyu tema değerleri korunuyor).
-  const _koIzBgOverride=(typeof document!=='undefined'&&document.body.classList.contains('dark'))
-    ?{}
+  // Koşu İzlerim'e ÖZEL, koç panelinden TAMAMEN BAĞIMSIZ açık/koyu tema
+  // (18.09.2026 — Göksel isteği: "otomatik 🌙/☀ istemiyorum, ayrı buton olmalı,
+  // bu her sporcunun kendi kararı"). kiDark, koç panelinin App'indeki
+  // darkMode/app_config'iyle HİÇ bağlantılı değil — sporcunun kendi cihazında
+  // sakladığı bağımsız tercih (bkz. useKiTheme, ~satır 33636). CSS custom
+  // property'ler DOM'da miras alındığı için bu override yalnızca kendi
+  // wrapper'ının İÇİNDEKİ var(--...) kullanımlarını etkiler — global
+  // :root/body.dark tanımına dokunulmuyor, koç paneli hiç etkilenmiyor.
+  // Açık: 2026.08.04'teki mavi tonlu özel palet korundu. Koyu: global
+  // body.dark ile AYNI değerler (ayrıca kendi koyu paleti icat edilmedi).
+  const _koIzThemeVars=kiDark
+    ?{
+        '--bg-primary':'#0f1b2d','--bg-secondary':'#162236','--bg-tertiary':'#0a1220',
+        '--text-primary':'#f0f0f0','--text-secondary':'#aaa','--text-tertiary':'#666',
+        '--border':'#333','--border-hover':'#555',
+        '--info':'#60a5fa','--info-bg':'#1e3a5f',
+        '--success':'#4ade80','--success-bg':'#14532d',
+        '--warn':'#fbbf24','--warn-bg':'#451a03',
+        '--danger':'#f87171','--danger-bg':'#450a0a'
+      }
     :{'--bg-primary':'#dce7f5','--bg-secondary':'#cddcee','--bg-tertiary':'#bcd0e8'};
 
-  return React.createElement('div',{style:{minHeight:'100vh',background:'var(--bg-tertiary)',padding:'20px 16px',..._koIzBgOverride}},
+  return React.createElement('div',{style:{minHeight:'100vh',background:'var(--bg-tertiary)',padding:'20px 16px',..._koIzThemeVars}},
     React.createElement('style',null,
       '@media (max-width: 900px){.plan-3col{grid-template-columns:1fr !important;}}'
     ),
+    React.createElement('button',{
+      title:(kiDark?'Açık':'Koyu')+' temaya geç — sadece bu cihazda, sadece Koşu İzlerim',
+      onClick:toggleKiDark,
+      style:{
+        position:'fixed',top:10,right:56,zIndex:50,
+        width:38,height:38,borderRadius:'50%',
+        border:'1px solid var(--border)',
+        background:'var(--bg-primary)',
+        color:'var(--text-secondary)',
+        fontSize:16,cursor:'pointer',
+        display:'flex',alignItems:'center',justifyContent:'center',
+        boxShadow:'0 2px 8px rgba(0,0,0,0.15)'
+      }
+    },kiDark?'☀':'🌙'),
     React.createElement('button',{
       title:'PC Görünümü '+(pcView?'kapat':'aç')+' — masaüstü düzenini zorlar',
       onClick:togglePcView,
@@ -36447,9 +36481,6 @@ function SporcuPlanView(){
                 {l:'MHR',v:athlete.mhr?athlete.mhr+' bpm':'—'},
                 {l:'LTHR',v:athlete.lthr?athlete.lthr+' bpm':'—'},
                 {l:'VO₂max',v:athlete.vo2max?athlete.vo2max+' ml/kg/dk':'—'},
-                {l:'vLT',v:vlt?round1(vlt)+' m/s ('+fmtPaceFromMS(vlt)+' /km)':'—'},
-                {l:'vLT Kaynağı',v:vlt?vltSource:'—'},
-                {l:'MAF Pace (1. km)',v:mafPaceDisplay},
               ].map((item,i)=>React.createElement('div',{key:i,style:{padding:'6px 8px',background:'var(--bg-secondary)',borderRadius:6}},
                 React.createElement('div',{style:{fontSize:9,color:'var(--text-tertiary)'}},item.l),
                 React.createElement('div',{style:{fontSize:12,fontWeight:600}},item.v)
