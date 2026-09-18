@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.18-1001 --><!DOCTYPE html>
+<!-- Version: v2026.09.18-1021 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.18-1001';
+const APP_VERSION='v2026.09.18-1021';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -15643,36 +15643,44 @@ function smoothElevationByDistance(points, windowM=100){
 // Düzleştirilmiş profilde D+ bazında EN BÜYÜK "sürdürülen tırmanış"ı bulur.
 // DÜZELTME #2 (18.09.2026 — Göksel'in gerçek Chianti GPX'iyle testi): önceki
 // sabit/oransal tolerans yaklaşımı (15m veya biriken yüksekliğin %15'i) gerçek
-// veride HÂLÂ yetersiz kaldı — sonuç değişmedi (hâlâ 4km/D+291m). Kök sorun:
-// "tolerans" kavramının kendisi yanlış çerçeve — hangi eşiği seçersek seçelim
-// gerçek parkurlarda o eşiği aşan ama yine de "geçmeye değer" düşüşler olabilir.
-// Artık TAMAMEN farklı, parametre gerektirmeyen bir yaklaşım: klasik "maksimum
-// alt-dizi toplamı" (Kadane) algoritması, profildeki ardışık irtifa farklarına
-// uygulanıyor. Sezgi: bir düşüşü "geçmeye değer" yapan şey sabit bir eşik değil,
-// SONRASINDA gelen tırmanışın o düşüşü net olarak fazlasıyla telafi etmesi — tam
-// olarak Kadane'in optimize ettiği şey. Birikmiş net kazanç negatife düştüğü an
-// (o noktaya kadarki tüm düşüşler tüm çıkışları geride bıraktığında) yeni bir
-// aday segment başlar; bu tamamen kendiliğinden ayarlanan bir eşik, elle
-// ayarlanan sabit/oransal bir sayı değil.
-function detectLongestClimb(smoothed){
+// veride yetersiz kaldı (4km/D+291m). Saf Kadane (parametresiz, sadece net
+// kazancı maksimize eden hâli) DENENDİ ama TERS yöne aşırı gitti: gerçek
+// Chianti verisinde 38.2km/D+598m/%1.6 eğim gibi bir sonuç verdi — bu, tek bir
+// "tırmanış" değil, uzun bir "rolling" (inişli-çıkışlı ama genel eğilimi hafif
+// yukarı) bölge. Bir düşüşü SADECE "sonraki tırmanış onu net telafi ediyor mu"
+// diye değerlendirmek, ÇOK UZUN ve ÇOK YASSI (neredeyse düz) bölgeleri de
+// "tırmanış" sayabiliyor — çünkü net kazanç pozitif kalsa da eğim anlamsızca
+// düşük olabiliyor.
+// ÇÖZÜM: Kadane'e bir "minimum eğim" cezası eklendi — her metrelik mesafe,
+// artık sabit bir maliyet (minGradYuzde) taşıyor; bu maliyeti karşılamayan
+// (yani yeterince dik olmayan) uzatmalar toplamı EKSİYE düşürüp segmenti
+// kendiliğinden sonlandırıyor. Gerçek GPX'te (13196 nokta) minGrad=%1-3
+// aralığı 6-9km / D+~390-430m / %5-6 eğim gibi fiziksel olarak anlamlı, tutarlı
+// bir "en uzun tırmanış" veriyor (resmi parkur profiliyle de örtüşüyor);
+// %2 varsayılan seçildi.
+function detectLongestClimb(smoothed, minGradYuzde=2){
   if(!smoothed||smoothed.length<2) return null;
+  const minGrad=minGradYuzde/100;
   let bestSum=0, bestStart=0, bestEnd=0;
   let curSum=0, curStart=0;
   for(let i=1;i<smoothed.length;i++){
-    const d=smoothed[i].ele-smoothed[i-1].ele;
-    if(curSum<=0){ curSum=d; curStart=i-1; }
-    else{ curSum+=d; }
+    const dEle=smoothed[i].ele-smoothed[i-1].ele;
+    const dDist=smoothed[i].distM-smoothed[i-1].distM;
+    const val=dEle-minGrad*dDist; // düz/yassı mesafe artık "bedava" değil
+    if(curSum<=0){ curSum=val; curStart=i-1; }
+    else{ curSum+=val; }
     if(curSum>bestSum){ bestSum=curSum; bestStart=curStart; bestEnd=i; }
   }
   if(bestSum<=0) return null;
   const startPt=smoothed[bestStart], endPt=smoothed[bestEnd];
   const mesafeKm=Math.max(0.01,(endPt.distM-startPt.distM)/1000);
+  const dPlus=Math.round(endPt.ele-startPt.ele); // gerçek (cezasız) net D+
   return {
     baslangicKm:round1(startPt.distM/1000),
     bitisKm:round1(endPt.distM/1000),
     mesafeKm:round1(mesafeKm),
-    dPlus:Math.round(bestSum),
-    ortEgimYuzde:round1((bestSum/(mesafeKm*1000))*100)
+    dPlus,
+    ortEgimYuzde:round1((dPlus/(mesafeKm*1000))*100)
   };
 }
 
