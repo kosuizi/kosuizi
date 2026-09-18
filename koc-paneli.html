@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.18-2001 --><!DOCTYPE html>
+<!-- Version: v2026.09.18-2013 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.18-2001';
+const APP_VERSION='v2026.09.18-2013';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -28974,11 +28974,20 @@ function RestWarningBanner({workouts,athlete,races,planSnap}){
   const _phase=calcPhase(localDateStr(new Date()),_nextRaceW?.tarih,_nextRaceW?.prep_weeks,_nextRaceW||{});
 
   // Arka arkaya antrenman sayısı (bugün dahil geriye doğru)
+  // 18.09.2026 — Göksel talebi: streak'teki HER GÜN koşu değilse (bazı günler
+  // çapraz/başka spor), "bir dinlenme VEYA ÇAPRAZ antrenman günü..." önerisi
+  // hatalı olur — çapraz antrenman zaten streak'in İÇİNDE, yeni bir öneri
+  // değil. _consecAllKosu, streak'teki HER günde en az bir koşu kaydı var mı
+  // izler (yoksa false) — mesaj buna göre dallanır (aşağıda).
   let _consec=0;
+  let _consecAllKosu=true;
   for(let _ci=0;_ci<8;_ci++){
     const _cd=new Date();_cd.setDate(_cd.getDate()-_ci);
-    if((workouts||[]).some(w=>w.date===localDateStr(_cd))) _consec++;
-    else break;
+    const _dayWs=(workouts||[]).filter(w=>w.date===localDateStr(_cd));
+    if(_dayWs.length>0){
+      _consec++;
+      if(!_dayWs.some(w=>(w.spor||'kosu')==='kosu')) _consecAllKosu=false;
+    } else break;
   }
 
   // ── Uyarı seviyesi belirle (en yüksek seviye kazanır) ────────────────
@@ -29024,7 +29033,9 @@ function RestWarningBanner({workouts,athlete,races,planSnap}){
       bg='var(--warn-bg)';border='var(--warn)';titleClr='var(--warn)';
     } else if(_consec>=3){
       lvl=2;icon='⚠️';title=_consec+' Gündür Arka Arkaya Antrenman';
-      text='Son '+_consec+' gündür arka arkaya çalıştın. Bir dinlenme veya çapraz antrenman günü kaslara yeniden yapılanma fırsatı verir.';
+      text=_consecAllKosu
+        ?'Son '+_consec+' gündür arka arkaya çalıştın. Bir dinlenme veya çapraz antrenman günü kaslara yeniden yapılanma fırsatı verir.'
+        :'Son '+_consec+' gündür arka arkaya antrenman yapıyorsun. Bir dinlenme günü kaslara yeniden yapılanma fırsatı verir.';
       bg='var(--warn-bg)';border='var(--warn)';titleClr='var(--warn)';
     }
   }
@@ -30179,7 +30190,7 @@ function Hafta24Karti({workouts,athlete,bare=false}){
   // Koç panelindeki kullanım (AthleteDetail, ~satır 29557) bare GEÇMEZ,
   // eski görünümü DEĞİŞMEDEN korur.
   const govdeIcerik=React.createElement(React.Fragment,null,
-    !bare&&React.createElement('div',{className:'card-title'},'📊 Son 24 Hafta Özeti'),
+    !bare&&React.createElement('div',{className:'card-title'},'📊 Son 24 Hafta'),
     React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:10}},
       'Mesafe, süre, ortalama tempo ve D+ sadece koşu antrenmanlarına aittir. Yük tüm antrenmanları kapsar. ',
       React.createElement('strong',null,'Toplam: ',round1(totals.km),' km · ',fmtHMS(totals.dak),' · D+ ',Math.round(totals.dPlus),' m · Yük ',round1(totals.yuk))
@@ -33661,38 +33672,20 @@ function useKiTheme(){
 
 // ── Katlanabilir Kart Başlığı — Koşu İzlerim (18.09.2026 — Göksel isteği) ────
 // Koşu İzlerim'deki özet kartları (📊 Durumum, 🏆 Bu Hafta Liderlik,
-// Antrenmanlarım — ve BUNDAN SONRA EKLENECEK her yeni kart) tıklanarak
-// açılıp kapanan bir başlık şeklinde gösterilir. Aç/kapa tercihi cihaza özgü
-// localStorage'da saklanır (usePcView'daki AYNI desen, Firebase'e yazılmaz),
-// böylece sporcu bir kartı kapattığında bu tercih sonraki ziyaretlerinde de
-// hatırlanır.
+// Antrenmanlarım, 📊 Son 24 Hafta, 🏃 Geçmiş Antrenman ve Yarışlar,
+// Antrenman Bölgeleri — ve BUNDAN SONRA EKLENECEK her yeni kart) tıklanarak
+// açılıp kapanan bir başlık şeklinde gösterilir. Aynı anda sadece BİR kart
+// açık olabilir (akordeon — bkz. SporcuPlanView içindeki openCard/acc
+// tanımı) ve hiçbir tercih hatırlanmaz — sayfa her açıldığında 'durumum'
+// ile başlar. (Önce sadece "Göksel Çelik" test hesabında denendi, artık
+// herkese açık.)
 //
-// YENİ BİR KART EKLERKEN: useAcilirKart(key,defaultOpen) ile aç/kapa state'i
-// alın, kartın başlık satırını AcilirKartBaslik ile oluşturun, ve kartın asıl
-// içeriğini `acik&&(...)` ile koşullu render edin — üç mevcut kart da
-// (durumKart/liderCard/antrenmanCard, ~satır 36255-36620) bu deseni izler.
-function useAcilirKart(key,defaultOpen=true){
-  const lsKey='kosuizi_kart_acik_'+key;
-  const [acik,setAcik]=useState(()=>{
-    try{
-      const v=localStorage.getItem(lsKey);
-      return v===null?defaultOpen:v==='1';
-    }catch{return defaultOpen;}
-  });
-  const onToggle=()=>setAcik(a=>{
-    const nv=!a;
-    try{localStorage.setItem(lsKey,nv?'1':'0');}catch{}
-    return nv;
-  });
-  return [acik,onToggle];
-}
-
-// Tıklanabilir başlık satırı — useAcilirKart'ın döndürdüğü acik/onToggle ile
-// birlikte kullanılır. renk: başlık metninin/okun rengi (kartın temasına göre
-// değişebilir — normal kartlarda 'var(--text-secondary)', koyu Liderlik
-// kartında '#94a3b8'). extra: başlık satırına eklenecek ekstra bir kontrol
-// (ör. Liderlik kartındaki "ⓘ" butonu) — accordion'u tetiklememesi için
-// kendi onClick'inde e.stopPropagation() çağırmalıdır.
+// Tıklanabilir başlık satırı — çağıran taraf acik/onToggle çiftini sağlar
+// (SporcuPlanView'daki acc('anahtar') ile). renk: başlık metninin/okun rengi
+// (kartın temasına göre değişebilir — normal kartlarda 'var(--text-secondary)',
+// koyu Liderlik kartında '#94a3b8'). extra: başlık satırına eklenecek ekstra
+// bir kontrol (ör. Liderlik kartındaki "ⓘ" butonu) — accordion'u
+// tetiklememesi için kendi onClick'inde e.stopPropagation() çağırmalıdır.
 function AcilirKartBaslik({baslik,acik,onToggle,renk,extra}){
   return React.createElement('div',{
     onClick:onToggle,
@@ -35616,63 +35609,32 @@ function SporcuPlanView(){
   const [snapCacheH,setSnapCacheH]=useState({});
   const [snapLoadingH,setSnapLoadingH]=useState({});
   // Koşu İzlerim özet kartlarının (📊 Durumum, 🏆 Bu Hafta Liderlik,
-  // Antrenmanlarım, 📊 Son 24 Hafta Özeti, 🏃 Geçmiş Antrenman ve Yarışlar,
-  // Antrenman Bölgeleri) aç/kapa durumu — bkz. useAcilirKart tanımı
-  // (~satır 33566). Varsayılan KAPALI (18.09.2026 — Göksel isteği): sayfa
-  // ilk açıldığında sadece başlıklar görünür, sporcu istediğini tıklayıp açar.
-  // Bu, HERKES için geçerli varsayılan/bağımsız davranış — aşağıdaki deneysel
-  // akordeon SADECE Göksel Çelik'in kendi hesabında bunun YERİNİ alır.
-  const [durumAcikIndep,toggleDurumIndep]=useAcilirKart('durumum',false);
-  const [liderAcikIndep,toggleLiderIndep]=useAcilirKart('liderlik',false);
-  const [antrenmanAcikIndep,toggleAntrenmanIndep]=useAcilirKart('antrenmanlarim',false);
-  const [hafta24AcikIndep,toggleHafta24Indep]=useAcilirKart('hafta24',false);
-  const [gecmisAcikIndep,toggleGecmisIndep]=useAcilirKart('gecmis',false);
-  const [bolgelerAcikIndep,toggleBolgelerIndep]=useAcilirKart('bolgeler',false);
-
-  // ── DENEYSEL akordeon — SADECE Göksel Çelik (18.09.2026 — Göksel isteği:
-  // "diğer sporculara sunmadan önce test etmem lazım, sadece benim hesabım
-  // güncellensin, hatırlanma olmasın, her seferinde Durumum açık başlasın").
-  // openCard TEK bir string tutar (aynı anda sadece bir kart açık olabilir) ve
-  // localStorage'a YAZILMAZ — bu yüzden sayfa her açıldığında (yenilemede de)
-  // her zaman 'durumum' ile başlar, önceki tercih HİÇ hatırlanmaz. Diğer
-  // sporcular yukarıdaki *Indep hook'larını (bağımsız, hatırlanan, herkes
-  // için değişmeyen eski davranış) kullanmaya devam eder — aşağıdaki
-  // isTestAthlete kontrolü bunu garantiler.
-  const isTestAthlete=athlete&&athlete.ad==='Göksel'&&athlete.soyad==='Çelik';
+  // Antrenmanlarım, 📊 Son 24 Hafta, 🏃 Geçmiş Antrenman ve Yarışlar,
+  // Antrenman Bölgeleri) akordeon aç/kapa durumu (18.09.2026 — Göksel
+  // isteği, önce sadece "Göksel Çelik" test hesabında denendi, artık
+  // HERKESE açık). Aynı anda sadece BİR kart açık olabilir (openCard tek
+  // bir string tutar), ve HİÇBİR ŞEY localStorage'a yazılmaz — sayfa her
+  // açıldığında/yenilendiğinde her zaman 'durumum' ile başlar, önceki
+  // tercih hatırlanmaz. YENİ BİR KART EKLERKEN: acc('anahtar') ile
+  // acik/onToggle çiftini alın, başlığı AcilirKartBaslik ile oluşturun,
+  // içeriği accordionWrap(acik,()=>...) ile (bir THUNK olarak) sarın.
   const [openCard,setOpenCard]=useState('durumum');
   const acc=(key)=>[openCard===key,()=>setOpenCard(c=>c===key?null:key)];
-  const [durumAcikAcc,toggleDurumAcc]=acc('durumum');
-  const [liderAcikAcc,toggleLiderAcc]=acc('liderlik');
-  const [antrenmanAcikAcc,toggleAntrenmanAcc]=acc('antrenmanlarim');
-  const [hafta24AcikAcc,toggleHafta24Acc]=acc('hafta24');
-  const [gecmisAcikAcc,toggleGecmisAcc]=acc('gecmis');
-  const [bolgelerAcikAcc,toggleBolgelerAcc]=acc('bolgeler');
-
-  const durumAcik=isTestAthlete?durumAcikAcc:durumAcikIndep;
-  const toggleDurum=isTestAthlete?toggleDurumAcc:toggleDurumIndep;
-  const liderAcik=isTestAthlete?liderAcikAcc:liderAcikIndep;
-  const toggleLider=isTestAthlete?toggleLiderAcc:toggleLiderIndep;
-  const antrenmanAcik=isTestAthlete?antrenmanAcikAcc:antrenmanAcikIndep;
-  const toggleAntrenman=isTestAthlete?toggleAntrenmanAcc:toggleAntrenmanIndep;
-  const hafta24Acik=isTestAthlete?hafta24AcikAcc:hafta24AcikIndep;
-  const toggleHafta24=isTestAthlete?toggleHafta24Acc:toggleHafta24Indep;
-  const gecmisAcik=isTestAthlete?gecmisAcikAcc:gecmisAcikIndep;
-  const toggleGecmis=isTestAthlete?toggleGecmisAcc:toggleGecmisIndep;
-  const bolgelerAcik=isTestAthlete?bolgelerAcikAcc:bolgelerAcikIndep;
-  const toggleBolgeler=isTestAthlete?toggleBolgelerAcc:toggleBolgelerIndep;
+  const [durumAcik,toggleDurum]=acc('durumum');
+  const [liderAcik,toggleLider]=acc('liderlik');
+  const [antrenmanAcik,toggleAntrenman]=acc('antrenmanlarim');
+  const [hafta24Acik,toggleHafta24]=acc('hafta24');
+  const [gecmisAcik,toggleGecmis]=acc('gecmis');
+  const [bolgelerAcik,toggleBolgeler]=acc('bolgeler');
 
   // Kartın içeriğini render eder. contentFn bir THUNK'tır (parametresiz
-  // fonksiyon) — Test sporcusu DIŞINDA herkes için ESKİ davranış TAM olarak
-  // korunur: kapalıyken contentFn() HİÇ ÇAĞRILMAZ (içerik hesaplanmaz/DOM'a
-  // girmez), performans ESKİSİYLE AYNI. Test sporcusunda ise içerik HER ZAMAN
-  // hesaplanır/DOM'dadır (animasyon için gerekli) ve CSS grid-template-rows
-  // (0fr↔1fr) + opacity/scale ile animasyonlu açılıp kapanır ("öne doğru
-  // büyüyerek" hissi) — bkz. .ki-accordion-body/.ki-accordion-inner CSS'i.
-  const accordionWrap=(acik,contentFn)=>isTestAthlete
-    ?React.createElement('div',{className:'ki-accordion-body'+(acik?' open':'')},
-        React.createElement('div',{className:'ki-accordion-inner'},contentFn())
-      )
-    :(acik&&contentFn());
+  // fonksiyon) — içerik HER ZAMAN hesaplanır/DOM'dadır (animasyon için
+  // gerekli) ve CSS grid-template-rows (0fr↔1fr) + opacity/scale ile
+  // animasyonlu açılıp kapanır ("öne doğru büyüyerek" hissi) — bkz.
+  // .ki-accordion-body/.ki-accordion-inner CSS'i.
+  const accordionWrap=(acik,contentFn)=>React.createElement('div',{className:'ki-accordion-body'+(acik?' open':'')},
+    React.createElement('div',{className:'ki-accordion-inner'},contentFn())
+  );
 
   const toggleRecipeH=async(w)=>{
     const wid=w.id||w.date;
@@ -36981,7 +36943,7 @@ function SporcuPlanView(){
       // koç panelindeki AthleteDetail kullanımı — ~satır 29607 — buna
       // ETKİLENMEZ, orada bare geçilmiyor).
       React.createElement('div',{className:'ki-card'},
-        React.createElement(AcilirKartBaslik,{baslik:'📊 Son 24 Hafta Özeti',acik:hafta24Acik,onToggle:toggleHafta24}),
+        React.createElement(AcilirKartBaslik,{baslik:'📊 Son 24 Hafta',acik:hafta24Acik,onToggle:toggleHafta24}),
         accordionWrap(hafta24Acik,()=>React.createElement(Hafta24Karti,{workouts,athlete,bare:true}))
       ),
 
