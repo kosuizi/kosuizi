@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.18-1356 --><!DOCTYPE html>
+<!-- Version: v2026.09.18-1411 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.18-1356';
+const APP_VERSION='v2026.09.18-1411';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -33562,6 +33562,57 @@ function usePcView(){
   return {pcView,zoom,toggle};
 }
 
+// ── Katlanabilir Kart Başlığı — Koşu İzlerim (18.09.2026 — Göksel isteği) ────
+// Koşu İzlerim'deki özet kartları (📊 Durumum, 🏆 Bu Hafta Liderlik,
+// Antrenmanlarım — ve BUNDAN SONRA EKLENECEK her yeni kart) tıklanarak
+// açılıp kapanan bir başlık şeklinde gösterilir. Aç/kapa tercihi cihaza özgü
+// localStorage'da saklanır (usePcView'daki AYNI desen, Firebase'e yazılmaz),
+// böylece sporcu bir kartı kapattığında bu tercih sonraki ziyaretlerinde de
+// hatırlanır.
+//
+// YENİ BİR KART EKLERKEN: useAcilirKart(key,defaultOpen) ile aç/kapa state'i
+// alın, kartın başlık satırını AcilirKartBaslik ile oluşturun, ve kartın asıl
+// içeriğini `acik&&(...)` ile koşullu render edin — üç mevcut kart da
+// (durumKart/liderCard/antrenmanCard, ~satır 36255-36620) bu deseni izler.
+function useAcilirKart(key,defaultOpen=true){
+  const lsKey='kosuizi_kart_acik_'+key;
+  const [acik,setAcik]=useState(()=>{
+    try{
+      const v=localStorage.getItem(lsKey);
+      return v===null?defaultOpen:v==='1';
+    }catch{return defaultOpen;}
+  });
+  const onToggle=()=>setAcik(a=>{
+    const nv=!a;
+    try{localStorage.setItem(lsKey,nv?'1':'0');}catch{}
+    return nv;
+  });
+  return [acik,onToggle];
+}
+
+// Tıklanabilir başlık satırı — useAcilirKart'ın döndürdüğü acik/onToggle ile
+// birlikte kullanılır. renk: başlık metninin/okun rengi (kartın temasına göre
+// değişebilir — normal kartlarda 'var(--text-secondary)', koyu Liderlik
+// kartında '#94a3b8'). extra: başlık satırına eklenecek ekstra bir kontrol
+// (ör. Liderlik kartındaki "ⓘ" butonu) — accordion'u tetiklememesi için
+// kendi onClick'inde e.stopPropagation() çağırmalıdır.
+function AcilirKartBaslik({baslik,acik,onToggle,renk,extra}){
+  return React.createElement('div',{
+    onClick:onToggle,
+    style:{
+      display:'flex',alignItems:'center',justifyContent:'space-between',gap:8,
+      cursor:'pointer',userSelect:'none',
+      marginBottom:acik?10:0
+    }
+  },
+    React.createElement('div',{style:{fontSize:11,fontWeight:700,color:renk||'var(--text-secondary)',textTransform:'uppercase',letterSpacing:'0.5px'}},baslik),
+    React.createElement('div',{style:{display:'flex',alignItems:'center',gap:6,flexShrink:0}},
+      extra,
+      React.createElement('span',{style:{fontSize:10,color:renk||'var(--text-tertiary)'}},acik?'▲':'▼')
+    )
+  );
+}
+
 function App(){
   const [athletes,setAthletes]=useState([]);
   const [races,setRaces]=useState([]);
@@ -35467,6 +35518,11 @@ function SporcuPlanView(){
   const [expandedRecipeH,setExpandedRecipeH]=useState({});
   const [snapCacheH,setSnapCacheH]=useState({});
   const [snapLoadingH,setSnapLoadingH]=useState({});
+  // Koşu İzlerim özet kartlarının (📊 Durumum, 🏆 Bu Hafta Liderlik,
+  // Antrenmanlarım) aç/kapa durumu — bkz. useAcilirKart tanımı (~satır 33566).
+  const [durumAcik,toggleDurum]=useAcilirKart('durumum',true);
+  const [liderAcik,toggleLider]=useAcilirKart('liderlik',true);
+  const [antrenmanAcik,toggleAntrenman]=useAcilirKart('antrenmanlarim',true);
   const toggleRecipeH=async(w)=>{
     const wid=w.id||w.date;
     if(expandedRecipeH[wid]){setExpandedRecipeH(s=>({...s,[wid]:false}));return;}
@@ -36253,7 +36309,8 @@ function SporcuPlanView(){
         };
 
         const durumKart=React.createElement('div',{className:'card',style:{padding:'14px 16px',height:'100%'}},
-          React.createElement('div',{style:{fontSize:11,fontWeight:700,color:'var(--text-secondary)',marginBottom:10,textTransform:'uppercase',letterSpacing:'0.5px'}},'📊 Durumum'),
+          React.createElement(AcilirKartBaslik,{baslik:'📊 Durumum',acik:durumAcik,onToggle:toggleDurum}),
+          durumAcik&&React.createElement(React.Fragment,null,
 
           // Toparlanma
           recoveryInfo&&React.createElement('div',{style:{marginBottom:12,paddingBottom:10,borderBottom:'1px solid var(--border)'}},
@@ -36379,6 +36436,7 @@ function SporcuPlanView(){
               myRacesMini.map(renderMiniRaceCard)
             );
           })()
+        )
         );
         // Sağ: Bu haftanın liderlik tablosu (koç panelindeki LiderlikTab ile
         // AYNI fonksiyonlar — calcWeeklyStats + finalizeLeaderboard — panel paritesi)
@@ -36525,10 +36583,14 @@ function SporcuPlanView(){
               display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',
               textAlign:'center',gap:8,minHeight:120
             }},
-              React.createElement('div',{style:{fontSize:11,fontWeight:700,color:'#94a3b8',textTransform:'uppercase',letterSpacing:'0.5px'}},'🏆 Bu Hafta Liderlik'),
-              React.createElement('div',{style:{fontSize:22}},'🛠️'),
-              React.createElement('div',{style:{fontSize:12,color:'#cbd5e1',lineHeight:1.5,maxWidth:220}},
-                'Skor hesaplamalarında düzeltme çalışması yapılıyor.'
+              React.createElement('div',{style:{width:'100%'}},
+                React.createElement(AcilirKartBaslik,{baslik:'🏆 Bu Hafta Liderlik',acik:liderAcik,onToggle:toggleLider,renk:'#94a3b8'})
+              ),
+              liderAcik&&React.createElement(React.Fragment,null,
+                React.createElement('div',{style:{fontSize:22}},'🛠️'),
+                React.createElement('div',{style:{fontSize:12,color:'#cbd5e1',lineHeight:1.5,maxWidth:220}},
+                  'Skor hesaplamalarında düzeltme çalışması yapılıyor.'
+                )
               )
             )
           :React.createElement('div',{style:{
@@ -36536,13 +36598,14 @@ function SporcuPlanView(){
           borderRadius:16,padding:'14px 16px',color:'#f8fafc',fontFamily:'system-ui,sans-serif',
           border:'1px solid rgba(255,255,255,.08)',height:'100%'
         }},
-          React.createElement('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:showScoreInfo?6:8,gap:8}},
-            React.createElement('div',{style:{fontSize:11,fontWeight:700,color:'#94a3b8',textTransform:'uppercase',letterSpacing:'0.5px'}},'🏆 Bu Hafta Liderlik'),
+          React.createElement(AcilirKartBaslik,{
+            baslik:'🏆 Bu Hafta Liderlik',acik:liderAcik,onToggle:toggleLider,renk:'#94a3b8',
             // 2026.08.25 — Göksel talebi: sade "ⓘ" ikonu fark edilmiyordu — artık
             // etiketli, hafif vurgulu bir buton (metin + ikon), koyu kart zemininde
             // göze çarpsın diye açık mavi renk ve hafif dolgu/kenarlıkla.
-            React.createElement('button',{
-              onClick:()=>setShowScoreInfo(v=>!v),
+            // e.stopPropagation() — bu butona tıklamak accordion'u kapatmasın.
+            extra:React.createElement('button',{
+              onClick:(e)=>{e.stopPropagation();setShowScoreInfo(v=>!v);},
               title:'Skor nasıl hesaplanıyor?',
               style:{
                 display:'flex',alignItems:'center',gap:4,flexShrink:0,cursor:'pointer',
@@ -36551,7 +36614,8 @@ function SporcuPlanView(){
                 color:'#38bdf8',fontSize:10,fontWeight:700,padding:'3px 8px',lineHeight:1.3
               }
             },'ⓘ Skor nasıl hesaplanıyor?')
-          ),
+          }),
+          liderAcik&&React.createElement(React.Fragment,null,
           // 2026.09.03 — Göksel talebi: sporcu "📣 Paylaşılabilir Görsellerde Yer
           // Alma İzni" kutucuğunu (ankette, reklam_izni alanı) onaylamamışsa,
           // bu widget'ın satır listesinin ÜSTÜNDE (başlığın hemen altında, skor
@@ -36597,24 +36661,26 @@ function SporcuPlanView(){
               liderRow(stats[myRank],myRank)
             )
           )
+        )
         );
 
         // Orta: Antrenmanlarım
         const isSunday=new Date().getDay()===0;
-        const antrenmanCard=dayInfos.length>0
-          ?React.createElement('div',{className:'card',style:{padding:'14px 16px',height:'100%'}},
-              React.createElement('div',{style:{fontSize:12,fontWeight:700,color:'var(--text-secondary)',marginBottom:12,textTransform:'uppercase',letterSpacing:'0.5px'}},'Antrenmanlarım'),
-              React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:2}},
-                dayInfos.map((info,i)=>renderDayCard(info,i))
-              )
+        const antrenmanIcerik=dayInfos.length>0
+          ?React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:2}},
+              dayInfos.map((info,i)=>renderDayCard(info,i))
             )
           :isSunday
-            ?React.createElement('div',{className:'card',style:{padding:'20px',textAlign:'center',color:'var(--text-tertiary)',fontSize:13,height:'100%'}},
+            ?React.createElement('div',{style:{textAlign:'center',color:'var(--text-tertiary)',fontSize:13,padding:'12px 0'}},
                 '🎉 Bu haftanın tüm antrenmanları tamamlandı!'
               )
-            :React.createElement('div',{className:'card',style:{padding:'20px',textAlign:'center',color:'var(--text-tertiary)',fontSize:13,height:'100%'}},
+            :React.createElement('div',{style:{textAlign:'center',color:'var(--text-tertiary)',fontSize:13,padding:'12px 0'}},
                 '—'
               );
+        const antrenmanCard=React.createElement('div',{className:'card',style:{padding:'14px 16px',height:'100%'}},
+          React.createElement(AcilirKartBaslik,{baslik:'Antrenmanlarım',acik:antrenmanAcik,onToggle:toggleAntrenman}),
+          antrenmanAcik&&antrenmanIcerik
+        );
 
         return React.createElement('div',{style:{
           display:'grid',
