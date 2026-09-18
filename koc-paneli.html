@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.18-1433 --><!DOCTYPE html>
+<!-- Version: v2026.09.18-1546 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -293,7 +293,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.18-1433';
+const APP_VERSION='v2026.09.18-1546';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -24856,6 +24856,165 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
 const ZONE_COLORS={Z1:'#6ee7b7',Z2:'#34d399',Z3:'#fbbf24',Z4:'#f97316',Z5a:'#ef4444',Z5b:'#dc2626',Z5c:'#991b1b'}; // SN-10 swap UYGULANDI (2026.09.08)
 
 
+// ── Nabız Sınır Cetveli — PAYLAŞILAN fonksiyon (Koç Paneli BolgeTab +
+// Koşu İzlerim, 18.09.2026 — Göksel isteği). "┄ standart taban / ▬ güncel
+// (son) sınır" cetvelini çizer. bcAnalysis/bcApplied SADECE koç panelinden
+// geçilir (bekleyen Sınır Kalibrasyonu önerisinin "┅ olası yeni sınır"
+// önizleme okunu üretmek için) — Koşu İzlerim bunları hiç vermez, o yüzden
+// sporcu tarafında bu önizleme oku HİÇBİR ZAMAN görünmez; sporcu sadece
+// standart taban + güncel (kalibre edilmiş) sınırı görür.
+function renderHrBoundaryRuler({zones,hasPace,athlete=null,bcAnalysis=null,bcApplied=null}){
+    if(!zones.hrZones||zones.hrZones[0]?.method!=='%LTHR') return null;
+    const lthr=zones.lthr;
+    // Nominal tasarım genişliği 780→1480: "Anaerobik · %3" gibi en uzun/en dar
+    // kombinasyon (Z5b, 3 puan) FS=8'de ancak ~1287px plotW'de sığıyor (elle
+    // hesaplandı) — 1450 rahat pay bırakıyor. Bu SADECE viewBox'ın iç oranı;
+    // gerçek render genişliği yine width:'100%' ile tablonunkiyle aynı kalıyor,
+    // sadece ölçek faktörü küçülüyor (metin/bant oranı sabit kalır).
+    // padBottom 62→110 (2026.09.16, Göksel talebi: her sınır etiketine PACE de eklendi —
+    // ikinci satır için ek dikey yer).
+    const W=1480,H=228,padLeft=15,padRight=15,padTop=58,bandH=60,padBottom=110;
+    const plotW=W-padLeft-padRight;
+    const rangeLo=HR_ZONES_LTHR[0].lo*100;                         // 65
+    const rangeHi=HR_ZONES_LTHR[HR_ZONES_LTHR.length-1].hi*100;    // 115
+    const xFor=pct=>padLeft+((pct-rangeLo)/(rangeHi-rangeLo))*plotW;
+    // Beyaz etiket metnini her renk üzerinde okunur tutan "hale" (koyu ince kontur) —
+    // textShadow yerine SVG'de daha güvenilir (Android WebView dahil her yerde çalışır).
+    const halo={paintOrder:'stroke',stroke:'rgba(0,0,0,.55)',strokeWidth:3,strokeLinejoin:'round'};
+    const nonScale={vectorEffect:'non-scaling-stroke'};
+
+    // Bekleyen (henüz uygulanmamış) Sınır Kalibrasyonu önerisi varsa "olası" değerleri hesapla.
+    const preview=(bcAnalysis&&!bcApplied)?applyBoundaryCalibration(athlete,bcAnalysis):null;
+
+    // Tüm cetvel metinleri TEK boyut (Göksel'in isteği: "gerekiyorsa küçültülsün") —
+    // en dar bandın (Z5a/Z5b, 3 puan) tanımlama metnini elverdiğince barındırabilecek
+    // küçük ama okunur bir boyut. Bant sınırlarını aşan metin merkezi hizada kalır;
+    // koyu hâle (halo) hangi rengin üstüne taşarsa taşsın okunurluğu korur.
+    const FS=8;
+
+    const bandEls=[];
+    zones.hrZones.forEach((z,i)=>{
+      const xL=xFor(z.lo*100), xR=xFor(z.hi*100); // soldan sağa: küçük pct sol, büyük pct sağ
+      const w=Math.max(0,xR-xL);
+      const cx=(xL+xR)/2, cy=padTop+bandH/2;
+      // Tam opak, canlı renk bant — soluk 0.85 opaklık yerine 1.0
+      bandEls.push(React.createElement('rect',{
+        key:'band'+i,x:xL,y:padTop,width:w,height:bandH,fill:ZONE_COLORS[z.id]||'#888'
+      }));
+      // Bantlar arası ince ayraç — renk geçişini netleştirir (bu bandın SOL kenarında)
+      if(i>0) bandEls.push(React.createElement('line',{
+        key:'sep'+i,x1:xL,x2:xL,y1:padTop,y2:padTop+bandH,stroke:'rgba(0,0,0,.35)',strokeWidth:1,...nonScale
+      }));
+      const shortName=(z.label||'').replace(z.id+' — ','');
+      const widthPct=round1((z.hi-z.lo)*100);
+      // Her bölgede aynı format: "Tempo · %5" — dar bantlarda metin band sınırını
+      // aşabilir (merkezden taşar) ama kırpılmaz/gizlenmez; halo okunurluğu korur.
+      bandEls.push(React.createElement('text',{key:'nm'+i,x:cx,y:cy,textAnchor:'middle',dominantBaseline:'middle',fontSize:FS,fontWeight:800,fill:'#fff',...halo},shortName+' · %'+widthPct));
+    });
+
+    const boundaryEls=[];
+    // Pace — aynı sınırın PACE bölge sistemindeki (farklı %VLT eşiğiyle bağımsız hesaplanan,
+    // ama AYNI zon ID'sine karşılık gelen) sınırı; bkz. calcZones→paceZones (2026.09.16,
+    // Göksel talebi: "85%·141" etiketinin yanına pace de eklensin).
+    const pz=zones.paceZones;
+    // Sabit dış sınırlar (Z1'in altı=%65, Z5c'nin üstü=%115) — HR_ZONES_LTHR yorumundaki
+    // gibi bunlar HİÇBİR ZAMAN kalibre edilmez (Sınır Kalibrasyonu yalnızca 6 İÇ sınırı
+    // hedefler), bu yüzden jenerik/güncel ayrımı yok — tek bir sabit çizgi+etiket yeterli.
+    // Göksel'in "Z1'in alt sınırı görünmüyor" geri bildirimi üzerine eklendi.
+    [{pct:rangeLo,bpm:zones.hrZones[0].lo_bpm,pace:pz?pz[0].lo_pace:null},
+     {pct:rangeHi,bpm:zones.hrZones[zones.hrZones.length-1].hi_bpm,pace:pz?pz[pz.length-1].hi_pace:null}
+    ].forEach((b,oi)=>{
+      const x=xFor(b.pct);
+      const lx=x+(oi===0?4:-4), ly=padTop+bandH+8;
+      boundaryEls.push(React.createElement('line',{
+        key:'outer'+oi,x1:x,x2:x,y1:padTop,y2:padTop+bandH,stroke:'#fff',strokeWidth:1.5,opacity:0.9,...nonScale
+      }));
+      boundaryEls.push(React.createElement('text',{
+        key:'outerlbl'+oi,x:lx,y:ly,fontSize:FS,fontFamily:'monospace',fill:'var(--text-secondary)',
+        textAnchor:'start',transform:'rotate(90 '+lx+' '+ly+')'
+      },round1(b.pct)+'%·'+b.bpm));
+      // İkinci satır (pace): local +y (satır atlama) ekseninde, local +x DEĞİL — x'i
+      // kaydırmak metni AYNI döndürülmüş satırın devamı yapıyordu ("86.5%·149 6:32" tek
+      // satıra birleşme hatası, 2026.09.16 — Göksel'in ikinci geri bildirimi). rotate(90)
+      // altında local +y → ekranda gerçekten "alt satır" gibi okunan paralel bir sütun.
+      if(hasPace&&b.pace){
+        const lineHeight=FS+2;
+        boundaryEls.push(React.createElement('text',{
+          key:'outerlblpace'+oi,x:lx,y:ly+lineHeight,fontSize:FS,fontFamily:'monospace',fill:'var(--text-tertiary)',
+          textAnchor:'start',transform:'rotate(90 '+lx+' '+ly+')'
+        },b.pace));
+      }
+    });
+    HR_BOUNDARY_KEYS.forEach((k,i)=>{
+      const genericPct=HR_BOUNDARY_BASE_PCT[k]*100;
+      const curPct=zones.hrZones[i].hi*100;
+      const curBpm=zones.hrZones[i].hi_bpm;
+      const xGeneric=xFor(genericPct), xCur=xFor(curPct);
+      const drifted=Math.round(genericPct*10)!==Math.round(curPct*10);
+      if(drifted){
+        boundaryEls.push(React.createElement('line',{
+          key:'gen'+k,x1:xGeneric,x2:xGeneric,y1:padTop,y2:padTop+bandH,
+          stroke:'var(--text-tertiary)',strokeWidth:1,strokeDasharray:'2,2',opacity:0.6,...nonScale
+        }));
+      }
+      boundaryEls.push(React.createElement('line',{
+        key:'cur'+k,x1:xCur,x2:xCur,y1:padTop,y2:padTop+bandH,stroke:'#fff',strokeWidth:1.5,opacity:0.9,...nonScale
+      }));
+      // Etiket bandın ALTINDA, 90° döndürülmüş (yakın sınırlar — ör. Z5a/Z5b 3 puan —
+      // yatay metinle çakışırdı; dikey yazı yalnızca ~10px yatay yer kaplar). İkinci satır
+      // (pace) local +y (satır atlama) ekseninde — local +x kaydırmak, metni AYNI
+      // döndürülmüş satırın devamı yapıp tek satıra birleştiriyordu (2026.09.16, Göksel'in
+      // ikinci geri bildirimi: "86.5%·149 6:32" — alt alta değil, birleşik görünüyordu).
+      const curPx=xCur+4, curPy=padTop+bandH+8, curLineH=FS+2;
+      boundaryEls.push(React.createElement('text',{
+        key:'curlbl'+k,x:curPx,y:curPy,fontSize:FS,fontFamily:'monospace',fill:'var(--text-secondary)',
+        textAnchor:'start',transform:'rotate(90 '+curPx+' '+curPy+')'
+      },round1(curPct)+'%·'+curBpm));
+      if(hasPace&&pz?.[i]?.hi_pace)boundaryEls.push(React.createElement('text',{
+        key:'curlblpace'+k,x:curPx,y:curPy+curLineH,fontSize:FS,fontFamily:'monospace',fill:'var(--text-tertiary)',
+        textAnchor:'start',transform:'rotate(90 '+curPx+' '+curPy+')'
+      },pz[i].hi_pace));
+
+      const change=preview?.changeLog?.find(c=>c.key===k);
+      if(change){
+        const potPct=HR_BOUNDARY_BASE_PCT[k]*100+change.to;
+        const potBpm=Math.round(lthr*potPct/100);
+        const xPot=xFor(potPct);
+        const dirColor=change.dir==='up'?'#60a5fa':'#f97316';
+        boundaryEls.push(React.createElement('line',{
+          key:'pot'+k,x1:xPot,x2:xPot,y1:padTop,y2:padTop+bandH,
+          stroke:dirColor,strokeWidth:1.5,strokeDasharray:'4,2',...nonScale
+        }));
+        // Bekleyen etiket bandın ÜSTÜNDE, aşağı-yukarı okunacak şekilde -90° döndürülmüş.
+        boundaryEls.push(React.createElement('text',{
+          key:'potlbl'+k,x:xPot-4,y:padTop-6,fontSize:FS,fontFamily:'monospace',fontWeight:700,fill:dirColor,
+          textAnchor:'start',transform:'rotate(-90 '+(xPot-4)+' '+(padTop-6)+')'
+        },(change.dir==='up'?'⬆':'⬇')+round1(potPct)+'%·'+potBpm));
+      }
+    });
+
+    // Uzunluk artık tablonun genişliğiyle birebir eşleşsin diye SVG width:'100%' —
+    // viewBox oranını koruyarak (preserveAspectRatio varsayılanı) ölçekleniyor.
+    // Göksel'in isteği: "cetvelin uzunluğu tablonun genişliği ile bir olsun".
+    return React.createElement('div',{style:{marginTop:16}},
+      React.createElement('div',{style:{fontSize:11,fontWeight:600,color:'var(--text-secondary)',marginBottom:6}},'Bölge Renk Haritası'),
+      React.createElement('svg',{width:'100%',viewBox:'0 0 '+W+' '+H,style:{display:'block'}},
+        ...bandEls,
+        React.createElement('rect',{x:padLeft,y:padTop,width:plotW,height:bandH,fill:'none',stroke:'var(--border)',strokeWidth:1,...nonScale}),
+        ...boundaryEls
+      ),
+      React.createElement('div',{style:{display:'flex',gap:16,flexWrap:'wrap',fontSize:10,color:'var(--text-tertiary)',marginTop:6}},
+        React.createElement('span',null,'┄ standart taban'),
+        React.createElement('span',null,'▬ güncel (son) sınır'),
+        preview&&React.createElement('span',{style:{color:'var(--info)'}},'┅ olası yeni sınır (bekliyor)')
+      ),
+      // Jenerik şablonun kaynağı (Göksel'in "hangi modele göre tasarlandı" sorusu üzerine)
+      React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',marginTop:6,lineHeight:1.5}},
+        'Standart taban: Joe Friel\'in "Training Bible" %LTHR bölge modeli — 7 bölge, LTHR\'ye (eşik nabzı) oranla tanımlı (Z1 %65–85 · Z2 %85–89 · Z3 %89–94 · Z4 %94–100 · Z5a %100–103 · Z5b %103–106 · Z5c %106–115). Sınır Kalibrasyonu bu 6 iç sınırı sporcuya özel kaydırır; %65 ve %115 dış sınırları sabit kalır.'
+      )
+    );
+}
+
 function BolgeTab({athlete,workouts,onUpdateAthlete}){
   // ── Reçete Geri Bildirim Kalibrasyonu (Çıpa — yalnızca vLT) ──
   const [fbScanLoading,setFbScanLoading]=useState(false);
@@ -25130,157 +25289,6 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
   // Her bantta TEK boyutlu (FS, aşağıda) "{kısa ad} · %{genişlik}" etiketi — dar
   // bantlarda (Z5a/Z5b gibi) metin bant sınırını aşabilir ama kırpılmaz; halo
   // (koyu kontur) hangi rengin üstüne taşarsa taşsın okunurluğu korur.
-  const renderBoundaryRuler=()=>{
-    if(!hasHR||zones.hrZones[0]?.method!=='%LTHR') return null;
-    const lthr=zones.lthr;
-    // Nominal tasarım genişliği 780→1480: "Anaerobik · %3" gibi en uzun/en dar
-    // kombinasyon (Z5b, 3 puan) FS=8'de ancak ~1287px plotW'de sığıyor (elle
-    // hesaplandı) — 1450 rahat pay bırakıyor. Bu SADECE viewBox'ın iç oranı;
-    // gerçek render genişliği yine width:'100%' ile tablonunkiyle aynı kalıyor,
-    // sadece ölçek faktörü küçülüyor (metin/bant oranı sabit kalır).
-    // padBottom 62→110 (2026.09.16, Göksel talebi: her sınır etiketine PACE de eklendi —
-    // ikinci satır için ek dikey yer).
-    const W=1480,H=228,padLeft=15,padRight=15,padTop=58,bandH=60,padBottom=110;
-    const plotW=W-padLeft-padRight;
-    const rangeLo=HR_ZONES_LTHR[0].lo*100;                         // 65
-    const rangeHi=HR_ZONES_LTHR[HR_ZONES_LTHR.length-1].hi*100;    // 115
-    const xFor=pct=>padLeft+((pct-rangeLo)/(rangeHi-rangeLo))*plotW;
-    // Beyaz etiket metnini her renk üzerinde okunur tutan "hale" (koyu ince kontur) —
-    // textShadow yerine SVG'de daha güvenilir (Android WebView dahil her yerde çalışır).
-    const halo={paintOrder:'stroke',stroke:'rgba(0,0,0,.55)',strokeWidth:3,strokeLinejoin:'round'};
-    const nonScale={vectorEffect:'non-scaling-stroke'};
-
-    // Bekleyen (henüz uygulanmamış) Sınır Kalibrasyonu önerisi varsa "olası" değerleri hesapla.
-    const preview=(bcAnalysis&&!bcApplied)?applyBoundaryCalibration(athlete,bcAnalysis):null;
-
-    // Tüm cetvel metinleri TEK boyut (Göksel'in isteği: "gerekiyorsa küçültülsün") —
-    // en dar bandın (Z5a/Z5b, 3 puan) tanımlama metnini elverdiğince barındırabilecek
-    // küçük ama okunur bir boyut. Bant sınırlarını aşan metin merkezi hizada kalır;
-    // koyu hâle (halo) hangi rengin üstüne taşarsa taşsın okunurluğu korur.
-    const FS=8;
-
-    const bandEls=[];
-    zones.hrZones.forEach((z,i)=>{
-      const xL=xFor(z.lo*100), xR=xFor(z.hi*100); // soldan sağa: küçük pct sol, büyük pct sağ
-      const w=Math.max(0,xR-xL);
-      const cx=(xL+xR)/2, cy=padTop+bandH/2;
-      // Tam opak, canlı renk bant — soluk 0.85 opaklık yerine 1.0
-      bandEls.push(React.createElement('rect',{
-        key:'band'+i,x:xL,y:padTop,width:w,height:bandH,fill:ZONE_COLORS[z.id]||'#888'
-      }));
-      // Bantlar arası ince ayraç — renk geçişini netleştirir (bu bandın SOL kenarında)
-      if(i>0) bandEls.push(React.createElement('line',{
-        key:'sep'+i,x1:xL,x2:xL,y1:padTop,y2:padTop+bandH,stroke:'rgba(0,0,0,.35)',strokeWidth:1,...nonScale
-      }));
-      const shortName=(z.label||'').replace(z.id+' — ','');
-      const widthPct=round1((z.hi-z.lo)*100);
-      // Her bölgede aynı format: "Tempo · %5" — dar bantlarda metin band sınırını
-      // aşabilir (merkezden taşar) ama kırpılmaz/gizlenmez; halo okunurluğu korur.
-      bandEls.push(React.createElement('text',{key:'nm'+i,x:cx,y:cy,textAnchor:'middle',dominantBaseline:'middle',fontSize:FS,fontWeight:800,fill:'#fff',...halo},shortName+' · %'+widthPct));
-    });
-
-    const boundaryEls=[];
-    // Pace — aynı sınırın PACE bölge sistemindeki (farklı %VLT eşiğiyle bağımsız hesaplanan,
-    // ama AYNI zon ID'sine karşılık gelen) sınırı; bkz. calcZones→paceZones (2026.09.16,
-    // Göksel talebi: "85%·141" etiketinin yanına pace de eklensin).
-    const pz=zones.paceZones;
-    // Sabit dış sınırlar (Z1'in altı=%65, Z5c'nin üstü=%115) — HR_ZONES_LTHR yorumundaki
-    // gibi bunlar HİÇBİR ZAMAN kalibre edilmez (Sınır Kalibrasyonu yalnızca 6 İÇ sınırı
-    // hedefler), bu yüzden jenerik/güncel ayrımı yok — tek bir sabit çizgi+etiket yeterli.
-    // Göksel'in "Z1'in alt sınırı görünmüyor" geri bildirimi üzerine eklendi.
-    [{pct:rangeLo,bpm:zones.hrZones[0].lo_bpm,pace:pz?pz[0].lo_pace:null},
-     {pct:rangeHi,bpm:zones.hrZones[zones.hrZones.length-1].hi_bpm,pace:pz?pz[pz.length-1].hi_pace:null}
-    ].forEach((b,oi)=>{
-      const x=xFor(b.pct);
-      const lx=x+(oi===0?4:-4), ly=padTop+bandH+8;
-      boundaryEls.push(React.createElement('line',{
-        key:'outer'+oi,x1:x,x2:x,y1:padTop,y2:padTop+bandH,stroke:'#fff',strokeWidth:1.5,opacity:0.9,...nonScale
-      }));
-      boundaryEls.push(React.createElement('text',{
-        key:'outerlbl'+oi,x:lx,y:ly,fontSize:FS,fontFamily:'monospace',fill:'var(--text-secondary)',
-        textAnchor:'start',transform:'rotate(90 '+lx+' '+ly+')'
-      },round1(b.pct)+'%·'+b.bpm));
-      // İkinci satır (pace): local +y (satır atlama) ekseninde, local +x DEĞİL — x'i
-      // kaydırmak metni AYNI döndürülmüş satırın devamı yapıyordu ("86.5%·149 6:32" tek
-      // satıra birleşme hatası, 2026.09.16 — Göksel'in ikinci geri bildirimi). rotate(90)
-      // altında local +y → ekranda gerçekten "alt satır" gibi okunan paralel bir sütun.
-      if(hasPace&&b.pace){
-        const lineHeight=FS+2;
-        boundaryEls.push(React.createElement('text',{
-          key:'outerlblpace'+oi,x:lx,y:ly+lineHeight,fontSize:FS,fontFamily:'monospace',fill:'var(--text-tertiary)',
-          textAnchor:'start',transform:'rotate(90 '+lx+' '+ly+')'
-        },b.pace));
-      }
-    });
-    HR_BOUNDARY_KEYS.forEach((k,i)=>{
-      const genericPct=HR_BOUNDARY_BASE_PCT[k]*100;
-      const curPct=zones.hrZones[i].hi*100;
-      const curBpm=zones.hrZones[i].hi_bpm;
-      const xGeneric=xFor(genericPct), xCur=xFor(curPct);
-      const drifted=Math.round(genericPct*10)!==Math.round(curPct*10);
-      if(drifted){
-        boundaryEls.push(React.createElement('line',{
-          key:'gen'+k,x1:xGeneric,x2:xGeneric,y1:padTop,y2:padTop+bandH,
-          stroke:'var(--text-tertiary)',strokeWidth:1,strokeDasharray:'2,2',opacity:0.6,...nonScale
-        }));
-      }
-      boundaryEls.push(React.createElement('line',{
-        key:'cur'+k,x1:xCur,x2:xCur,y1:padTop,y2:padTop+bandH,stroke:'#fff',strokeWidth:1.5,opacity:0.9,...nonScale
-      }));
-      // Etiket bandın ALTINDA, 90° döndürülmüş (yakın sınırlar — ör. Z5a/Z5b 3 puan —
-      // yatay metinle çakışırdı; dikey yazı yalnızca ~10px yatay yer kaplar). İkinci satır
-      // (pace) local +y (satır atlama) ekseninde — local +x kaydırmak, metni AYNI
-      // döndürülmüş satırın devamı yapıp tek satıra birleştiriyordu (2026.09.16, Göksel'in
-      // ikinci geri bildirimi: "86.5%·149 6:32" — alt alta değil, birleşik görünüyordu).
-      const curPx=xCur+4, curPy=padTop+bandH+8, curLineH=FS+2;
-      boundaryEls.push(React.createElement('text',{
-        key:'curlbl'+k,x:curPx,y:curPy,fontSize:FS,fontFamily:'monospace',fill:'var(--text-secondary)',
-        textAnchor:'start',transform:'rotate(90 '+curPx+' '+curPy+')'
-      },round1(curPct)+'%·'+curBpm));
-      if(hasPace&&pz?.[i]?.hi_pace)boundaryEls.push(React.createElement('text',{
-        key:'curlblpace'+k,x:curPx,y:curPy+curLineH,fontSize:FS,fontFamily:'monospace',fill:'var(--text-tertiary)',
-        textAnchor:'start',transform:'rotate(90 '+curPx+' '+curPy+')'
-      },pz[i].hi_pace));
-
-      const change=preview?.changeLog?.find(c=>c.key===k);
-      if(change){
-        const potPct=HR_BOUNDARY_BASE_PCT[k]*100+change.to;
-        const potBpm=Math.round(lthr*potPct/100);
-        const xPot=xFor(potPct);
-        const dirColor=change.dir==='up'?'#60a5fa':'#f97316';
-        boundaryEls.push(React.createElement('line',{
-          key:'pot'+k,x1:xPot,x2:xPot,y1:padTop,y2:padTop+bandH,
-          stroke:dirColor,strokeWidth:1.5,strokeDasharray:'4,2',...nonScale
-        }));
-        // Bekleyen etiket bandın ÜSTÜNDE, aşağı-yukarı okunacak şekilde -90° döndürülmüş.
-        boundaryEls.push(React.createElement('text',{
-          key:'potlbl'+k,x:xPot-4,y:padTop-6,fontSize:FS,fontFamily:'monospace',fontWeight:700,fill:dirColor,
-          textAnchor:'start',transform:'rotate(-90 '+(xPot-4)+' '+(padTop-6)+')'
-        },(change.dir==='up'?'⬆':'⬇')+round1(potPct)+'%·'+potBpm));
-      }
-    });
-
-    // Uzunluk artık tablonun genişliğiyle birebir eşleşsin diye SVG width:'100%' —
-    // viewBox oranını koruyarak (preserveAspectRatio varsayılanı) ölçekleniyor.
-    // Göksel'in isteği: "cetvelin uzunluğu tablonun genişliği ile bir olsun".
-    return React.createElement('div',{style:{marginTop:16}},
-      React.createElement('div',{style:{fontSize:11,fontWeight:600,color:'var(--text-secondary)',marginBottom:6}},'Bölge Renk Haritası'),
-      React.createElement('svg',{width:'100%',viewBox:'0 0 '+W+' '+H,style:{display:'block'}},
-        ...bandEls,
-        React.createElement('rect',{x:padLeft,y:padTop,width:plotW,height:bandH,fill:'none',stroke:'var(--border)',strokeWidth:1,...nonScale}),
-        ...boundaryEls
-      ),
-      React.createElement('div',{style:{display:'flex',gap:16,flexWrap:'wrap',fontSize:10,color:'var(--text-tertiary)',marginTop:6}},
-        React.createElement('span',null,'┄ standart taban'),
-        React.createElement('span',null,'▬ güncel (son) sınır'),
-        preview&&React.createElement('span',{style:{color:'var(--info)'}},'┅ olası yeni sınır (bekliyor)')
-      ),
-      // Jenerik şablonun kaynağı (Göksel'in "hangi modele göre tasarlandı" sorusu üzerine)
-      React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',marginTop:6,lineHeight:1.5}},
-        'Standart taban: Joe Friel\'in "Training Bible" %LTHR bölge modeli — 7 bölge, LTHR\'ye (eşik nabzı) oranla tanımlı (Z1 %65–85 · Z2 %85–89 · Z3 %89–94 · Z4 %94–100 · Z5a %100–103 · Z5b %103–106 · Z5c %106–115). Sınır Kalibrasyonu bu 6 iç sınırı sporcuya özel kaydırır; %65 ve %115 dış sınırları sabit kalır.'
-      )
-    );
-  };
 
   // ── Jenerik Taban Cetveli (2026.09.08 — Göksel'in düzeltmesi: "istediğim şey bu
   // değildi" — pace değil, AYNI nabız cetvelinin kalibrasyonsuz/jenerik hâli) ────
@@ -25793,7 +25801,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
           )
         )
       ),
-      renderBoundaryRuler(),
+      renderHrBoundaryRuler({zones,hasPace,athlete,bcAnalysis,bcApplied}),
       renderGenericBaselineRuler()
     )
   );
@@ -35584,6 +35592,7 @@ function SporcuPlanView(){
   const [antrenmanAcik,toggleAntrenman]=useAcilirKart('antrenmanlarim',false);
   const [hafta24Acik,toggleHafta24]=useAcilirKart('hafta24',false);
   const [gecmisAcik,toggleGecmis]=useAcilirKart('gecmis',false);
+  const [bolgelerAcik,toggleBolgeler]=useAcilirKart('bolgeler',false);
   const toggleRecipeH=async(w)=>{
     const wid=w.id||w.date;
     if(expandedRecipeH[wid]){setExpandedRecipeH(s=>({...s,[wid]:false}));return;}
@@ -35682,6 +35691,19 @@ function SporcuPlanView(){
 
   const todayStr=localDateStr(new Date());
   const zones=calcZones(athlete);
+  // Fizyolojik Temel + Antrenman Bölgeleri kartları için (18.09.2026 — Göksel
+  // isteği) — Koç Panelindeki BolgeTab'daki AYNI hesap (panel paritesi).
+  const hasHR=zones.hrZones!=null;
+  const hasPace=zones.paceZones!=null;
+  const vlt=zones.vlt;
+  const vltSource=calcVltDetail(athlete).label;
+  const mafPaceDisplay=(()=>{
+    if(athlete.maf_pace)return athlete.maf_pace+' /km';
+    const lastMafWk=(workouts||[])
+      .filter(w=>w.athleteId===athlete.id&&(w._testTur==='maf'||w.tur==='test_maf')&&w._testSonuc?.maf_pace)
+      .sort((a,b)=>b.date.localeCompare(a.date))[0];
+    return lastMafWk?lastMafWk._testSonuc.maf_pace+' /km':'—';
+  })();
   const {start:wkStart,end:wkEnd}=getWeekBounds(0);
 
   // Koç paneli hesapladığı weekEff'i planSnap'e yazar — Koşu İzlerim direkt okur
@@ -36406,6 +36428,29 @@ function SporcuPlanView(){
 
           ),
 
+          // ── Fizyolojik Temel — Koşu İzlerim (18.09.2026 — Göksel isteği) ─────
+          // Koç Panelindeki BolgeTab'daki "Fizyolojik Temel" kartının salt-okunur
+          // hâli — Durumum kartı içinde bir alt bölüm olarak (kendi ayrı katlanır
+          // kartı YOK, Durumum'un kendi aç/kapa durumuna tabi), 🏁 Yarışlarım'ın
+          // ÜZERİNDE konumlandırılır.
+          React.createElement('div',{style:{marginBottom:12,paddingBottom:10,borderBottom:'1px solid var(--border)'}},
+            React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',marginBottom:6}},'🧬 Fizyolojik Temel'),
+            React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(110px,1fr))',gap:8}},
+              [
+                {l:'RHR',v:athlete.rhr?athlete.rhr+' bpm':'—'},
+                {l:'MHR',v:athlete.mhr?athlete.mhr+' bpm':'—'},
+                {l:'LTHR',v:athlete.lthr?athlete.lthr+' bpm':'—'},
+                {l:'VO₂max',v:athlete.vo2max?athlete.vo2max+' ml/kg/dk':'—'},
+                {l:'vLT',v:vlt?round1(vlt)+' m/s ('+fmtPaceFromMS(vlt)+' /km)':'—'},
+                {l:'vLT Kaynağı',v:vlt?vltSource:'—'},
+                {l:'MAF Pace (1. km)',v:mafPaceDisplay},
+              ].map((item,i)=>React.createElement('div',{key:i,style:{padding:'6px 8px',background:'var(--bg-secondary)',borderRadius:6}},
+                React.createElement('div',{style:{fontSize:9,color:'var(--text-tertiary)'}},item.l),
+                React.createElement('div',{style:{fontSize:12,fontWeight:600}},item.v)
+              ))
+            )
+          ),
+
           // ── Yarışlarım — Koşu İzlerim (18.09.2026 — Göksel isteği) ──────────
           // Sporcunun kendi seçtiği yarışların (athlete.yarıslar) salt-okunur,
           // sadeleştirilmiş kartları. Koç panelindeki renderRaceCard'ın
@@ -36761,6 +36806,51 @@ function SporcuPlanView(){
           React.createElement('div',{style:{gridColumn:'1 / -1'}}, antrenmanCard)
         );
       })(),
+
+      // ── Antrenman Bölgeleri — Koşu İzlerim (18.09.2026 — Göksel isteği) ─────
+      // Koç Panelindeki BolgeTab'daki "Antrenman Bölgeleri" tablosunun salt-okunur
+      // hâli, Antrenmanlarım kartının ALTINDA ayrı/katlanabilir bir kart olarak.
+      // Cetvellerden SADECE renderHrBoundaryRuler (┄ standart taban / ▬ güncel
+      // sınır) gösterilir — "Standart Taban Cetveli" (renderGenericBaselineRuler,
+      // koç-içi kalibrasyon karşılaştırması) burada BİLEREK yok.
+      (hasHR||hasPace)&&React.createElement('div',{className:'card',style:{marginBottom:12,padding:'14px 16px'}},
+        React.createElement(AcilirKartBaslik,{baslik:'Antrenman Bölgeleri',acik:bolgelerAcik,onToggle:toggleBolgeler}),
+        bolgelerAcik&&(()=>{
+          const zoneRowKI=(z,i,showPace)=>React.createElement('tr',{key:i,style:{background:i%2===0?'var(--bg-secondary)':'var(--bg-primary)'}},
+            React.createElement('td',{style:{padding:'8px 10px',display:'flex',alignItems:'center',gap:8}},
+              React.createElement('div',{style:{width:12,height:12,borderRadius:2,background:ZONE_COLORS[z.id]||'#888',flexShrink:0}}),
+              React.createElement('span',{style:{fontWeight:600,fontSize:12}},z.id),
+              React.createElement('span',{style:{fontSize:11,color:'var(--text-secondary)'}},z.label?.replace(z.id+' — ','')||'')
+            ),
+            hasHR&&React.createElement('td',{style:{padding:'8px 10px',fontSize:13,fontFamily:'monospace',textAlign:'center'}},
+              z.lo_bpm&&z.hi_bpm?z.lo_bpm+' – '+z.hi_bpm+' bpm':'—'
+            ),
+            showPace&&hasPace&&React.createElement('td',{style:{padding:'8px 10px',fontSize:13,fontFamily:'monospace',textAlign:'center'}},
+              zones.paceZones[i]?.hi_pace?zones.paceZones[i].lo_pace+' – '+zones.paceZones[i].hi_pace:'—'
+            ),
+            showPace&&hasPace&&React.createElement('td',{style:{padding:'8px 10px',fontSize:13,fontWeight:600,color:'var(--info)',textAlign:'center',fontFamily:'monospace'}},
+              zones.paceZones[i]?.target_pace||'—'
+            )
+          );
+          return React.createElement(React.Fragment,null,
+            hasHR&&React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',marginBottom:12,textAlign:'right'}},'Yöntem: '+zones.hrZones[0].method),
+            React.createElement('div',{style:{overflowX:'auto'}},
+              React.createElement('table',{style:{width:'100%',borderCollapse:'collapse'}},
+                React.createElement('thead',null,React.createElement('tr',{style:{background:'var(--bg-secondary)'}},
+                  React.createElement('th',{style:{padding:'8px 10px',fontSize:11,fontWeight:600,textAlign:'left',textTransform:'uppercase',letterSpacing:'.4px',color:'var(--text-secondary)'}},'Bölge'),
+                  hasHR&&React.createElement('th',{style:{padding:'8px 10px',fontSize:11,fontWeight:600,textAlign:'center',textTransform:'uppercase',letterSpacing:'.4px',color:'var(--text-secondary)'}},'Nabız (bpm)'),
+                  hasPace&&React.createElement('th',{style:{padding:'8px 10px',fontSize:11,fontWeight:600,textAlign:'center',textTransform:'uppercase',letterSpacing:'.4px',color:'var(--text-secondary)'}},'Pace Aralığı'),
+                  hasPace&&React.createElement('th',{style:{padding:'8px 10px',fontSize:11,fontWeight:600,textAlign:'center',textTransform:'uppercase',letterSpacing:'.4px',color:'var(--text-secondary)'}},'Hedef Pace')
+                )),
+                React.createElement('tbody',null,
+                  (zones.hrZones||PACE_ZONES_VLT.map((z,i)=>({...z,label:z.id,lo_bpm:null,hi_bpm:null}))).map((z,i)=>zoneRowKI(z,i,!!hasPace))
+                )
+              )
+            ),
+            renderHrBoundaryRuler({zones,hasPace})
+          );
+        })()
+      ),
 
       // SN-5: Kuvvet antrenmanı önerisi linkleri + açıklama
       (athlete.kuvvet_link||athlete.kuvvet_link2||athlete.kuvvet_link3||athlete.kuvvet_aciklama)&&React.createElement('div',{className:'card',style:{marginBottom:12,padding:'14px 16px'}},
