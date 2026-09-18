@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.18-1334 --><!DOCTYPE html>
+<!-- Version: v2026.09.18-1349 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.18-1334';
+const APP_VERSION='v2026.09.18-1349';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -29067,8 +29067,30 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
   const nextRace=upcoming[0]||null;
   const daysToRace=nextRace?Math.ceil((new Date(nextRace.tarih+'T12:00:00')-today)/864e5):null;
 
-  // Yarış hazırlık skoru
+  // Yarış hazırlık skoru — en yakın yarış için (fallback: aşağıdaki
+  // activePrepReadiness boşsa kullanılır)
   const readiness=nextRace?raceReadinessScore(last?.ctl,last?.acwr,last?.phase,athlete?.sakatlık,athlete?.hrv_durum,daysToRace,nextRace,athlete,workouts,history):null;
+
+  // Yarış Hazırlık Skoru — sporcunun hazırlandığı VE yüklenme planı fiilen
+  // başlamış (calcPhase 'Temel'/'Yarış Sonrası' dışına çıkmış) TÜM yarışlar
+  // gösterilir — SADECE en yakın yarış değil (18.09.2026 — Göksel isteği).
+  // Panel paritesi: LiderlikTab (~satır 8706) ve Koşu İzlerim mini widget'ı
+  // (~satır 36391) ile AYNI activePrep/hazirlikBasladi mantığı kullanılır.
+  const todayStrHazirlik=(()=>{const t=new Date();return`${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;})();
+  const activePrepRaces=upcoming
+    .map(r=>{
+      const daysLeftR=Math.ceil((new Date(r.tarih+'T12:00:00')-today)/864e5);
+      const phaseR=r.prep_weeks?calcPhase(todayStrHazirlik,r.tarih,r.prep_weeks,r,getAthRaceOverride(athlete,r.id)):null;
+      const hazirlikBasladiR=!!phaseR&&phaseR!=='Temel'&&phaseR!=='Yarış Sonrası';
+      return{...r,daysLeft:daysLeftR,hazirlikBasladi:hazirlikBasladiR};
+    })
+    .filter(r=>r.hazirlikBasladi)
+    .sort((a,b)=>a.daysLeft-b.daysLeft);
+  const activePrepReadiness=activePrepRaces.map(r=>({
+    race:r,
+    daysLeft:r.daysLeft,
+    readiness:raceReadinessScore(last?.ctl,last?.acwr,last?.phase,athlete?.sakatlık,athlete?.hrv_durum,r.daysLeft,r,athlete,workouts,history)
+  }));
 
   // Bölge dağılımı — seçili periyot (görsel çubuk için)
   const [zonePeriod,setZonePeriod]=React.useState(4);
@@ -29215,9 +29237,21 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
             React.createElement('span',null,iletimBadge.label)
           )
         ),
-        readiness!==null&&React.createElement('div',{style:{minWidth:200}},
-          React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',marginBottom:4}},'Yarış Hazırlık Skoru — '+nextRace.ad),
-          React.createElement(ReadinessBar,{score:readiness?.score??readiness,detaylar:readiness?.detaylar})
+        (activePrepReadiness.length>0
+          ?React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:10,minWidth:200}},
+              activePrepReadiness.map(rp=>
+                React.createElement('div',{key:rp.race.id},
+                  React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',marginBottom:4}},
+                    'Yarış Hazırlık Skoru — '+rp.race.ad+' · '+rp.daysLeft+' gün'
+                  ),
+                  React.createElement(ReadinessBar,{score:rp.readiness?.score??rp.readiness,detaylar:rp.readiness?.detaylar})
+                )
+              )
+            )
+          :readiness!==null&&React.createElement('div',{style:{minWidth:200}},
+              React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',marginBottom:4}},'Yarış Hazırlık Skoru — '+nextRace.ad),
+              React.createElement(ReadinessBar,{score:readiness?.score??readiness,detaylar:readiness?.detaylar})
+            )
         )
       )
     ),
