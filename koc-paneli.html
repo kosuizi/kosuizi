@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.18-2024 --><!DOCTYPE html>
+<!-- Version: v2026.09.19-0001 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.18-2024';
+const APP_VERSION='v2026.09.19-0001';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -18961,6 +18961,107 @@ function calcPersonalYukFactor(tip, athWorkouts, ath){
 }
 
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// GERÇEK/PLAN KARŞILAŞTIRMASI — TEK KAYNAK (2026.09.19 — Göksel'in "Gerçek/Plan ve
+// Simüle CTL/ATL tutmuyor" analizi, 5-6 aydır tüm sporcularda gözlenen tutarsızlık)
+//
+// Eskiden bu mantık generateTwoWeekPlan'ın gün döngüsünün içine gömülüydü ve
+// yalnızca TAZE üretilen planlı günden (planned) besleniyordu. Üç kök neden:
+//  (1) SAF ÇAPRAZ GÜN: planlı gün 'capraz' + sure_dk=0 olduğundan refSure 45'e düşüyor,
+//      TUR_ZONE_BEKLENTI'de 'capraz' tanımı olmadığından varsayılan Z2 koşu yükü
+//      (~56 birim, 45 dk Z2 koşu) plan tarafına EKLENİYORDU — üstüne bir de RPE
+//      yükü biniyordu. Gerçek taraf yalnızca RPE yükü olduğundan çapraz günler
+//      hep %20-50 "↓" çıkıyordu. Artık planda koşu beklentisi yalnızca gerçekten
+//      koşu planlıysa (veya koşu yapıldıysa) hesaba katılıyor.
+//  (2) ÇOKLU ÇAPRAZ SEANS: plan tarafı find() ile yalnızca İLK çapraz seansı sayıyor,
+//      gerçek taraf ise günün TÜM seanslarını topluyordu (yoga + kuvvet). Artık her iki
+//      taraf da tüm çapraz seansları topluyor.
+//  (3) PLAN KAYNAĞI: rozet, snapshot'taki (koça/sporcuya gösterilen) reçeteden değil,
+//      her render'da yeniden üretilen taze plandan hesaplanıyordu — ekrandaki "Yapı"
+//      ile karşılaştırılan plan farklı olabiliyordu. Snapshot birleştirmesinden sonra
+//      recomputeComparisonFromPlan ile AYNI fonksiyon, snapshot'taki tip/yapı ile
+//      yeniden çağrılıyor.
+// ═══════════════════════════════════════════════════════════════════════════════
+function calcDayComparison({actual,actualLoad,actualKm,actualDp,planTip,planSureDk,planYapilar,planIsKosuCapraz,planYukHedef,athlete,isPast,isToday}){
+  actual=actual||[];
+  if((isPast||isToday)&&actual.length>0){
+    // YUKKAT yalnızca sporcunun HİÇ HR baz verisi (LTHR/RHR/MHR) olmadığı nadir durumda
+    // son çare (bkz. calcBeklenenYuk) ve HR-bazlı çapraz sporlar (bisiklet/yüzme/...) için.
+    const YUKKAT={kolay:0.8,aerobik:1.1,uzun:1.25,tempo:1.55,tempo_sureli:1.5,esik:1.7,esik_sureli:1.65,interval:2.1,
+      yokus_kisa:2.1,yokus_uzun:2.0,tirmanis:2.0,teknik:1.3,acici:1.0,capraz:0.6,
+      progressive:1.4,cruise:1.65,yaris_tempo:1.8,on_off:1.9,piramit:1.9,
+      kesintisiz_piramit:1.7,hill_sprint:2.2,strides:0.9,back_to_back:1.2};
+    const gercekKosu=actual.find(w=>w.spor==='kosu'||!w.spor);
+    const gercekCaprazlar=actual.filter(w=>w.spor&&w.spor!=='kosu');
+    const gercekKosuSure=gercekKosu?Math.round((toSec(gercekKosu.sure_sa,gercekKosu.sure_dk,gercekKosu.sure_sn)||0)/60):0;
+    const refTip=planTip||'aerobik';
+    // Koşu beklentisi: planda koşu varsa (koşu/kombine gün) VEYA gün içinde fiilen koşu yapıldıysa.
+    // Saf çapraz/dinlenme planında koşu yapılmadıysa plana hayali koşu yükü EKLENMEZ.
+    const kosuBeklentisi=!!gercekKosu||(refTip!=='capraz'&&refTip!=='dinlenme');
+    let kosuPlanYuk=0,yontem='capraz_rpe';
+    if(kosuBeklentisi){
+      const refSure=gercekKosuSure>0?gercekKosuSure:(planSureDk||45);
+      const beklenenYuk=calcBeklenenYuk(refTip,refSure,athlete,gercekKosu?.mesafe,gercekKosu?.irtifa,gercekKosu?.zemin_zorluk,planYapilar);
+      kosuPlanYuk=beklenenYuk!=null?beklenenYuk:Math.round(refSure*(YUKKAT[refTip]||1.1));
+      yontem=beklenenYuk!=null?'hr_zone':'yukkat_fallback';
+    }
+    // Çapraz yük: günün TÜM çapraz seansları. RPE-bazlı sporlarda (kuvvet/yoga/pilates/diğer)
+    // beklenen de AYNI RPE×süre ölçeğinde, TİPİK (varsayılan) RPE ile — gerçek RPE değil
+    // (o zaman kıyas her zaman %100 çıkar); HR-bazlı sporlarda eski YUKKAT.capraz.
+    const _caprazKatsayi=rpeYukKatsayisi(parseSayi(athlete?.rhr)||0,parseSayi(athlete?.mhr)||0,parseSayi(athlete?.lthr)||0);
+    let caprazEkYuk=0;
+    gercekCaprazlar.forEach(w=>{
+      const sureDk=Math.round((toSec(w.sure_sa,w.sure_dk,w.sure_sn)||0)/60);
+      if(sureDk<=0) return;
+      const rpeVar=RPE_VARSAYILAN[w.spor];
+      caprazEkYuk+=Math.round(sureDk*(rpeVar!=null?rpeVar*_caprazKatsayi:(YUKKAT.capraz||0.6)));
+    });
+    // Kombine (koşu+çapraz) gün planlı ama çapraz hiç loglanmadı → planlı çapraz varsayılanı (45 dk)
+    if(caprazEkYuk<=0&&planIsKosuCapraz) caprazEkYuk=Math.round(45*(YUKKAT.capraz||0.6));
+    const planYuk=kosuPlanYuk+caprazEkYuk;
+    if(planYuk>0){
+      const diff=round1(actualLoad-planYuk);
+      const pct=Math.round(actualLoad/planYuk*100);
+      return{actual:round1(actualLoad),planned:planYuk,diff,pct,actualKm:round1(actualKm),actualDp:Math.round(actualDp),status:pct>=80&&pct<=120?'ok':pct<80?'eksik':'fazla',_yontem:yontem};
+    }
+    return null;
+  }
+  if(isPast&&actual.length===0&&planTip!=='dinlenme'){
+    return{actual:0,planned:planYukHedef,diff:-planYukHedef,pct:0,actualKm:0,actualDp:0,status:'atlandı'};
+  }
+  return null;
+}
+// Snapshot (overrideMap) birleştirmesinden SONRA çağrılır: görünen reçete (ov.tip/yapilar)
+// ile rozetin karşılaştırdığı plan AYNI olsun. ov.tip yoksa mevcut comparison korunur.
+function recomputeComparisonFromPlan(day,ov,athlete){
+  if(!day||!ov||!ov.tip) return day;
+  const planIsKosuCapraz=ov.isKosuCapraz===true||(ov.tip!=='capraz'&&(ov.yapilar||[]).some(y=>y&&y._caprazNot));
+  const c=calcDayComparison({
+    actual:day.actual||[],actualLoad:day.actualLoad||0,actualKm:day.actualKm||0,actualDp:day.actualDp||0,
+    planTip:ov.tip,planSureDk:ov.sure_dk,planYapilar:ov.yapilar,planIsKosuCapraz,planYukHedef:ov.yukHedef||0,
+    athlete,isPast:!!day.isPast,isToday:!!day.isToday
+  });
+  return{...day,comparison:c};
+}
+// Simülasyonda PLANLI saf çapraz gün (yukHedef=0) için tipik yük: sporcunun son 6 haftadaki
+// çapraz günlerinin ortalama gerçek yükü; yeterli geçmiş yoksa 45 dk kuvvet-benzeri RPE yükü
+// (hrTSS ölçeğinde). Eskiden bu günler simülasyona 0 yük olarak giriyordu.
+function estimateTipikCaprazYuk(athWorkouts,athlete){
+  const cutoff=new Date();cutoff.setDate(cutoff.getDate()-42);
+  const cutoffStr=localDateStr(cutoff);
+  const byDay={};
+  (athWorkouts||[]).forEach(w=>{
+    if(!w.date||w.date<cutoffStr) return;
+    if(!w.spor||w.spor==='kosu') return;
+    const m=calcMetrics(w,athlete);
+    byDay[w.date]=(byDay[w.date]||0)+(m.yukObj||0);
+  });
+  const vals=Object.values(byDay).filter(v=>v>0);
+  if(vals.length>=2) return Math.round(vals.reduce((a,b)=>a+b,0)/vals.length);
+  const k=rpeYukKatsayisi(parseSayi(athlete?.rhr)||0,parseSayi(athlete?.mhr)||0,parseSayi(athlete?.lthr)||0);
+  return Math.round(45*RPE_VARSAYILAN.kuvvet*k);
+}
+
 function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanlar=[], optimizeMode=false, forceLastEntry=null, weekEffOverride=null){
   const today=new Date();
   // forceLastEntry: _stableHist kırpıldığında bile fitness state (ACWR/TSB/CTL/ATL)
@@ -18981,7 +19082,30 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
   const weekTargets=calcWeeklyTargets(athlete,races,actualWorkouts||[],optimizeMode,history);
 
   const weeks=[];
-  let simAtl=last?.atl||0, simCtl=last?.ctl||0;
+  // KÖK NEDEN DÜZELTMESİ (2026.09.19 — "Simüle CTL/ATL tutmuyor" analizi): Eskiden sim
+  // BUGÜNÜN gerçek CTL/ATL'sinden (bu haftanın Pzt-Bugün yüklerini ZATEN içeriyor) başlıyor,
+  // ama döngü Pazartesi'den başladığı için geçmiş günlerin yükleri İKİNCİ KEZ ekleniyordu
+  // (çift sayım) ve Pazartesi satırı aslında bugünün değerini gösteriyordu. Artık sim,
+  // HAFTA BAŞINDAN ÖNCEKİ günün (geçen Pazar) gerçek geçmiş satırından başlıyor; geçmiş günler
+  // gerçek yükle (buildHistory'nin AYNI hesabıyla) yeniden oynatılıyor → her günün simState'i o
+  // günün gerçek durumuyla uyumlu, bugünden sonrası (Cmt/Paz/gelecek hafta) doğru zeminden ilerliyor.
+  // history hem tam (bugüne kadar) hem kırpılmış (_stableHist, geçen Pazar'a kadar) gelebilir —
+  // ikisinde de geçen Pazar satırı tarihe göre bulunur.
+  const _simBaseDs=localDateStr(getWeekBounds(-1).end);
+  const _simBase=(()=>{
+    let row=null;
+    for(let i=(history||[]).length-1;i>=0;i--){
+      if(history[i]&&history[i].date<=_simBaseDs){row=history[i];break;}
+    }
+    if(!row) return{atl:0,ctl:0,mechAtl:0,mechCtl:0}; // haftadan önce hiç yük yok
+    // Satır Pazar'dan eskiyse (veri boşluğu) aradaki yüksüz günler kadar sönümle
+    const gap=Math.max(0,Math.round((new Date(_simBaseDs+'T12:00:00')-new Date(row.date+'T12:00:00'))/864e5));
+    const dec=(lam)=>Math.pow(1-lam,Math.min(gap,120));
+    return{atl:(row.atl||0)*dec(λ_atl),ctl:(row.ctl||0)*dec(λ_ctl),mechAtl:(row.mechAtl||0)*dec(λ_matl),mechCtl:(row.mechCtl||0)*dec(λ_mctl)};
+  })();
+  // Gelecekteki PLANLI saf çapraz günler için tipik yük (eskiden 0 giriyordu)
+  const caprazSimYuk=estimateTipikCaprazYuk(athWorkouts,athlete);
+  let simAtl=_simBase.atl, simCtl=_simBase.ctl;
   // ── Mekanik yük simülasyonu (02.08.2026, Göksel'in isteği) ──────────────────
   // Eskiden mechCtl/mechAtl hiç ileri simüle edilmiyordu, hep last.mechCtl/mechAtl'de
   // donuk kalıyordu — kardiyo (simAtl/simCtl) her gün ilerlerken mekanik taraf bugünkü
@@ -18992,7 +19116,7 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
   // dakika-başı km-eşdeğeri kaba tahmini kullanılır — yukHedef'in (süre×tür çarpanı)
   // aynı hassasiyet seviyesindeki mekanik karşılığı. Gerçek veri girildiğinde
   // (isPast) zaten tam calcMechLoad'a döner, bu yalnızca planlama aşaması içindir.
-  let simMechAtl=last?.mechAtl||0, simMechCtl=last?.mechCtl||0;
+  let simMechAtl=_simBase.mechAtl, simMechCtl=_simBase.mechCtl;
   let sonYogunGunGlobal=false; // Haftalar arası korunur
   let plannedKaliteliCarry=[]; // Hafta 0'da planlanan kaliteli tipler → hafta 1'de tekrar önleme
 
@@ -19035,7 +19159,10 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
     const effDisiplinPlan=effectiveDisiplin(athlete,primary||null);
     // Hafta başındaki CTL band'ini sabitle — gün içi küçük simCtl artışları (örn. Cmt aerobik)
     // band'i değiştirerek uzun koşu günündeki bandMax'ı farklı yapmasın.
-    const weekStartCtl=simCtl;
+    // NOT (2026.09.19): sim artık geçen Pazar'dan başladığı için hafta-0'da band/iskelet girdisi
+    // bilinçli olarak ESKİ davranışta (bugünün gerçek CTL/ATL'si) tutuldu — plan üretim girdileri
+    // bu düzeltmeyle değişmesin; düzeltilen yalnızca sim durumunun kendisi (simState/tsb/acwr).
+    const weekStartCtl=(weekOff===0&&last)?(last.ctl||0):simCtl;
     // Rotasyon indeksi: sporcu ID hash'i + history uzunluğu
     // → her sporcu farklı sekans noktasından başlar, benzer history'ye rağmen farklı antrenman alır
     const athHash = (athlete.id||'').split('').reduce((h,c)=>((h<<5)-h+c.charCodeAt(0))|0, 0);
@@ -19148,7 +19275,7 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
 
       // Tüm koşu günlerini topla (geçmiş+gelecek)
       const kosuGunleriHafta=[];
-      let tmpAtl=simAtl, tmpCtl=simCtl;
+      let tmpAtl=(weekOff===0&&last)?(last.atl||0):simAtl, tmpCtl=(weekOff===0&&last)?(last.ctl||0):simCtl;
       for(let di=0;di<7;di++){
         const d=new Date(start);d.setDate(start.getDate()+di);
         const y=d.getFullYear(),mo=String(d.getMonth()+1).padStart(2,'0'),dd2=String(d.getDate()).padStart(2,'0');
@@ -19378,6 +19505,12 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
             });
           }).length||1},
         kosuGunleri,caprazGunleri,primary||null);
+      // KÖK NEDEN DÜZELTMESİ (2026.09.19): planDay'e band için {...simState,ctl:weekStartCtl}
+      // veriliyor ve planDay bu nesneyi AYNEN planned.simState olarak döndürüyor → tabloda CTL
+      // tüm hafta hafta-başı değerine DONUK görünüyordu, TSB/ATL/ACWR ise gerçek sim'den
+      // geldiği için CTL−ATL ≠ TSB oluyordu. Gösterilen/aşağı akan simState artık gerçek
+      // sim değerlerini taşır; band girdisi ayrı alanda (bandCtl) durur.
+      planned.simState={...simState,bandCtl:weekStartCtl};
       // ── Zone + Fitness Sinyal Override ────────────────────────────────────
       // Gelecek ve bugün (antrenman yapılmamış) günleri için evaluateSignals'ı uygula.
       // isPast veya gerçek antrenman kaydı olan günlere dokunma.
@@ -19620,13 +19753,22 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       wkStats.sonYogunGun=isYogunTip;
       sonYogunGunGlobal=isYogunTip;
       // Kaliteli antrenman simülasyon yükünü yumuşat
-      const rawLoad=isPast?(actualLoad||0):(planned.yukHedef||0);
+      // KÖK NEDEN DÜZELTMESİ (2026.09.19): GERÇEKLEŞEN gün = geçmiş VEYA bugün (antrenman kaydı
+      // varsa). Eskiden bugün gerçek yük yerine PLAN yükü (saf çapraz günde 0) ile ilerliyordu.
+      // Ayrıca gelecekteki planlı saf çapraz günler (yukHedef=0) artık tipik çapraz yükle girer.
+      const _simGerceklesti=isPast||(isToday&&actual.length>0);
+      let _planLoad=planned.yukHedef||0;
+      if(!_simGerceklesti&&_planLoad<=0&&planned.tip==='capraz') _planLoad=caprazSimYuk;
+      const rawLoad=_simGerceklesti?(actualLoad||0):_planLoad;
       // DÜZELTME (2026.07.09): Liste sadece 4 tipi kapsıyordu, sonra 13 tipe genişletildi
       // ama 'progressive' yine unutulmuştu (tekrar eden kayma). 2026.07.27 itibariyle
       // tek kaynak KALITELI_TIPLERI'ye bağlandı — bir daha kaymasın.
       const hasKaliteliActual=isPast&&actual.some(w=>KALITELI_TIPLERI.includes(w.tur||w.spor));
       const isKaliteliTip=hasKaliteliActual||KALITELI_TIPLERI.includes(effectiveTip);
-      const simFactor=isTestDay?0.4:isKaliteliTip?0.75:1.0;
+      // KÖK NEDEN DÜZELTMESİ (2026.09.19): ×0.75/×0.4 yumuşatma yalnızca PLANLI (henüz yapılmamış)
+      // günlerin projeksiyon belirsizliği içindi. Gerçekleşmiş günlere de uygulanınca sim,
+      // gerçek geçmişten (buildHistory) tasarım gereği düşük çıkıyordu (Pzt 61.3 → 46 sayılıyordu).
+      const simFactor=_simGerceklesti?1.0:(isTestDay?0.4:isKaliteliTip?0.75:1.0);
       const loadForSim=Math.round(rawLoad*simFactor);
       simAtl=loadForSim*λ_atl+simAtl*(1-λ_atl);
       simCtl=loadForSim*λ_ctl+simCtl*(1-λ_ctl);
@@ -19635,71 +19777,21 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       // aynı anda ilerletiliyor — böylece hafta 1'deki yokuş/tırmanış birikimi,
       // hafta 2'nin mekanik-aşırı-yük kontrollerinde (mechKardioImbalancePlan vb.)
       // artık görünür oluyor.
-      const mechLoadForSim=isPast?(actualMech||0):estimateMechLoadForSim(planned.tip,planned.sure_dk);
+      const mechLoadForSim=_simGerceklesti?(actualMech||0):estimateMechLoadForSim(planned.tip,planned.sure_dk);
       simMechAtl=mechLoadForSim*λ_matl+simMechAtl*(1-λ_matl);
       simMechCtl=mechLoadForSim*λ_mctl+simMechCtl*(1-λ_mctl);
-      let comparison=null;
-      if((isPast||isToday)&&actual.length>0){
-        // DÜZELTME (2026.07.27 — Göksel'in ACWR/TSB tutarsızlığı sonrası sorduğu
-        // "Gerçek/Plan" derinlemesine analizi): YUKKAT artık yalnızca sporcunun HİÇ
-        // HR baz verisi (LTHR/RHR/MHR) olmadığı nadir durumda son çare olarak
-        // kullanılıyor. Asıl hesaplama artık calcBeklenenYuk — bkz. tanım (calcZones
-        // yakını) için tam gerekçe.
-        const YUKKAT={kolay:0.8,aerobik:1.1,uzun:1.25,tempo:1.55,tempo_sureli:1.5,esik:1.7,esik_sureli:1.65,interval:2.1,
-          yokus_kisa:2.1,yokus_uzun:2.0,tirmanis:2.0,teknik:1.3,acici:1.0,capraz:0.6,
-          progressive:1.4,cruise:1.65,yaris_tempo:1.8,on_off:1.9,piramit:1.9,
-          kesintisiz_piramit:1.7,hill_sprint:2.2,strides:0.9,back_to_back:1.2};
-
-        // Gerçek antrenmanları tip bazında ayır
-        const gercekKosu=actual.find(w=>w.spor==='kosu'||!w.spor);
-        const gercekCapraz=actual.find(w=>w.spor&&w.spor!=='kosu');
-        const gercekKosuSure=gercekKosu?Math.round((toSec(gercekKosu.sure_sa,gercekKosu.sure_dk,gercekKosu.sure_sn)||0)/60):0;
-        const gercekCaprazSure=gercekCapraz?Math.round((toSec(gercekCapraz.sure_sa,gercekCapraz.sure_dk,gercekCapraz.sure_sn)||0)/60):0;
-
-        // Plan tipi: planned'dan al (overrideMap varsa oradan geliyor)
-        const refTip=planned.tip||'aerobik';
-
-        // Plan süresi: gerçek koşu süresi kullan (forceEasy'nin kısalttığı değeri değil)
-        // Böylece "o tip antrenman için beklenen yük" doğru hesaplanır
-        const refSure=gercekKosuSure>0?gercekKosuSure:(planned.sure_dk||45);
-
-        // Çapraz yük: gerçek çapraz süresi varsa onu kullan (çapraz için hâlâ YUKKAT —
-        // calcBeklenenYuk sadece koşu HR-zone'larını modelliyor)
-        const caprazSure=gercekCaprazSure>0?gercekCaprazSure:(planned.isKosuCapraz?45:0);
-        // KÖK NEDEN DÜZELTMESİ (2026.08.09 — Göksel'in bildirdiği "kuvvet günlerinde
-        // %581/%438 gibi sahte 'aşırı yük' uyarıları" hatası): ÖNCEDEN her çapraz
-        // türü için SABİT YUKKAT.capraz(0.6)×süre kullanılıyordu. Ama kuvvet/yoga/
-        // pilates gibi RPE-bazlı sporlarda GERÇEK yük artık RPE×süre (Foster session-
-        // RPE yöntemi, ~RPE 3-5×süre) — 0.6×süre'den KAT KAT büyük bir ölçek. İki
-        // taraf farklı birimlerdeydi, kıyas anlamsızdı. Artık RPE-bazlı sporlarda
-        // (RPE_VARSAYILAN'da tanımlı: kuvvet/pilates/yoga/diğer) "beklenen" de AYNI
-        // RPE×süre ölçeğini, tipik/varsayılan RPE ile kullanıyor — gerçek RPE değil
-        // (o zaman kıyas her zaman ~%100 çıkar, hiçbir sapmayı yakalayamaz); amaç
-        // "tipik bir seansa göre" sapma yakalamak. HR-bazlı çapraz türlerinde
-        // (bisiklet/yüzme/kürek/futbol/basketbol) eski YUKKAT.capraz korunuyor —
-        // onlar zaten farklı, tutarlı bir HR-bazlı ölçekte hesaplanıyor.
-        // 2026.08.09 — "bilimsel kalibrasyon" turu: RPE-bazlı beklenen yük de
-        // rpeYukKatsayisi ile hrTSS ölçeğine taşınıyor — gerçek yükle (calcMetrics
-        // içindeki AYNI kalibrasyon) tam tutarlı kalsın diye.
-        const gercekCaprazSpor=gercekCapraz?.spor;
-        const caprazRpeVarsayilan=gercekCaprazSpor?RPE_VARSAYILAN[gercekCaprazSpor]:null;
-        const _caprazKatsayi=rpeYukKatsayisi(parseSayi(athlete?.rhr)||0,parseSayi(athlete?.mhr)||0,parseSayi(athlete?.lthr)||0);
-        const caprazEkYuk=caprazSure>0
-          ?Math.round(caprazSure*(caprazRpeVarsayilan!=null?caprazRpeVarsayilan*_caprazKatsayi:(YUKKAT.capraz||0.6)))
-          :0;
-
-        const beklenenYuk=calcBeklenenYuk(refTip,refSure,athlete,gercekKosu?.mesafe,gercekKosu?.irtifa,gercekKosu?.zemin_zorluk,planned.yapilar);
-        const planKat=YUKKAT[refTip]||1.1;
-        const planYukFallback=Math.round(refSure*planKat);
-        const planYuk=(beklenenYuk!=null?beklenenYuk:planYukFallback)+caprazEkYuk;
-        if(planYuk>0){
-          const diff=round1(actualLoad-planYuk);
-          const pct=Math.round(actualLoad/planYuk*100);
-          comparison={actual:round1(actualLoad),planned:planYuk,diff,pct,actualKm:round1(actualKm),actualDp:Math.round(actualDp),status:pct>=80&&pct<=120?'ok':pct<80?'eksik':'fazla',_yontem:beklenenYuk!=null?'hr_zone':'yukkat_fallback'};
-        }
-      } else if(isPast&&actual.length===0&&planned.tip!=='dinlenme'){
-        comparison={actual:0,planned:planned.yukHedef,diff:-planned.yukHedef,pct:0,actualKm:0,actualDp:0,status:'atlandı'};
+      // Bugün antrenman yapıldıysa sim'i gerçek geçmişin bugünkü satırına kilitle: bugünden sonrası
+      // (Cmt/Paz/gelecek hafta) yuvarlama/replay sapması taşımadan doğrudan gerçek durumdan ilerler.
+      if(isToday&&actual.length>0&&last&&last.date===dateStr){
+        simAtl=last.atl||0; simCtl=last.ctl||0;
+        simMechAtl=last.mechAtl||0; simMechCtl=last.mechCtl||0;
       }
+      // Gerçek/Plan: TEK KAYNAK calcDayComparison (bkz. tanım — çapraz gün hayalet koşu yükü,
+      // çoklu çapraz seans ve snapshot-plan uyumsuzluğu düzeltmesi, 2026.09.19).
+      let comparison=calcDayComparison({actual,actualLoad,actualKm,actualDp,
+        planTip:planned.tip,planSureDk:planned.sure_dk,planYapilar:planned.yapilar,
+        planIsKosuCapraz:planned.isKosuCapraz===true,planYukHedef:planned.yukHedef,
+        athlete,isPast,isToday});
       // Geçmiş günlerde + bugün yapılan antrenmanlar: gerçek türe göre doğru şablon
       let effectiveYapilar=planned.yapilar;
       // FIX: Birleşik koşu+çapraz günde, yapilar yenilemesi için sadece KOŞU kaydını kullan.
@@ -21371,7 +21463,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               // Panel paritesi/aynı kök neden düzeltmesi — tip/baslik/yapilar override'dan
               // alınırken isTest/testTur da AYNI kaynaktan (ov) gelmeli; aksi halde
               // isTest ham (taze) day'den miras kalıp yanlış ikon gösterebilir.
-              if(_isStillOk) return{...day,yapilar:ov.yapilar,tip:ov.tip||day.tip,baslik:ov.baslik||day.baslik,yapi_notu:('yapi_notu' in ov)?ov.yapi_notu:(day.yapi_notu||''),isTest:ov.isTest||false,testTur:ov.testTur||null};
+              if(_isStillOk) return recomputeComparisonFromPlan({...day,yapilar:ov.yapilar,tip:ov.tip||day.tip,baslik:ov.baslik||day.baslik,yapi_notu:('yapi_notu' in ov)?ov.yapi_notu:(day.yapi_notu||''),isTest:ov.isTest||false,testTur:ov.testTur||null},ov,athlete);
             }
             return day;
           }
@@ -21405,7 +21497,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               const _ovStillOkToday=!ov||_isManualToday||athActualDates.has(day.date)||_ovTipToday==='dinlenme'||_ovTipToday==='yaris'||
                 (_ovTipToday==='capraz'&&_curCaprazToday.includes(_dayShortToday))||
                 (_ovTipToday!=='dinlenme'&&_ovTipToday!=='yaris'&&_ovTipToday!=='capraz'&&_curKosuToday.includes(_dayShortToday));
-              if(_ovStillOkToday&&ov?.yapilar?.length>0) return{...day,yapilar:ov.yapilar,tip:ov.tip||day.tip,baslik:ov.baslik||day.baslik,yapi_notu:('yapi_notu' in ov)?ov.yapi_notu:(day.yapi_notu||''),isTest:ov.isTest||false,testTur:ov.testTur||null};
+              if(_ovStillOkToday&&ov?.yapilar?.length>0) return recomputeComparisonFromPlan({...day,yapilar:ov.yapilar,tip:ov.tip||day.tip,baslik:ov.baslik||day.baslik,yapi_notu:('yapi_notu' in ov)?ov.yapi_notu:(day.yapi_notu||''),isTest:ov.isTest||false,testTur:ov.testTur||null},ov,athlete);
               // İkinci güvenlik katmanı — gelecek dalındaki "Manuel atama" fallback'iyle AYNI
               // desen (bkz. aşağıda satır ~14222): ov her nedense yapılarsız/geçersizse bile
               // manualOverrides'taki tip/baslik'i sessizce yoksayma. Manuel atama her zaman
