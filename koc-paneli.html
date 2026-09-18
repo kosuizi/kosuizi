@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.19-0001 --><!DOCTYPE html>
+<!-- Version: v2026.09.19-0030 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.19-0001';
+const APP_VERSION='v2026.09.19-0030';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -502,7 +502,7 @@ function calcMetrics(w,ath){
 
   // DÜZELTME (2026.07.27 — döngüyü kapatma): Segment-bazlı gerçek nabız verisi
   // (_rowZoneDist) sadece HR-güvenilir sporlarda anlamlı.
-  const yukObjSegment=(hrGuvenilirSpor&&w._rowZoneDist)?calcYukFromZoneDist(w._rowZoneDist,ath):null;
+  const yukObjSegment=(hrGuvenilirSpor&&w._rowZoneDist)?calcYukFromZoneDist(w._rowZoneDist,ath,durMin,w.mesafe,w.irtifa,w.zemin_zorluk):null;
 
   // Excel X: RPE × süre(dk) — Subjektif yük (kuvvet/yoga/pilates/diğer için BİRİNCİL)
   // 2026.08.09 — Göksel talebi ("bilimsel kalibrasyon"): artık hrTSS ile AYNI ölçekte
@@ -3035,7 +3035,20 @@ const TUR_ZONE_BEKLENTI={
 // kadar (7 zon) hassas değil, ama YİNE DE tek-blended-ortalamadan çok daha isabetli:
 // hrTSS karesel (IF²) olduğundan karışık yoğunluğu tek ortalamayla özetlemek yükü
 // sistematik olarak düşük gösterir (Jensen eşitsizliği) — bant bazlı toplama bunu düzeltir.
-function calcYukFromZoneDist(rzd,athlete){
+// KÖK NEDEN DÜZELTMESİ (2026.09.19 — Göksel'in "Çarşamba Cruise ↓%57, tüm aşama nabızlarını girmiştim"
+// bildirimi): rzd (computeZoneDistFromRows çıktısı) bölge-DAĞILIMI yüzdesi için tasarlandığından
+// Isınma/Soğuma/Dinlenme/Toparlanma/Blok arası satırlarını BİLİNÇLİ olarak dışarıda bırakır —
+// yani totalMin seansın TOPLAM süresi değil, yalnızca İŞ satırlarının süresidir. Bu yapı yük
+// hesabına da olduğu gibi devralınmıştı: aşama nabzı girilen bir seansın yükü yalnızca iş
+// satırlarından çıkıyor (55 dk'lık cruise'da 24 dk) ve aynı seans yalnızca ortalama nabızla
+// girilseydi çıkacak değerin ~yarısı kadar kaydediliyordu (ayrıntılı veri girmek yükü DÜŞÜRÜYORDU).
+// Plan tarafı (calcYukFromYapilar) ise ısınma/soğuma/aralar dahil TÜM segmenti sayıyor.
+// Ayrıca bu yolda arazi/eğim çarpanı hiç uygulanmıyordu (calcObjLoad'ın ortalama-nabız yolunda ve
+// plan tarafında uygulanıyor). Düzeltme: (1) seansın toplam süresi (durMin) ile rzd.totalMin
+// arasındaki KAPSANMAYAN süre Z1–Z2 orta nabzıyla (plan tarafının ısınma/soğuma/ara varsayımıyla
+// aynı ölçek) eklenir; (2) calcObjLoad ile AYNI arazi/eğim çarpanı uygulanır. Kayıtlı toplam süre
+// zaten mevcut olduğundan geçmiş kayıtlar yeniden veri girişi gerektirmeden düzelir.
+function calcYukFromZoneDist(rzd,athlete,durMin,mesafe,irtifa,zemin_zorluk){
   if(!rzd||!rzd.totalMin||rzd.totalMin<=0) return null;
   const zones=calcZones(athlete);
   const hz=zones?.hrZones;
@@ -3051,7 +3064,16 @@ function calcYukFromZoneDist(rzd,athlete){
     if(!durMin||durMin<=0||bpm==null) return 0;
     return lthr>0?calcHrTSS(durMin*60,bpm,lthr):calcTRIMP(durMin,bpm,rhr,mhr,cinsiyet);
   };
-  const yuk=yukForBand(rzd.lowMin,lowBpm)+yukForBand(rzd.highMin,highBpm)+yukForBand(rzd.anaMin,anaBpm);
+  let yuk=yukForBand(rzd.lowMin,lowBpm)+yukForBand(rzd.highMin,highBpm)+yukForBand(rzd.anaMin,anaBpm);
+  // (1) Aşama satırlarının kapsamadığı süre (ısınma/soğuma/aralar) — <1 dk yuvarlama gürültüsü sayılmaz
+  const kapsanmayanMin=(durMin||0)-rzd.totalMin;
+  if(kapsanmayanMin>=1) yuk+=yukForBand(kapsanmayanMin,lowBpm);
+  // (2) Arazi/eğim çarpanı — calcObjLoad ile birebir aynı formül
+  const _km=parseFloat(mesafe)||0, _dp=parseFloat(irtifa)||0, _z=parseInt(zemin_zorluk)||1;
+  const _tMod=TERRAIN_MULT[_z]||1.0;
+  let _gradeMod=1.0;
+  if(_km>0&&_dp>0){const _gradePct=(_dp/_km)/10; _gradeMod=1+Math.min(_gradePct*0.12,0.28);}
+  yuk*=Math.min(_tMod*_gradeMod,1.60);
   return yuk>0?round1(yuk):null;
 }
 // ── TAM OTOMATİK SEGMENT BAZLI TÜRETME (2026.07.27 — Göksel'in isteği üzerine) ──
