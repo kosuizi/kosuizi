@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.17-2046 --><!DOCTYPE html>
+<!-- Version: v2026.09.18-0812 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.17-2046';
+const APP_VERSION='v2026.09.18-0812';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -6964,6 +6964,27 @@ function SporcularTab({athletes,races,athHistory,allHistory,workouts,onAdd,onUpd
   const [showR,setShowR]=useState(false);
   const [editA,setEditA]=useState(null);
   const [editR,setEditR]=useState(null);
+  const [gpxYukleniyor,setGpxYukleniyor]=useState(null); // yüklenmekte olan yarışın id'si
+  const [gpxHata,setGpxHata]=useState({}); // {raceId: hata mesajı}
+  const gpxInputRefs=useRef({});
+  const handleGpxUpload=(race,file)=>{
+    if(!file)return;
+    setGpxYukleniyor(race.id);
+    setGpxHata(h=>({...h,[race.id]:null}));
+    const reader=new FileReader();
+    reader.onload=(e)=>{
+      try{
+        const gpxProfil=analyzeRaceGpx(e.target.result);
+        onUpdateRace({...race,gpxProfil});
+      }catch(err){
+        setGpxHata(h=>({...h,[race.id]:err.message||'GPX işlenemedi.'}));
+      }finally{
+        setGpxYukleniyor(null);
+      }
+    };
+    reader.onerror=()=>{setGpxHata(h=>({...h,[race.id]:'Dosya okunamadı.'}));setGpxYukleniyor(null);};
+    reader.readAsText(file);
+  };
   const [expandHist,setExpandHist]=useState({});
   const [expandCard,setExpandCard]=useState({});
   const [showPastRaces,setShowPastRaces]=useState(false);
@@ -7061,6 +7082,32 @@ function SporcularTab({athletes,races,athHistory,allHistory,workouts,onAdd,onUpd
         r.nem&&React.createElement('span',{className:'badge badge-gray'},'%'+r.nem+' nem'),
         r.prep_weeks&&React.createElement('span',{className:'badge badge-gray'},r.prep_weeks+' hafta hazırlık'),
         React.createElement('span',{className:'badge badge-gray',title:'Taper + Zirve hafta ayarları'},'T:'+taperW+'w Z:'+peakW+'w')
+      ),
+      // GPX Parkur Profili — en uzun sürdürülen tırmanış + yükseklik grafiği
+      // (17.09.2026 — Göksel isteği). r.gpxProfil yoksa boş-durum mesajı gösterilir.
+      React.createElement('div',{style:{marginBottom:10,padding:'10px 12px',background:'var(--bg-secondary)',borderRadius:'var(--radius)',border:'1px solid var(--border)'}},
+        r.gpxProfil
+          ?React.createElement(React.Fragment,null,
+              React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6,flexWrap:'wrap',gap:6}},
+                React.createElement('div',{className:'flex-gap',style:{flexWrap:'wrap'}},
+                  React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)'}},'⛰️ Parkur:'),
+                  React.createElement('span',{className:'badge badge-gray'},r.gpxProfil.toplamMesafeKm+' km / D+'+r.gpxProfil.toplamDPlus+'m'),
+                  r.gpxProfil.enUzunTirmanis&&React.createElement('span',{className:'badge badge-info',title:'Yükleme planında Zirve/Taper haftalarının tek-gün D+ hedefine üst sınır olarak kullanılır'},
+                    'En uzun tırmanış: '+r.gpxProfil.enUzunTirmanis.mesafeKm+'km / D+'+r.gpxProfil.enUzunTirmanis.dPlus+'m (%'+r.gpxProfil.enUzunTirmanis.ortEgimYuzde+' eğim)')
+                ),
+                React.createElement('button',{className:'btn btn-sm',onClick:()=>gpxInputRefs.current[r.id]?.click(),disabled:gpxYukleniyor===r.id},
+                  gpxYukleniyor===r.id?'⏳ İşleniyor...':'🔄 GPX Güncelle')
+              ),
+              elevationSparkSVG(r.gpxProfil.profil)
+            )
+          :React.createElement('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:8}},
+              React.createElement('span',{style:{fontSize:12,color:'var(--text-tertiary)'}},'Bu yarış için GPX parkur dosyası yüklenmedi — yüklersen "en uzun sürdürülen tırmanış" otomatik çıkarılıp Zirve/Taper haftalarındaki D+ hedefine yansıtılır.'),
+              React.createElement('button',{className:'btn btn-sm btn-primary',onClick:()=>gpxInputRefs.current[r.id]?.click(),disabled:gpxYukleniyor===r.id},
+                gpxYukleniyor===r.id?'⏳ İşleniyor...':'📤 GPX Yükle')
+            ),
+        React.createElement('input',{type:'file',accept:'.gpx',ref:el=>{gpxInputRefs.current[r.id]=el;},style:{display:'none'},
+          onChange:e=>{const f=e.target.files?.[0];handleGpxUpload(r,f);e.target.value='';}}),
+        gpxHata[r.id]&&React.createElement('div',{style:{marginTop:6,fontSize:11,color:'var(--danger)'}},'⚠️ '+gpxHata[r.id])
       ),
       // "Hazırlık başladı" bildirimi — coğunlukla persistent (Gelişme/Zirve/Taper boyunca
       // görünür kalır, sadece geçiş haftasında yanıp sönmez), böylece koç ne zaman kontrol
@@ -15513,6 +15560,168 @@ function effectiveDisiplin(athlete, primaryRace){
   return base;
 }
 
+// ── GPX Parkur Analizi — Yarış Yükseklik Profili ──────────────────────────
+// Bir .gpx dosyasından (trkpt lat/lon/ele) parkurun yükseklik profilini,
+// toplam D+'ını ve "en uzun sürdürülen tırmanış"ını çıkarır. Sonuç
+// race.gpxProfil olarak saklanır; hesaplaTekGunDpHedefi Zirve/Taper'da bu
+// gerçek değeri haftalık D+ hedefinin üst sınırı olarak kullanır — yarışın
+// kendisinde sürdürülmesi gereken tek-oturumluk D+'a en yakın gerçek veri.
+// (17.09.2026 — Göksel isteği)
+
+function haversineM(lat1,lon1,lat2,lon2){
+  const R=6371000, toRad=d=>d*Math.PI/180;
+  const dLat=toRad(lat2-lat1), dLon=toRad(lon2-lon1);
+  const a=Math.sin(dLat/2)**2+Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
+
+// GPX metnini kümülatif {distM, ele} nokta dizisine çevirir.
+function parseGpxTrackPoints(gpxText){
+  const doc=new DOMParser().parseFromString(gpxText,'application/xml');
+  if(doc.querySelector('parsererror')) throw new Error('GPX dosyası okunamadı (bozuk XML).');
+  const pts=[...doc.querySelectorAll('trkpt, rtept')];
+  if(pts.length<2) throw new Error('GPX içinde yeterli konum noktası bulunamadı.');
+  const out=[]; let distM=0, prevLat=null, prevLon=null;
+  // SERTLEŞTİRME (18.09.2026): gerçek saatlerde sinyal kaybı (tünel, sık orman,
+  // vadi) ardından tek bir noktada onlarca-yüzlerce metrelik "ışınlanma" sık
+  // görülür. Böyle bir noktayı mesafeye/profile katmak hem toplam mesafeyi hem
+  // (küçük yatay mesafeye karşı büyük irtifa farkıyla) sahte bir "uçurum" D+'ı
+  // üretir. Art arda iki nokta arası sıçrama fiziksel olarak imkansız kadar
+  // büyükse (>250m — birkaç saniyelik GPX aralığında koşucu için imkansız) o
+  // nokta tamamen atlanır, mesafe önceki geçerli noktadan devam eder.
+  const MAX_SICRAMA_M=250;
+  for(const p of pts){
+    const lat=parseFloat(p.getAttribute('lat')), lon=parseFloat(p.getAttribute('lon'));
+    const eleEl=p.querySelector('ele');
+    const ele=eleEl?parseFloat(eleEl.textContent):null;
+    if(!isFinite(lat)||!isFinite(lon)||ele===null||!isFinite(ele))continue;
+    if(prevLat!==null){
+      const adim=haversineM(prevLat,prevLon,lat,lon);
+      if(adim>MAX_SICRAMA_M) continue; // GPS sıçraması — nokta atlanır
+      distM+=adim;
+    }
+    out.push({distM,ele});
+    prevLat=lat; prevLon=lon;
+  }
+  if(out.length<2) throw new Error('GPX içinde yükseklik (ele) verisi bulunamadı.');
+  return out;
+}
+
+// SERTLEŞTİRME (18.09.2026): tek nokta irtifa sıçramaları (barometrik/GPS
+// glitch — bir noktada aniden ±birkaç on/yüz metre) hareketli ortalamayı bile
+// bozabilir (pencere içindeyken ortalamayı kaydırır). Düzleştirmeden ÖNCE,
+// her noktanın irtifasını komşularının medyanıyla karşılaştırıp aşırı
+// sapanları o medyanla değiştirir (tek nokta glitch'lerine karşı hareketli
+// ortalamadan çok daha dayanıklı bir filtre).
+function despikeElevation(points, komsuSayisi=4, esikM=40){
+  const n=points.length;
+  const out=points.map(p=>({...p}));
+  for(let i=0;i<n;i++){
+    const lo=Math.max(0,i-komsuSayisi), hi=Math.min(n,i+komsuSayisi+1);
+    const komsular=[];
+    for(let j=lo;j<hi;j++) if(j!==i) komsular.push(points[j].ele);
+    if(komsular.length<2) continue;
+    komsular.sort((a,b)=>a-b);
+    const medyan=komsular[Math.floor(komsular.length/2)];
+    if(Math.abs(points[i].ele-medyan)>esikM) out[i].ele=medyan;
+  }
+  return out;
+}
+
+// Mesafe bazlı hareketli ortalama — GPS/barometrik gürültüyü azaltır
+// (windowM: her noktanın etrafında ortalanan pencere genişliği, metre).
+function smoothElevationByDistance(points, windowM=100){
+  const out=[]; let lo=0, hi=0, sum=0, cnt=0;
+  for(let i=0;i<points.length;i++){
+    while(hi<points.length&&points[hi].distM-points[i].distM<=windowM/2){sum+=points[hi].ele;cnt++;hi++;}
+    while(points[i].distM-points[lo].distM>windowM/2){sum-=points[lo].ele;cnt--;lo++;}
+    out.push({distM:points[i].distM, ele:sum/cnt});
+  }
+  return out;
+}
+
+// Düzleştirilmiş profilde D+ bazında EN BÜYÜK "sürdürülen tırmanış"ı bulur.
+// noiseToleranceM'den küçük ara düşüşlere izin verilir (teknik patika/kısa
+// düzlükler tırmanışı bölmesin); bunu aşan bir düşüş tırmanışı bitirir.
+function detectLongestClimb(smoothed, noiseToleranceM=15){
+  let best=null, cur=null;
+  for(let i=1;i<smoothed.length;i++){
+    const d=smoothed[i].ele-smoothed[i-1].ele;
+    if(d>0){
+      if(!cur) cur={startIdx:i-1,peakEle:smoothed[i-1].ele,peakIdx:i-1,startEle:smoothed[i-1].ele};
+      if(smoothed[i].ele>cur.peakEle){cur.peakEle=smoothed[i].ele;cur.peakIdx=i;}
+    } else if(d<0&&cur){
+      if(cur.peakEle-smoothed[i].ele>noiseToleranceM){
+        const dPlus=cur.peakEle-cur.startEle;
+        if(dPlus>0&&(!best||dPlus>best.dPlus)) best={startIdx:cur.startIdx,endIdx:cur.peakIdx,dPlus};
+        cur=null;
+      }
+    }
+  }
+  if(cur){
+    const dPlus=cur.peakEle-cur.startEle;
+    if(dPlus>0&&(!best||dPlus>best.dPlus)) best={startIdx:cur.startIdx,endIdx:cur.peakIdx,dPlus};
+  }
+  if(!best) return null;
+  const startPt=smoothed[best.startIdx], endPt=smoothed[best.endIdx];
+  const mesafeKm=Math.max(0.01,(endPt.distM-startPt.distM)/1000);
+  return {
+    baslangicKm:round1(startPt.distM/1000),
+    bitisKm:round1(endPt.distM/1000),
+    mesafeKm:round1(mesafeKm),
+    dPlus:Math.round(best.dPlus),
+    ortEgimYuzde:round1((best.dPlus/(mesafeKm*1000))*100)
+  };
+}
+
+// Grafik için profili ~hedefNokta noktaya indirger ({km, ele}).
+function downsampleProfile(smoothed, hedefNokta=150){
+  if(smoothed.length<=hedefNokta) return smoothed.map(p=>({km:round1(p.distM/1000),ele:Math.round(p.ele)}));
+  const step=smoothed.length/hedefNokta, out=[];
+  for(let i=0;i<hedefNokta;i++){
+    const p=smoothed[Math.min(smoothed.length-1,Math.round(i*step))];
+    out.push({km:round1(p.distM/1000),ele:Math.round(p.ele)});
+  }
+  const last=smoothed[smoothed.length-1];
+  out.push({km:round1(last.distM/1000),ele:Math.round(last.ele)});
+  return out;
+}
+
+// Basit yükseklik profili sparkline'ı — race.gpxProfil.profil dizisinden.
+function elevationSparkSVG(profil, w=280, h=56){
+  if(!profil||profil.length<2)return null;
+  const eles=profil.map(p=>p.ele);
+  const minE=Math.min(...eles), maxE=Math.max(...eles);
+  const range=Math.max(1,maxE-minE);
+  const maxKm=profil[profil.length-1].km||1;
+  const pts=profil.map(p=>{
+    const x=(p.km/maxKm)*w;
+    const y=h-((p.ele-minE)/range)*h;
+    return x.toFixed(1)+','+y.toFixed(1);
+  }).join(' ');
+  const areaPts=`0,${h} ${pts} ${w},${h}`;
+  return React.createElement('svg',{viewBox:`0 0 ${w} ${h}`,width:'100%',height:h,style:{display:'block'},preserveAspectRatio:'none'},
+    React.createElement('polygon',{points:areaPts,fill:'var(--info)',fillOpacity:0.15}),
+    React.createElement('polyline',{points:pts,fill:'none',stroke:'var(--info)',strokeWidth:'1.5'})
+  );
+}
+
+// Ana orkestrasyon — GPX metni → race.gpxProfil şeması.
+function analyzeRaceGpx(gpxText){
+  const raw=parseGpxTrackPoints(gpxText);
+  const despiked=despikeElevation(raw,4,40);
+  const smoothed=smoothElevationByDistance(despiked,100);
+  let toplamDPlus=0;
+  for(let i=1;i<smoothed.length;i++){const d=smoothed[i].ele-smoothed[i-1].ele; if(d>0)toplamDPlus+=d;}
+  return {
+    toplamMesafeKm:round1(raw[raw.length-1].distM/1000),
+    toplamDPlus:Math.round(toplamDPlus),
+    enUzunTirmanis:detectLongestClimb(smoothed,15),
+    profil:downsampleProfile(smoothed,150),
+    yuklemeTarihi:new Date().toISOString()
+  };
+}
+
 // ── Haftanın Uzun Koşusu — Hedef Pay Oranı ────────────────────────────────
 // Yükleme planındaki haftalık km hedefinin ne kadarının "haftanın uzunu"
 // olarak planlanacağını belirler. Faza göre değişir: Zirve haftalarda uzun
@@ -15689,20 +15898,47 @@ function computeRampProjection(weekTargets, rampModeOn, rampRatePct){
   return proj;
 }
 
-function estimateUzunKosuHedefi(targetKm, targetDp, phase, disiplin, zones, band, raceKm=0, noRaceCtx=null){
+// ── Haftanın Uzun/Tırmanış Günü — D+ Hedef Pay Oranı ──────────────────────
+// uzunKosuPayOrani'nin D+ karşılığı. Farkı: D+ km'den daha çok KONSANTRE
+// olmalı — yarışta D+ tek oturumda sürdürülür, km gibi hafta boyu dağıtılmaz.
+// Bu yüzden pay, aynı fazdaki km payından belirgin şekilde yüksek tutulur ve
+// Zirve'de %100'e ulaşır. Zirve/Taper'da, sporcunun yarışı için GPX'ten
+// çıkarılmış "en uzun sürdürülen tırmanış" verisi varsa (bkz. analyzeRaceGpx),
+// o gerçek değer hedefin ÜST SINIRI olarak kullanılır — genel orandan daha
+// isabetli, yarış-özgül bir hedef verir. (17.09.2026 — Göksel onayı, ilk
+// sürüm; oranlar tartışmaya açık, saha tecrübesiyle güncellenebilir.)
+const DP_PAY_TABLO={'Temel':0.55,'Gelişme':0.80,'Zirve':1.0,'Taper':0.90,'Yarış Sonrası':0};
+function uzunKosuDpPayOrani(phase){
+  const pay=DP_PAY_TABLO[phase];
+  return pay===undefined?0.70:pay;
+}
+// GPX analiziyle çıkarılmış "en uzun sürdürülen tırmanış" D+'ı (yoksa null).
+function raceEnUzunTirmanisDp(race){
+  const dp=race?.gpxProfil?.enUzunTirmanis?.dPlus;
+  return (typeof dp==='number'&&dp>0)?dp:null;
+}
+// Haftanın uzun/tırmanış gününe (tek oturuma) düşecek D+ hedefi.
+// kalanDp: o haftadan kalan (henüz koşulmamış) D+ hedefi.
+function hesaplaTekGunDpHedefi(kalanDp, phase, race=null){
+  kalanDp=Math.round(kalanDp||0);
+  if(kalanDp<=0) return 0;
+  const gpxDp=(phase==='Zirve'||phase==='Taper')?raceEnUzunTirmanisDp(race):null;
+  if(gpxDp!=null) return Math.min(kalanDp, gpxDp);
+  return Math.round(kalanDp*uzunKosuDpPayOrani(phase));
+}
+
+function estimateUzunKosuHedefi(targetKm, targetDp, phase, disiplin, zones, band, raceKm=0, noRaceCtx=null, race=null){
   const pay=uzunKosuPayOrani(phase, disiplin, noRaceCtx);
   let km=round1((targetKm||0)*pay);
   const effBand=band||proxyBandFromWeeklyKm(targetKm||0);
   const bandCapKm=uzunKosuBandMaxKm(effBand, disiplin, zones, raceKm);
   let capped=false;
-  let dp=disiplin!=='yol'?Math.round(targetDp||0):0;
-  // DÜZELTME (17.09.2026 — Göksel bildirimi): mesafe band tavanına çekildiğinde
-  // D+ ÖNCEDEN küçültülmüyordu — haftanın TAM D+ hedefi, kısalmış (tavanlı)
-  // mesafeye atfediliyor, fiziksel olarak imkansız bir eğim önerilebiliyordu
-  // (örn. 5km / D+1500m). Artık mesafe tavana çekildiği oranda D+ de ölçeklenir.
-  // NOT: tavana ÇEKİLMEYEN normal durumda dp değişmiyor — bu, gerçek üretimdeki
-  // "healthy path" dpGun formülüyle (bkz. planDay, satır ~17501) zaten örtüşüyor
-  // (tek uzun/tırmanış günü varsa haftanın TAMAMI o güne atfedilir).
+  // DÜZELTME (17.09.2026 — Göksel isteği): dp artık haftalık hedefin TAMAMI
+  // değil, faza göre değişen bir pay ile hesaplanıyor (bkz. hesaplaTekGunDpHedefi/
+  // uzunKosuDpPayOrani) — Zirve/Taper'da GPX'ten çıkarılmış gerçek "en uzun
+  // tırmanış" verisi varsa onunla üst sınırlanıyor. Önceki davranış (haftanın
+  // TAMAMI tek güne) artık sadece Zirve fazının varsayılanı.
+  let dp=disiplin!=='yol'?hesaplaTekGunDpHedefi(targetDp, phase, race):0;
   if(bandCapKm>0&&km>bandCapKm){
     if(km>0) dp=Math.round(dp*(bandCapKm/km));
     km=bandCapKm;
@@ -17548,7 +17784,13 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
   // hesaplanıyor; hedef zaten karşılanmışsa kalanTargetDp kendiliğinden 0'a iner. Bu
   // yüzden ayrı bir "tip zaten görüldü mü" kontrolüne gerek yok — üstelik bu kontrol
   // yanlış pozitif üretiyordu.
-  const dpGun=Math.round((wkStats.dpHedefHafta||0)/Math.max(1,wkStats.uzunKalanSayi||1));
+  // DÜZELTME (17.09.2026 — Göksel isteği): dpHedefHafta'nın TAMAMI yerine artık
+  // faza göre değişen bir pay kullanılıyor (bkz. hesaplaTekGunDpHedefi/
+  // uzunKosuDpPayOrani) — Temel'de D+ kısmen dağıtık kalması kabul edilir,
+  // Zirve'ye yaklaştıkça tek güne yüklenen pay artar. Zirve/Taper'da race'in
+  // GPX'ten çıkarılmış "en uzun sürdürülen tırmanış" verisi varsa (bkz.
+  // analyzeRaceGpx/race.gpxProfil) o gerçek değer üst sınır olarak kullanılır.
+  const dpGun=Math.round(hesaplaTekGunDpHedefi(wkStats.dpHedefHafta,phase,race)/Math.max(1,wkStats.uzunKalanSayi||1));
   const sonYogunGun=wkStats.sonYogunGun||false;
   const haftaGunTipi=wkStats.haftaGunTipi||null;
   // phaseStep: Taper/Yarış Sonrası fazlarında sıfıra düşürülür (yük azaltma dönemi)
@@ -22874,7 +23116,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                 :(_frozenNextDecision?.currentRampRatePct??_decCurrentRatePct);
               const _uzunHedefRaw=wt.isRaceWeek||wt.phase==='Yarış Sonrası'
                 ?null
-                :estimateUzunKosuHedefi(_dispKmForUzun,_dispDpForUzun,wt.phase,_uzunDisiplin,_uzunZones,wt.isCurrent?_uzunRealBand:null,plan.primary?.mesafe,wt?._isNoRace?{avg4km:wt._avg4km,artisOrani:wt._artisOrani}:null);
+                :estimateUzunKosuHedefi(_dispKmForUzun,_dispDpForUzun,wt.phase,_uzunDisiplin,_uzunZones,wt.isCurrent?_uzunRealBand:null,plan.primary?.mesafe,wt?._isNoRace?{avg4km:wt._avg4km,artisOrani:wt._artisOrani}:null,plan.primary);
               // TABAN (13.07.2026 sohbeti — Göksel'in önerisi): revize/rampa mekanizması
               // haftanın uzunu hedefini, BİR ÖNCEKİ haftada zaten koşulmuş en uzun tekil
               // mesafenin ALTINA düşürmemeli — o mesafe fiziksel olarak zaten kanıtlanmış,
@@ -22911,7 +23153,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               // uzun koşu için de farkı göstermek için kullanılır.
               const _uzunHedefOrijinal=wt.isRaceWeek||wt.phase==='Yarış Sonrası'
                 ?null
-                :estimateUzunKosuHedefi(wt.targetKm,wt.targetDp,wt.phase,_uzunDisiplin,_uzunZones,null,plan.primary?.mesafe,wt?._isNoRace?{avg4km:wt._avg4km,artisOrani:wt._artisOrani}:null);
+                :estimateUzunKosuHedefi(wt.targetKm,wt.targetDp,wt.phase,_uzunDisiplin,_uzunZones,null,plan.primary?.mesafe,wt?._isNoRace?{avg4km:wt._avg4km,artisOrani:wt._artisOrani}:null,plan.primary);
 
               const diffKm=round1(act.km-wt.targetKm);
               const diffDp=Math.round(act.dp-wt.targetDp);
@@ -23434,7 +23676,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                 const _p1=round1((displayCurWeekEff.effKm||0)*(1+rampRatePct/100));
                 if(_p1>0&&_p1<weekOrigKm*0.99)_dKm=_p1;
               }
-              const _uzunHedefHaftaRaw=estimateUzunKosuHedefi(_dKm,_dDp,week.wt.phase,effectiveDisiplin(athlete,plan.primary),_uzunZonesHafta,_uzunBandHafta,plan.primary?.mesafe,week.wt?._isNoRace?{avg4km:week.wt._avg4km,artisOrani:week.wt._artisOrani}:null);
+              const _uzunHedefHaftaRaw=estimateUzunKosuHedefi(_dKm,_dDp,week.wt.phase,effectiveDisiplin(athlete,plan.primary),_uzunZonesHafta,_uzunBandHafta,plan.primary?.mesafe,week.wt?._isNoRace?{avg4km:week.wt._avg4km,artisOrani:week.wt._artisOrani}:null,plan.primary);
               // TABAN (13.07.2026 sohbeti — Göksel'in önerisi): ana tablodaki (HaftalikPlanTab
               // satırları) ile AYNI mantık — bkz. tablodaki "TABAN" notu. Bu kart AYRI bir kod
               // yolu olduğu için (farklı değişken adları, aynı weekTargets kaynağı) taban orada
@@ -23462,7 +23704,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     flooredByPrevWeek:true
                   }
                 :_uzunHedefHaftaRaw;
-              const _uzunHedefHaftaOrijinal=estimateUzunKosuHedefi(weekOrigKm,weekOrigDp,week.wt.phase,effectiveDisiplin(athlete,plan.primary),_uzunZonesHafta,null,plan.primary?.mesafe,week.wt?._isNoRace?{avg4km:week.wt._avg4km,artisOrani:week.wt._artisOrani}:null);
+              const _uzunHedefHaftaOrijinal=estimateUzunKosuHedefi(weekOrigKm,weekOrigDp,week.wt.phase,effectiveDisiplin(athlete,plan.primary),_uzunZonesHafta,null,plan.primary?.mesafe,week.wt?._isNoRace?{avg4km:week.wt._avg4km,artisOrani:week.wt._artisOrani}:null,plan.primary);
               const _haftalikDegisti=_uzunHedefHaftaOrijinal.km!==_uzunHedefHafta.km;
               const _haftalikDpDegisti=_uzunHedefHaftaOrijinal.dp>0&&_uzunHedefHaftaOrijinal.dp!==_uzunHedefHafta.dp;
               return _uzunHedefHafta.km>0&&React.createElement('span',{
