@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.18-0944 --><!DOCTYPE html>
+<!-- Version: v2026.09.18-1001 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -244,7 +244,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.18-0944';
+const APP_VERSION='v2026.09.18-1001';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -15641,45 +15641,38 @@ function smoothElevationByDistance(points, windowM=100){
 }
 
 // Düzleştirilmiş profilde D+ bazında EN BÜYÜK "sürdürülen tırmanış"ı bulur.
-// noiseToleranceM'den küçük ara düşüşlere izin verilir (teknik patika/kısa
-// düzlükler tırmanışı bölmesin); bunu aşan bir düşüş tırmanışı bitirir.
-// DÜZELTME (18.09.2026 — Göksel'in resmi parkur profiliyle karşılaştırması):
-// sabit 15m tolerans, büyük bir dağ tırmanışının içindeki kısa "yalancı düzlük"
-// veya küçük teknik inişleri (birkaç on metre) gerçek bir düşüş sayıp tırmanışı
-// gereksiz yere parçalıyordu — Chianti 73K'da son ~10km'lik büyük tırmanış,
-// resmi profilde tek parça görünürken GPX analizinde 4km/D+291m'e bölünmüştü.
-// Artık tolerans, o ana kadar biriken tırmanış yüksekliğinin bir payı olarak da
-// hesaplanıyor (büyük bir tırmanış küçük ara düşüşlere daha toleranslı olmalı);
-// ikisinin BÜYÜĞÜ kullanılır, küçük tepecikler yine de kısa düşüşte bölünür.
-function detectLongestClimb(smoothed, noiseToleranceM=15, toleransOrani=0.15){
-  let best=null, cur=null;
+// DÜZELTME #2 (18.09.2026 — Göksel'in gerçek Chianti GPX'iyle testi): önceki
+// sabit/oransal tolerans yaklaşımı (15m veya biriken yüksekliğin %15'i) gerçek
+// veride HÂLÂ yetersiz kaldı — sonuç değişmedi (hâlâ 4km/D+291m). Kök sorun:
+// "tolerans" kavramının kendisi yanlış çerçeve — hangi eşiği seçersek seçelim
+// gerçek parkurlarda o eşiği aşan ama yine de "geçmeye değer" düşüşler olabilir.
+// Artık TAMAMEN farklı, parametre gerektirmeyen bir yaklaşım: klasik "maksimum
+// alt-dizi toplamı" (Kadane) algoritması, profildeki ardışık irtifa farklarına
+// uygulanıyor. Sezgi: bir düşüşü "geçmeye değer" yapan şey sabit bir eşik değil,
+// SONRASINDA gelen tırmanışın o düşüşü net olarak fazlasıyla telafi etmesi — tam
+// olarak Kadane'in optimize ettiği şey. Birikmiş net kazanç negatife düştüğü an
+// (o noktaya kadarki tüm düşüşler tüm çıkışları geride bıraktığında) yeni bir
+// aday segment başlar; bu tamamen kendiliğinden ayarlanan bir eşik, elle
+// ayarlanan sabit/oransal bir sayı değil.
+function detectLongestClimb(smoothed){
+  if(!smoothed||smoothed.length<2) return null;
+  let bestSum=0, bestStart=0, bestEnd=0;
+  let curSum=0, curStart=0;
   for(let i=1;i<smoothed.length;i++){
     const d=smoothed[i].ele-smoothed[i-1].ele;
-    if(d>0){
-      if(!cur) cur={startIdx:i-1,peakEle:smoothed[i-1].ele,peakIdx:i-1,startEle:smoothed[i-1].ele};
-      if(smoothed[i].ele>cur.peakEle){cur.peakEle=smoothed[i].ele;cur.peakIdx=i;}
-    } else if(d<0&&cur){
-      const gucluTolerans=Math.max(noiseToleranceM,(cur.peakEle-cur.startEle)*toleransOrani);
-      if(cur.peakEle-smoothed[i].ele>gucluTolerans){
-        const dPlus=cur.peakEle-cur.startEle;
-        if(dPlus>0&&(!best||dPlus>best.dPlus)) best={startIdx:cur.startIdx,endIdx:cur.peakIdx,dPlus};
-        cur=null;
-      }
-    }
+    if(curSum<=0){ curSum=d; curStart=i-1; }
+    else{ curSum+=d; }
+    if(curSum>bestSum){ bestSum=curSum; bestStart=curStart; bestEnd=i; }
   }
-  if(cur){
-    const dPlus=cur.peakEle-cur.startEle;
-    if(dPlus>0&&(!best||dPlus>best.dPlus)) best={startIdx:cur.startIdx,endIdx:cur.peakIdx,dPlus};
-  }
-  if(!best) return null;
-  const startPt=smoothed[best.startIdx], endPt=smoothed[best.endIdx];
+  if(bestSum<=0) return null;
+  const startPt=smoothed[bestStart], endPt=smoothed[bestEnd];
   const mesafeKm=Math.max(0.01,(endPt.distM-startPt.distM)/1000);
   return {
     baslangicKm:round1(startPt.distM/1000),
     bitisKm:round1(endPt.distM/1000),
     mesafeKm:round1(mesafeKm),
-    dPlus:Math.round(best.dPlus),
-    ortEgimYuzde:round1((best.dPlus/(mesafeKm*1000))*100)
+    dPlus:Math.round(bestSum),
+    ortEgimYuzde:round1((bestSum/(mesafeKm*1000))*100)
   };
 }
 
@@ -15725,7 +15718,7 @@ function analyzeRaceGpx(gpxText){
   return {
     toplamMesafeKm:round1(raw[raw.length-1].distM/1000),
     toplamDPlus:Math.round(toplamDPlus),
-    enUzunTirmanis:detectLongestClimb(smoothed,15),
+    enUzunTirmanis:detectLongestClimb(smoothed),
     profil:downsampleProfile(smoothed,150),
     yuklemeTarihi:new Date().toISOString()
   };
