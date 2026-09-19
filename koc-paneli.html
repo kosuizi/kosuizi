@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.19-1921 --><!DOCTYPE html>
+<!-- Version: v2026.09.19-2027 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.19-1921';
+const APP_VERSION='v2026.09.19-2027';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -30802,6 +30802,41 @@ function gpxComputeElevGain(points){
   }
   return Math.round(gain);
 }
+// ── FAZ BAZLI D+ (2026.09.19-2027 — Göksel talebi: "Reçeteye Ekle" sırasında her
+// aşamanın D+ (m) değeri de reçeteye otomatik yazılsın) ────────────────────────────
+// gpxComputeElevGain ile BİREBİR aynı algoritma (±5 nokta hareketli ortalama + 0.5m
+// taban-sıfırlama) TÜM iz üzerinde BİR KEZ çalıştırılır; her yükseliş adımı, gerçekleştiği
+// noktanın zamanıyla birlikte kaydedilir. Faz D+'sı, o fazın [t0,t1] penceresine düşen
+// adımların toplamıdır — böylece (a) faz sınırlarında ayrı ayrı yeniden düzleştirme/taban
+// sıfırlama artefaktı oluşmaz, (b) fazların D+ toplamı, toplam irtifa kazanımıyla
+// (Ekle formundaki İrtifa) tutarlı kalır. İzde <ele> yoksa null döner.
+function gpxElevGainIncrements(points){
+  const withEle=(points||[]).filter(p=>p.ele!=null&&!isNaN(p.ele));
+  if(withEle.length<2) return null;
+  const raw=withEle.map(p=>p.ele);
+  const win=5;
+  const sm=raw.map((_,i)=>{
+    const lo=Math.max(0,i-win),hi=Math.min(raw.length-1,i+win);
+    let s=0,c=0;
+    for(let j=lo;j<=hi;j++){s+=raw[j];c++;}
+    return s/c;
+  });
+  const THRESH=0.5;
+  const incs=[];
+  let base=sm[0];
+  for(let i=1;i<sm.length;i++){
+    const diff=sm[i]-base;
+    if(diff>THRESH){incs.push({t:withEle[i].t,g:diff});base=sm[i];}
+    else if(diff<0){base=sm[i];}
+  }
+  return incs;
+}
+function gpxPhaseElevGain(incs,t0,t1){
+  if(!incs) return null;
+  let g=0;
+  for(const x of incs){ if(x.t>t0&&x.t<=t1) g+=x.g; }
+  return Math.round(g);
+}
 // ── GPX/TCX'ten "Ekle" formunun temel alanlarını otomatik doldurma özeti ──────
 // Göksel talebi (2026.09.04): koç artık alanları (başlangıç saati, mesafe, irtifa
 // kazanımı, süre, ort./maks. nabız, tarih) önce elle doldurup SONRA dosya eklemek
@@ -31223,6 +31258,7 @@ function gpxComputePhases(points,blockCfgs){
   if(!points||points.length<2) return null;
   const totalEndT=points[points.length-1].t;
   const totalEndD=points[points.length-1].d;
+  const elevIncs=gpxElevGainIncrements(points); // faz D+ için (bkz. gpxElevGainIncrements)
   const native=[];
   let t=0;
   (blockCfgs||[]).forEach((b,bi)=>{
@@ -31277,7 +31313,9 @@ function gpxComputePhases(points,blockCfgs){
       }
     }
     const hrEdge=gpxHrEdgeStats(points,p.t0,p.t1);
-    return {...p,distKm,durSec,pace,hr,hrEdge};
+    // Faz D+ (m) — izde irtifa verisi yoksa null (reçetede D+ boş kalır, uydurulmaz).
+    const dPlus=durSec>0?gpxPhaseElevGain(elevIncs,p.t0,p.t1):null;
+    return {...p,distKm,durSec,pace,hr,hrEdge,dPlus};
   });
   return {rows,totalEndT,totalEndD};
 }
@@ -31429,6 +31467,12 @@ function gpxBuildLegPayload(baseRow,phase,liveZones,isAralikLeg){
   // KENDİ donmuş hedefine göre "yavaş" sinyali üretip Hedef Uyumu'nu haksız yere
   // düşürüyordu. Bu SADECE bir kayda özgü değil, GPX/TCX ile loglanan TÜM
   // antrenmanları etkileyen sistemik bir hataydı.
+  // D+ (m): reçetedeki manuel "D+ (m)" hücresiyle AYNI alan ve AYNI kural (updateCell/
+  // updateAralikCell: sıfır/boş → override yok). Hem düz satırlar hem aralık bacakları
+  // (repMap[k].run/rest) bu fonksiyondan geçtiği için ikisi de otomatik dolar. dp>0 olan
+  // satırlar GAP hesabına (paceValidation/gapZoneColor/_rowGapData) girer — iki panel
+  // de aynı ReceteTablosu kodunu kullandığından Koşu İzlerim'de de aynı sonucu verir.
+  if(phase.dPlus>0) out.dp=Math.round(phase.dPlus);
   if(baseRow.label) out.label=baseRow.label;
   if(baseRow.type)  out.type=baseRow.type;
   if(baseRow._origPaceSec>0) out._origPaceSec=baseRow._origPaceSec;
@@ -31891,13 +31935,14 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
         React.createElement('div',{style:{overflowX:'auto'}},
           React.createElement('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:11}},
             React.createElement('thead',null,React.createElement('tr',null,
-              ['Faz','Süre','Mesafe','Pace','Ort.','Maks.','Min.'].map((h,i)=>React.createElement('th',{key:i,style:{textAlign:i===0?'left':'right',padding:'4px 6px',borderBottom:'1px solid var(--border)',color:'var(--text-tertiary)',fontWeight:600}},h))
+              ['Faz','Süre','Mesafe','D+','Pace','Ort.','Maks.','Min.'].map((h,i)=>React.createElement('th',{key:i,style:{textAlign:i===0?'left':'right',padding:'4px 6px',borderBottom:'1px solid var(--border)',color:'var(--text-tertiary)',fontWeight:600}},h))
             )),
             React.createElement('tbody',null,
               phaseResult.rows.map((r,i)=>React.createElement('tr',{key:i},
                 React.createElement('td',{style:{padding:'4px 6px',borderBottom:'1px solid var(--border)'}},gpxPhaseLabel(r,blocks)),
                 React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},gpxFmtMin(r.durSec)),
                 React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},(r.distKm*1000).toFixed(0)+'m'),
+                React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},r.dPlus!=null?r.dPlus+' m':'—'),
                 React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},gpxFmtPace(r.pace)),
                 React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},r.hr.avg!=null?Math.round(r.hr.avg):'—'),
                 React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},r.hr.max!=null?Math.round(r.hr.max):'—'),
