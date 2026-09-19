@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.19-1538 --><!DOCTYPE html>
+<!-- Version: v2026.09.19-1557 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.19-1538';
+const APP_VERSION='v2026.09.19-1557';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -36223,49 +36223,21 @@ function SporcuPlanView(){
       let _displayTip=_KOSU_TIP_SET.has(_rawDisplayTip)?_rawDisplayTip:'aerobik';
       // Koç paneliyle parite: Yürü-Koş tespit edildiyse tip de tutarlı olsun (bkz. satır ~15702)
       if(_ykM) _displayTip='yuru_kos';
-      // Eski snapshot uyumu + D+ güncelleme: detay metninden _gapAvgPaceSec hesapla ve _rows.pSec güncelle
-      const _injectGap=(yList)=>yList.map(y=>{
-        // _tirmanisAna blokları: detay metninden "beklenen pace: X–Y (Z:ZZ)/km" parse et
-        if(y._tirmanisAna){
-          const _tirPaceM2=(y.detay||'').match(/beklenen pace[^(]+\((\d+:\d+)\)/i);
-          const _gapPsTir2=_tirPaceM2?paceToSec(_tirPaceM2[1]):null;
-          if(!_gapPsTir2) return y;
-          let newRows2=y._rows;
-          if(newRows2){
-            newRows2=newRows2.map(r=>{
-              if((r.type||'run')!=='run'||r.tekrar) return r;
-              if(/[iı]sınma|isinma|soğuma/i.test(r.label||'')) return r;
-              const fci2=r._forceColorZIdx!==undefined?r._forceColorZIdx:(r.zIdx!==undefined?r.zIdx:2);
-              return{...r,pSec:_gapPsTir2,_forceColorZIdx:fci2};
-            });
-          }
-          return{...y,_gapAvgPaceSec:_gapPsTir2,...(newRows2?{_rows:newRows2}:{})};
-        }
-        if(!(y.detay||'').includes('Hedef D+:')) return y;
-        const _dm=(y.detay||'').match(/Hedef D\+:\s*~?(\d+)m/);
-        if(!_dm) return y;
-        const _dpM3=parseInt(_dm[1]);
-        const _dkM=(y.detay||'').match(/^(\d+)\s*dk/);
-        const _dkY=y.sure_dk||(_dkM?parseInt(_dkM[1]):0);
-        if(!_dpM3||!_dkY) return y;
-        const _zIdxY=(()=>{const t=(y.baslik||'').toLowerCase();if(/z1|yorgun bacak/i.test(t))return 0;if(/z3|tempo/.test(t))return 2;if(/z4|eşik/.test(t))return 3;return 1;})();
-        const _gapPs3=calcGAPAvgPaceSec(_dpM3,_dkY,zones,_zIdxY);
-        if(!_gapPs3) return y;
-        let newRows3=y._rows;
-        if(newRows3){
-          newRows3=newRows3.map(r=>{
-            if((r.type||'run')!=='run'||r.tekrar) return r;
-            if(/[iı]sınma|isinma|soğuma/i.test(r.label||'')) return r;
-            const fci3=r._forceColorZIdx!==undefined?r._forceColorZIdx:(r.zIdx!==undefined?r.zIdx:_zIdxY);
-            return{...r,pSec:_gapPs3,_forceColorZIdx:fci3};
-          });
-        }
-        return{...y,_gapAvgPaceSec:_gapPs3,...(newRows3?{_rows:newRows3}:{})};
-      });
-      // Koç paneliyle aynı pipeline: kosuYapilarAl → injectRowsFromTpl → _injectGap
+      // KÖK NEDEN DÜZELTMESİ (2026.09.19 — "Koç paneli ve Koşu İzlerim tutarsız", Göksel bildirimi):
+      // Burada Koşu İzlerim'e ÖZEL bir _injectGap() vardı ve injectRowsFromTpl()'den SONRA çalışıyordu.
+      // Tırmanış adımında pace'i detay metnindeki "beklenen pace ... (5:30)" değerinden yeniden
+      // türetiyordu (şablon süresi: 80 dk); injectRowsFromTpl içindeki _injectGapAll ise (Koç panelinin
+      // kullandığı, paylaşılan yol) adımın KENDİ süresinden (70 dk) hesaplıyor → 5:35. Sonuç: iki panelde
+      // satır kimliği parmak izi (_origPaceSec: 335 ≠ 330) farklı çıkıyor → ReceteTablosu'ndaki
+      // "kalıntı override" güvenlik kilidi (_pMatch/_ovStale) Koç'ta kaydedilmiş GERÇEK değerleri
+      // Koşu İzlerim'de "eski/yabancı" sanıp atıyordu → plan değerleri (12700 m, 5:30, "Hedef Bölge")
+      // gösteriliyordu. Çözüm: Koç paneliyle BİREBİR aynı pipeline (kosuYapilarAl → injectRowsFromTpl).
+      // D+/GAP enjeksiyonu zaten injectRowsFromTpl içinde (_injectGapAll) yapılır — burada TEKRAR
+      // yapılmamalı; aksi halde bu tutarsızlık geri gelir.
+      // Koç paneliyle AYNI pipeline: kosuYapilarAl → injectRowsFromTpl (D+/GAP dahil, ek adım YOK)
       const _rawYapilarKI=_ykOverrideApplied?displayYapilar:kosuYapilarAl({tip:_displayTip,yapilar:displayYapilar,isKosuCapraz:_isKosuCapraz});
       const _injectedYapilarKI=injectRowsFromTpl(_rawYapilarKI,_displayTip,ov?.yapi_notu||'',ov?.sure_dk||45,zones,athlete?.disiplin);
-      const filteredYapilar=_injectGap(_injectedYapilarKI);
+      const filteredYapilar=_injectedYapilarKI;
       const tabloEl=filteredYapilar.length>0
         ?React.createElement(ReceteTablosu,{
             yapilar:filteredYapilar,
