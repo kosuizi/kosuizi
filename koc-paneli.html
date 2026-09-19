@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.19-1513 --><!DOCTYPE html>
+<!-- Version: v2026.09.19-1538 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.19-1513';
+const APP_VERSION='v2026.09.19-1538';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -1861,8 +1861,11 @@ function extractFeedbackSignals(allSnapsObj, athlete){
             // 2026.09.19: _isGapRow satırında gerçek D+ yoksa (GAP hesaplanamaz) düz zon bandı
             // yerine planlanan (yavaşlatılmış) hedef pace'e düşülür — paceValidation ile aynı kural.
             if(!(row._isGapRow&&!_gapApplied)&&pz?.lo_ms&&pz?.hi_ms){
-              const fastBoundarySec=Math.round(1000/pz.hi_ms); // hızlı sınır (az sn/km)
-              const slowBoundarySec=Math.round(1000/pz.lo_ms); // yavaş sınır (çok sn/km)
+              let fastBoundarySec=Math.round(1000/pz.hi_ms); // hızlı sınır (az sn/km)
+              let slowBoundarySec=Math.round(1000/pz.lo_ms); // yavaş sınır (çok sn/km)
+              // Çok-zonlu hedef — paceValidation ile BİREBİR aynı bant (bkz. rowZoneSpan)
+              const _spPaceSc=(()=>{const sp=activeZoneSpan(row,zi);return sp?spanPaceBounds(zones,sp):null;})();
+              if(_spPaceSc){fastBoundarySec=_spPaceSc.fast;slowBoundarySec=_spPaceSc.slow;}
               const zoneWidth=slowBoundarySec-fastBoundarySec;
               const tol=Math.max(1,Math.round(zoneWidth*(row._isGapRow?1.0:0.5)));
               if(cmpSec>=fastBoundarySec&&cmpSec<=slowBoundarySec){
@@ -1887,9 +1890,12 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         // Donmuş sınırlar varsa (satır daha önce düzenlenmiş) onları kullan — LTHR sonradan
         // değişse bile geçmiş satırın nabız değerlendirmesi kaymasın. Yoksa (hiç düzenlenmemiş/
         // eski veri) güncel LTHR'a göre canlı hesapla.
-        const hr=(row._origLoBpm&&row._origHiBpm)
+        // Çok-zonlu hedef (Z2–Z3 Tırmanış vb.) — bpmValidation ile BİREBİR aynı bant (bkz. rowZoneSpan);
+        // donmuş _origLoBpm/_origHiBpm tek (üst) zona ait olduğundan bu satırlarda kullanılmaz.
+        const _spHrSc=(()=>{const sp=activeZoneSpan(row,zi);return sp?spanHrBand(zones,sp):null;})();
+        const hr=_spHrSc||((row._origLoBpm&&row._origHiBpm)
           ? {id:zones?.hrZones?.[zi]?.id, lo_bpm:row._origLoBpm, hi_bpm:row._origHiBpm}
-          : zones?.hrZones?.[zi];
+          : zones?.hrZones?.[zi]);
         // 2026.08.23 — Göksel talebi: "Yarışlar için herhangi bir değerlendirme
         // yapılmasını istemiyorum." Önceden sadece PACE yarış satırlarında dışlanıyordu
         // (_isRaceRow, bkz. yukarısı) — nabız (HR) bloğu tip'ten bağımsızdı ve yarış
@@ -11048,6 +11054,35 @@ function lagWidenExtra(durSec){
     dangerDown:Math.round(LAG_WIDEN_MAX.dangerDown*frac),
   };
 }
+// ── Çok-zonlu hedef aşamaları (2026.09.19 — Göksel talebi: "Z2–Z3 Tırmanış" örneği) ──────
+// Bazı aşamaların hedefi TEK bir zonla değil bir zon ARALIĞIYLA tanımlıdır (ör. Tırmanış:
+// Nabız 141–156 bpm = Z2–Z3; Fartlek: Z2 ↔ Z3 dönüşümlü; Z1–Z2 Karışık; Giderek Artan
+// Finiş: Z4→Z5a). Ama satırın _origZIdx'i tek indeks (hep ÜST zon) taşıdığından, pace ve
+// nabız rozetleri/puanlama SADECE üst zonun bandına bakıyordu — Z2–Z3 tırmanışı yalnızca
+// Z3 (148–156 bpm) ile kıyaslanıp, plan metninin kendi verdiği 141–156 aralığındaki nabız
+// bile "Çok Düşük" çıkabiliyordu. Bu yardımcılar satırın etiketinden (kalıcı kayıtlarda da
+// bulunur — ek alan/migrasyon gerekmez) zon aralığını [alt, üst] indeksleriyle döndürür.
+// Aralık YALNIZCA efektif hedef zon üst zonla eşleşiyorsa uygulanır — coach hedefi başka
+// bir zona çektiyse (_targetZIdx) onun seçimine saygı duyulur (tek zon).
+function rowZoneSpan(row){
+  const lb=(row&&row.label)||'';
+  const m=lb.match(/^\s*Z([1-5])\s*[–\-]\s*Z?([1-5])(?![0-9abc])/i); // 'Z2-Z3 Tırmanış', 'Z1–Z2 Karışık'
+  if(m){const a=parseInt(m[1],10)-1, b=parseInt(m[2],10)-1; if(b>a&&b-a<=2) return [a,b];}
+  if(/^Fartlek Blokları/i.test(lb)) return [1,2];      // 2–3 dk Z3 / 3–5 dk Z2 dönüşümlü
+  if(/^Giderek Artan Finiş/i.test(lb)) return [3,4];   // her 2 dk'da hız artır (Z4→Z5a)
+  return null;
+}
+function activeZoneSpan(row,zi){ const sp=rowZoneSpan(row); return (sp&&zi===sp[1])?sp:null; }
+function spanPaceBounds(zonesObj,sp){ // {fast,slow} sn/km — alt zonun yavaş ucu ↔ üst zonun hızlı ucu
+  const hi=zonesObj?.paceZones?.[sp[1]], lo=zonesObj?.paceZones?.[sp[0]];
+  if(!hi?.hi_ms||!lo?.lo_ms) return null;
+  return {fast:Math.round(1000/hi.hi_ms), slow:Math.round(1000/lo.lo_ms)};
+}
+function spanHrBand(zonesObj,sp){ // {id,lo_bpm,hi_bpm} — alt zonun alt sınırı ↔ üst zonun üst sınırı
+  const hi=zonesObj?.hrZones?.[sp[1]], lo=zonesObj?.hrZones?.[sp[0]];
+  if(!hi?.hi_bpm||!lo?.lo_bpm) return null;
+  return {id:hi.id, lo_bpm:lo.lo_bpm, hi_bpm:hi.hi_bpm};
+}
 // durSec (opsiyonel): satırın gerçek süresi (sn). Verilirse ve bölge sürekli (Z2–Z4)
 // ise, kısa süreye göre alt yön toleransı kademeli genişletilir. Verilmezse veya
 // bölge Z1/Z5x ise davranış öncekiyle birebir aynıdır (Z5x zaten kendi sabit geniş
@@ -11534,9 +11569,13 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     // aynı kaynağa (_mZones) geçildi — profileHistory zaten her nabız bölgesi
     // değişikliğinde eski/yeni değerleri kaydediyor (bkz. athleteAtDate), sadece bu
     // rozet ona hiç bakmıyordu.
-    const hr=(row._origLoBpm&&row._origHiBpm)
+    // Çok-zonlu hedef (Z2–Z3 Tırmanış vb.): bant alt zonun alt sınırından üst zonun üst sınırına
+    // (bkz. rowZoneSpan). Donmuş _origLoBpm/_origHiBpm TEK (üst) zona ait olduğundan bu satırlarda
+    // kullanılmaz — sınırlar o günün profilinden (_mZones/athleteAtDate) okunur.
+    const _spHr=(()=>{const sp=activeZoneSpan(row,zi);return sp?spanHrBand(_mZones,sp):null;})();
+    const hr=_spHr||((row._origLoBpm&&row._origHiBpm)
       ? {id:_mZones?.hrZones?.[zi]?.id, lo_bpm:row._origLoBpm, hi_bpm:row._origHiBpm}
-      : _mZones?.hrZones?.[zi];
+      : _mZones?.hrZones?.[zi]);
     if(!hr?.lo_bpm||!hr?.hi_bpm) return null;
     const {lo_bpm,hi_bpm}=hr;
     // durSec: sürekli bölgelerde (Z2–Z4) kısa segmentlerin lag payını hesaba katar
@@ -11790,8 +11829,11 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     const zi=row._targetZIdx!=null?row._targetZIdx:row._origZIdx;
     const pz=zi!=null?_mZones?.paceZones?.[zi]:null;
     if(pz?.lo_ms&&pz?.hi_ms){
-      const fastBoundarySec=Math.round(1000/pz.hi_ms); // hızlı sınır (az sn/km)
-      const slowBoundarySec=Math.round(1000/pz.lo_ms); // yavaş sınır (çok sn/km)
+      let fastBoundarySec=Math.round(1000/pz.hi_ms); // hızlı sınır (az sn/km)
+      let slowBoundarySec=Math.round(1000/pz.lo_ms); // yavaş sınır (çok sn/km)
+      // Çok-zonlu hedef (Z2–Z3 Tırmanış vb.) — bkz. rowZoneSpan: bant alt zonun yavaş ucundan üst zonun hızlı ucuna
+      const _spPace=(()=>{const sp=activeZoneSpan(row,zi);return sp?spanPaceBounds(_mZones,sp):null;})();
+      if(_spPace){fastBoundarySec=_spPace.fast;slowBoundarySec=_spPace.slow;}
       if(cmpSec>=fastBoundarySec&&cmpSec<=slowBoundarySec)
         return{label:'Hedef Bölge',color:'#22c55e',bg:'#f0fdf4',icon:'✓'};
       // Tolerans: zone genişliğinin %50'si — dar zonelarda (Z3–Z4) ~10–12 sn, geniş zonelarda (Z1) ~30 sn
