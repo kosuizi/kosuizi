@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.19-1610 --><!DOCTYPE html>
+<!-- Version: v2026.09.19-1629 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.19-1610';
+const APP_VERSION='v2026.09.19-1629';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -16701,6 +16701,31 @@ function computeRampVsIdealDecision({phase,acwr,sakatlik,hrvDurum,hrv7Low,tutarl
   return {level,title,message,suggestedRampRatePct};
 }
 
+// ── Mevcut hafta "GÖRÜNEN HEDEF" — TEK KAYNAK (19.09.2026 sohbeti) ─────────────
+// Kök neden: aynı hafta için ekranda iki farklı "hedef" görünüyordu. Yükleme Planı
+// uyarı kutusu (evaluatePeakReachability) CANLI weekTargets değerini (örn. 55.5km /
+// D+1308m) yazıyordu; "Bu Hafta" başlığındaki Hedef rozeti ve Koşu İzlerim ise
+// DONDURULMUŞ planSnap.weekEff'i (örn. 40.8km / D+998m) okur. Canlı hedef hafta içinde
+// donmuş olandan sapabildiği için (bkz. "Hedef" rozeti KÖK NEDEN notu) ikisi ayrışıyordu.
+// Artık başlık rozeti VE uyarı kutusu aynı fonksiyondan besleniyor — tekrar yazılıp
+// birbirinden sapması mümkün değil.
+//   dcwe   : displayCurWeekEff (dondurulmuş weekEff ya da canlı curWeekEffective) veya null
+//   liveWt : o haftanın canlı hedef kaydı — yalnızca dcwe.origKm/origDp yoksa fallback
+//            ve isRaceWeek bilgisi için kullanılır
+//   km/dp  : rozetin gösterdiği değer (revize gösteriliyorsa efektif, aksi halde orijinal)
+function resolveWeekDisplayTarget(dcwe,liveWt){
+  const effKm=dcwe?dcwe.effKm:0;
+  const effDp=dcwe?dcwe.effDp:0;
+  const origKm=dcwe?.origKm>0?dcwe.origKm:(liveWt?.targetKm||0);
+  const origDp=dcwe?.origDp>0?dcwe.origDp:(liveWt?.targetDp||0);
+  const showRevised=!!(dcwe?.isRevised&&liveWt&&(
+    (origKm>0&&effKm<origKm&&(origKm-effKm)/origKm>0.05)||
+    (origDp>0&&effDp<origDp&&(origDp-effDp)/origDp>0.10)||
+    liveWt.isRaceWeek
+  ));
+  return{origKm,origDp,effKm,effDp,showRevised,km:showRevised?effKm:origKm,dp:showRevised?effDp:origDp};
+}
+
 // ── Zirve Hafta Ulaşılabilirlik Değerlendirmesi (Bağlam-Duyarlı) ─────────────
 // Sporcunun bulunduğu faza göre farklı değerlendirmeler üretir:
 //   - Yarış haftası: Başarı mesajı, yarış günü bilgileri
@@ -16708,7 +16733,7 @@ function computeRampVsIdealDecision({phase,acwr,sakatlik,hrvDurum,hrv7Low,tutarl
 //   - Zirve: Bu haftanın hedefine uygunluk
 //   - Zirve öncesi (Temel/Gelişme): Projeksiyon ile ulaşılabilirlik
 // Döner: { status, message, currentWeek, actionItems[], peak*, projected*, gap* }
-function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, rampRatePct=10, curEffKm=null, curEffDp=null){
+function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, rampRatePct=10, curEffKm=null, curEffDp=null, curDispKm=null, curDispDp=null){
   if(!weeks||!weeks.length||!primary)return null;
 
   // Bulunduğu hafta — tüm analizin merkezi
@@ -16724,10 +16749,19 @@ function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, ram
   const raceDate=new Date(primary.tarih+'T12:00:00');
   const daysToRace=Math.ceil((raceDate-today)/864e5);
 
+  // Bu haftanın GÖRÜNEN hedefi (başlıktaki "Hedef:" rozeti / Koşu İzlerim ile aynı —
+  // bkz. resolveWeekDisplayTarget). curDispKm verilmemişse (eski çağrı biçimi) eski
+  // davranışa düşer: revize efektif hedef varsa o, yoksa canlı ham hedef.
+  // NOT: aşağıdaki Gelişme/Temel projeksiyon simülasyonu (curEffKm/curEffDp) bilerek
+  // DEĞİŞTİRİLMEDİ — bu değişiklik yalnızca ekranda GÖSTERİLEN "bu hafta" sayılarını kapsar.
+  const _hasDisp=curDispKm!=null&&curDispKm>0;
+  const thisKm=_hasDisp?curDispKm:((curEffKm!=null&&curEffKm>0)?curEffKm:currentWeek.targetKm);
+  const thisDp=(_hasDisp&&curDispDp!=null)?curDispDp:((curEffDp!=null&&curEffDp>0)?curEffDp:currentWeek.targetDp);
+
   const baseResult={
     currentWeek,peakKm,peakDp,
-    currentTargetKm:currentWeek.targetKm,
-    currentTargetDp:currentWeek.targetDp,
+    currentTargetKm:thisKm,
+    currentTargetDp:thisDp,
     currentActualKm:currentWeek.actualKm,
     currentActualDp:currentWeek.actualDp,
     phase:currentWeek.phase,
@@ -16761,7 +16795,7 @@ function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, ram
       title:'🔽 Taper Fazı',
       message:`Yarışa ${daysToRace} gün kaldı — form zirvesi inşa ediliyor. Hacmi kademeli düşür, yoğunluğu koru.`,
       actionItems:[
-        `📉 Bu hafta hedefi: ${currentWeek.targetKm}km / D+ ${currentWeek.targetDp}m (zirve haftanın %${Math.round(currentWeek.targetKm/Math.max(1,peakKm)*100)}'i)`,
+        `📉 Bu hafta hedefi: ${thisKm}km / D+ ${thisDp}m (zirve haftanın %${Math.round(thisKm/Math.max(1,peakKm)*100)}'i)`,
         '🎯 Yoğunluğu koru — hız ve eşik çalışmaları kısalt ama bırakma',
         '💪 Kuvvet antrenmanlarını %50 azalt, ağırlığı hafiflet',
         '😴 Uyku ve toparlanmaya öncelik ver — form bu hafta inşa ediliyor',
@@ -16785,8 +16819,10 @@ function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, ram
     // yönlendiriyordu. Artık aynı ilke: efektif hedef varsa (curEffKm, revize
     // edilmiş haftalarda) o kullanılır, yoksa ham hedefe düşülür — Yükleme
     // Planı Tablosu'nda gösterilenle birebir aynı sayı.
-    const kmTarget=(curEffKm!=null&&curEffKm>0)?curEffKm:currentWeek.targetKm;
-    const dpTarget=(curEffDp!=null&&curEffDp>0)?curEffDp:currentWeek.targetDp;
+    // DÜZELTME (19.09.2026): revize yoksa eskiden CANLI ham hedefe düşüyordu; artık
+    // başlıktaki Hedef rozetiyle aynı görünen hedef (thisKm/thisDp — bkz. yukarıda).
+    const kmTarget=thisKm;
+    const dpTarget=thisDp;
     const kmPct=kmTarget>0?Math.round(kmDone/kmTarget*100):0;
     const dpPct=dpTarget>0?Math.round(dpDone/dpTarget*100):0;
     const peakWeeksLeft=weeks.filter(w=>w.phase==='Zirve'&&!w.isPast&&!w.isCurrent&&!w._isRecovery).length;
@@ -16938,8 +16974,8 @@ function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, ram
   }:null;
 
   // Bu haftanın ideal hedefi
-  const currentKmPct=currentWeek.targetKm>0?Math.round(currentWeek.actualKm/currentWeek.targetKm*100):0;
-  const currentDpPct=currentWeek.targetDp>0?Math.round(currentWeek.actualDp/currentWeek.targetDp*100):0;
+  const currentKmPct=thisKm>0?Math.round(currentWeek.actualKm/thisKm*100):0;
+  const currentDpPct=thisDp>0?Math.round(currentWeek.actualDp/thisDp*100):0;
 
   const phaseLabel=currentWeek.phase==='Gelişme'?'📈 Gelişme Fazı':'🏗️ Temel Fazı';
   let status,title,message,actionItems=[];
@@ -16951,16 +16987,16 @@ function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, ram
     title=`${phaseLabel} — Dinlenme Haftası`;
     message=`Dinlenme haftasındasın — hacim ${Math.round(currentWeek._kmPct*100)}%'e indirildi. Toparlanma için ideal.`;
     actionItems=[
-      `📊 Bu hafta hedefi: ${currentWeek.targetKm}km / D+ ${currentWeek.targetDp}m`,
+      `📊 Bu hafta hedefi: ${thisKm}km / D+ ${thisDp}m`,
       '💆 Kolay koşular + çapraz antrenman',
       '🔄 Bir sonraki hafta tam yüke döneceksin'
     ];
   } else if(worstGap<=0.05){
     status='ideal';
     title=phaseLabel;
-    message=`✓ Mevcut trendle zirve hedeflere ulaşılacak. Bu hafta hedefin: ${currentWeek.targetKm}km / D+ ${currentWeek.targetDp}m`;
+    message=`✓ Mevcut trendle zirve hedeflere ulaşılacak. Bu hafta hedefin: ${thisKm}km / D+ ${thisDp}m`;
     actionItems=[
-      `📊 Bu hafta: ${currentWeek.actualKm}/${currentWeek.targetKm}km (%${currentKmPct}) · D+ ${currentWeek.actualDp}/${currentWeek.targetDp}m (%${currentDpPct})`,
+      `📊 Bu hafta: ${currentWeek.actualKm}/${thisKm}km (%${currentKmPct}) · D+ ${currentWeek.actualDp}/${thisDp}m (%${currentDpPct})`,
       `⏳ Zirveye ${weeksToFirstPeak} hafta`,
       catchUpInfo?(catchUpInfo.catchUpWeekIdx!=null
         ?`🔵 Revize hedef ${catchUpInfo.effKm}km · Rampa %${catchUpInfo.ratePct}/hafta ile H${catchUpInfo.catchUpWeekIdx} haftasında orijinal plana dönülür (${catchUpInfo.weeksUntilCatchUp} hafta sonra)`
@@ -16970,9 +17006,9 @@ function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, ram
   } else if(worstGap<=0.20){
     status='risk';
     title=phaseLabel+' — Dikkat';
-    message=`⚠ Zirve hedeflere ulaşmak için tutarlılık artırılmalı. Bu haftaya odaklan: ${currentWeek.targetKm}km / D+ ${currentWeek.targetDp}m`;
+    message=`⚠ Zirve hedeflere ulaşmak için tutarlılık artırılmalı. Bu haftaya odaklan: ${thisKm}km / D+ ${thisDp}m`;
     actionItems=[
-      `📊 Bu hafta: ${currentWeek.actualKm}/${currentWeek.targetKm}km (%${currentKmPct}) · D+ ${currentWeek.actualDp}/${currentWeek.targetDp}m (%${currentDpPct})`,
+      `📊 Bu hafta: ${currentWeek.actualKm}/${thisKm}km (%${currentKmPct}) · D+ ${currentWeek.actualDp}/${thisDp}m (%${currentDpPct})`,
       `📉 Projeksiyon zirve: ${projectedPeakKm}km (hedef ${peakKm}km)`,
       gapKm>0?`🎯 Haftalık ortalama +${round1(gapKm/Math.max(1,weeksToFirstPeak))}km artış gerekli`:null,
       gapDp>0?`⛰️ D+ için haftada +${Math.round(gapDp/Math.max(1,weeksToFirstPeak))}m ekle`:null,
@@ -16984,9 +17020,9 @@ function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, ram
   } else {
     status='unlikely';
     title=phaseLabel+' — Plan Revizesi Önerilir';
-    message=`Mevcut trendle zirve hedeflere ulaşılması zor. Şu an odaklanılacak: bu hafta ${currentWeek.targetKm}km / D+ ${currentWeek.targetDp}m`;
+    message=`Mevcut trendle zirve hedeflere ulaşılması zor. Şu an odaklanılacak: bu hafta ${thisKm}km / D+ ${thisDp}m`;
     actionItems=[
-      `📊 Bu hafta: ${currentWeek.actualKm}/${currentWeek.targetKm}km (%${currentKmPct}) · D+ ${currentWeek.actualDp}/${currentWeek.targetDp}m (%${currentDpPct})`,
+      `📊 Bu hafta: ${currentWeek.actualKm}/${thisKm}km (%${currentKmPct}) · D+ ${currentWeek.actualDp}/${thisDp}m (%${currentDpPct})`,
       `📉 Projeksiyon: ${projectedPeakKm}km vs hedef ${peakKm}km (açık %${Math.round(kmGapPct*100)})`,
       `⏳ Zirveye ${weeksToFirstPeak} hafta — %${Math.round((weeklyGrowthRate-1)*100)}/hafta oranı yeterli değil`,
       catchUpInfo?(catchUpInfo.catchUpWeekIdx!=null
@@ -23229,7 +23265,9 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       })(),
       // Bağlam-Duyarlı Zirve Hafta Ulaşılabilirlik Uyarısı
       (()=>{
-        const evalRes=evaluatePeakReachability(weekTargets,plan.primary,athlete,rampModeOn,rampRatePct,displayCurWeekEff?.isRevised?displayCurWeekEff.effKm:null,displayCurWeekEff?.isRevised?displayCurWeekEff.effDp:null);
+        // Bu haftanın görünen hedefi — başlıktaki "Hedef:" rozetiyle AYNI kaynak (resolveWeekDisplayTarget)
+        const _peakDisp=resolveWeekDisplayTarget(displayCurWeekEff,weekTargets.find(w=>w.isCurrent)||null);
+        const evalRes=evaluatePeakReachability(weekTargets,plan.primary,athlete,rampModeOn,rampRatePct,displayCurWeekEff?.isRevised?displayCurWeekEff.effKm:null,displayCurWeekEff?.isRevised?displayCurWeekEff.effDp:null,_peakDisp.km,_peakDisp.dp);
         if(!evalRes)return null;
         // Status → renk eşleştirmesi
         const colorMap={
@@ -23885,8 +23923,11 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       },0));
       // Mevcut hafta revize hedef: curWeekEffective (yoğunluk düzeltmeli) — tekrar hesap gereksiz
       // curWeekEffective yoksa (plan yok / gelecek hafta) null döner
-      const weekEffKm=week.weekOff===0&&displayCurWeekEff?displayCurWeekEff.effKm:0;
-      const weekEffDp=week.weekOff===0&&displayCurWeekEff?displayCurWeekEff.effDp:0;
+      // (19.09.2026) Efektif/orijinal/revize-gösterim değerleri artık paylaşılan
+      // resolveWeekDisplayTarget'tan gelir — Yükleme Planı uyarı kutusu da aynısını kullanır.
+      const _wdt=resolveWeekDisplayTarget(week.weekOff===0?displayCurWeekEff:null,week.wt);
+      const weekEffKm=_wdt.effKm;
+      const weekEffDp=_wdt.effDp;
       // KÖK NEDEN DÜZELTMESİ (Temmuz 2026 — Koç Paneli / Koşu İzlerim "Hedef" uyuşmazlığı):
       // week.wt.targetKm/targetDp CANLI hesaplanır — sporcunun CTL'si hafta İÇİNDE
       // antrenman girdikçe değişir, bu da targetKm'yi hafta bitmeden kaydırır (bkz. yukarıdaki
@@ -23896,13 +23937,9 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       // (ve haftanın ortasında kendi kendine değişen) bir sayı gösterebiliyordu. "Bu Hafta"
       // için gösterim artık dondurulmuş origKm/origDp'yi esas alır — weekEff henüz yoksa
       // (çok eski kayıt/ilk yükleme) canlı week.wt değerine düşer.
-      const weekOrigKm=week.weekOff===0&&displayCurWeekEff?.origKm>0?displayCurWeekEff.origKm:(week.wt?.targetKm||0);
-      const weekOrigDp=week.weekOff===0&&displayCurWeekEff?.origDp>0?displayCurWeekEff.origDp:(week.wt?.targetDp||0);
-      const weekShowRevised=week.weekOff===0&&displayCurWeekEff?.isRevised&&week.wt&&(
-        (weekOrigKm>0&&weekEffKm<weekOrigKm&&(weekOrigKm-weekEffKm)/weekOrigKm>0.05)||
-        (weekOrigDp>0&&weekEffDp<weekOrigDp&&(weekOrigDp-weekEffDp)/weekOrigDp>0.10)||
-        week.wt.isRaceWeek
-      );
+      const weekOrigKm=_wdt.origKm;
+      const weekOrigDp=_wdt.origDp;
+      const weekShowRevised=_wdt.showRevised;
       // DÜZELTME 2 (Temmuz 2026 — Kalan'ın kaynağı tekrar değişti, Göksel'in talebiyle):
       // Önceki sürümde "Kalan" = Hedef − Gerçek idi (aşağıdaki artık geçersiz not buydu).
       // Bu YANLIŞTI: Gerçek zaten koşulmuş mesafedir; Hedef'ten onu çıkarmak "antrenman
