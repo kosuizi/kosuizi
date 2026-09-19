@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.19-0030 --><!DOCTYPE html>
+<!-- Version: v2026.09.19-1513 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.19-0030';
+const APP_VERSION='v2026.09.19-1513';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -928,9 +928,9 @@ function fmtHMS(totalMin){
 
 function fmtPaceStr(totalMin,km){
   if(!totalMin||!km)return'—';
-  const paceSec=(totalMin/km)*60;
+  const paceSec=Math.round((totalMin/km)*60); // 2026.09.19: önce yuvarla ('m:60' hatası)
   const pm=Math.floor(paceSec/60);
-  const ps=Math.round(paceSec%60);
+  const ps=paceSec%60;
   return`${pm}:${String(ps).padStart(2,'0')} /km`;
 }
 
@@ -1814,9 +1814,15 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         // üstündeki not) coach'un seçtiği yönle çelişmediği sürece kullanılır.
         const enteredSec=(pm||0)*60+(ps||0);
         let cmpSec=enteredSec;
-        if(row.dp>0&&row._origMesafe>0&&!row._isGapRow){
-          const gap=calcGAP(row.dp,row._origMesafe/1000,0);
-          if(gap) cmpSec=Math.round(enteredSec/gap.factor);
+        // 2026.09.19 — Göksel talebi: hedef pace kıyaslaması TÜM antrenman türlerinde GAP ile
+        // (planlı D+ satırları/_isGapRow DAHİL — eski istisna kaldırıldı). Eğim, rozetin
+        // (paceValidation/gapFactorForRow) kullandığı GERÇEK girilen mesafeden hesaplanır;
+        // mesafe yoksa donmuş _origMesafe'ye düşülür (rozet-puan paritesi).
+        let _gapApplied=false;
+        const _gapDistM=row.mesafe>0?row.mesafe:row._origMesafe;
+        if(row.dp>0&&_gapDistM>0){
+          const gap=calcGAP(row.dp,_gapDistM/1000,0);
+          if(gap){ cmpSec=Math.round(enteredSec/gap.factor); _gapApplied=true; }
         }
         // Manuel rozet override — bkz. paceBadgeToSignal üstündeki not. Coach ReceteTablosu'nda
         // pace rozetini elle düzelttiyse, puanlama motoru OTOMATİK hesaplama yerine onu kullanır;
@@ -1852,7 +1858,9 @@ function extractFeedbackSignals(allSnapsObj, athlete){
             // (bkz. aşağıdaki `hr` değişkeni, _origLoBpm/_origHiBpm donmuşsa onu tercih eder;
             // donmamışsa artık CANLI değil, o GÜNÜN zone'una düşer — HR için de aynı iyileşme).
             const pz=zi!=null?zones?.paceZones?.[zi]:null;
-            if(pz?.lo_ms&&pz?.hi_ms){
+            // 2026.09.19: _isGapRow satırında gerçek D+ yoksa (GAP hesaplanamaz) düz zon bandı
+            // yerine planlanan (yavaşlatılmış) hedef pace'e düşülür — paceValidation ile aynı kural.
+            if(!(row._isGapRow&&!_gapApplied)&&pz?.lo_ms&&pz?.hi_ms){
               const fastBoundarySec=Math.round(1000/pz.hi_ms); // hızlı sınır (az sn/km)
               const slowBoundarySec=Math.round(1000/pz.lo_ms); // yavaş sınır (çok sn/km)
               const zoneWidth=slowBoundarySec-fastBoundarySec;
@@ -4866,7 +4874,8 @@ function _driftEF(paceSec,hr){ return (paceSec>0&&hr>0)?paceSec/hr:0; }
 // (pace_dk/pace_sn) çevirmesi için (bkz. gpxComputeCardiacDrift).
 function _secToPaceParts(sec){
   if(!sec||sec<=0) return {dk:'',sn:''};
-  const dk=Math.floor(sec/60),sn=Math.round(sec%60);
+  const _t=Math.round(sec); // 2026.09.19: önce yuvarla ('m:60' hatası)
+  const dk=Math.floor(_t/60),sn=_t%60;
   return {dk:String(dk),sn:String(sn)};
 }
 // Tek bir bloğun ham alanlarından %'lerini hesaplar — kaynağı fark etmez (manuel/GPX).
@@ -9653,7 +9662,7 @@ function blockCount(band,phase){
 // Pace string (MM:SS) → saniye
 const paceToSec=p=>{if(!p)return 0;const[m,s]=(p+'').split(':');return parseInt(m||0)*60+parseInt(s||0);};
 // Saniye → pace string
-const secToPace=s=>{const m=Math.floor(s/60);const sc=Math.round(s%60);return`${m}:${String(sc).padStart(2,'0')}`;};
+const secToPace=s=>{const t=Math.round(s);const m=Math.floor(t/60);const sc=t%60;return`${m}:${String(sc).padStart(2,'0')}`;}; // 2026.09.19: 59.6 sn → '4:60' hatası düzeltildi (önce yuvarla, sonra böl)
 // İki pace arasındaki ortalama
 const avgPace=(lo,hi)=>{const ls=paceToSec(lo),hs=paceToSec(hi);return(ls&&hs)?secToPace((ls+hs)/2):null;};
 
@@ -10063,7 +10072,8 @@ function getRahatYurumePace(zones){
 // sn/km → "M:SS" — yapı notu/detay metinlerinde okunabilir pace göstermek için.
 function fmtPaceLbl(paceSec){
   if(!paceSec) return '—';
-  const m=Math.floor(paceSec/60),s=Math.round(paceSec%60);
+  const _t=Math.round(paceSec); // 2026.09.19: önce yuvarla ('m:60' hatası)
+  const m=Math.floor(_t/60),s=_t%60;
   return m+':'+String(s).padStart(2,'0');
 }
 // ── MAF nabız hedefi — sporcu bazlı dinamik hesap ─────────────────────────
@@ -11631,22 +11641,34 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
   // slowBoundarySec = 1000/lo_ms → zone'un en yavaş izin verilen pace'i (çok sn/km)
   // Zone içindeyse → yeşil | sınır dışı ≤tol → sarı | daha fazlası → kırmızı
   // GAP-düzeltmeli karşılaştırma pace'i — paceValidation VE satır rengi (liveRowColor)
-  // TARAFINDAN ORTAK kullanılır, tek kaynak. Satıra gerçek D+ girilmişse (ve hedefte D+
-  // öngörülmemişse — _isGapRow hariç, bkz. altındaki not) ham girilen pace yerine
-  // GAP-düzeltmeli (düz eşdeğer) pace döner.
+  // TARAFINDAN ORTAK kullanılır, tek kaynak. Satıra gerçek D+ (ve mesafe) girilmişse
+  // (eğim >= %0.5) ham girilen pace yerine GAP-düzeltmeli (düz eşdeğer) pace döner.
+  //
+  // KÖK NEDEN DÜZELTMESİ (2026.09.19 — Göksel talebi: "hedef pace kıyaslaması HER ZAMAN
+  // GAP değeri ile olmalı", Tırmanış antrenmanı örneği: 6:23 ham pace / 5:48 GAP): ÖNCEDEN
+  // burada `!row._isGapRow` istisnası vardı ("hedef zaten D+'ya göre yavaşlatıldı, tekrar
+  // düzeltmek sistematik hata yaratır" gerekçesiyle). Ama kıyaslanan zon sınırları (pz.lo_ms/
+  // hi_ms) DÜZ ZEMİN bandıdır — yavaşlatılmış hedef değil. Sonuç: tırmanışlı ham pace (6:23)
+  // düz banda (4:23–4:39) vuruluyor, planın kendi beklenen pace'i bile 'Çok Yavaş' çıkıyordu.
+  // Artık TÜM antrenman türlerinde (planlı D+ satırları dahil) gerçek D+ girildiyse pace
+  // GAP-düzeltmeli (düz eşdeğer) hâliyle düz zon bandına kıyaslanır. Gerçek D+ yoksa GAP
+  // hesaplanamaz — bu durumda _isGapRow satırları için paceValidation planlanan (yavaşlatılmış)
+  // hedef pace ile kıyaslar (bkz. paceValidation içindeki `_plannedTargetLabel`).
+  const gapFactorForRow=(row)=>{
+    if(!row||!(row.dp>0)||!(row.mesafe>0)) return null;
+    // KÖK NEDEN DÜZELTMESİ (2026.08.30 — bkz. D+ (m) sütunundaki aynı notun ikizi):
+    // aralık ortalamasında (_aralikAveraged) row.dp TÜM tekrarların TOPLAMI
+    // (_dpIsSum:true) iken row.mesafe TEK tekrarın ortalaması — mesafeyi de aynı
+    // ölçeğe (repeatCount ile) getirmezsek eğim ~tekrar sayısı kadar şişer. Bu
+    // fonksiyon HEM paceValidation rozetini HEM liveRowColor'ı beslediği için bu
+    // düzeltme ikisini de otomatik kapsıyor.
+    const distKmForGap=((row._dpIsSum?(row.repeatCount||1):1)*row.mesafe)/1000;
+    const gap=calcGAP(row.dp,distKmForGap,0);
+    return gap&&gap.factor>0?gap.factor:null;
+  };
   const gapAdjustedPaceSec=(row,rawSec)=>{
-    if(row.dp>0&&row.mesafe>0&&!row._isGapRow){
-      // KÖK NEDEN DÜZELTMESİ (2026.08.30 — bkz. D+ (m) sütunundaki aynı notun ikizi):
-      // aralık ortalamasında (_aralikAveraged) row.dp TÜM tekrarların TOPLAMI
-      // (_dpIsSum:true) iken row.mesafe TEK tekrarın ortalaması — mesafeyi de aynı
-      // ölçeğe (repeatCount ile) getirmezsek eğim ~tekrar sayısı kadar şişer. Bu
-      // fonksiyon HEM paceValidation rozetini HEM liveRowColor'ı beslediği için bu
-      // düzeltme ikisini de otomatik kapsıyor.
-      const distKmForGap=((row._dpIsSum?(row.repeatCount||1):1)*row.mesafe)/1000;
-      const gap=calcGAP(row.dp,distKmForGap,0);
-      if(gap) return Math.round(rawSec/gap.factor);
-    }
-    return rawSec;
+    const f=gapFactorForRow(row);
+    return f?Math.round(rawSec/f):rawSec;
   };
 
   // ── GAP bölgesi rengi (Göksel talebi, 2026.09.14 — "her satırda D+ girildikten sonra
@@ -11661,7 +11683,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
   // mevcut renk kaynağına (liveRowColor/statik .color) düşer, bu satırlarda davranış
   // DEĞİŞMEZ.
   const gapZoneColor=(row)=>{
-    if(!row||!(row.dp>0)||!(row.mesafe>0)||row._isGapRow) return null;
+    if(!row||!(row.dp>0)||!(row.mesafe>0)) return null; // 2026.09.19: _isGapRow dışlaması kaldırıldı (bkz. gapAdjustedPaceSec notu)
     const rawSec=(row.pm||0)*60+(row.ps||0);
     if(rawSec<=0) return null;
     const distKmForGap=((row._dpIsSum?(row.repeatCount||1):1)*row.mesafe)/1000;
@@ -11726,11 +11748,32 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     const enteredSec=(pm||0)*60+(ps||0);
     if(enteredSec<=0) return null;
     // GAP düzeltmesi (bkz. gapAdjustedPaceSec) — 5:45 koşulmuş ama D+ ile GAP 5:20
-    // hesaplanmışsa "biraz hızlı/yavaş" kıyaslaması 5:20 üzerinden yapılır. _isGapRow
-    // İSTİSNASI: bu satırın hedefi zaten PLANLANAN "Hedef D+:" değerine göre yavaşlatılmış
-    // (bkz. _adimGapPs/calcGAPAvgPaceSec, satır ~5904) — o durumda ham girilen pace zaten
-    // hedefle AYNI temelde (ikisi de tırmanışlı), tekrar düzeltmek sistematik hata yaratır.
-    const cmpSec=gapAdjustedPaceSec(row,enteredSec);
+    // hesaplanmışsa "biraz hızlı/yavaş" kıyaslaması 5:20 üzerinden yapılır.
+    // 2026.09.19 — Göksel talebi: bu kural TÜM antrenman türleri için geçerli, planlı
+    // D+ satırları (_isGapRow) DAHİL — eski _isGapRow istisnası kaldırıldı (ham tırmanış
+    // pace'ini düz zon bandıyla kıyaslıyordu → hep 'Çok Yavaş').
+    const _gapFac=gapFactorForRow(row);
+    const cmpSec=_gapFac?Math.round(enteredSec/_gapFac):enteredSec;
+    // Planlanan (D+'ya göre yavaşlatılmış) hedef pace ile nokta-bazlı kıyas. İKİ durumda kullanılır:
+    //  (a) _isGapRow satırında gerçek D+ girilmemişse (GAP hesaplanamaz — ham pace'i düz zon
+    //      bandıyla kıyaslamak anlamsız olurdu), (b) zon sınırı verisi yoksa (eski fallback).
+    // NOT: eski fallback'te `tol` tanımsız bir değişkendi (pz bloğuna ait const) — bu dala
+    // düşülürse ReferenceError fırlatıyordu; artık tol1/tol2 yerelde tanımlı.
+    const _plannedPace=row._targetPaceSec!=null?row._targetPaceSec:row._origPaceSec;
+    const _plannedTargetLabel=()=>{
+      const diff=cmpSec-_plannedPace;
+      const absDiff=Math.abs(diff);
+      const tol1=row._isGapRow?50:25;
+      const tol2=tol1*2;
+      if(absDiff<=tol1) return{label:'Hedef Bölge',color:'#22c55e',bg:'#f0fdf4',icon:'✓'};
+      if(absDiff<=tol2) return diff>0
+        ?{label:'Biraz Yavaş',color:'#f59e0b',bg:'#fffbeb',icon:'▼'}
+        :{label:'Biraz Hızlı',color:'#f59e0b',bg:'#fffbeb',icon:'▲'};
+      return diff>0
+        ?{label:'Çok Yavaş',color:'#ef4444',bg:'#fef2f2',icon:'▼▼'}
+        :{label:'Çok Hızlı',color:'#ef4444',bg:'#fef2f2',icon:'▲▲'};
+    };
+    if(row._isGapRow&&!_gapFac&&_plannedPace>0) return _plannedTargetLabel();
     // NOT: eski "OP-YK1" (Yürü-Koş yürüyüş satırı için sabit 10:00/km pace hedefi) bloğu
     // kaldırıldı — bkz. yukarıdaki OP-YK3 notu. row.type==='walk' artık fonksiyonun en
     // başında return null ile eleniyor, bu satıra hiç ulaşmıyor.
@@ -11765,18 +11808,8 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
       return{label:'Çok Yavaş',color:'#ef4444',bg:'#fef2f2',icon:'▼▼'};
     }
     // Fallback: paceZone yoksa _targetPaceSec/_origPaceSec bazlı eski mantık
-    const origPace=row._targetPaceSec!=null?row._targetPaceSec:row._origPaceSec;
-    if(!origPace||origPace<=0) return null;
-    const diff=cmpSec-origPace;
-    const absDiff=Math.abs(diff);
-    const tol1=row._isGapRow?50:25;
-    if(absDiff<=tol1) return{label:'Hedef Bölge',color:'#22c55e',bg:'#f0fdf4',icon:'✓'};
-    if(absDiff<=tol) return diff>0
-      ?{label:'Biraz Yavaş',color:'#f59e0b',bg:'#fffbeb',icon:'▼'}
-      :{label:'Biraz Hızlı',color:'#f59e0b',bg:'#fffbeb',icon:'▲'};
-    return diff>0
-      ?{label:'Çok Yavaş',color:'#ef4444',bg:'#fef2f2',icon:'▼▼'}
-      :{label:'Çok Hızlı',color:'#ef4444',bg:'#fef2f2',icon:'▲▲'};
+    if(!_plannedPace||_plannedPace<=0) return null;
+    return _plannedTargetLabel();
   };
 
   // ── Pace/Nabız/RPE Odak Rozeti (2026.09.01 — Göksel talebi) ─────────────────
@@ -14582,8 +14615,9 @@ function tplYarisTempo(band, sure_dk, zones, phase='Zirve', race=null, racePaceS
   let raceZoneIdx, zYT;
   if(racePaceSec&&racePaceSec>0){
     raceZoneIdx=raceZoneFromPace(racePaceSec,zones);
-    const pm=Math.floor(racePaceSec/60);
-    const ps=Math.round(racePaceSec%60);
+    const _rpT=Math.round(racePaceSec); // 2026.09.19: önce yuvarla ('m:60' hatası)
+    const pm=Math.floor(_rpT/60);
+    const ps=_rpT%60;
     const paceStr=`${pm}:${String(ps).padStart(2,'0')}`;
     const zoneLbl=zoneInfo(zones,raceZoneIdx)||(raceZoneIdx>=4?'Z5a':raceZoneIdx===2?'Z3':'Z4');
     zYT=`${zoneLbl} · Hedef ${paceStr} /km`;
@@ -14706,9 +14740,9 @@ function calcGAP(dpM, distKm, sure_dk){
 // Flat pace (sn/km) → beklenen gerçek tırmanış pace'i (sn/km)
 function gapToActualPace(flatPaceSec, gapFactor){
   if(!flatPaceSec||!gapFactor)return null;
-  const actualSec=flatPaceSec*gapFactor;
+  const actualSec=Math.round(flatPaceSec*gapFactor); // 2026.09.19: önce yuvarla — 4:59.6 → '4:60' hatası
   const m=Math.floor(actualSec/60);
-  const s=Math.round(actualSec%60);
+  const s=actualSec%60;
   return`${m}:${String(s).padStart(2,'0')}`;
 }
 
@@ -17825,8 +17859,9 @@ function raceHedefSure(race, athlete, ctl, acwr, athWorkouts){
 
   // Pace hesapla
   const paceSec=(tHedef*60)/km; // saniye/km
-  const pm=Math.floor(paceSec/60);
-  const ps=Math.round(paceSec%60);
+  const _hpT=Math.round(paceSec); // 2026.09.19: önce yuvarla ('m:60' hatası)
+  const pm=Math.floor(_hpT/60);
+  const ps=_hpT%60;
   return{
     tHedefMin:tHedef,
     totalSec:Math.round(tHedef*60),
