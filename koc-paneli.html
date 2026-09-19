@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.19-1557 --><!DOCTYPE html>
+<!-- Version: v2026.09.19-1610 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.19-1557';
+const APP_VERSION='v2026.09.19-1610';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -3176,9 +3176,12 @@ function calcBeklenenYuk(tur,durMin,athlete,mesafe,irtifa,zemin_zorluk,yapilar){
 
 function fmtPaceFromMS(ms){
   if(!ms || ms <= 0) return '—';
-  const secPerKm = 1000 / ms;
-  const m = Math.floor(secPerKm / 60);
-  const s = Math.round(secPerKm % 60);
+  // 2026.09.19 (2. tur): önce yuvarla, sonra böl — 299.6 sn → '4:60' değil '5:00'.
+  // Bu fonksiyon TÜM bölge pace metinlerinin (lo_pace/hi_pace/target_pace) kaynağı;
+  // 1. turda gapToActualPace/secToPace düzeltilmiş ama burası atlanmıştı.
+  const _secR = Math.round(1000 / ms);
+  const m = Math.floor(_secR / 60);
+  const s = _secR % 60;
   return `${m}:${String(s).padStart(2,'0')}`;
 }
 
@@ -9668,6 +9671,11 @@ function blockCount(band,phase){
 // Pace string (MM:SS) → saniye
 const paceToSec=p=>{if(!p)return 0;const[m,s]=(p+'').split(':');return parseInt(m||0)*60+parseInt(s||0);};
 // Saniye → pace string
+// KÖK NEDEN (2026.09.19, 2. tur — "4:60 hâlâ görünüyor"): plan metinleri (detay/_cue) oluşturulduğu
+// anda snapshot'a DONDURULUR; üreticiler düzeltilse bile eski kayıtlardaki 'm:60' metni olduğu gibi
+// gösteriliyordu ("kod doğru ama ekranda görünmüyor"). Gösterim anında düzeltilir (kayıt değişmez).
+// Not: lookbehind kullanılmaz (eski iOS Safari'de sözdizimi hatası verir).
+const fixPace60=(t)=>typeof t==='string'?t.replace(/\b(\d{1,2}):60\b/g,(_,m)=>(parseInt(m,10)+1)+':00'):t;
 const secToPace=s=>{const t=Math.round(s);const m=Math.floor(t/60);const sc=t%60;return`${m}:${String(sc).padStart(2,'0')}`;}; // 2026.09.19: 59.6 sn → '4:60' hatası düzeltildi (önce yuvarla, sonra böl)
 // İki pace arasındaki ortalama
 const avgPace=(lo,hi)=>{const ls=paceToSec(lo),hs=paceToSec(hi);return(ls&&hs)?secToPace((ls+hs)/2):null;};
@@ -10152,8 +10160,9 @@ function adimToRowsFallback(adim, zones){
       const h=Math.floor(estSec/3600),m=Math.floor((estSec%3600)/60),s=Math.round(estSec%60);
       cr={h,m,s,mesafe:rawMesafe>0?Math.round(rawMesafe*1000):0,pm:0,ps:0};
     }
-    const pm2=pSec?Math.floor(pSec/60):0;
-    const ps2=pSec?Math.round(pSec%60):0;
+    const _pSecR=pSec?Math.round(pSec):0; // 2026.09.19: önce yuvarla ('m:60' hatası)
+    const pm2=_pSecR?Math.floor(_pSecR/60):0;
+    const ps2=_pSecR?_pSecR%60:0;
     return[{
       type:'single',label:baslik,
       color:ZONE_COLORS_INLINE[zi]||'#fbbf24',
@@ -12772,7 +12781,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
                 // Öncelik sırası: 1) _cuePatch (row-label bazlı kullanıcı düzenlemesi)
                 // 2) r._cue (şablondan gelen _rows._cue) 3) getCueForRow (yapilar.detay / otomatik)
                 const _patchedCue=savedCuePatches?.[r.label];
-                const cue=_patchedCue!==undefined?_patchedCue:(r._cue!==undefined&&r._cue!==null?r._cue:getCueForRow(r.label,src));
+                const cue=fixPace60(_patchedCue!==undefined?_patchedCue:(r._cue!==undefined&&r._cue!==null?r._cue:getCueForRow(r.label,src)));
                 const isEditing=editingLabel===r.label;
                 if(isEditing) return React.createElement('div',{style:{marginTop:4,display:'flex',gap:4,alignItems:'center'}},
                   React.createElement('input',{
@@ -12961,8 +12970,8 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
           React.createElement('td',{style:{...cell(true),color:'#fbbf24',fontSize:13}},tot.m),
           React.createElement('td',{style:{...cell(),color:'#f1f5f9'}},String(tot.s).padStart(2,'0')),
           React.createElement('td',{style:{...cell(true),color:'#fbbf24',fontSize:12}},totMesafe>0?totMesafe:0),
-          React.createElement('td',{style:{...cell(true),color:'#fbbf24',fontSize:13}},avgPaceSec?Math.floor(avgPaceSec/60):0),
-          React.createElement('td',{style:{...cell(),color:'#f1f5f9'}},avgPaceSec?String(Math.round(avgPaceSec%60)).padStart(2,'0'):'00'),
+          React.createElement('td',{style:{...cell(true),color:'#fbbf24',fontSize:13}},avgPaceSec?Math.floor(Math.round(avgPaceSec)/60):0),
+          React.createElement('td',{style:{...cell(),color:'#f1f5f9'}},avgPaceSec?String(Math.round(avgPaceSec)%60).padStart(2,'0'):'00'),
           React.createElement('td',{style:{...cell(),color:'#94a3b8'}},'—'),
           React.createElement('td',{style:{...cell(),color:actualOrtNabiz?'#fbbf24':'#94a3b8',fontWeight:actualOrtNabiz?700:400,fontSize:actualOrtNabiz?12:undefined}},
             actualOrtNabiz?actualOrtNabiz+' bpm':'—'
@@ -20709,7 +20718,7 @@ function ManuelAtamaModal(props){
             e('span',{style:{color:'var(--info)',fontWeight:700,fontSize:10,marginTop:2}},i+1+'.'),
             e('div',null,
               e('div',{style:{fontWeight:600,fontSize:11}},y.baslik),
-              y.detay&&e('div',{style:{fontSize:10,color:'var(--text-secondary)'}},y.detay)
+              y.detay&&e('div',{style:{fontSize:10,color:'var(--text-secondary)'}},fixPace60(y.detay))
             )
           );
         })
@@ -26210,7 +26219,7 @@ function ChartAerEff({history}){
             label:ctx=>{
               const v=ctx.raw;
               if(v==null)return null;
-              const m=Math.floor(v/60);const s=Math.round(v%60);
+              const _vR=Math.round(v);const m=Math.floor(_vR/60);const s=_vR%60;
               if(ctx.datasetIndex===1)return`SMA(${SMA_PERIOD}): ${m}:${String(s).padStart(2,'0')} /km`;
               return`Pace@140bpm: ${m}:${String(s).padStart(2,'0')} /km`;
             }
@@ -26220,7 +26229,7 @@ function ChartAerEff({history}){
           x:{ticks:{color:tickColor,font:{size:10},maxTicksLimit:8},grid:{color:gridColor},border:{display:false}},
           y:{
             reverse:true,
-            ticks:{color:tickColor,font:{size:10},callback:v=>{const m=Math.floor(v/60);const s=Math.round(v%60);return`${m}:${String(s).padStart(2,'0')}`}},
+            ticks:{color:tickColor,font:{size:10},callback:v=>{const _vR=Math.round(v);const m=Math.floor(_vR/60);const s=_vR%60;return`${m}:${String(s).padStart(2,'0')}`}},
             grid:{color:gridColor},border:{display:false},
             title:{display:true,text:'↑ Hızlı (daha iyi)',color:tickColor,font:{size:10}}
           }
@@ -30417,7 +30426,7 @@ function Hafta24Karti({workouts,athlete,bare=false}){
             ),
             React.createElement('td',{style:{padding:'5px 8px'}},
               React.createElement(Bar,{val:r.paceSec||0,max:maxPace,color:'#fbbf24',
-                text:r.paceSec?`${Math.floor(r.paceSec/60)}:${String(Math.round(r.paceSec%60)).padStart(2,'0')} /km`:'—',
+                text:r.paceSec?`${Math.floor(Math.round(r.paceSec)/60)}:${String(Math.round(r.paceSec)%60).padStart(2,'0')} /km`:'—',
                 reverse:true,minVal:minPace,range:paceRange})
             ),
             React.createElement('td',{style:{padding:'5px 8px'}},
