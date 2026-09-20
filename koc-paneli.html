@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.20-1016 --><!DOCTYPE html>
+<!-- Version: v2026.09.20-1103 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.20-1016';
+const APP_VERSION='v2026.09.20-1103';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -5751,6 +5751,12 @@ function BugunTab({athletes,workouts,onSelChange,onTabChange,onEkleSeed}){
       const result={};
       await Promise.all(aktifAthletes.map(async ath=>{
         try{const snap=await fbGet(`plan_snapshots/${ath.id}/${weekKey}`);if(snap)result[ath.id]=snap;}catch(e){}
+        // Devir (panel paritesi — Koşu İzlerim ile AYNI kural, bkz. haftaSnapshotMirasi):
+        // bu haftanın snapshot'ı henüz üretilmemişse, geçen haftada koçun "Gelecek Hafta" olarak
+        // ONAYLADIĞI günler sporcuya iletilmiş sayılır → geçen haftanın snapshot'ını da al.
+        if(!result[ath.id]?.generatedAt){
+          try{const _ps=await fbGet(`plan_snapshots/${ath.id}/${getWeekKey(-1)}`);if(_ps)result[ath.id+'_prev']=_ps;}catch(e){}
+        }
         // Yarın farklı bir haftadaysa ek snap al
         if(tomorrowWeekKey!==weekKey){
           try{const snap2=await fbGet(`plan_snapshots/${ath.id}/${tomorrowWeekKey}`);
@@ -5806,8 +5812,11 @@ function BugunTab({athletes,workouts,onSelChange,onTabChange,onEkleSeed}){
   const athData=aktifAthletes.map(ath=>{
     const snap=snaps[ath.id];
     const snapTmr=tomorrowWeekKey!==weekKey?(snaps[ath.id+'_tomorrow']||snap):snap;
-    const dayPlanRaw=snap?.overrideMap?.[todayStr]||null;
-    const tomorrowPlanRaw=snapTmr?.overrideMap?.[tomorrowStr]||null;
+    const snapPrevB=snaps[ath.id+'_prev']||null;
+    const dayPlanRaw=overrideGirisiBul(todayStr,snap,snapPrevB);
+    // Yarın bir SONRAKİ haftadaysa (Pazar → Pazartesi): koçun "Gelecek Hafta" olarak onayladığı gün
+    // BU haftanın snapshot'ında (gelecek hafta tarihiyle) durur → devir kaynağı geçen hafta değil, bu hafta.
+    const tomorrowPlanRaw=overrideGirisiBul(tomorrowStr,snapTmr,tomorrowWeekKey!==weekKey?snap:snapPrevB);
     const dayPlan=isOvUyumlu(dayPlanRaw,todayShortG,ath)?dayPlanRaw:buildBekleyenPlan(ath,todayShortG);
     const tomorrowPlan=isOvUyumlu(tomorrowPlanRaw,tomorrowShortG,ath)?tomorrowPlanRaw:buildBekleyenPlan(ath,tomorrowShortG);
     const todayActual=todayActualAll.filter(w=>w.athleteId===ath.id);
@@ -21370,6 +21379,48 @@ function PickDebugInfo({debug}){
   );
 }
 
+// ── Haftalar arası devir: koçun "Gelecek Hafta" planında ONAYLADIĞI günler ───
+// Koç gelecek haftanın bir gününü onay kutusuyla işaretlediğinde bu giriş, O AN GEÇERLİ
+// (bu hafta) snapshot'ın overrideMap'inde gelecek hafta TARİHİYLE saklanır (bkz.
+// generatePlanSnapshot: iki haftalık plan yazılır; onay/atama/satır düzenlemesi weekKey(0)'a gider).
+// Hafta döndüğünde yeni haftanın snapshot'ı henüz üretilmemiştir (Planı Güncelle gerekir) ve
+// bu girişler GEÇEN haftanın snapshot'ında kalır. Bu fonksiyon onları yeni haftaya devreder.
+// KURAL: devir SADECE yeni haftanın snapshot'ı henüz ÜRETİLMEMİŞSE (generatedAt yok) yapılır;
+// üretilmişse (Planı Güncelle basılmış) o snapshot yetkilidir — onaylı günler zaten oraya
+// korunarak yazılmıştır (bkz. handlePlanGuncelle). Yeni haftanın snapshot'ında aynı tarih için
+// giriş varsa o öncelikli. Koşu İzlerim, Koç Paneli (Planı Güncelle koruması) ve Bugün sekmesi
+// AYNI fonksiyonu/kuralı kullanır (panel paritesi).
+function haftaSnapshotMirasi(ownSnap,prevSnap){
+  const own=ownSnap||{};
+  const overrideMap={...(own.overrideMap||{})};
+  const rowOverrides={...(own.rowOverrides||{})};
+  const manualOverrides={...(own.manualOverrides||{})};
+  const devralinan=[];
+  if(!own.generatedAt&&prevSnap?.overrideMap){
+    const {start,end}=getWeekBounds(0);
+    const s=localDateStr(start), e=localDateStr(end);
+    Object.keys(prevSnap.overrideMap).forEach(ds=>{
+      if(ds<s||ds>e) return;               // sadece yeni haftanın tarihleri
+      if(own.overrideMap?.[ds]) return;     // yeni haftanın kendi girişi öncelikli
+      const pov=prevSnap.overrideMap[ds];
+      if(!pov||pov.approved!==true) return; // sadece koç onaylı olanlar
+      overrideMap[ds]=pov;
+      if(prevSnap.rowOverrides?.[ds]&&!own.rowOverrides?.[ds]) rowOverrides[ds]=prevSnap.rowOverrides[ds];
+      if(prevSnap.manualOverrides?.[ds]&&!own.manualOverrides?.[ds]) manualOverrides[ds]=prevSnap.manualOverrides[ds];
+      devralinan.push(ds);
+    });
+  }
+  return {overrideMap,rowOverrides,manualOverrides,devralinan};
+}
+// Tek bir tarihin overrideMap girişi (Bugün sekmesi için) — haftaSnapshotMirasi ile AYNI kural.
+function overrideGirisiBul(date,ownSnap,prevSnap){
+  const own=ownSnap?.overrideMap?.[date];
+  if(own) return own;
+  if(ownSnap?.generatedAt) return null; // üretilmiş haftada snapshot yetkili
+  const fb=prevSnap?.overrideMap?.[date];
+  return (fb&&fb.approved===true)?fb:null;
+}
+
 // ── Anket güncelleme uyarısı — TEK DOĞRULUK KAYNAĞI (panel paritesi) ─────────
 // Hem Koşu İzlerim'deki "Gelecek hafta antrenmanların için anketini güncelle" kartı
 // (SporcuPlanView) hem de Koç Panelindeki "Gelecek Hafta Planını Göster" butonunun
@@ -22143,6 +22194,20 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
 
     const curSnap=planSnapRef.current||{};
     const todayStr=localDateStr(new Date());
+    // Devir: yeni haftanın snapshot'ı henüz üretilmemişse, GEÇEN haftanın snapshot'ında koçun
+    // "Gelecek Hafta" olarak ONAYLADIĞI günler bu haftanın korunan günleri sayılır — aksi halde
+    // bu ilk Planı Güncelle onları taze (onaysız) öneriyle ezerdi ve sporcunun Koşu İzlerim'de
+    // gördüğü onaylı antrenman kaybolurdu. (bkz. haftaSnapshotMirasi)
+    let _prevSnapForCarry=null;
+    if(!curSnap.generatedAt){
+      try{_prevSnapForCarry=await fbGet(`plan_snapshots/${athlete.id}/${prevWeekKey}`);}catch(e){_prevSnapForCarry=null;}
+    }
+    const _miras=haftaSnapshotMirasi(curSnap,_prevSnapForCarry);
+    const curSnapProt={
+      overrideMap:_miras.overrideMap,
+      manualOverrides:(curSnap.manualOverrides||_miras.devralinan.length)?_miras.manualOverrides:undefined,
+      rowOverrides:(curSnap.rowOverrides||_miras.devralinan.length)?_miras.rowOverrides:undefined
+    };
     // GÖZLEMLENEBİLİRLİK KİLİDİ (24.07.2026 — "buton hiçbir şey yapmıyor" şikayeti):
     // Bu fonksiyonun geri kalanı (~300 satır) hiçbir try/catch İÇİNDE değildi. Aradaki
     // herhangi bir satır (ör. bozuk/beklenmedik şekilli bir snapshot alanı — bkz. sporcular
@@ -22208,14 +22273,14 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     const athWkDates=new Set(freshWorkouts.filter(w=>w.athleteId===freshAthlete.id).map(w=>w.date));
     athWkDates.forEach(ds=>protectedDates.add(ds));
     // 2. Geçmiş tüm override girişleri
-    if(curSnap.manualOverrides){
-      Object.keys(curSnap.manualOverrides).forEach(ds=>{if(ds<todayStr) protectedDates.add(ds);});
+    if(curSnapProt.manualOverrides){
+      Object.keys(curSnapProt.manualOverrides).forEach(ds=>{if(ds<todayStr) protectedDates.add(ds);});
     }
-    if(curSnap.rowOverrides){
-      Object.keys(curSnap.rowOverrides).forEach(ds=>{if(ds<todayStr) protectedDates.add(ds);});
+    if(curSnapProt.rowOverrides){
+      Object.keys(curSnapProt.rowOverrides).forEach(ds=>{if(ds<todayStr) protectedDates.add(ds);});
     }
-    if(curSnap.overrideMap){
-      Object.entries(curSnap.overrideMap).forEach(([ds,ov])=>{
+    if(curSnapProt.overrideMap){
+      Object.entries(curSnapProt.overrideMap).forEach(([ds,ov])=>{
         if(ds<todayStr){
           // Geçmiş günü koru — girişin tipi yeni profille uyumluysa.
           // Koşu reçetesi → gün hâlâ kosu_gunleri'ndeyse koru.
@@ -22250,9 +22315,9 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         //    her zaman korunur, taze öneriyle (örn. Kolay Koşu) asla değiştirilmez.
         if(ov?.tip==='serbest'&&ds>=todayStr){
           protectedDates.add(ds);
-        } else if(ov?.approved===true&&ds>=todayStr&&ov?.tip==='dinlenme'&&(!isProfilUyumlu(ds)||!!curSnap?.manualOverrides?.[ds])){
+        } else if(ov?.approved===true&&ds>=todayStr&&ov?.tip==='dinlenme'&&(!isProfilUyumlu(ds)||!!curSnapProt?.manualOverrides?.[ds])){
           protectedDates.add(ds);
-        } else if(ov?.approved===true&&ds>=todayStr&&ov?.tip!=='dinlenme'&&(isProfilUyumlu(ds)||!!curSnap?.manualOverrides?.[ds])){
+        } else if(ov?.approved===true&&ds>=todayStr&&ov?.tip!=='dinlenme'&&(isProfilUyumlu(ds)||!!curSnapProt?.manualOverrides?.[ds])){
           // KÖK NEDEN DÜZELTMESİ (24.07.2026 — "Ata + onay" garantisi): Eskiden bu koşul
           // SADECE profille uyuşan günleri koruyordu. Koç "Ata" ile profil-dışı bir güne
           // (ör. çapraz günü olmayan bir güne çapraz) atama yapıp onaylarsa, profil
@@ -22268,22 +22333,22 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
 
     // Korunan günlerin overrideMap girişlerini geri yükle
     protectedDates.forEach(dateStr=>{
-      if(curSnap.overrideMap?.[dateStr]){
-        newSnap.overrideMap[dateStr]=curSnap.overrideMap[dateStr];
+      if(curSnapProt.overrideMap?.[dateStr]){
+        newSnap.overrideMap[dateStr]=curSnapProt.overrideMap[dateStr];
       }
     });
 
     // manualOverrides ve rowOverrides: yalnızca geçmiş veya korunan günler taşınır
-    if(curSnap.manualOverrides){
+    if(curSnapProt.manualOverrides){
       const filteredManual={};
-      Object.entries(curSnap.manualOverrides).forEach(([ds,v])=>{
+      Object.entries(curSnapProt.manualOverrides).forEach(([ds,v])=>{
         if(ds<todayStr||protectedDates.has(ds)) filteredManual[ds]=v;
       });
       newSnap.manualOverrides={...(newSnap.manualOverrides||{}),...filteredManual};
     }
-    if(curSnap.rowOverrides){
+    if(curSnapProt.rowOverrides){
       const filteredRow={};
-      Object.entries(curSnap.rowOverrides).forEach(([ds,v])=>{
+      Object.entries(curSnapProt.rowOverrides).forEach(([ds,v])=>{
         if(ds<todayStr||protectedDates.has(ds)) filteredRow[ds]=v;
       });
       newSnap.rowOverrides={...(newSnap.rowOverrides||{}),...filteredRow};
@@ -35968,6 +36033,7 @@ function SporcuKayit(){
 function SporcuPlanView(){
   const [athlete,setAthlete]=useState(null);
   const [planSnap,setPlanSnap]=useState(null);
+  const [prevSnap,setPrevSnap]=useState(null); // geçen haftanın snapshot'ı — onaylı günlerin devri için (haftaSnapshotMirasi)
   const [workouts,setWorkouts]=useState([]);
   const [allWorkouts,setAllWorkouts]=useState([]);
   const [allAthletes,setAllAthletes]=useState([]);
@@ -36081,13 +36147,15 @@ function SporcuPlanView(){
         setAthlete(ath||null);
         setAllAthletes(aths||[]);
         if(ath){
-          const [snap,wks,rcs,hist]=await Promise.all([
+          const [snap,wks,rcs,hist,prevS]=await Promise.all([
             fbGet('plan_snapshots/'+athId+'/'+getWeekKey(0)),
             fbGet('wks'),
             fbGet('races'),
             fbGet('ath_history'),
+            fbGet('plan_snapshots/'+athId+'/'+getWeekKey(-1)).catch(()=>null),
           ]);
           setPlanSnap(snap||null);
+          setPrevSnap(prevS||null);
           setAllWorkouts(wks||[]);
           setWorkouts((wks||[]).filter(w=>w.athleteId===athId));
           setRaces(rcs||[]);
@@ -36100,7 +36168,12 @@ function SporcuPlanView(){
 
   if(loading) return React.createElement('div',{style:{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'var(--text-tertiary)',fontSize:14}},'Yükleniyor...');
   if(!athlete) return React.createElement('div',{style:{textAlign:'center',padding:40,color:'var(--text-secondary)'}},'Sporcu bulunamadı.');
-  if(!planSnap?.overrideMap) return React.createElement('div',{style:{textAlign:'center',padding:40,color:'var(--text-secondary)'}},'Bu hafta için henüz plan oluşturulmadı.');
+  // Devir: yeni haftanın snapshot'ı henüz üretilmemişken, koçun geçen hafta "Gelecek Hafta" olarak
+  // ONAYLADIĞI günler bu haftanın günü olarak gösterilmeye devam eder (bkz. haftaSnapshotMirasi).
+  const _miras=haftaSnapshotMirasi(planSnap,prevSnap);
+  if(!planSnap?.overrideMap&&!_miras.devralinan.length) return React.createElement('div',{style:{textAlign:'center',padding:40,color:'var(--text-secondary)'}},'Bu hafta için henüz plan oluşturulmadı.');
+  const ovMapEff=_miras.overrideMap;      // planSnap.overrideMap + devralınan onaylı günler
+  const rowOvEff=_miras.rowOverrides;     // planSnap.rowOverrides + devralınan satır düzenlemeleri
 
   try{
 
@@ -36140,7 +36213,7 @@ function SporcuPlanView(){
   // Her gün için karar ver
   const dayInfos=[];
   weekDateStrs.forEach(date=>{
-    const ov=planSnap.overrideMap[date]||null;
+    const ov=ovMapEff[date]||null;
     const actuals=actualsByDate[date]||[];
     const isPast=date<todayStr;
     const isToday=date===todayStr;
@@ -36208,7 +36281,7 @@ function SporcuPlanView(){
   // hasUnfinishedToday artık yalnızca bugün kartının gösterimini etkiler, geleceği engellemez.
   for(const date of weekDateStrs){
     if(date<=todayStr) continue;
-    const ov=planSnap.overrideMap[date]||null;
+    const ov=ovMapEff[date]||null;
     const isApprovedFuture=ov?.approved===true;
     if(!ov||!isApprovedFuture) continue;
     if(ov.tip==='dinlenme'){
@@ -36220,13 +36293,29 @@ function SporcuPlanView(){
     }
   }
 
+  // Gelecek hafta: koçun "Gelecek Hafta Planı"nda onay kutusunu işaretlediği günler (antrenman,
+  // dinlenme, yarış — bu haftadaki kuralla AYNI: yalnızca approved===true). Bu girişler bu
+  // haftanın snapshot'ında gelecek hafta TARİHİYLE durur. nextWeek:true → kartta "GELECEK HAFTA"
+  // rozeti ve ayrı bir bölüm başlığı çıkar; hafta döndüğünde haftaSnapshotMirasi bunları
+  // yeni haftanın normal günleri olarak gösterir.
+  {
+    const {start:_nwS,end:_nwE}=getWeekBounds(1);
+    for(let d=new Date(_nwS);d<=_nwE;d.setDate(d.getDate()+1)){
+      const date=localDateStr(d);
+      const ov=planSnap?.overrideMap?.[date]||null;
+      if(!ov||ov.approved!==true) continue;
+      const st=ov.tip==='dinlenme'?'next_rest':ov.tip==='yaris'?'race_upcoming':'next';
+      dayInfos.push({date,status:st,ov,actuals:[],nextWeek:true});
+    }
+  }
+
   // Tek bir günü Haftalık Plan stilinde render et
   const renderDayCard=(info,idx)=>{
     // ── Onaylı dinlenme günü: özel kompakt kart ──────────────────────────────
     if(info.status==='today_rest'||info.status==='next_rest'){
       const ovDin=info.ov;
       const isRestToday=info.status==='today_rest';
-      const statusLbl=isRestToday?'BUGÜN · DİNLENME':'SIRADAKİ';
+      const statusLbl=isRestToday?'BUGÜN · DİNLENME':(info.nextWeek?'GELECEK HAFTA · DİNLENME':'SIRADAKİ');
       const note=ovDin?.restNote||'';
       return React.createElement('div',{
         key:info.date+'_'+idx,
@@ -36296,12 +36385,12 @@ function SporcuPlanView(){
     // Durum rozeti
     let statusLabel,statusBg,statusFg;
     if(isRace&&isCompleted){statusLabel='YARIŞ · TAMAMLANDI';statusBg='var(--danger-bg)';statusFg='var(--danger)';}
-    else if(isRaceUpcoming){statusLabel='YARIŞ';statusBg='var(--danger-bg)';statusFg='var(--danger)';}
+    else if(isRaceUpcoming){statusLabel=info.nextWeek?'GELECEK HAFTA · YARIŞ':'YARIŞ';statusBg='var(--danger-bg)';statusFg='var(--danger)';}
     else if(isMissed){statusLabel='❌ KAÇIRILDI';statusBg='var(--danger-bg)';statusFg='var(--danger)';}
     else if(info.status==='completed'){statusLabel='TAMAMLANDI';statusBg='var(--success-bg)';statusFg='var(--success)';}
     else if(info.status==='today_done'){statusLabel='BUGÜN · TAMAMLANDI';statusBg='var(--success-bg)';statusFg='var(--success)';}
     else if(info.status==='today'){statusLabel='BUGÜN';statusBg='var(--info-bg)';statusFg='var(--info)';}
-    else {statusLabel='SIRADAKİ';statusBg='var(--info-bg)';statusFg='var(--info)';}
+    else {statusLabel=info.nextWeek?'GELECEK HAFTA':'SIRADAKİ';statusBg='var(--info-bg)';statusFg='var(--info)';}
 
     // Hangi bölümler render edilecek?
     // Yarış günü ise eski mantık (tek koşu reçetesi) — koşu/çapraz ayrımı uygulanmaz
@@ -36432,8 +36521,8 @@ function SporcuPlanView(){
             // bkz. HaftalikPlanTab → isWorkoutLogged:!!split.kosuDone). Koç panelindeki AYNI
             // kaynak (split.kosuDone) burada da kullanılır.
             isWorkoutLogged:!!split.kosuDone,
-            savedOverrides:(planSnap?.rowOverrides||{})[info.date],
-            savedCuePatches:(planSnap?.overrideMap?.[info.date]?._cuePatch)||{},
+            savedOverrides:rowOvEff[info.date],
+            savedCuePatches:(ovMapEff?.[info.date]?._cuePatch)||{},
             actualOrtNabiz:split.kosuActuals.find(w=>parseFloat(w.ort_nabiz)>0)?.ort_nabiz||null
           })
         :null;
@@ -36533,7 +36622,7 @@ function SporcuPlanView(){
           !isRace&&planYapiNotu(ov)&&React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',marginTop:1}},planYapiNotu(ov)),
           (()=>{
             // Override uygulanmış etkili süre — aşamalar revize edildiğinde doğru toplam
-            const savedOv=(planSnap?.rowOverrides||{})[info.date];
+            const savedOv=rowOvEff[info.date];
             const effSure=computeEffectiveSureDk(
               kosuYapilarAl({tip:ov?.tip,yapilar:ov?.yapilar||[],isKosuCapraz:ov?.isKosuCapraz}),
               zones, savedOv, ov?.sure_dk||0
@@ -37146,17 +37235,38 @@ function SporcuPlanView(){
 
         // Orta: Antrenmanlarım
         const isSunday=new Date().getDay()===0;
-        const antrenmanIcerik=dayInfos.length>0
+        const _buHaftaInfos=dayInfos.filter(x=>!x.nextWeek);
+        const _gelecekHaftaInfos=dayInfos.filter(x=>x.nextWeek);
+        const _gelecekHaftaBolum=_gelecekHaftaInfos.length>0&&(()=>{
+          const {start:_gS,end:_gE}=getWeekBounds(1);
+          const _fm=(d)=>d.toLocaleDateString('tr-TR',{day:'2-digit',month:'long'});
+          return React.createElement('div',{style:{marginTop:_buHaftaInfos.length>0?14:0}},
+            React.createElement('div',{style:{
+              display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',
+              padding:'6px 0',marginBottom:6,borderBottom:'1px dashed var(--border)'
+            }},
+              React.createElement('span',{style:{fontSize:12,fontWeight:700,color:'var(--info)'}},'📅 Gelecek Hafta'),
+              React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)'}},_fm(_gS)+' – '+_fm(_gE))
+            ),
+            React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:2}},
+              _gelecekHaftaInfos.map((info,i)=>renderDayCard(info,'nw'+i))
+            )
+          );
+        })();
+        const _buHaftaIcerik=_buHaftaInfos.length>0
           ?React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:2}},
-              dayInfos.map((info,i)=>renderDayCard(info,i))
+              _buHaftaInfos.map((info,i)=>renderDayCard(info,i))
             )
           :isSunday
             ?React.createElement('div',{style:{textAlign:'center',color:'var(--text-tertiary)',fontSize:13,padding:'12px 0'}},
                 '🎉 Bu haftanın tüm antrenmanları tamamlandı!'
               )
-            :React.createElement('div',{style:{textAlign:'center',color:'var(--text-tertiary)',fontSize:13,padding:'12px 0'}},
-                '—'
-              );
+            :_gelecekHaftaInfos.length>0
+              ?null
+              :React.createElement('div',{style:{textAlign:'center',color:'var(--text-tertiary)',fontSize:13,padding:'12px 0'}},
+                  '—'
+                );
+        const antrenmanIcerik=React.createElement('div',null,_buHaftaIcerik,_gelecekHaftaBolum||null);
         const antrenmanCard=React.createElement('div',{className:'ki-card'},
           React.createElement(AcilirKartBaslik,{baslik:'Antrenmanlarım',acik:antrenmanAcik,onToggle:toggleAntrenman}),
           accordionWrap(antrenmanAcik,()=>antrenmanIcerik)
@@ -37402,7 +37512,7 @@ function SporcuPlanView(){
       },'🏃🏻‍♀️🏃🏻 Tüm Sporcuları Gör'),
 
       // Güncelleme tarihi
-      planSnap.lastSavedAt&&React.createElement('div',{style:{textAlign:'center',fontSize:10,color:'var(--text-tertiary)',marginTop:8,paddingBottom:20}},
+      planSnap?.lastSavedAt&&React.createElement('div',{style:{textAlign:'center',fontSize:10,color:'var(--text-tertiary)',marginTop:8,paddingBottom:20}},
         'Plan güncellendi: '+(()=>{
           const d=new Date(planSnap.lastSavedAt);
           return String(d.getDate()).padStart(2,'0')+'.'+String(d.getMonth()+1).padStart(2,'0')+'.'+d.getFullYear()+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
