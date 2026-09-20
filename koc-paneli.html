@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.19-2027 --><!DOCTYPE html>
+<!-- Version: v2026.09.20-1016 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.19-2027';
+const APP_VERSION='v2026.09.20-1016';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -21370,6 +21370,57 @@ function PickDebugInfo({debug}){
   );
 }
 
+// ── Anket güncelleme uyarısı — TEK DOĞRULUK KAYNAĞI (panel paritesi) ─────────
+// Hem Koşu İzlerim'deki "Gelecek hafta antrenmanların için anketini güncelle" kartı
+// (SporcuPlanView) hem de Koç Panelindeki "Gelecek Hafta Planını Göster" butonunun
+// kilidi (HaftalikPlanTab) BU fonksiyondan beslenir.
+// true  = sporcu bu haftaki son planlı antrenmanını tamamlamış ama anketini o
+//         antrenmandan SONRA güncellememiş → uyarı kartı görünür, koç butonu kilitli.
+// false = uyarı gerekmiyor (yarış tamamlanmamış / planlı gün yok / son gün henüz
+//         gelmedi veya kaydı yok / anket son antrenmandan sonra güncellenmiş).
+function anketGuncellemeBekleniyor({athlete,workouts,races,planSnap,todayStr}){
+  if(!athlete) return false;
+  const {start:wkStart,end:wkEnd}=getWeekBounds(0);
+  const athWks=(workouts||[]).filter(w=>w.athleteId===athlete.id);
+  // Bu haftaki sporcu yarışları — tamamlanmamış yarış varsa uyarı ertelenir
+  const athRaceIds=(athlete.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
+  const wkStartStr=localDateStr(wkStart);
+  const wkEndStr=localDateStr(wkEnd);
+  const buHaftakiYarislar=(races||[]).filter(r=>
+    athRaceIds.includes(r.id)&&r.tarih&&r.tarih>=wkStartStr&&r.tarih<=wkEndStr
+  );
+  // Yarış günü geçmiş + o tarihte kayıtlı antrenman yok → yarış henüz tamamlanmamış kabul et
+  const yarisTamamlanmamis=buHaftakiYarislar.some(r=>{
+    if(r.tarih>todayStr) return true; // yarış gelecekte
+    return !athWks.some(w=>w.date===r.tarih);
+  });
+  if(yarisTamamlanmamis) return false;
+  // Bu haftaki planlı antrenman günleri (koşu + çapraz) + yarış günleri
+  // NOT: Yarış günleri koşu_gunleri listesinde olmayabilir (yarış günü koşu günü
+  // seçilemez kuralı) ama kesinlikle tamamlanması gereken etkinliktir → ayrıca eklenir.
+  const weekDateList=[];
+  for(let d=new Date(wkStart);d<=wkEnd;d.setDate(d.getDate()+1)){
+    weekDateList.push(localDateStr(d));
+  }
+  const planliGunlerSet=new Set(weekDateList.filter(ds=>{
+    const ov=planSnap?.overrideMap?.[ds];
+    return ov&&ov.tip&&ov.tip!=='dinlenme';
+  }));
+  buHaftakiYarislar.forEach(r=>{if(r.tarih) planliGunlerSet.add(r.tarih);});
+  const planliGunler=[...planliGunlerSet].sort();
+  if(!planliGunler.length) return false;
+  const sonPlanliTarih=planliGunler[planliGunler.length-1];
+  if(sonPlanliTarih>todayStr) return false; // son planlı gün henüz gelmedi
+  const sonGunWk=athWks.find(w=>w.date===sonPlanliTarih);
+  if(!sonGunWk) return false; // son gün antrenmanı kaydedilmemiş
+  // Son antrenmanın zamanı (saat yoksa günün sonu kabul edilir)
+  const wkTime=sonGunWk.time||'23:59';
+  const sonAntrenmanZaman=new Date(sonPlanliTarih+'T'+wkTime+':00');
+  const anketZaman=athlete.anket_guncelleme?new Date(athlete.anket_guncelleme):null;
+  const anketGuncel=!!(anketZaman&&anketZaman>sonAntrenmanZaman);
+  return !anketGuncel;
+}
+
 function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapInit,onPlanSnapChange,onAthletesRefresh,onWorkoutsRefresh,onSaveWorkout,onUpdateWorkout,onUpdateAthlete,onSaveTestPlan,onDeleteTestPlan}){  const [showLoading,setShowLoading]=useState(false);
   const [selectedPrimary,setSelectedPrimary]=useState(null);
   const [planMode,setPlanModeLocal]=useState('optimize');
@@ -23799,6 +23850,12 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         ? (sonPlanliGunTarih<=todayStr&&sonGunTamamlandi)
         : true); // hiç planlı gün yoksa kısıt yok
 
+      // 4. koşul: Sporcu, son antrenmanından SONRA anketini güncellemiş olmalı.
+      // Koşu İzlerim'de "Gelecek hafta antrenmanların için anketini güncelle" kartı
+      // görünürken buton kilitli kalır; sporcu anketi güncelleyince (kart kaybolunca) açılır.
+      // Kart ile kilit AYNI fonksiyondan beslenir (anketGuncellemeBekleniyor) — panel paritesi.
+      const anketBekleniyor=etkiTespitEdildi&&anketGuncellemeBekleniyor({athlete,workouts:athWks,races,planSnap,todayStr});
+
       // OP-4: Snapshot bayat mı? (anket / koşu günleri / yeni antrenman değişikliği sonrası)
       let snapshotBayat=false, bayatSebep=null;
       if(planSnap?.lastSavedAt){
@@ -23840,14 +23897,17 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         }else if(sonPlanliGunTarih&&!sonGunTamamlandi){
           yardimMetni=`Bu haftanın son planlı antrenmanı (${sonPlanliGun.baslik||'antrenman'}) henüz kaydedilmedi. Gelecek hafta planı, son antrenmanın yükü history'ye işlendikten sonra anlamlı olur.`;
         }
+      }else if(anketBekleniyor){
+        yardimMetni='Sporcu, son antrenmanından sonra anketini güncelleyince gelecek hafta planı gösterilir (Koşu İzlerim\'de anket uyarısı görünüyor).';
       }
 
-      // Üç durum:
+      // Dört durum:
       // 1) Son antrenman yapılmadı → buton disable
-      // 2) Son antrenman yapıldı + snapshot bayat → "Planı güncelle & göster" (turuncu, confirm)
-      // 3) Son antrenman yapıldı + snapshot güncel → normal buton
-      const butonAktif=etkiTespitEdildi;
-      const butonGuncelleGerek=etkiTespitEdildi&&snapshotBayat;
+      // 2) Son antrenman yapıldı ama sporcu anketi o antrenmandan sonra güncellemedi → buton disable
+      // 3) Son antrenman + anket güncel + snapshot bayat → "Planı güncelle & göster" (turuncu, confirm)
+      // 4) Son antrenman + anket güncel + snapshot güncel → normal buton
+      const butonAktif=etkiTespitEdildi&&!anketBekleniyor;
+      const butonGuncelleGerek=butonAktif&&snapshotBayat;
       const handleGelecekHaftaClick=()=>{
         if(butonGuncelleGerek){
           // Bayatsa: önce güncelle, sonra göster
@@ -36579,51 +36639,10 @@ function SporcuPlanView(){
       // NOT: Bu haftada yarış varsa, yarış tamamlanmadan uyarı çıkmaz
       // (yarış haftanın en önemli etkinliği; öncesinde anket isteği motivasyonu bozar).
       (()=>{
-        // Bu haftaki sporcu yarışları — tamamlanmamış yarış varsa uyarıyı erteleyecek
-        const athRaceIds=(athlete.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
-        const wkStartStr=localDateStr(wkStart);
-        const wkEndStr=localDateStr(wkEnd);
-        const buHaftakiYarislar=(races||[]).filter(r=>
-          athRaceIds.includes(r.id)&&r.tarih&&r.tarih>=wkStartStr&&r.tarih<=wkEndStr
-        );
-        // Yarış günü geçmiş + o tarihte kayıtlı antrenman yok → yarış henüz tamamlanmamış kabul et
-        const yarisTamamlanmamis=buHaftakiYarislar.some(r=>{
-          if(r.tarih>todayStr) return true; // yarış gelecekte
-          // Yarış günü geçmiş — sporcu yarış antrenmanını kaydetmiş mi?
-          return !workouts.some(w=>w.date===r.tarih);
-        });
-        if(yarisTamamlanmamis) return null;
-
-        // Bu haftaki planlı antrenman günleri (koşu + çapraz) + yarış günleri
-        // NOT: Yarış günleri koşu_gunleri listesinde olmayabilir (yarış günü koşu günü
-        // seçilemez kuralı). Yine de "planlı gün" sayılır çünkü kesinlikle tamamlanması
-        // gereken bir etkinlik. Bu yüzden yarış tarihlerini ayrıca ekliyoruz.
-        const weekDateList=[];
-        for(let d=new Date(wkStart);d<=wkEnd;d.setDate(d.getDate()+1)){
-          weekDateList.push(localDateStr(d));
-        }
-        // Önce koşu/çapraz planlı günleri topla
-        const planliGunlerSet=new Set(weekDateList.filter(ds=>{
-          const ov=planSnap?.overrideMap?.[ds];
-          return ov&&ov.tip&&ov.tip!=='dinlenme';
-        }));
-        // Bu haftaki yarış tarihlerini de ekle (overrideMap'te olmasalar bile)
-        buHaftakiYarislar.forEach(r=>{if(r.tarih) planliGunlerSet.add(r.tarih);});
-        const planliGunler=[...planliGunlerSet].sort();
-        if(!planliGunler.length) return null;
-        const sonPlanliTarih=planliGunler[planliGunler.length-1];
-        // Son planlı gün geçmişte olmalı (yarış gelecekte ise zaten bu dal atar)
-        if(sonPlanliTarih>todayStr) return null;
-        // O günde kayıtlı gerçek antrenman var mı?
-        const sonGunWk=workouts.find(w=>w.date===sonPlanliTarih);
-        if(!sonGunWk) return null;
-        // Son antrenmanın ne zaman girildiği (workout timestamp yoksa tarih+saat)
-        const wkTime=sonGunWk.time||'23:59';
-        const sonAntrenmanZaman=new Date(sonPlanliTarih+'T'+wkTime+':00');
-        // Anket güncellemesi son antrenmandan sonra mı?
-        const anketZaman=athlete.anket_guncelleme?new Date(athlete.anket_guncelleme):null;
-        const anketGuncel=anketZaman&&anketZaman>sonAntrenmanZaman;
-        if(anketGuncel) return null; // hazır — uyarı gerekmez
+        // Uyarı koşulu TEK doğruluk kaynağından gelir (anketGuncellemeBekleniyor).
+        // Koç Panelindeki "Gelecek Hafta Planını Göster" butonunun kilidi de AYNI
+        // fonksiyonu kullanır — kart görünürken buton kilitli, kart kaybolunca açık.
+        if(!anketGuncellemeBekleniyor({athlete,workouts,races,planSnap,todayStr})) return null;
         // Anket sayfasına geçiş URL'si — routing ?form=sporcu ile çalışır
         const anketUrl='?form=sporcu&id='+athlete.id;
         return React.createElement('div',{style:{
