@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.21-2122 --><!DOCTYPE html>
+<!-- Version: v2026.09.21-2353 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.21-2122';
+const APP_VERSION='v2026.09.21-2353';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -2460,6 +2460,47 @@ function paceComplianceLabel(puan){
   if(puan>=50) return{text:'Orta düzey',cls:'nötr'};
   if(puan>=30) return{text:'Tutarsız',cls:'kotu'};
   return{text:'Ciddi sapma',cls:'kotu'};
+}
+
+// ── Günlük Hedef Uyumu rozeti (2026.09.21 — Göksel talebi) ──────────────────
+// Tamamlanan antrenmanın yanındaki yeşil ✔ işaretinin yanında, O GÜNÜN liderlik
+// skoruna giren 🎯 Hedef Uyumu değeri ve puana göre rengi gösterilir. Değer, Liderlik'i
+// besleyen AYNI motordan (extractFeedbackSignals + calcPaceComplianceScore → ham `puan`,
+// yani Liderlik satırındaki "🎯 Hedef Uyumu: %X" ile aynı büyüklük) SADECE o tarihin
+// rowOverrides girişi taranarak hesaplanır. Haftalık Hedef Uyumu o haftanın TÜM faz
+// sinyallerinin toplu değerlendirmesidir — bu yüzden günlük değerlerin aritmetik
+// ortalamasıyla birebir aynı olmak zorunda değildir.
+// Renk eşikleri Liderlik listesiyle AYNI (LiderlikTab satır render'ı ve Koşu İzlerim mini
+// Liderlik widget'ındaki upColor): >=85 info, >=70 success, >=50 warn, altı danger,
+// ölçülemediyse (—) nötr. Koç Paneli (HaftalikPlanTab) ve Koşu İzlerim (SporcuPlanView)
+// BU ÜÇ fonksiyonu ortak kullanır (panel paritesi) — ayrı hesap/eşik kopyası YOKTUR.
+function calcGunlukHedefUyumu(rowOvDay,date,athlete){
+  if(!rowOvDay||typeof rowOvDay!=='object'||!date||!athlete) return null;
+  try{
+    const signals=extractFeedbackSignals({__gun:{rowOverrides:{[date]:rowOvDay}}},athlete);
+    const sc=calcPaceComplianceScore(signals);
+    return (sc&&sc.puan!=null)?sc.puan:null;
+  }catch(e){return null;}
+}
+function hedefUyumuRenk(p){
+  if(p==null) return {fg:'var(--text-tertiary)',bg:'var(--bg-tertiary)'};
+  if(p>=85) return {fg:'var(--info)',bg:'var(--info-bg)'};
+  if(p>=70) return {fg:'var(--success)',bg:'var(--success-bg)'};
+  if(p>=50) return {fg:'var(--warn)',bg:'var(--warn-bg)'};
+  return {fg:'var(--danger)',bg:'var(--danger-bg)'};
+}
+function gunlukHedefUyumuRozeti(rowOvDay,date,athlete,opts){
+  const p=calcGunlukHedefUyumu(rowOvDay,date,athlete);
+  const c=hedefUyumuRenk(p);
+  const props={
+    'data-hedef-uyumu':p==null?'yok':String(p),
+    title:p==null
+      ?'Hedef Uyumu — bu antrenmanda puanlanabilir pace/nabız verisi yok'
+      :'Hedef Uyumu %'+p+' — bu antrenmanın liderlik skoruna giren pace/nabız/mesafe uyumu',
+    style:{fontSize:11,fontWeight:800,lineHeight:1,padding:'3px 7px',borderRadius:99,whiteSpace:'nowrap',color:c.fg,background:c.bg,border:'1px solid '+c.fg}
+  };
+  if(opts&&opts.noExport) props['data-no-export']=true; // paylaşılan Haftalık Reçete görselini değiştirme
+  return React.createElement('span',props,'🎯 '+(p==null?'—':p+'%'));
 }
 
 // 'Tümü' periyodu için plan_snapshots taramasının güvenlik sınırları —
@@ -24927,6 +24968,9 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     (planSnap?.overrideMap?.[day.date]?._revizeOnaylandi)&&React.createElement('span',{'data-no-export':true,style:{color:'var(--warn)',fontWeight:700,marginLeft:3,fontSize:10}},'(revize)')
                   )
                 ),
+                // 2026.09.21 — Göksel talebi: ✔'in yanında günün Hedef Uyumu (liderlik skoruna giren
+                // değer) + puana göre renk. Koşu İzlerim'deki ✔ ile AYNI ortak fonksiyon (panel paritesi).
+                isDone&&gunlukHedefUyumuRozeti((planSnap?.rowOverrides||{})[day.date],day.date,athlete,{noExport:true}),
                 isDone&&React.createElement('span',{style:{fontSize:20,color:'var(--success)',fontWeight:900,lineHeight:1}},'✔'),
                 (isCancelledDay||isYapilmamis)&&React.createElement('span',{style:{fontSize:18,color:'var(--danger)',fontWeight:700,lineHeight:1}},'✕')
               ),
@@ -37134,6 +37178,9 @@ function SporcuPlanView(){
           textTransform:'uppercase',letterSpacing:0.3,whiteSpace:'nowrap'
         }},statusLabel),
         React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)',flex:1}},fmtDate(info.date)),
+        // 2026.09.21 — Göksel talebi: ✔'in yanında günün Hedef Uyumu (liderlik skoruna giren
+        // değer) + puana göre renk. Koç Paneli'ndeki (HaftalikPlanTab) ✔ ile AYNI ortak fonksiyon (panel paritesi).
+        fullyDone&&gunlukHedefUyumuRozeti(rowOvEff[info.date],info.date,athlete),
         fullyDone&&React.createElement('span',{style:{fontSize:18,color:'var(--success)',fontWeight:900,lineHeight:1}},'✔')
       ),
       // Başlık satırı: emoji + isim + süre
