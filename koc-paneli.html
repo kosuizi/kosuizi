@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.21-2053 --><!DOCTYPE html>
+<!-- Version: v2026.09.21-2122 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.21-2053';
+const APP_VERSION='v2026.09.21-2122';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -28120,6 +28120,70 @@ function ChartTestKiyas({tid,records,athlete}){
   return React.createElement('div',{style:{position:'relative',height:170,marginTop:10,marginBottom:4}},React.createElement('canvas',{ref}));
 }
 
+// ── Koşu Dinamikleri Trend Grafiği (21.09.2026, Göksel talebi) ─────────────────
+// Kadans / Yer Temas / Dikey Salınım TEK grafikte. Üç metriğin ölçeği farklı
+// (spm ~170-190, ms ~200-300, cm ~6-10) — bu yüzden her metrik KENDİ Y eksenine
+// çizilir, eksen etiketleri çizgi renginde boyanır. Seçili olmayan metrik çizgisiyle
+// birlikte ekseni de kalkar. Seçim butonları TestTab'da (dinMetrik state'i).
+const KOSU_DIN_METRIKLER=[
+  {k:'kadans',kisa:'Kadans',birim:'spm',renk:'#3b82f6'},
+  {k:'yer_kontak',kisa:'Yer Temas',birim:'ms',renk:'#f59e0b'},
+  {k:'dikey_salinim',kisa:'Dikey Salınım',birim:'cm',renk:'#10b981'}
+];
+function ChartKosuDinamikleri({seri,aktif}){
+  const ref=useRef();const inst=useRef();
+  const aktifKey=(aktif||[]).join(',');
+  const yeterli=!!seri&&seri.length>=2;
+  useEffect(()=>{
+    if(inst.current){inst.current.destroy();inst.current=null;}
+    if(!ref.current||!yeterli)return;
+    const secili=KOSU_DIN_METRIKLER.filter(m=>(aktif||[]).includes(m.k));
+    if(!secili.length)return;
+    const isDark=document.body.classList.contains('dark');
+    const gridColor=isDark?'rgba(255,255,255,.08)':'rgba(0,0,0,.08)';
+    const tickColor=isDark?'#777':'#888';
+    const scales={x:{ticks:{color:tickColor,font:{size:10},maxRotation:45,autoSkip:true},grid:{color:gridColor},border:{display:false}}};
+    const datasets=secili.map((m,i)=>{
+      const axisId='y_'+m.k;
+      scales[axisId]={
+        type:'linear',position:i===0?'left':'right',grace:'12%',
+        ticks:{color:m.renk,font:{size:10},maxTicksLimit:6,callback:v=>Math.round(v*10)/10},
+        grid:{color:gridColor,drawOnChartArea:i===0},border:{display:false}
+      };
+      return{
+        label:m.kisa,yAxisID:axisId,data:seri.map(s=>s[m.k]),
+        borderColor:m.renk,backgroundColor:m.renk,borderWidth:2,
+        pointRadius:3,pointHoverRadius:5,spanGaps:true,tension:.25
+      };
+    });
+    inst.current=new Chart(ref.current,{
+      type:'line',
+      data:{labels:seri.map(s=>fmtShort(s.date)),datasets},
+      options:{
+        responsive:true,maintainAspectRatio:false,
+        interaction:{mode:'index',intersect:false},
+        plugins:{
+          legend:{display:false}, // metrik seçim butonları zaten renkli lejant görevi görüyor
+          tooltip:{callbacks:{
+            title:items=>{const s=seri[items[0].dataIndex];return s?fmtDate(s.date):'';},
+            afterTitle:items=>{
+              const s=seri[items[0].dataIndex];
+              if(!s)return '';
+              const t=(s.tur&&TUR_LABELS[s.tur])||s.tur||'';
+              return t?(t+(s.yapi_notu?' · '+s.yapi_notu:'')):'';
+            },
+            label:ctx=>{const m=secili[ctx.datasetIndex];return ' '+m.kisa+': '+(ctx.raw==null?'—':ctx.raw+' '+m.birim);}
+          }}
+        },
+        scales
+      }
+    });
+    return()=>{if(inst.current){inst.current.destroy();inst.current=null;}};
+  },[seri,aktifKey,yeterli]);
+  if(!yeterli)return React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',padding:'8px 0'}},'Grafik için en az 2 antrenman kaydı gerekir.');
+  return React.createElement('div',{style:{position:'relative',height:230}},React.createElement('canvas',{ref}));
+}
+
 // Test zamanlama: Bu sporcu için şu an test önerilmeli mi?
 // Belirli bir tarih için test uygunluğunu değerlendir
 // ── Test Günü Sert Engelleri — TEK PAYLAŞILAN KAYNAK (14.09.2026, Göksel onayı) ──
@@ -28419,7 +28483,14 @@ function analyzeDynamics(workouts, athleteId, selectedTur, selectedYapiNotu){
     })():'yetersiz_veri';
     sonuc[k]={avg,son,seviye,trend,vals,birim:ref.birim,ref};
   });
-  return{sonuc,wkCount:athWks.length,autoDetected,filtered:!!selectedTur};
+  // Grafik için antrenman bazlı seri (kronolojik). Kartlardaki 'vals' yalnızca değerleri tutar;
+  // tarih/tür bilgisi grafikte (eksen + tooltip) gerektiği için burada ayrıca döndürülür.
+  const seri=athWks.map(w=>{
+    const num=v=>{const n=parseFloat(v);return n>0?n:null;};
+    return{id:w.id,date:w.date,tur:w.tur||'',yapi_notu:w.yapi_notu||'',
+      kadans:num(w.kadans),yer_kontak:num(w.yer_kontak),dikey_salinim:num(w.dikey_salinim)};
+  });
+  return{sonuc,wkCount:athWks.length,autoDetected,filtered:!!selectedTur,seri};
 }
 
 function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,onUpdateWorkout,onDeleteWorkout,testPlanlar,onSaveTestPlan,onDeleteTestPlan}){
@@ -28434,6 +28505,7 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,o
   const setEF=(k,v)=>setEditForm(f=>({...f,[k]:v}));
   const [dinTur,setDinTur]=useState('');       // '' = Tümü (varsayılan: sabit tempolu antrenmanlar)
   const [dinYapiNotu,setDinYapiNotu]=useState(''); // '' = seçilen türün tüm alt seviyeleri
+  const [dinMetrik,setDinMetrik]=useState({kadans:true,yer_kontak:true,dikey_salinim:true}); // trend grafiğinde görünen metrikler
 
   const oneriler=React.useMemo(()=>
     athlete?calcTestTiming(athlete,history,races,workouts):[]
@@ -28885,6 +28957,47 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,o
           !dinTur&&dinamikler.autoDetected>0&&React.createElement('span',{style:{color:'var(--text-tertiary)'}},' ('+dinamikler.autoDetected+' tanesi otomatik tespit edildi)'),
           !dinTur&&' · İnterval, tempo ve eşik hariç'
         ),
+        // Trend grafiği — seçili antrenman filtresindeki (dinTur/dinYapiNotu) antrenmanları tarih sırasıyla çizer.
+        (()=>{
+          const dinKeys=KOSU_DIN_METRIKLER.map(m=>m.k);
+          const verisi=k=>!!dinamikler.sonuc[k];
+          // Etkin metrikler: kullanıcının açtığı VE verisi olanlar. Hiçbiri kalmadıysa (ör. filtre
+          // değişti, açık metrikte veri yok) verisi olan tüm metriklere düş — grafik boş kalmasın.
+          let dinAktif=dinKeys.filter(k=>dinMetrik[k]&&verisi(k));
+          if(!dinAktif.length)dinAktif=dinKeys.filter(verisi);
+          const dinToggle=k=>{
+            if(!verisi(k))return;
+            // Son kalan görünür metriği kapatmaya izin verme
+            if(dinAktif.includes(k)&&dinAktif.length===1)return;
+            setDinMetrik(prev=>{
+              const next={...prev};
+              next[k]=!dinAktif.includes(k);
+              // Etkin kümede olmayan ama state'te açık kalmış metrikler yeniden görünmesin diye
+              // görünür durumu state'e yansıt
+              dinKeys.forEach(x=>{if(x!==k)next[x]=dinAktif.includes(x);});
+              return next;
+            });
+          };
+          return React.createElement('div',{className:'card',style:{marginBottom:16}},
+            React.createElement('div',{className:'card-title'},'📈 Koşu Dinamikleri Trendi'),
+            React.createElement('div',{style:{display:'flex',gap:8,flexWrap:'wrap',marginBottom:12}},
+              KOSU_DIN_METRIKLER.map(m=>{
+                const acik=dinAktif.includes(m.k),var_=verisi(m.k);
+                return React.createElement('button',{key:m.k,type:'button','aria-pressed':acik,disabled:!var_,
+                  title:var_?'':'Bu filtrede '+m.kisa+' verisi yok',
+                  onClick:()=>dinToggle(m.k),
+                  style:{display:'inline-flex',alignItems:'center',gap:6,padding:'6px 12px',fontSize:12,fontWeight:600,fontFamily:'inherit',
+                    borderRadius:999,cursor:var_?'pointer':'not-allowed',opacity:var_?1:.45,transition:'all .15s',
+                    border:'1.5px solid '+(acik?m.renk:'var(--border)'),
+                    background:acik?m.renk+'22':'transparent',
+                    color:acik?'var(--text-primary)':'var(--text-tertiary)'}},
+                  React.createElement('span',{style:{width:9,height:9,borderRadius:'50%',background:acik?m.renk:'var(--border)'}}),
+                  m.kisa+' ('+m.birim+')');
+              })
+            ),
+            React.createElement(ChartKosuDinamikleri,{seri:dinamikler.seri,aktif:dinAktif})
+          );
+        })(),
         React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(240px,1fr))',gap:12,marginBottom:16}},
           [{k:'kadans',l:'Kadans',aciklama:'Yüksek kadans (≥180 spm) eklem yükünü azaltır.',oneri:{gelistir:'Metronom ile kadansını artır. Hedef: haftada +2–3 spm.',kabul:'İyi seviye. Kısa yokuş tekrarları kadansı artırabilir.',iyi:'Mükemmel kadans!'}},
            {k:'yer_kontak',l:'Yer Temas Süresi',aciklama:'Düşük yer temas süresi (<250ms) koşu verimliliğinin göstergesi.',oneri:{gelistir:'Pliometrik egzersizler ve ayak altı kuvvetini artır.',kabul:'Makul seviye. Üst vücut kuvvetini artır.',iyi:'Çok iyi yer teması!'}},
