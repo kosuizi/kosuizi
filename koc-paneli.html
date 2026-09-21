@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.21-2022 --><!DOCTYPE html>
+<!-- Version: v2026.09.21-2053 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.21-2022';
+const APP_VERSION='v2026.09.21-2053';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -1451,6 +1451,7 @@ const BPM_SIGNAL_SCORE_THRESHOLD=4;
 // Kalibrasyon (vLT/Sınır) odak rozetine değil ZON kurallarına bakar (toVltDir → s.zi) — hr/pace
 // seçimi kalibrasyonu DEĞİŞTİRMEZ (bilinçli karar); sadece feel sinyali tamamen düşürdüğü için
 // kalibrasyondan da çıkar. Override yoksa (eski/otomatik) tüm davranış birebir aynıdır.
+// Aralık/Yürü-Koş yapılarında seçim BACAK bazlıdır (koşu bacağı / dinlenme-yürüyüş bacağı; tüm tekrarlara uygulanır).
 const FOCUS_OPTIONS=Object.freeze({
   hr:  Object.freeze({key:'hr',  label:'Nabız Odaklı',   icon:'❤️',color:'#be185d',bg:'#fdf2f8'}),
   pace:Object.freeze({key:'pace',label:'Pace Odaklı',    icon:'↔️',color:'#1d4ed8',bg:'#eff6ff'}),
@@ -2040,8 +2041,20 @@ function extractFeedbackSignals(allSnapsObj, athlete){
               const {_targetZIdx,_targetPaceSec,_origLoBpm,_origHiBpm,...rest}=leg;
               return rest;
             };
-            if(typeMap.run) scanRow(_cleanLeg(typeMap.run),repStr);
-            if(typeMap.rest) scanRow(_cleanLeg(typeMap.rest),repStr);
+            // 2026.09.21 — Göksel talebi (aralık/Yürü-Koş için manuel odak): koç odağı bacak bazlı seçer ve seçim
+            // ana tablodaki özet satırın kaydında (rowOvs[headerIdx+1] = koşu, [headerIdx+2] = dinlenme/yürüyüş)
+            // durur (bkz. ReceteTablosu → setFocusOverride). Tekrar (leg) kayıtları kendi başlarına odak taşımaz —
+            // burada özet satırdan miras alınır. Bayat kayıt koruması: özet satırın _origZIdx'i bacağınkiyle
+            // uyuşmuyorsa (antrenman türü değişip aynı indekse başka bir satır gelmiş) seçim YOK sayılır.
+            const _hIdxN=parseInt(_hIdxStr,10);
+            const _withLegFocus=(sumRec,leg)=>{
+              if(!leg||!sumRec) return leg;
+              if(!focusOverrideKey(sumRec)) return leg;
+              if(sumRec._origZIdx!=null&&leg._origZIdx!=null&&sumRec._origZIdx!==leg._origZIdx) return leg;
+              return {...leg,_focusOverride:sumRec._focusOverride};
+            };
+            if(typeMap.run) scanRow(_cleanLeg(_withLegFocus(rowOvs[_hIdxN+1],typeMap.run)),repStr);
+            if(typeMap.rest) scanRow(_cleanLeg(_withLegFocus(rowOvs[_hIdxN+2],typeMap.rest)),repStr);
           });
         });
       }
@@ -10602,6 +10615,7 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
 
   // Nabız validasyonu (AralikEditor için — override vs. zone sınırları)
   const bpmValidationAralik=(rowData, type, rep)=>{
+    if(focusOverrideKey(rowData)==='feel') return null; // 2026.09.21: bacağın odağı Hissiyat → nabız değerlendirilmez (özet satırın override'ı rowData'ya miras kalır)
     // Kısa süreli aralıklı antrenmanlarda (strides, sprint, hill vb.) nabız gecikmeli
     // yükselir/iner → RUN (aktif eforun kendisi) için nabız göstergesi atlanır.
     //
@@ -12006,9 +12020,13 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
   //  • Pace hiç değerlendirilmeyen satırlar (Isınma/Soğuma/Dinlenme/Yürüyüş/RPE'li) → Nabız ↔ Hissiyat
   //    (sistemde bu satırlarda "Pace Odaklı" diye bir tasarım yok).
   //  • Pace+nabız ikisi de değerlendirilen ana fazlar → Nabız / Pace / Hissiyat.
-  //  • Aralık (tekrarlı) satırlar → şimdilik seçici YOK (tekrar bazlı satırlar AralikEditor'da).
+  //  • Aralık/Yürü-Koş (tekrarlı) yapılar (2026.09.21 — Göksel talebi) → seçim BACAK bazlı: ana tablodaki
+  //    "koşu" özet satırı ve "dinlenme/yürüyüş" özet satırı için ayrı ayrı; seçim o bacağın TÜM tekrarlarına
+  //    uygulanır (AralikEditor'daki tekrar satırları özet satırın override'ını miras alır — bkz. getRowData,
+  //    extractFeedbackSignals → __aralik döngüsü). Yukarıdaki kurallar (Hissiyat-by-design satırlarda seçici yok,
+  //    pace değerlendirilmeyen bacaklarda Nabız ↔ Hissiyat) bacaklar için de aynen geçerli.
   const focusOverrideOptions=(row)=>{
-    if(!row||row.type==='header'||row.repeatCount>1||row._aralikAveraged) return null;
+    if(!row||row.type==='header') return null;
     const g=_focusGates(row);
     if(!g.hrActive) return null;
     const opts=[FOCUS_OPTIONS.hr];
