@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.21-1812 --><!DOCTYPE html>
+<!-- Version: v2026.09.21-1843 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.21-1812';
+const APP_VERSION='v2026.09.21-1843';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -16247,19 +16247,25 @@ function computeRampProjection(weekTargets, rampModeOn, rampRatePct, curEffKm=nu
   // mesafe (km) bazlıdır. onTrack = mesafe ham plana uyuyor; dpOnTrack = D+ ham plana uyuyor
   // (rampa kapalıyken ikisi aynıdır, açıkken D+ ayrı oranla ilerler).
   const proj={};
-  let active=false,chainOriginKm=null,chainSteps=0;
+  // active: mesafe VEYA D+ ham plana takıldı → tabloda mavi projeksiyon var. kmActive: MESAFE zinciri
+  // aktif → chainOriginKm/chainSteps yalnızca o zaman dolar (Rampa-vs-İdeal karar motoru mesafe
+  // bazlıdır; yalnızca D+ kısıtlıysa motora sahte zincir bilgisi gitmesin — 21.09.2026).
+  let active=false,kmActive=false,chainOriginKm=null,chainSteps=0;
   for(const e of sim.entries){
-    if(!e.recovery&&(!e.onTrack||!e.dpOnTrack)&&!active){active=true;chainOriginKm=e.level;chainSteps=0;}
+    if(!e.recovery&&(!e.onTrack||!e.dpOnTrack)&&!active)active=true;
+    if(!e.recovery&&!e.onTrack&&!kmActive){kmActive=true;chainOriginKm=e.level;chainSteps=0;}
     if(!active)continue;
     const key=localDateStr(e.w.weekStart);
     if(e.recovery){
-      proj[key]={projKm:e.targetKm,projDp:e.targetDp,onTrack:e.onTrack,dpOnTrack:e.dpOnTrack,chainOriginKm,chainSteps};
+      proj[key]={projKm:e.targetKm,projDp:e.targetDp,onTrack:e.onTrack,dpOnTrack:e.dpOnTrack,
+        chainOriginKm:kmActive?chainOriginKm:null,chainSteps:kmActive?chainSteps:0};
       continue;
     }
-    chainSteps++;
-    proj[key]={projKm:e.targetKm,projDp:e.targetDp,onTrack:e.onTrack,dpOnTrack:e.dpOnTrack,chainOriginKm,chainSteps,
+    if(kmActive)chainSteps++;
+    proj[key]={projKm:e.targetKm,projDp:e.targetDp,onTrack:e.onTrack,dpOnTrack:e.dpOnTrack,
+      chainOriginKm:kmActive?chainOriginKm:null,chainSteps:kmActive?chainSteps:0,
       zeroReturn:!!e.isReturn&&(!e.onTrack||!e.dpOnTrack)};
-    if(e.onTrack){chainOriginKm=e.targetKm;chainSteps=0;}
+    if(kmActive&&e.onTrack){chainOriginKm=e.targetKm;chainSteps=0;}
   }
   return proj;
 }
@@ -16305,6 +16311,7 @@ function computeRampNeed(weeks, curEffKm=null, curEffDp=null, rampModeOn=false, 
   const cur=ws.find(w=>w.isCurrent);
   const isGrowth=w=>!w.isPast&&!w.isRecovery&&!w.isRaceWeek&&w.phase!=='Taper';
   let lv,n;
+  const afterCur=!!(cur&&isGrowth(cur));
   if(cur&&isGrowth(cur)){
     lv=sim.levelAfterCur;
     n=ws.filter(w=>isGrowth(w)&&(w.weekIdx||0)>(cur.weekIdx||0)&&(w.weekIdx||0)<=(pkWeek.weekIdx||0)).length;
@@ -16314,7 +16321,7 @@ function computeRampNeed(weeks, curEffKm=null, curEffDp=null, rampModeOn=false, 
   }
   if(n<=0||!(lv.level>0))return null;
   const pct=(peak,lvlV)=>(peak>0&&lvlV>0)?Math.max(0,round1((Math.pow(peak/lvlV,1/n)-1)*100)):null;
-  return{level:round1(lv.level),levelDp:Math.round(lv.levelDp),n,peakKm,peakDp,
+  return{level:round1(lv.level),levelDp:Math.round(lv.levelDp),n,peakKm,peakDp,afterCur,
     levelNow:round1(lvNow.level),levelDpNow:Math.round(lvNow.levelDp),
     lastKmNow:round1(lvNow.lastKm),avgKmNow:round1(lvNow.avgKm),
     lastDpNow:Math.round(lvNow.lastDp),avgDpNow:Math.round(lvNow.avgDp),
@@ -17091,7 +17098,7 @@ function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, ram
   const _densGrowPct=(need&&dpMeaningful&&need.needKmPct!=null&&need.needDpPct!=null)
     ?round1(((1+need.needDpPct/100)/(1+need.needKmPct/100)-1)*100):null;
   const _needLine=(need&&need.needKmPct!=null)
-    ?`📐 Zirveye gereken haftalık artış: mesafe %${need.needKmPct}${(dpMeaningful&&need.needDpPct!=null)?' · D+ %'+need.needDpPct:''} — tavan (${rampModeOn?(_capDpPct!==_capPct?'rampa: mesafe %'+_capPct+' · D+ %'+_capDpPct:'rampa %'+_capPct):'sabit %'+_capPct}) ${_infeasible?'YETERSİZ':(_tight?'yeterli ama pay az':'yeterli')}${(_densGrowPct!=null&&_densGrowPct>=0.5)?' · D+ km\'den ≈%'+_densGrowPct+' hızlı büyümeli, yani m/km yoğunluğu da artmalı':''}`
+    ?`📐 Zirveye gereken haftalık artış (${need.afterCur?'bu hafta tamamlanınca ':''}seviye ${need.level}km → zirve ${need.peakKm}km, ${need.n} büyüme haftası): mesafe %${need.needKmPct}${(dpMeaningful&&need.needDpPct!=null)?' · D+ %'+need.needDpPct+' ('+need.levelDp+'m → '+need.peakDp+'m)':''} — tavan (${rampModeOn?(_capDpPct!==_capPct?'rampa: mesafe %'+_capPct+' · D+ %'+_capDpPct:'rampa %'+_capPct):'sabit %'+_capPct}) ${_infeasible?'YETERSİZ':(_tight?'yeterli ama pay az':'yeterli')}${(_densGrowPct!=null&&_densGrowPct>=0.5)?' · D+ km\'den ≈%'+_densGrowPct+' hızlı büyümeli, yani m/km yoğunluğu da artmalı':''}`
     :null;
   // Seviye satırları: seviyenin HANGİ değerden geldiği görünür (geçen hafta mı, 4 hafta ortalaması mı)
   const _srcTxt=(last,avg,unit,dec)=>{
@@ -24045,7 +24052,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     style:{fontSize:9,fontWeight:600,marginTop:1,whiteSpace:'nowrap',
                       color:_decision.level==='kirmizi'?'var(--danger)':_decision.level==='sari'?'var(--warn)':'var(--success)'},
                     title:'Hedef, İdeal\'i %'+_decGapPct+' aşıyor. '+_decision.message+
-                      (_dispSuggestedRampRatePct!=null?' Önerilen rampa: %'+_dispRampRateForLabel+' → %'+_dispSuggestedRampRatePct+'.'+(_frozenNextDecision&&_decision.suggestedRampRatePct==null?' (geçen hafta hesaplanmıştı)':''):'')
+                      (_dispSuggestedRampRatePct!=null?(rampModeOn?' Önerilen mesafe rampası: %':' Önerilen rampa: %')+_dispRampRateForLabel+' → %'+_dispSuggestedRampRatePct+'.'+(_frozenNextDecision&&_decision.suggestedRampRatePct==null?' (geçen hafta hesaplanmıştı)':''):'')
                   },
                     (_decision.level==='kirmizi'?'🔴 ':_decision.level==='sari'?'🟡 ':'🟢 ')+_decision.title+
                     (_dispSuggestedRampRatePct!=null?' (%'+_dispRampRateForLabel+'→%'+_dispSuggestedRampRatePct+')':'')
