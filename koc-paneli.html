@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.21-1745 --><!DOCTYPE html>
+<!-- Version: v2026.09.21-1812 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.21-1745';
+const APP_VERSION='v2026.09.21-1812';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -16128,6 +16128,9 @@ function uzunKosuBandMaxKm(band, disiplin, zones, raceKm=0){
 // Eski kayıtlardaki %10 (ve altı) değerler otomatik %11'e çekilir. Kayıtsız/geçersiz değer
 // varsayılan %15 olur.
 const RAMP_PCT_MIN=11, RAMP_PCT_MAX=25, RAMP_PCT_DEFAULT=15;
+// Rampa AÇIKKEN D+ ayrı oranla ilerler (bkz. rampSimulate). Haftanın m/km'si plan yoğunluğunun bu
+// katını geçemez (km ramp'le kısılmışken D+ ham plana çıkarsa aşırı dik hafta oluşmasın).
+const RAMP_DP_DENS_GUARD=1.25;
 const clampRampPct=(v)=>Math.min(RAMP_PCT_MAX,Math.max(RAMP_PCT_MIN,parseInt(v)||RAMP_PCT_DEFAULT));
 
 // SEVİYE = max(son biten dinlenme-dışı hafta, son 4 dinlenme-dışı haftanın ORTALAMASI) — Göksel onayı
@@ -16175,20 +16178,34 @@ function rampLevelInfo(ws){
 // Tablo, uyarı kartı ve "Herşey yolunda giderse" satırı bu simülasyonu (rampSimulate) kullanır.
 // curEffKm/curEffDp (opsiyonel): bu haftanın GÖRÜNEN (dondurulmuş) efektif hedefi — bu hafta
 // tutturulursa sonraki haftalar oradan ilerler (tablo/kart/panel hep aynı değeri geçirir).
-function rampSimulate(ws, rampModeOn, rampRatePct, curEffKm=null, curEffDp=null){
+function rampSimulate(ws, rampModeOn, rampRatePct, curEffKm=null, curEffDp=null, rampDpRatePct=null){
   const hist=rampHistory(ws);
   if(!hist.length)return null;
-  if(!(rampLevelFrom(hist).level>0))return null;
+  const lvNow=rampLevelFrom(hist);
+  if(!(lvNow.level>0))return null;
   const rate=rampModeOn?1+(rampRatePct/100):1.10;
+  // D+ RAMPASI (21.09.2026 — Göksel kararı): Rampa AÇIKKEN D+ hedefi km'yi izlemez, kendi oranıyla
+  // ilerler: min(ham D+, D+ seviyesi × (1+D+ oranı)). Rampa KAPALIYKEN (sabit %10) D+ km'yi izler
+  // (eskisi gibi). D+ seviyesi 0 ise (D+ geçmişi yok / düz koşucu) o hafta km'yi izler.
+  const dpRate=rampModeOn?1+((rampDpRatePct!=null?rampDpRatePct:rampRatePct)/100):null;
   const upcoming=ws.filter(w=>!w.isPast&&!w.isRaceWeek&&w.phase!=='Taper');
   const entries=[];
   let first=true;
+  let levelAfterCur=null;
   for(const w of upcoming){
     const lv=rampLevelFrom(hist);
+    const dens=w.targetKm>0&&w.targetDp>0?w.targetDp/w.targetKm:0;
+    const sepDp=!!dpRate&&lv.levelDp>0;
     if(w.isRecovery){
       const tKm=Math.min(w.targetKm,lv.level);
-      const tDp=w.targetKm>0?Math.round(w.targetDp*tKm/w.targetKm):w.targetDp;
-      entries.push({w,recovery:true,targetKm:tKm,targetDp:tDp,onTrack:w.targetKm<=lv.level,level:lv.level});
+      let tDp=w.targetKm>0?Math.round(w.targetDp*tKm/w.targetKm):w.targetDp;
+      let dpOn=w.targetKm<=lv.level;
+      if(sepDp){
+        tDp=Math.min(w.targetDp,Math.round(lv.levelDp));dpOn=w.targetDp<=lv.levelDp;
+        if(dens>0&&tKm>0){const gcap=Math.round(RAMP_DP_DENS_GUARD*dens*tKm);if(tDp>gcap){tDp=gcap;dpOn=false;}}
+      }
+      entries.push({w,recovery:true,targetKm:tKm,targetDp:tDp,onTrack:w.targetKm<=lv.level,dpOnTrack:dpOn,level:lv.level});
+      if(w.isCurrent)levelAfterCur=lv;
       continue;
     }
     const isReturn=first&&lv.zeroLast;
@@ -16196,35 +16213,52 @@ function rampSimulate(ws, rampModeOn, rampRatePct, curEffKm=null, curEffDp=null)
     const cap=round1(lv.level*(isReturn?1:rate));
     const onTrack=!(w.targetKm>lv.level)||cap>=w.targetKm;
     const tKm=onTrack?w.targetKm:cap;
-    const dens=w.targetKm>0&&w.targetDp>0?w.targetDp/w.targetKm:0;
-    const tDp=onTrack?w.targetDp:(dens>0?Math.round(tKm*dens):0);
+    let tDp,dpOnTrack;
+    if(sepDp){
+      const capDp=Math.round(lv.levelDp*(isReturn?1:dpRate));
+      dpOnTrack=!(w.targetDp>lv.levelDp)||capDp>=w.targetDp;
+      tDp=dpOnTrack?w.targetDp:capDp;
+      // yoğunluk koruması: haftanın m/km'si plan yoğunluğunun RAMP_DP_DENS_GUARD katını geçmesin
+      if(dens>0&&tKm>0){
+        const gcap=Math.round(RAMP_DP_DENS_GUARD*dens*tKm);
+        if(tDp>gcap){tDp=gcap;dpOnTrack=false;}
+      }
+    } else {
+      dpOnTrack=onTrack;
+      tDp=onTrack?w.targetDp:(dens>0?Math.round(tKm*dens):0);
+    }
     let aKm=tKm,aDp=tDp;
     if(w.isCurrent&&curEffKm>0){aKm=curEffKm;aDp=curEffDp>0?curEffDp:(dens>0?Math.round(curEffKm*dens):tDp);}
+    else if(w.isCurrent&&curEffDp>0){aDp=curEffDp;}
     hist.push({km:aKm,dp:aDp});
-    entries.push({w,recovery:false,targetKm:tKm,targetDp:tDp,onTrack,isReturn,level:lv.level});
+    if(w.isCurrent)levelAfterCur=rampLevelFrom(hist);
+    entries.push({w,recovery:false,targetKm:tKm,targetDp:tDp,onTrack,dpOnTrack,isReturn,level:lv.level});
   }
-  return{entries,rate};
+  return{entries,rate,dpRate,levelNow:lvNow,levelAfterCur:levelAfterCur||lvNow};
 }
 
-function computeRampProjection(weekTargets, rampModeOn, rampRatePct, curEffKm=null){
+function computeRampProjection(weekTargets, rampModeOn, rampRatePct, curEffKm=null, curEffDp=null, rampDpRatePct=null){
   const ws=(weekTargets||[]).slice().sort((a,b)=>(a.weekIdx||0)-(b.weekIdx||0));
-  const sim=rampSimulate(ws,rampModeOn,rampRatePct,curEffKm,null);
+  const sim=rampSimulate(ws,rampModeOn,rampRatePct,curEffKm,curEffDp,rampDpRatePct);
   if(!sim)return {};
   // chainOriginKm/chainSteps: zincirin başladığı km ve o noktadan bu haftaya kadar kaç kez bileşik
   // katsayı uygulandığı — Rampa-vs-İdeal karar motoru "bu hedefe inmek için hangi oran gerekir?"
-  // sorusunu geriye çözebilsin diye dışa aktarılır (yakalanan haftada sıfırlanır).
+  // sorusunu geriye çözebilsin diye dışa aktarılır (yakalanan haftada sıfırlanır). Karar motoru
+  // mesafe (km) bazlıdır. onTrack = mesafe ham plana uyuyor; dpOnTrack = D+ ham plana uyuyor
+  // (rampa kapalıyken ikisi aynıdır, açıkken D+ ayrı oranla ilerler).
   const proj={};
   let active=false,chainOriginKm=null,chainSteps=0;
   for(const e of sim.entries){
-    if(!e.recovery&&!e.onTrack&&!active){active=true;chainOriginKm=e.level;chainSteps=0;}
+    if(!e.recovery&&(!e.onTrack||!e.dpOnTrack)&&!active){active=true;chainOriginKm=e.level;chainSteps=0;}
     if(!active)continue;
     const key=localDateStr(e.w.weekStart);
     if(e.recovery){
-      proj[key]={projKm:e.targetKm,projDp:e.targetDp,onTrack:e.onTrack,chainOriginKm,chainSteps};
+      proj[key]={projKm:e.targetKm,projDp:e.targetDp,onTrack:e.onTrack,dpOnTrack:e.dpOnTrack,chainOriginKm,chainSteps};
       continue;
     }
     chainSteps++;
-    proj[key]={projKm:e.targetKm,projDp:e.targetDp,onTrack:e.onTrack,chainOriginKm,chainSteps,zeroReturn:!!e.isReturn&&!e.onTrack};
+    proj[key]={projKm:e.targetKm,projDp:e.targetDp,onTrack:e.onTrack,dpOnTrack:e.dpOnTrack,chainOriginKm,chainSteps,
+      zeroReturn:!!e.isReturn&&(!e.onTrack||!e.dpOnTrack)};
     if(e.onTrack){chainOriginKm=e.targetKm;chainSteps=0;}
   }
   return proj;
@@ -16232,15 +16266,16 @@ function computeRampProjection(weekTargets, rampModeOn, rampRatePct, curEffKm=nu
 
 // "Herşey yolunda giderse ... hafta içinde orijinal plana dönülür" — TEK KAYNAK.
 // Döner: zincir yoksa null; varsa {effKm, catchUpWeek, lastWeekIdx, ratePct}
-function computeRampCatchUp(weeks, rampModeOn, rampRatePct, curEffKm=null){
+function computeRampCatchUp(weeks, rampModeOn, rampRatePct, curEffKm=null, curEffDp=null, rampDpRatePct=null){
   const ws=(weeks||[]).slice().sort((a,b)=>(a.weekIdx||0)-(b.weekIdx||0));
-  const proj=computeRampProjection(ws,rampModeOn,rampRatePct,curEffKm);
+  const proj=computeRampProjection(ws,rampModeOn,rampRatePct,curEffKm,curEffDp,rampDpRatePct);
   const cur=ws.find(w=>w.isCurrent);
   const curE=cur?proj[localDateStr(cur.weekStart)]:null;
   const fut=ws.filter(w=>!w.isPast&&!w.isCurrent&&!w.isRecovery&&!w.isRaceWeek&&w.phase!=='Taper')
     .map(w=>({w,e:proj[localDateStr(w.weekStart)]})).filter(x=>x.e);
   if(!curE&&!fut.length)return null;
-  const first=fut.find(x=>x.e.onTrack);
+  // "Orijinal plana dönüş" = mesafe VE D+ ikisi de ham plana yetişti
+  const first=fut.find(x=>x.e.onTrack&&x.e.dpOnTrack!==false);
   return{
     effKm:curEffKm>0?curEffKm:((curE&&cur&&!cur.isRecovery)?curE.projKm:(fut.length?fut[0].e.projKm:null)),
     catchUpWeek:first?first.w:null,
@@ -16255,13 +16290,13 @@ function computeRampCatchUp(weeks, rampModeOn, rampRatePct, curEffKm=null){
 // Bu hafta planlandığı gibi tamamlanmış kabul edilir (curEffKm/curEffDp verilmişse o değerle;
 // verilmediyse min(ham hedef, seviye × tavan)) → seviye kayan pencereyle güncellenir, adım sayısı
 // yalnızca bu haftadan SONRAKİ büyüme haftalarını sayar.
-function computeRampNeed(weeks, curEffKm=null, curEffDp=null, rampModeOn=false, rampRatePct=10){
+function computeRampNeed(weeks, curEffKm=null, curEffDp=null, rampModeOn=false, rampRatePct=10, rampDpRatePct=null){
   const ws=(weeks||[]).slice().sort((a,b)=>(a.weekIdx||0)-(b.weekIdx||0));
-  const hist=rampHistory(ws);
-  if(!hist.length)return null;
-  let lv=rampLevelFrom(hist);
-  if(!(lv.level>0))return null;
-  const lvNow=lv; // bu haftadan ÖNCEKİ (kanıtlanmış) seviye — kartta "seviye / plan" oranı için
+  // Bu haftanın (tutturuldu varsayımı) kayan pencereye eklenmesi rampSimulate'de yapılır — tablo,
+  // kart ve bu fonksiyon AYNI simülasyonu kullanır.
+  const sim=rampSimulate(ws,rampModeOn,rampRatePct,curEffKm,curEffDp,rampDpRatePct);
+  if(!sim)return null;
+  const lvNow=sim.levelNow; // bu haftadan ÖNCEKİ (kanıtlanmış) seviye — kartta "seviye / plan" oranı için
   const peakWks=ws.filter(w=>w.phase==='Zirve'&&!w.isRecovery&&!w.isRaceWeek&&!w.isPast);
   if(!peakWks.length)return null;
   const peakKm=Math.max(...peakWks.map(w=>w.targetKm));
@@ -16269,19 +16304,13 @@ function computeRampNeed(weeks, curEffKm=null, curEffDp=null, rampModeOn=false, 
   const pkWeek=peakWks.find(w=>w.targetKm===peakKm)||peakWks[0];
   const cur=ws.find(w=>w.isCurrent);
   const isGrowth=w=>!w.isPast&&!w.isRecovery&&!w.isRaceWeek&&w.phase!=='Taper';
-  let n;
+  let lv,n;
   if(cur&&isGrowth(cur)){
-    const rate=rampModeOn?1+(rampRatePct/100):1.10;
-    const cap=round1(lv.level*(lv.zeroLast?1:rate));
-    const tKm=(!(cur.targetKm>lv.level)||cap>=cur.targetKm)?cur.targetKm:cap;
-    const dens=cur.targetKm>0&&cur.targetDp>0?cur.targetDp/cur.targetKm:0;
-    const aKm=curEffKm>0?curEffKm:tKm;
-    const aDp=curEffDp>0?curEffDp:(dens>0?Math.round(aKm*dens):0);
-    hist.push({km:aKm,dp:aDp});
-    lv=rampLevelFrom(hist);
+    lv=sim.levelAfterCur;
     n=ws.filter(w=>isGrowth(w)&&(w.weekIdx||0)>(cur.weekIdx||0)&&(w.weekIdx||0)<=(pkWeek.weekIdx||0)).length;
   } else {
-    n=ws.filter(w=>isGrowth(w)&&(w.weekIdx||0)<=(pkWeek.weekIdx||0)).length-(lv.zeroLast?1:0);
+    lv=lvNow;
+    n=ws.filter(w=>isGrowth(w)&&(w.weekIdx||0)<=(pkWeek.weekIdx||0)).length-(lvNow.zeroLast?1:0);
   }
   if(n<=0||!(lv.level>0))return null;
   const pct=(peak,lvlV)=>(peak>0&&lvlV>0)?Math.max(0,round1((Math.pow(peak/lvlV,1/n)-1)*100)):null;
@@ -16829,7 +16858,7 @@ function resolveWeekDisplayTarget(dcwe,liveWt){
 //   - Zirve: Bu haftanın hedefine uygunluk
 //   - Zirve öncesi (Temel/Gelişme): Projeksiyon ile ulaşılabilirlik
 // Döner: { status, message, currentWeek, actionItems[], peak*, projected*, gap* }
-function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, rampRatePct=10, curEffKm=null, curEffDp=null, curDispKm=null, curDispDp=null){
+function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, rampRatePct=10, curEffKm=null, curEffDp=null, curDispKm=null, curDispDp=null, rampDpRatePct=null){
   if(!weeks||!weeks.length||!primary)return null;
 
   // Bulunduğu hafta — tüm analizin merkezi
@@ -16974,6 +17003,9 @@ function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, ram
   // oranını (Rampa açıksa seçili oran, kapalıysa %10) kullanıyor.
   const weeklyGrowthRate=rampModeOn?1+(rampRatePct/100):1.10;
   const _capPct=Math.round((weeklyGrowthRate-1)*100);
+  // D+ tavanı: rampa AÇIKKEN kendi oranı, kapalıyken D+ km'yi izlediği için km tavanı
+  const _capDpPct=rampModeOn?(rampDpRatePct!=null?rampDpRatePct:rampRatePct):_capPct;
+  const growthDp=1+_capDpPct/100;
   const _rampWord=rampModeOn?'Rampa':'Sabit';
 
   const pastWeeks=weeks.filter(w=>w.isPast&&w.targetKm>0);
@@ -16990,7 +17022,7 @@ function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, ram
   //      haftanın planının ≥%85'i mi? Değilse SARI; hangi metrik geride ise (mesafe / D+) onu söyler.
   //      Gereken oran tavanın %80'ine dayanmışsa da SARI (pay az).
   // Seviye/gereken oran hesabı computeRampNeed'de (tablodaki zincirle aynı kaynak).
-  const need=computeRampNeed(weeks,curEffKm,curEffDp,rampModeOn,rampRatePct);
+  const need=computeRampNeed(weeks,curEffKm,curEffDp,rampModeOn,rampRatePct,rampDpRatePct);
   const lastDoneKm=need?need.level:(recent.length?round1(recent.reduce((s,w)=>s+(w.actualKm||0),0)/recent.length):currentWeek.targetKm*0.5);
   const lastDoneDp=need&&need.levelDp>0?need.levelDp:(recent.length?Math.round(recent.reduce((s,w)=>s+(w.actualDp||0),0)/recent.length):currentWeek.targetDp*0.5);
 
@@ -17002,7 +17034,7 @@ function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, ram
 
   // Rampa oranıyla büyüme (Rampa kapalıysa sabit %10 — 10% rule)
   const maxReachableKm=nGrow>0?round1(lastDoneKm*Math.pow(weeklyGrowthRate,nGrow)):lastDoneKm;
-  const maxReachableDp=nGrow>0?Math.round(lastDoneDp*Math.pow(weeklyGrowthRate,nGrow)):lastDoneDp;
+  const maxReachableDp=nGrow>0?Math.round(lastDoneDp*Math.pow(growthDp,nGrow)):lastDoneDp;
   const projectedPeakKm=round1(Math.min(peakKm,maxReachableKm));
   const projectedPeakDp=Math.round(Math.min(peakDp,maxReachableDp));
 
@@ -17018,7 +17050,7 @@ function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, ram
   const _dpRateShort=dpMeaningful&&maxReachableDp<peakDp;
   const _infeasible=_kmRateShort||_dpRateShort;
   const _kmNear=!!(need&&need.needKmPct!=null&&need.needKmPct>=0.8*_capPct);
-  const _dpNear=!!(dpMeaningful&&need&&need.needDpPct!=null&&need.needDpPct>=0.8*_capPct);
+  const _dpNear=!!(dpMeaningful&&need&&need.needDpPct!=null&&need.needDpPct>=0.8*_capDpPct);
   const _tight=!_infeasible&&(_kmNear||_dpNear);
   // 2) Konum: seviye / bu haftanın (ham) planı
   const POS_OK=0.85;
@@ -17031,7 +17063,7 @@ function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, ram
 
   // "Herşey yolunda giderse ... orijinal plana dönülür" — tablodaki rampa zinciriyle AYNI kaynak
   // (computeRampCatchUp). Zincir yoksa (sporcu plana uyuyor) null → satır gösterilmez.
-  const _cu=computeRampCatchUp(weeks,rampModeOn,rampRatePct,curEffKm);
+  const _cu=computeRampCatchUp(weeks,rampModeOn,rampRatePct,curEffKm,curEffDp,rampDpRatePct);
   const catchUpInfo=_cu?{
     effKm:_cu.effKm,ratePct:_cu.ratePct,
     catchUpWeekIdx:_cu.catchUpWeek?_cu.catchUpWeek.weekIdx:null,
@@ -17059,7 +17091,7 @@ function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, ram
   const _densGrowPct=(need&&dpMeaningful&&need.needKmPct!=null&&need.needDpPct!=null)
     ?round1(((1+need.needDpPct/100)/(1+need.needKmPct/100)-1)*100):null;
   const _needLine=(need&&need.needKmPct!=null)
-    ?`📐 Zirveye gereken haftalık artış: mesafe %${need.needKmPct}${(dpMeaningful&&need.needDpPct!=null)?' · D+ %'+need.needDpPct:''} — tavan (${rampModeOn?'rampa':'sabit'} %${_capPct}) ${_infeasible?'YETERSİZ':(_tight?'yeterli ama pay az':'yeterli')}${(_densGrowPct!=null&&_densGrowPct>=0.5)?' · D+ km\'den ≈%'+_densGrowPct+' hızlı büyümeli, yani m/km yoğunluğu da artmalı':''}`
+    ?`📐 Zirveye gereken haftalık artış: mesafe %${need.needKmPct}${(dpMeaningful&&need.needDpPct!=null)?' · D+ %'+need.needDpPct:''} — tavan (${rampModeOn?(_capDpPct!==_capPct?'rampa: mesafe %'+_capPct+' · D+ %'+_capDpPct:'rampa %'+_capPct):'sabit %'+_capPct}) ${_infeasible?'YETERSİZ':(_tight?'yeterli ama pay az':'yeterli')}${(_densGrowPct!=null&&_densGrowPct>=0.5)?' · D+ km\'den ≈%'+_densGrowPct+' hızlı büyümeli, yani m/km yoğunluğu da artmalı':''}`
     :null;
   // Seviye satırları: seviyenin HANGİ değerden geldiği görünür (geçen hafta mı, 4 hafta ortalaması mı)
   const _srcTxt=(last,avg,unit,dec)=>{
@@ -17089,10 +17121,16 @@ function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, ram
     :null;
   const _volLow=!!(_dec&&_dec.vol<POS_OK), _densLow=!!(_dec&&_dec.dens<POS_OK);
   const _dpTips=[];
-  if(_densLow)_dpTips.push(`⛰️ m/km yoğunluğu planın %${_pct(_dec.dens)}'inde: tırmanışlı/tepeli koşu ekle (rampa bu kısmı kapatmaz)`);
-  if(_volLow)_dpTips.push(`🔵 Hacim planın %${_pct(_dec.vol)}'inde: rampa km'yi büyütürken D+ hedefi de orantılı büyür — bu kısım hacimle kapanır`);
+  if(_densLow)_dpTips.push(rampModeOn
+    ?`⛰️ m/km yoğunluğu planın %${_pct(_dec.dens)}'inde: D+ rampası (%${_capDpPct}) D+ hedefini km'den bağımsız büyütür — tırmanışlı/tepeli koşu ekle`
+    :`⛰️ m/km yoğunluğu planın %${_pct(_dec.dens)}'inde: tırmanışlı/tepeli koşu ekle (rampa bu kısmı kapatmaz)`);
+  if(_volLow)_dpTips.push(rampModeOn
+    ?`🔵 Hacim planın %${_pct(_dec.vol)}'inde: mesafe rampası (%${_capPct}) km'yi büyütür; D+ kendi oranıyla ilerler`
+    :`🔵 Hacim planın %${_pct(_dec.vol)}'inde: rampa km'yi büyütürken D+ hedefi de orantılı büyür — bu kısım hacimle kapanır`);
   if(!_dpTips.length&&(_posDpLow||_dpRateShort))_dpTips.push('⛰️ D+ seviyesini plana yaklaştır: tırmanışlı/tepeli koşu ekle');
-  const _dpNote='ℹ️ Rampa km\'yi büyütür; D+ hedefi km ile orantılı büyür (m/km sabit kalır). Yani rampa D+ açığının hacimden gelen kısmını kapatır, yoğunluktan gelen kısmını kapatmaz.';
+  const _dpNote=rampModeOn
+    ?`ℹ️ Rampa açık: D+ hedefi km'den bağımsız, kendi oranıyla (%${_capDpPct}/hafta) büyür; haftanın m/km'si plan yoğunluğunun %${Math.round(RAMP_DP_DENS_GUARD*100)}'ini geçmez.`
+    :'ℹ️ Rampa km\'yi büyütür; D+ hedefi km ile orantılı büyür (m/km sabit kalır). Yani rampa D+ açığının hacimden gelen kısmını kapatır, yoğunluktan gelen kısmını kapatmaz.';
   const _reachLine=`📉 Tavanla ulaşılabilir zirve: mesafe ${projectedPeakKm}km (hedef ${peakKm}km)${dpMeaningful?' · D+ '+projectedPeakDp+'m (hedef '+peakDp+'m)':''}`;
 
   if(currentIsRecovery){
@@ -17107,7 +17145,7 @@ function evaluatePeakReachability(weeks, primary, athlete, rampModeOn=false, ram
   } else if(_infeasible){
     status='unlikely';
     title=phaseLabel+' — Plan Revizesi Önerilir';
-    message=`Mevcut seviyeden ${rampModeOn?'rampa':'sabit'} %${_capPct} tavanıyla zirve hedeflere ulaşılamıyor. Şu an odaklanılacak: bu hafta ${thisKm}km / D+ ${thisDp}m`;
+    message=`Mevcut seviyeden ${rampModeOn?'rampa':'sabit'} %${_capPct}${(rampModeOn&&_capDpPct!==_capPct)?' (D+ %'+_capDpPct+')':''} tavanıyla zirve hedeflere ulaşılamıyor. Şu an odaklanılacak: bu hafta ${thisKm}km / D+ ${thisDp}m`;
     actionItems=[
       _progressLine,
       _reachLine,
@@ -19498,15 +19536,30 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
     // calcWeeklyTargets'in targetKm/Dp'si yerine effKm/effDp kullan.
     // Bu olmadan revize haftada km açığı hesabı yanlış referansla çalışır.
     // week1Proj: ramp modu aktifken gelecek hafta için projeksiyon hedefi
+    // Gelecek hafta + rampa AÇIK (21.09.2026): hedef, tablo/kart/panelle AYNI rampa zincirinden gelir
+    // (computeRampProjection — kayan pencere, mesafe ve D+ ayrı oran). Eskiden burada "bu haftanın
+    // efektifi × (1+oran)" hesabı (week1Proj) kullanılıyordu ve D+ hiç kısıtlanmıyordu (ham D+).
+    // Zincir yoksa/yetişmişse (onTrack) override yok → ham hedef. _rampCfg yoksa eski week1Proj yolu.
+    let _w1Chain=null;
+    if(weekOff===1&&weekEffOverride?.week1Proj?.isRevised&&weekEffOverride._rampCfg){
+      try{
+        const _pj=computeRampProjection(weekTargets,true,weekEffOverride._rampCfg.km,weekEffOverride.effKm,weekEffOverride.effDp,weekEffOverride._rampCfg.dp);
+        _w1Chain=_pj[localDateStr(wt.weekStart)]||null;
+      }catch(_e){_w1Chain=null;}
+    }
     const _effKmOverride=weekOff===0&&weekEffOverride?.isRevised
       ?weekEffOverride.effKm
       :weekOff===1&&weekEffOverride?.week1Proj?.isRevised
-        ?weekEffOverride.week1Proj.effKm
+        ?(weekEffOverride._rampCfg
+            ?((_w1Chain&&!_w1Chain.onTrack)?_w1Chain.projKm:null)
+            :weekEffOverride.week1Proj.effKm)
         :null;
     const _effDpOverride=weekOff===0&&weekEffOverride?.isRevised
       ?weekEffOverride.effDp
-      :weekOff===1&&weekEffOverride?.week1Proj?.isRevised&&(weekEffOverride.week1Proj.effDp||0)>0
-        ?weekEffOverride.week1Proj.effDp
+      :weekOff===1&&weekEffOverride?.week1Proj?.isRevised
+        ?(weekEffOverride._rampCfg
+            ?((_w1Chain&&_w1Chain.dpOnTrack===false&&_w1Chain.projDp>0)?_w1Chain.projDp:null)
+            :((weekEffOverride.week1Proj.effDp||0)>0?weekEffOverride.week1Proj.effDp:null))
         :null;
     // Tür son kullanım & frekans — pickSeq'de çeşitlilik için
     const _planTodayStr=localDateStr(today);
@@ -21589,6 +21642,9 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
   // Projeksiyon rampa ayarları — Yükleme Planı tablosu
   const [rampModeOn,setRampModeOn]=useState(planSnapInit?.rampModeOn??false); // false=sabit %10, true=dinamik
   const [rampRatePct,setRampRatePct]=useState(planSnapInit?.rampRatePct!=null?clampRampPct(planSnapInit.rampRatePct):RAMP_PCT_DEFAULT);  // %11-%25 arası, sadece rampModeOn=true'da etkin
+  // D+ rampa oranı (21.09.2026): rampa AÇIKKEN D+ hedefi km'den bağımsız bu oranla ilerler.
+  // Eski kayıtlarda yoksa mesafe oranıyla aynı başlar (bağlı varsayılan); koç ayrı ayarlayabilir.
+  const [rampDpRatePct,setRampDpRatePct]=useState(planSnapInit?.rampDpRatePct!=null?clampRampPct(planSnapInit.rampDpRatePct):(planSnapInit?.rampRatePct!=null?clampRampPct(planSnapInit.rampRatePct):RAMP_PCT_DEFAULT));
 
   // ── Plan Snapshot ─────────────────────────────────────────────────────────
   const [planSnap,setPlanSnapLocal]=useState(planSnapInit||null);
@@ -21654,6 +21710,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     if(prevRampAthleteIdRef.current!==athlete.id){
       setRampModeOn(false);
       setRampRatePct(15);
+      setRampDpRatePct(15);
       prevRampAthleteIdRef.current=athlete.id;
     }
     fbGet(`plan_snapshots/${athlete.id}/${prevWeekKey}`).then(prev=>{
@@ -21688,6 +21745,11 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         else if(prev?.rampModeOn!==undefined) setRampModeOn(!!prev.rampModeOn);
         if(snap?.rampRatePct!==undefined) setRampRatePct(clampRampPct(snap.rampRatePct));
         else if(prev?.rampRatePct!==undefined) setRampRatePct(clampRampPct(prev.rampRatePct));
+        // D+ oranı: kayıt yoksa (eski snapshot) mesafe oranıyla aynı başlar
+        if(snap?.rampDpRatePct!==undefined) setRampDpRatePct(clampRampPct(snap.rampDpRatePct));
+        else if(snap?.rampRatePct!==undefined) setRampDpRatePct(clampRampPct(snap.rampRatePct));
+        else if(prev?.rampDpRatePct!==undefined) setRampDpRatePct(clampRampPct(prev.rampDpRatePct));
+        else if(prev?.rampRatePct!==undefined) setRampDpRatePct(clampRampPct(prev.rampRatePct));
         // KÖK NEDEN DÜZELTMESİ #4 (Temmuz 2026 — tekrar eden rampa kapanması):
         // Yukarıdaki miras zinciri yalnızca TEK hafta (prevWeekKey) geriye bakıyordu.
         // Koç ara bir haftada panele hiç girmemişse (ör. dinlenme/tapering haftası ya
@@ -21707,6 +21769,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                 if(rampDeepSearchTokenRef.current!==_rampToken) return;
                 setRampModeOn(!!older.rampModeOn);
                 if(older.rampRatePct!==undefined) setRampRatePct(clampRampPct(older.rampRatePct));
+                if(older.rampDpRatePct!==undefined) setRampDpRatePct(clampRampPct(older.rampDpRatePct));
+                else if(older.rampRatePct!==undefined) setRampDpRatePct(clampRampPct(older.rampRatePct));
                 return;
               }
             }
@@ -21797,7 +21861,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         // week1 original target — weekTargets henüz hazır değil, plan içinden çek
         const _w1tgt=null; // generateTwoWeekPlan içi wt.targetKm ile kıyaslanır
         const _week1Proj={effKm:_p1Km,effDp:0,isRevised:true};
-        return{..._we,week1Proj:_week1Proj};
+        return{..._we,week1Proj:_week1Proj,_rampCfg:{km:rampRatePct,dp:rampDpRatePct}};
       })());
       const todayStr=localDateStr(new Date());
       const manualOvMap=planSnap.manualOverrides||{};
@@ -21968,10 +22032,10 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       const _we=planSnap?.weekEff||null;
       if(!rampModeOn||!_we?.isRevised||!_we.effKm) return _we;
       const _p1Km=round1(_we.effKm*(1+(rampRatePct/100)));
-      return{..._we,week1Proj:{effKm:_p1Km,effDp:0,isRevised:true}};
+      return{..._we,week1Proj:{effKm:_p1Km,effDp:0,isRevised:true},_rampCfg:{km:rampRatePct,dp:rampDpRatePct}};
     })());
     }catch(e){console.error('plan useMemo error:',e);return{_error:e.message};}
-  },[athlete,history,races,workouts,selectedPrimary,planSnap,rampModeOn,rampRatePct]);
+  },[athlete,history,races,workouts,selectedPrimary,planSnap,rampModeOn,rampRatePct,rampDpRatePct]);
 
   const weekTargets=React.useMemo(()=>{
     if(!athlete)return[];
@@ -22057,11 +22121,16 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       // oranla birlikte taşınır ki yoğunluk (m/km) bozulmasın (bkz. yukarıdaki
       // D+ yoğunluk kontrolü notu, aynı mantık). Bu TEK yerde uygulanır —
       // hem Firebase'e yazılan hem tabloda gösterilen değer buradan gelir.
-      const rampProj=computeRampProjection(weekTargets,rampModeOn,rampRatePct);
+      const rampProj=computeRampProjection(weekTargets,rampModeOn,rampRatePct,null,null,rampDpRatePct);
       const curRampEntry=rampProj[localDateStr(cwWt.weekStart)]||null;
       if(curRampEntry&&curRampEntry.projKm>cappedEffKmFinal){
         cappedEffKmFinal=curRampEntry.projKm;
-        if(curRampEntry.projDp>0) cappedEffDp=curRampEntry.projDp;
+        // Rampa KAPALIYKEN D+ km'yi izler (D+ tabanı km tabanıyla birlikte taşınır — eskisi gibi).
+        if(!rampModeOn&&curRampEntry.projDp>0) cappedEffDp=curRampEntry.projDp;
+      }
+      // Rampa AÇIKKEN D+ zinciri bağımsızdır: D+ tabanı kendi oranıyla ayrıca uygulanır.
+      if(rampModeOn&&curRampEntry&&curRampEntry.dpOnTrack===false&&curRampEntry.projDp>cappedEffDp){
+        cappedEffDp=curRampEntry.projDp;
       }
       // "Geçen hafta 0 km" güvenlik kuralı (21.09.2026, yarışlı sporcular için): dönüş haftasında
       // artış uygulanmaz — bu haftanın hedefi seviyenin ÜSTÜNE çıkamaz (genel durumda rampa bir
@@ -22076,7 +22145,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       const isRevised=kmDown>0.05||dpDown>0.10||cwWt.isRaceWeek;
       return{origKm:cwWt.targetKm,origDp:cwWt.targetDp,effKm:cappedEffKmFinal,effDp:cappedEffDp,isRevised};
     }catch(e){return null;}
-  },[athlete,plan,weekTargets,workouts,races,rampModeOn,rampRatePct]);
+  },[athlete,plan,weekTargets,workouts,races,rampModeOn,rampRatePct,rampDpRatePct]);
 
   // planSnap'e weekEff yaz — Koşu İzlerim bu alanı okur, kendi hesap yapmaz
   // Dondurma kuralı:
@@ -22193,6 +22262,15 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     if(frozen&&frozen._weekKey===weekKey) return frozen;
     return curWeekEffective;
   },[snapReady,planSnap,curWeekEffective,weekKey]);
+
+  // Rampa AÇIKKEN gelecek hafta planı/rozeti için rampa zinciri (21.09.2026): eskiden burada ayrı
+  // bir "bu haftanın efektifi × (1+oran)" hesabı vardı — tablodaki zincirle (kayan pencere, D+
+  // ayrı oran) uyuşmuyordu. Artık tablo/kart/panel/gün planı aynı zincirden beslenir.
+  const rampPlanProj=React.useMemo(()=>{
+    if(!rampModeOn||!displayCurWeekEff?.isRevised)return {};
+    try{return computeRampProjection(weekTargets,true,rampRatePct,displayCurWeekEff.effKm,displayCurWeekEff.effDp,rampDpRatePct);}
+    catch(e){return {};}
+  },[weekTargets,rampModeOn,rampRatePct,rampDpRatePct,displayCurWeekEff]);
 
   // ── Sporcu bazlı taper/zirve override kaydet ─────────────────────────────
   const handleSaveAthRaceOverride=(raceId,field,val)=>{
@@ -22368,6 +22446,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     // Rampa projeksiyon ayarlarını koru — generatePlanSnapshot bunları bilmiyor
     newSnap.rampModeOn=rampModeOn;
     newSnap.rampRatePct=rampRatePct;
+    newSnap.rampDpRatePct=rampDpRatePct;
 
     // Korunan günleri belirle
     // KURAL 1 (20.09.2026 — TİK MUTLAK KORUMADIR): koçun tik (approved=true) attığı HİÇBİR gün
@@ -23421,55 +23500,68 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
             const newVal=!rampModeOn;
             // Rampa AÇILIRKEN oran, zirveye GEREKEN orandan (yukarı yuvarlanmış, %11–%25 içinde)
             // düşükse ona yükseltilir; koçun seçtiği daha yüksek bir oran korunur. (21.09.2026)
-            let newRate=rampRatePct;
+            let newRate=rampRatePct, newDpRate=rampDpRatePct;
             if(newVal){
               try{
-                const _nd=computeRampNeed(weekTargets,displayCurWeekEff?.isRevised?displayCurWeekEff.effKm:null,displayCurWeekEff?.isRevised?displayCurWeekEff.effDp:null,true,rampRatePct);
+                const _nd=computeRampNeed(weekTargets,displayCurWeekEff?.isRevised?displayCurWeekEff.effKm:null,displayCurWeekEff?.isRevised?displayCurWeekEff.effDp:null,true,rampRatePct,rampDpRatePct);
                 if(_nd&&_nd.needKmPct!=null){
                   const _sug=clampRampPct(Math.ceil(_nd.needKmPct));
                   if(_sug>newRate)newRate=_sug;
                 }
+                // D+ oranı da kendi gereken oranından (yukarı yuvarlanmış) düşük kalmaz
+                if(_nd&&_nd.needDpPct!=null){
+                  const _sugDp=clampRampPct(Math.ceil(_nd.needDpPct));
+                  if(_sugDp>newDpRate)newDpRate=_sugDp;
+                }
               }catch(e){}
               if(newRate!==rampRatePct)setRampRatePct(newRate);
+              if(newDpRate!==rampDpRatePct)setRampDpRatePct(newDpRate);
             }
             setRampModeOn(newVal);
             const s=planSnapRef.current||{};
-            const u={...s,rampModeOn:newVal,rampRatePct:newRate,lastSavedAt:new Date().toISOString()};
+            const u={...s,rampModeOn:newVal,rampRatePct:newRate,rampDpRatePct:newDpRate,lastSavedAt:new Date().toISOString()};
             setPlanSnap(u);
             fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,u).catch(()=>{});
           }
         },rampModeOn?'📈 Rampa Açık':'📈 Rampa'),
-        rampModeOn&&React.createElement(React.Fragment,null,
-          React.createElement('span',{style:{fontSize:11,color:'var(--text-secondary)',whiteSpace:'nowrap'}},'Oran:'),
-          React.createElement('input',{
-            type:'range',min:RAMP_PCT_MIN,max:RAMP_PCT_MAX,step:1,
-            value:rampRatePct,
-            onChange:e=>setRampRatePct(parseInt(e.target.value)),
-            onMouseUp:e=>{
-              const v=parseInt(e.target.value);
-              const u={...(planSnapRef.current||{}),rampModeOn,rampRatePct:v,lastSavedAt:new Date().toISOString()};
-              setPlanSnap(u);
-              fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,u).catch(()=>{});
-            },
-            onTouchEnd:e=>{
-              const v=parseInt(e.target.value);
-              const u={...(planSnapRef.current||{}),rampModeOn,rampRatePct:v,lastSavedAt:new Date().toISOString()};
-              setPlanSnap(u);
-              fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,u).catch(()=>{});
-            },
-            style:{width:90,accentColor:'var(--success)',cursor:'pointer'}
-          }),
-          React.createElement('span',{style:{
-            fontSize:12,fontWeight:700,
-            color:rampRatePct<=12?'var(--success)':rampRatePct<=16?'var(--warn)':'var(--danger)',
-            minWidth:32
-          }},'%'+rampRatePct),
-          React.createElement('span',{style:{fontSize:10,color:'var(--text-tertiary)'}},
-            rampRatePct<=12?'Güvenli':rampRatePct<=15?'Standart':rampRatePct<=18?'Agresif':rampRatePct<=21?'Çok agresif':'Maksimum'
-          )
-        ),
+        rampModeOn&&(()=>{
+          // İki bağımsız kaydırıcı (21.09.2026): Mesafe oranı ve D+ oranı, her biri %11–%25, 1'er 1'er.
+          const mkSlider=(label,val,setVal,field)=>React.createElement(React.Fragment,{key:field},
+            React.createElement('span',{style:{fontSize:11,color:'var(--text-secondary)',whiteSpace:'nowrap'}},label),
+            React.createElement('input',{
+              type:'range',min:RAMP_PCT_MIN,max:RAMP_PCT_MAX,step:1,
+              value:val,
+              onChange:e=>setVal(parseInt(e.target.value)),
+              onMouseUp:e=>{
+                const v=parseInt(e.target.value);
+                const u={...(planSnapRef.current||{}),rampModeOn,[field]:v,lastSavedAt:new Date().toISOString()};
+                setPlanSnap(u);
+                fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,u).catch(()=>{});
+              },
+              onTouchEnd:e=>{
+                const v=parseInt(e.target.value);
+                const u={...(planSnapRef.current||{}),rampModeOn,[field]:v,lastSavedAt:new Date().toISOString()};
+                setPlanSnap(u);
+                fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,u).catch(()=>{});
+              },
+              style:{width:90,accentColor:'var(--success)',cursor:'pointer'}
+            }),
+            React.createElement('span',{style:{
+              fontSize:12,fontWeight:700,
+              color:val<=12?'var(--success)':val<=16?'var(--warn)':'var(--danger)',
+              minWidth:32
+            }},'%'+val),
+            React.createElement('span',{style:{fontSize:10,color:'var(--text-tertiary)'}},
+              val<=12?'Güvenli':val<=15?'Standart':val<=18?'Agresif':val<=21?'Çok agresif':'Maksimum'
+            )
+          );
+          return React.createElement(React.Fragment,null,
+            mkSlider('Mesafe:',rampRatePct,setRampRatePct,'rampRatePct'),
+            mkSlider('D+:',rampDpRatePct,setRampDpRatePct,'rampDpRatePct')
+          );
+        })(),
         !rampModeOn&&React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)'}},
-          'Sabit %10/hafta · Büyük açıklar için Rampa\'yı açın (%11–%25)'
+          'Sabit %10/hafta (mesafe ve D+) · Büyük açıklar için Rampa\'yı açın (mesafe ve D+ için ayrı %11–%25)'
         )
       ),
       plan.primary&&(()=>{
@@ -23542,7 +23634,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       (()=>{
         // Bu haftanın görünen hedefi — başlıktaki "Hedef:" rozetiyle AYNI kaynak (resolveWeekDisplayTarget)
         const _peakDisp=resolveWeekDisplayTarget(displayCurWeekEff,weekTargets.find(w=>w.isCurrent)||null);
-        const evalRes=evaluatePeakReachability(weekTargets,plan.primary,athlete,rampModeOn,rampRatePct,displayCurWeekEff?.isRevised?displayCurWeekEff.effKm:null,displayCurWeekEff?.isRevised?displayCurWeekEff.effDp:null,_peakDisp.km,_peakDisp.dp);
+        const evalRes=evaluatePeakReachability(weekTargets,plan.primary,athlete,rampModeOn,rampRatePct,displayCurWeekEff?.isRevised?displayCurWeekEff.effKm:null,displayCurWeekEff?.isRevised?displayCurWeekEff.effDp:null,_peakDisp.km,_peakDisp.dp,rampDpRatePct);
         if(!evalRes)return null;
         // Status → renk eşleştirmesi
         const colorMap={
@@ -23600,7 +23692,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               // mümkün değil. Detaylı gerekçe/tarihçe için fonksiyonun kendi
               // yorumuna bkz. (üstte, estimateUzunKosuHedefi'nden hemen önce).
               const _catchupRate=rampModeOn?1+(rampRatePct/100):1.10;
-              const futureProj=computeRampProjection(weekTargets,rampModeOn,rampRatePct,displayCurWeekEff?.isRevised?displayCurWeekEff.effKm:null);
+              const futureProj=computeRampProjection(weekTargets,rampModeOn,rampRatePct,displayCurWeekEff?.isRevised?displayCurWeekEff.effKm:null,displayCurWeekEff?.isRevised?displayCurWeekEff.effDp:null,rampDpRatePct);
 
               // ── İdeal Hazırlık — salt görsel referans (15.07.2026 sohbeti) ──────
               // CTL/gerçekleşen antrenmandan bağımsız, saf yarış formülüne göre
@@ -23647,7 +23739,10 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               // başlamamışsa, ramp yakalayamıyorsa gösterilir)
               const _isFuture=!wt.isPast&&!wt.isCurrent;
               const _futPrj=_isFuture?futureProj[wtWeekKey]:null;
-              const _showFutProj=!!_futPrj&&!_futPrj.onTrack;
+              // Mesafe ve D+ projeksiyonu AYRI gösterilir: rampa açıkken D+ kendi oranıyla ilerler
+              // (kapalıyken dpOnTrack === onTrack olduğundan davranış eskisiyle aynı).
+              const _showFutKm=!!_futPrj&&!_futPrj.onTrack;
+              const _showFutDp=!!_futPrj&&_futPrj.dpOnTrack===false;
               // Mevcut hafta: curWeekEffective (yoğunluk düzeltmeli versiyonu — ayrı hesap gereksiz)
               const isCurEff=wt.isCurrent&&displayCurWeekEff;
               // Geçmiş hafta: Firebase'de kayıtlı weekEff (o hafta mevcut haftayken yazıldı)
@@ -23725,8 +23820,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               // Yani dinlenme haftasında GERÇEKTEN bir uzun koşu var, sadece kısa —
               // bunu gizlemek yanıltıcıydı. isRaceWeek/Yarış Sonrası gizli kalmaya
               // devam ediyor çünkü onların ayrı/yok bir "uzun koşu" kavramı var.
-              const _dispKmForUzun=showRevised?effKm:(showCascade?cascadeKm:(_showFutProj?_futPrj.projKm:wt.targetKm));
-              const _dispDpForUzun=(showRevised&&wt.targetDp>0)?effDp:((showCascade&&wt.targetDp>0)?cascadeDp:(((_showFutProj&&wt.targetDp>0&&_futPrj.projDp>0))?_futPrj.projDp:wt.targetDp));
+              const _dispKmForUzun=showRevised?effKm:(showCascade?cascadeKm:(_showFutKm?_futPrj.projKm:wt.targetKm));
+              const _dispDpForUzun=(showRevised&&wt.targetDp>0)?effDp:((showCascade&&wt.targetDp>0)?cascadeDp:(((_showFutDp&&wt.targetDp>0&&_futPrj.projDp>0))?_futPrj.projDp:wt.targetDp));
 
               // ── Rampa-vs-İdeal Karar Rozeti (20.07.2026 sohbeti) ──────────────
               // Sadece yükleme fazlarında (Zirve/Gelişme), geçmiş olmayan ve
@@ -23914,7 +24009,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                         React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',fontWeight:400,marginRight:4}},wt.targetKm),
                         React.createElement('span',{style:{color:'var(--warn)'}},cascadeKm)
                       )
-                    :_showFutProj
+                    :_showFutKm
                       ?React.createElement('span',{title:'Rampa projeksiyonu: %'+Math.round((_catchupRate-1)*100)+'/hafta artış -> '+_futPrj.projKm+' km (orijinal: '+wt.targetKm+' km)'},
                         React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',fontWeight:400,marginRight:4}},wt.targetKm),
                         React.createElement('span',{style:{color:'var(--info)',fontWeight:700}},_futPrj.projKm)
@@ -23971,8 +24066,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                         React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',fontWeight:400,marginRight:4}},wt.targetDp),
                         React.createElement('span',{style:{color:'var(--warn)'}},cascadeDp)
                       )
-                    :_showFutProj&&wt.targetDp>0&&_futPrj.projDp>0
-                      ?React.createElement('span',{title:'Rampa projeksiyonu D+: '+_futPrj.projDp+'m (orijinal: '+wt.targetDp+'m)'},
+                    :_showFutDp&&wt.targetDp>0&&_futPrj.projDp>0
+                      ?React.createElement('span',{title:'Rampa projeksiyonu D+: '+_futPrj.projDp+'m'+(rampModeOn?' (D+ oranı %'+rampDpRatePct+')':'')+' (orijinal: '+wt.targetDp+'m)'},
                         React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',fontWeight:400,marginRight:4}},wt.targetDp),
                         React.createElement('span',{style:{color:'var(--info)',fontWeight:700}},_futPrj.projDp)
                       )
@@ -24265,10 +24360,12 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       // eşik sadece "ne zaman üstü-çizili gösterilsin" kararı içindir, "Kalan" hesabındaki
       // Hedef değeri (hedefGosterilenKm) için GEÇERSİZDİR; Hedef her zaman canlı/güncel
       // revize değeri (weekEffKm varsa o, yoksa weekOrigKm) esas alır.
-      const _rampProjKm=week.weekOff===1&&rampModeOn&&displayCurWeekEff?.isRevised
-        ?round1((displayCurWeekEff.effKm||0)*(1+rampRatePct/100))
-        :0;
+      const _nwRamp=week.weekOff===1?(rampPlanProj[localDateStr(week.wt.weekStart)]||null):null;
+      const _rampProjKm=(_nwRamp&&!_nwRamp.onTrack)?_nwRamp.projKm:0;
       const _showRampProj=_rampProjKm>0&&_rampProjKm<weekOrigKm*0.99;
+      // D+ (rampa açıkken ayrı zincir): gelecek hafta D+ hedefi rampa oranıyla kısıtlıysa o değer
+      const _rampProjDp=(_nwRamp&&_nwRamp.dpOnTrack===false&&_nwRamp.projDp>0)?_nwRamp.projDp:0;
+      const _showRampProjDp=_rampProjDp>0&&_rampProjDp<weekOrigDp*0.99;
       const hedefGosterilenKm=week.weekOff===0
         ?(weekEffKm>0?weekEffKm:weekOrigKm)
         :(_showRampProj?_rampProjKm:weekOrigKm);
@@ -24278,7 +24375,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       // weekOrigDp esas alınır.
       const hedefGosterilenDp=week.weekOff===0
         ?(weekEffDp>0?weekEffDp:weekOrigDp)
-        :weekOrigDp;
+        :(_showRampProjDp?_rampProjDp:weekOrigDp); // rampa açıkken gelecek hafta D+ zinciri
       const shareHaftalikRecete=async()=>{
         const el=haftalikReceteRef.current;
         if(!el)return;
@@ -24312,7 +24409,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               )
               // Gelecek hafta + ramp aktifse projeksiyon hedefini göster
               :(week.weekOff===1&&rampModeOn&&displayCurWeekEff?.isRevised&&(()=>{
-                  const _p1=round1((displayCurWeekEff.effKm||0)*(1+rampRatePct/100));
+                  const _p1=_rampProjKm;
                   const _showP1=_p1>0&&_p1<weekOrigKm*0.99;
                   return _showP1
                     ?React.createElement('span',null,
@@ -24327,7 +24424,12 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                 React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',fontWeight:400,marginRight:4}},'D+ '+weekOrigDp+'m'),
                 React.createElement('span',{style:{fontWeight:700,color:'var(--warn)'}},'D+ '+weekEffDp+'m')
               )
-              :React.createElement('span',{style:{fontWeight:600}},'D+ '+weekOrigDp+'m')),
+              :(_showRampProjDp
+                ?React.createElement('span',null,
+                  React.createElement('span',{style:{textDecoration:'line-through',color:'var(--text-tertiary)',fontWeight:400,marginRight:4}},'D+ '+weekOrigDp+'m'),
+                  React.createElement('span',{style:{fontWeight:700,color:'var(--success)'}},'D+ '+_rampProjDp+'m')
+                )
+                :React.createElement('span',{style:{fontWeight:600}},'D+ '+weekOrigDp+'m'))),
             (()=>{
               // Haftanın uzunu — bu kartta GÖRÜNEN hedeften (revize/rampa projeksiyonu
               // dahil) pay alır, ham orijinal hedeften değil — yukarıdaki "Hedef:" rozeti
@@ -24347,8 +24449,9 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                 _dKm=weekEffKm;
                 if(weekOrigDp>0)_dDp=weekEffDp;
               } else if(week.weekOff===1&&rampModeOn&&displayCurWeekEff?.isRevised){
-                const _p1=round1((displayCurWeekEff.effKm||0)*(1+rampRatePct/100));
+                const _p1=_rampProjKm;
                 if(_p1>0&&_p1<weekOrigKm*0.99)_dKm=_p1;
+                if(_showRampProjDp)_dDp=_rampProjDp;
               }
               const _uzunHedefHaftaRaw=estimateUzunKosuHedefi(_dKm,_dDp,week.wt.phase,effectiveDisiplin(athlete,plan.primary),_uzunZonesHafta,_uzunBandHafta,plan.primary?.mesafe,week.wt?._isNoRace?{avg4km:week.wt._avg4km,artisOrani:week.wt._artisOrani}:null,plan.primary);
               // TABAN (13.07.2026 sohbeti — Göksel'in önerisi): ana tablodaki (HaftalikPlanTab
