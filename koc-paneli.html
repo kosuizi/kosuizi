@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.20-1917 --><!DOCTYPE html>
+<!-- Version: v2026.09.21-1101 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.20-1917';
+const APP_VERSION='v2026.09.21-1101';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -15511,10 +15511,6 @@ function applyWellnessAndCollectReasons(weeks, athlete){
   if(!weeks||!weeks.length)return weeks;
   return weeks.map(wk=>{
     const reasons=[];
-    if(wk.telafiUygulandı&&wk.telafiKm>0){
-      reasons.push({type:'telafi',label:'Telafi',icon:'↑',value:'+'+wk.telafiKm+'km',
-        detail:'Geçmiş eksik haftaların telafisi — hedef +'+wk.telafiKm+'km / +'+(wk.telafiDp||0)+'m D+ artırıldı'});
-    }
     if(wk.backoffUygulandı){
       reasons.push({type:'backoff',label:'Geri çekme',icon:'↓',value:'-%'+(wk.backoffPct||8),
         detail:'Önceki hafta aşırı yük (>%120) — overtraining koruması için %'+(wk.backoffPct||8)+' azaltıldı'});
@@ -15711,7 +15707,7 @@ function calcWeeklyTargetsNoRace(athlete, workouts, history=[]){
       _noRaceMaxGunlukKm:noRaceMaxGunlukKm,
       _maxKaliteli:maxKaliteliNoRaceTiered,
       _maxYuksekKaliteli:maxYuksekKaliteliNoRace,
-      telafiUygulandı:false,backoffUygulandı:false
+      backoffUygulandı:false
     };
   };
 
@@ -16258,10 +16254,10 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary, history=[], fr
   // Band 1→0.75, 2→0.85, 3→1.00, 4→1.10, 5→1.20  (önceki: 0.60–1.15 arası, çok agresif)
   const bandKmMod=currentBand<=1?0.75:currentBand===2?0.85:currentBand===3?1.00:currentBand===4?1.10:1.20;
 
-  // Geçmiş haftaların gerçekleşme durumunu hesapla — telafi için
+  // Geçmiş haftaların gerçekleşme durumunu hesapla — geri çekme/re-base için
   const athWks=(workouts||[]).filter(w=>w.athleteId===athlete.id);
 
-  // Önce tüm haftaları hesapla (telafi için önce plan gerekli)
+  // Önce tüm haftaları hesapla (geri çekme/re-base için önce ham plan gerekli)
   // prepWeeks+1: son iterasyon yarış haftasının kendisi
   const baseWeeks=[];
   for(let w=0;w<prepWeeks+1;w++){
@@ -16467,18 +16463,22 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary, history=[], fr
     }
   }
 
-  // ── Telafi & geri çekme mantığı (antrenman bilimi tabanlı) ────────────────
+  // ── Geri çekme & re-base mantığı (antrenman bilimi tabanlı) ───────────────
+  // KALDIRILDI (21.09.2026 — Göksel onayı): "Telafi" mekanizması (eksik haftaların
+  // %50'sini sonraki haftalara, ham hedefin en fazla %15'i kadar ekleyen havuz)
+  // tamamen silindi. Gerekçe: Rampa ("geçen hafta gerçeği × 1.10, ham plana kadar")
+  // kaçırılan yükü zaten geri kazandırıyor; telafi ise ham planı şişirip gerçek
+  // hedefe hiç yansımayan, yanıltıcı bir rozet üretiyordu (örn. H7 ham 58.3 →
+  // revize 40.5). Telafi havuzu ayrıca ham plana, ekrandaki "Fark" ise dondurulmuş
+  // hedefe göre eksik sayıyordu. Artık ham plan = periyodizasyon eğrisi (+ geri çekme/re-base).
   // Prensipler:
-  // 1. Eksik haftalar (deficit): kayıp yükün %50'si gelecek 2-3 haftaya yayılır
-  // 2. Başarısız haftalar (missed, <%40): telafi yapılmaz — fitness kaybı, plan re-base
-  // 3. Aşırı haftalar (overshoot, >%120): sonraki hafta %5-10 azaltılır (overtraining koruma)
-  // 4. Telafi sadece Temel/Gelişme fazında uygulanır (Taper/Zirve'ye dokunulmaz)
-  // 5. Maksimum tek hafta artışı %10 (10% rule — Daniels/Pfitzinger)
-  // 6. Mevcut ACWR > 1.25 ise telafi uygulanmaz (sakatlık riski)
+  // 1. Başarısız haftalar (missed, <%40): fitness kaybı — plan re-base (-%10)
+  // 2. Aşırı haftalar (overshoot, >%120): sonraki hafta %8 azaltılır (overtraining koruma)
+  // 3. Geri çekme sadece Temel/Gelişme'de uygulanır (Taper'da en fazla %5)
+  // 4. Mevcut ACWR > 1.25 ise re-base uygulanmaz (eski telafi kapısıyla aynı kapı — davranış korundu)
 
-  let telafiKm=0, telafiDp=0;
   let overshootBackoff=0; // Bir sonraki haftada uygulanacak azaltma faktörü (0–0.10)
-  // Telafi kapısı için ACWR: mevcut hafta antrenman girişlerinden etkilenmemesi amacıyla
+  // Re-base kapısı için ACWR: mevcut hafta antrenman girişlerinden etkilenmemesi amacıyla
   // bugünün (canlı) ACWR yerine önceki haftanın son günü (Pazar) itibariyle snapshot alınır.
   // Hedef yalnızca yeni hafta başladığında (Pazartesi) yeniden hesaplanır.
   const _cwMon=(()=>{const d=new Date(today);const dow=d.getDay();d.setDate(d.getDate()-(dow===0?6:dow-1));d.setHours(0,0,0,0);return d;})();
@@ -16512,24 +16512,18 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary, history=[], fr
     overshootBackoff=0;
 
     if(wk.isPast){
-      // Geçmiş hafta bitti — telafi/backoff/missed birikimini güncelle
+      // Geçmiş hafta bitti — backoff/missed birikimini güncelle
       // missedCount: son MISSED_WINDOW geçmiş haftaya bakan kayan pencere
       recentPastStatuses.push(wk.weekStatus);
       if(recentPastStatuses.length>MISSED_WINDOW) recentPastStatuses.shift();
       missedCount=recentPastStatuses.filter(s=>s==='missed').length;
-      if(wk.weekStatus==='deficit'){
-        // Eksik hafta — kayıp yükün %50'si telafi havuzuna
-        const eksikKm=Math.max(0,wk.targetKm-wk.actualKm);
-        const eksikDp=Math.max(0,wk.targetDp-wk.actualDp);
-        telafiKm+=eksikKm*0.50;
-        telafiDp+=eksikDp*0.50;
-      } else if(wk.weekStatus==='overshoot'){
+      if(wk.weekStatus==='overshoot'){
         // Aşırı hafta — SADECE bir sonraki haftada (Temel/Gelişme) %8 geri çekme.
         // Bu haftanın kendisi zaten geçmiş, bu yüzden myBackoff burada uygulanmaz —
         // sadece overshootBackoff bir sonraki iterasyona (bir sonraki hafta) taşınır.
         overshootBackoff=0.08;
       }
-      return{...wk,telafiUygulandı:false,backoffUygulandı:false};
+      return{...wk,backoffUygulandı:false};
     }
 
     // Gelecek/mevcut hafta — Taper ve Zirve dokunulmaz
@@ -16542,9 +16536,9 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary, history=[], fr
         const azaltKm=round1(wk.targetKm*backoffPct);
         const azaltDp=Math.round(wk.targetDp*backoffPct);
         return{...wk,targetKm:round1(wk.targetKm-azaltKm),targetDp:Math.round(wk.targetDp-azaltDp),
-          backoffUygulandı:true,backoffPct:Math.round(backoffPct*100),telafiUygulandı:false};
+          backoffUygulandı:true,backoffPct:Math.round(backoffPct*100)};
       }
-      return{...wk,telafiUygulandı:false,backoffUygulandı:false};
+      return{...wk,backoffUygulandı:false};
     }
 
     // 1. Aşırı yük backoff'u (öncelik) — sadece bu haftaya taşınmışsa (myBackoff)
@@ -16553,43 +16547,32 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary, history=[], fr
       const azaltDp=wk.targetDp*myBackoff;
       const yeniKm=round1(wk.targetKm-azaltKm);
       const yeniDp=Math.round(wk.targetDp-azaltDp);
-      return{...wk,targetKm:yeniKm,targetDp:yeniDp,backoffUygulandı:true,backoffPct:8,telafiUygulandı:false};
+      return{...wk,targetKm:yeniKm,targetDp:yeniDp,backoffUygulandı:true,backoffPct:8};
     }
 
-    // 2. ACWR güvenlik: mevcut ACWR > 1.25 ise telafi yapma
-    if(currentAcwr>1.25||telafiKm<=0){
-      return{...wk,telafiUygulandı:false,backoffUygulandı:false};
+    // 2. ACWR güvenlik: mevcut ACWR > 1.25 ise re-base uygulanmaz (sakatlık riski).
+    // NOT (21.09.2026): bu kapı eskiden "telafi havuzu boşsa" koşuluyla birleşikti;
+    // telafi kaldırıldığı için artık yalnızca ACWR'ye bakar.
+    if(currentAcwr>1.25){
+      return{...wk,backoffUygulandı:false};
     }
 
-    // 3. Eksik telafi: maksimum hafta hedefinin %15'i kadar ek (10% rule güvenli sınırı)
-    // Dinlenme haftalarına da telafi yapma (deload korunmalı)
+    // Dinlenme haftalarında re-base uygulanmaz (deload korunmalı)
     if(wk.isRecovery){
-      return{...wk,telafiUygulandı:false,backoffUygulandı:false};
+      return{...wk,backoffUygulandı:false};
     }
 
-    const buHaftaTelafi=Math.min(telafiKm,wk.targetKm*0.15);
-    const buHaftaTelafiDp=Math.min(telafiDp,wk.targetDp*0.15);
-    telafiKm=Math.max(0,telafiKm-buHaftaTelafi);
-    telafiDp=Math.max(0,telafiDp-buHaftaTelafiDp);
-
-    // 4. Birden fazla missed hafta varsa, gelecek haftaları %10 azalt (re-base)
-    let missedRebase=0;
-    if(missedCount>=2){
-      missedRebase=0.10;
+    // 3. Birden fazla missed hafta varsa, gelecek haftaları %10 azalt (re-base)
+    if(missedCount<2){
+      return{...wk,backoffUygulandı:false};
     }
-
-    const finalKm=round1((wk.targetKm+buHaftaTelafi)*(1-missedRebase));
-    const finalDp=Math.round((wk.targetDp+buHaftaTelafiDp)*(1-missedRebase));
-
+    const missedRebase=0.10;
     return{
       ...wk,
-      targetKm:finalKm,
-      targetDp:finalDp,
-      telafiUygulandı:buHaftaTelafi>0,
-      telafiKm:round1(buHaftaTelafi),
-      telafiDp:Math.round(buHaftaTelafiDp),
+      targetKm:round1(wk.targetKm*(1-missedRebase)),
+      targetDp:Math.round(wk.targetDp*(1-missedRebase)),
       backoffUygulandı:false,
-      missedRebase:missedRebase>0?Math.round(missedRebase*100):0
+      missedRebase:Math.round(missedRebase*100)
     };
   });
 
@@ -16598,7 +16581,7 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary, history=[], fr
 
 // ── İDEAL HAZIRLIK — Performanstan/CTL'den Bağımsız Referans Eğrisi ─────────
 // (15.07.2026 sohbeti) Yalnızca GÖRSEL bir referans içindir: sporcunun CTL'sine
-// göre ölçeklenen bandKmMod, frozenTargets, effKm/cascade/backoff/telafi gibi
+// göre ölçeklenen bandKmMod, frozenTargets, effKm/cascade/backoff gibi
 // GERÇEKLEŞEN antrenmana duyarlı hiçbir mekanizmadan geçmez — yarış mesafesi,
 // D+ ve periyodizasyon fazına göre saf/sabit "ideal" haftalık hedefi üretir.
 // calcWeeklyTargetsCore'u hiçbir şekilde değiştirmez/çağırmaz; tamamen ayrı,
@@ -17204,7 +17187,7 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
     const prevKmRatio=prevWeek?.kmRatio??null;
 
     // planForceEasy: dinlenme haftası + geçen hafta kaçırıldı → ikisi beraber
-    // Telafi mekanizması targetKm'i zaten artırdı; antrenman tipini de kısıtla.
+    // Geçen hafta kaçırıldı ve bu hafta planlı dinlenme: antrenman tipini de kısıtla.
     if(isPlanRecovery&&prevStatus==='missed'){
       planForceEasy=true;
       zoneReasons.push('📅 Planlı dinlenme haftası + geçen hafta hedef tutturulamadı — yoğun antrenman ertelendi.');
@@ -23779,8 +23762,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   !wt.isRaceWeek&&wt.isRecovery&&React.createElement('span',{className:'badge badge-info',style:{marginLeft:4,fontSize:9}},wt._recoveryDeferred?'⏩ Dinlenme':'Dinlenme'),
                   // Tüm ayarlama sebepleri rozetleri (HRV/sakatlık dahil)
                   (wt._adjustReasons||[]).map((r,ri)=>{
-                    const cls=r.type==='telafi'?'badge-warn':
-                      r.type==='backoff'?'badge-info':
+                    const cls=r.type==='backoff'?'badge-info':
                       r.type==='rebase'?'badge-danger':
                       r.type==='hrv'?'badge-warn':
                       r.type==='injury'?'badge-danger':
