@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.22-2110 --><!DOCTYPE html>
+<!-- Version: v2026.09.22-2238 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.22-2110';
+const APP_VERSION='v2026.09.22-2238';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -21909,6 +21909,32 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     const _dp=day.date.split('-');
     setReviewMsg(`🧪 ${_dp[2]}.${_dp[1]} — ${ad} olarak planlandı. Uygulamak için 'Planı Güncelle'ye bas.`);
   };
+  // Mevcut bir GERÇEK antrenman kaydını (ör. GPX'ten eklenmiş normal koşu) test
+  // olarak işaretleme (22.09.2026, Göksel bildirimi/kararı — kök neden: sistem bir
+  // MAF testinin yapıldığını SADECE Test sekmesi > "Test Gir" akışıyla oluşan
+  // _isTest/_testTur kaydından anlıyordu; GPX'ten normal antrenman olarak girilen
+  // testler tanınmıyor, calcTestTiming hep 'onerilir' kalıp takvimde tekrar tekrar
+  // 🧪❓ rozeti basıyordu). Antrenmanın gerçek verisi (mesafe/süre/nabız) DEĞİŞMEDEN
+  // korunur — sadece _isTest/_testTur/_testSonuc eklenir, aynı Test Gir'in guncelle
+  // mantığıyla sporcu profili de (vo2max/lthr/pb_5k/maf_pace) güncellenir.
+  const _LEGACY_TEST_TURS=['test_maf','test_cooper','test_5k','test_laktat'];
+  const [markTestFor,setMarkTestFor]=useState(null); // {workoutId, testId}
+  const [markTestForm,setMarkTestForm]=useState({});
+  const handleMarkAsTestSave=(w)=>{
+    const testDef=TEST_TURLERI[markTestFor?.testId];
+    if(!testDef)return;
+    const sonuc=testDef.hesapla(markTestForm);
+    if(!sonuc){alert('Lütfen gerekli alanları doldur.');return;}
+    const patch={_isTest:true,_testTur:testDef.id,_testSonuc:sonuc,notlar:(w.notlar?w.notlar+' · ':'')+'Test sonucu: '+sonuc.label};
+    if(onUpdateWorkout)onUpdateWorkout(w.id,patch);
+    const updates={};
+    if(sonuc.vo2max&&testDef.guncelle.includes('vo2max'))updates.vo2max=String(sonuc.vo2max);
+    if(sonuc.lthr&&testDef.guncelle.includes('lthr'))updates.lthr=String(sonuc.lthr);
+    if(sonuc.pb_5k&&(testDef.guncelle.includes('pb_5k')||testDef.guncelle.includes('vlt_kalibre')))updates.pb_5k=sonuc.pb_5k;
+    if(sonuc.maf_pace&&testDef.guncelle.includes('aerobik_baseline'))updates.maf_pace=sonuc.maf_pace;
+    if(Object.keys(updates).length>0&&onUpdateAthlete)onUpdateAthlete({...athlete,...updates});
+    setMarkTestFor(null);setMarkTestForm({});
+  };
   const weekKey=getWeekKey(0);
   const prevWeekKey=getWeekKey(-1);
   // Rampa-vs-İdeal karar rozetinin sayısal önerisi (bkz. ~satır 16770 civarı,
@@ -25075,6 +25101,47 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                         })
                       )
                     ))
+                  ),
+                  // "Test olarak işaretle" — dualMode'dan BAĞIMSIZ, gerçek bir koşu kaydı
+                  // (split.kosuActuals) varsa her zaman gösterilir (bkz. handleMarkAsTestSave,
+                  // 22.09.2026 kök neden notu). GPX'ten normal antrenman olarak girilmiş bir
+                  // koşuyu sonradan bir test türüne (MAF/Cooper/5K/LTHR) bağlar.
+                  split.kosuActuals.length>0&&React.createElement('div',{style:{marginBottom:4}},
+                    split.kosuActuals.map((w,wi)=>{
+                      const isAlreadyTest=!!w._isTest||_LEGACY_TEST_TURS.includes(w.tur);
+                      if(isAlreadyTest){
+                        const _td=TEST_TURLERI[w._testTur||{test_maf:'maf',test_cooper:'cooper',test_5k:'zaman_5k',test_laktat:'lthr_test'}[w.tur]];
+                        return React.createElement('div',{key:'mt'+wi,style:{fontSize:10,color:'var(--success)',fontWeight:600}},'✓ '+(_td?.ad||'Test')+' olarak kayıtlı');
+                      }
+                      const isOpen=markTestFor?.workoutId===w.id;
+                      return React.createElement('div',{key:'mt'+wi},
+                        !isOpen&&React.createElement('span',{
+                          style:{fontSize:10,color:'var(--info)',cursor:'pointer',textDecoration:'underline'},
+                          onClick:()=>{setMarkTestFor({workoutId:w.id,testId:'maf'});setMarkTestForm({});}
+                        },'🧪 Test olarak işaretle'),
+                        isOpen&&(()=>{
+                          const testDef=TEST_TURLERI[markTestFor.testId];
+                          return React.createElement('div',{style:{marginTop:4,padding:8,border:'1px solid var(--border)',borderRadius:'var(--radius)',background:'var(--bg-secondary)'}},
+                            React.createElement('select',{
+                              value:markTestFor.testId,
+                              onChange:e=>{setMarkTestFor({...markTestFor,testId:e.target.value});setMarkTestForm({});},
+                              style:{fontSize:11,marginBottom:6,width:'100%'}
+                            },Object.values(TEST_TURLERI).map(t=>React.createElement('option',{key:t.id,value:t.id},t.ad))),
+                            testDef.girdi.map(g=>React.createElement('div',{key:g.k,style:{marginBottom:4}},
+                              React.createElement('label',{style:{fontSize:10,color:'var(--text-secondary)',display:'block'}},g.l),
+                              React.createElement('input',{type:g.type||'text',value:markTestForm[g.k]||'',placeholder:g.ph||'',min:g.min,max:g.max,
+                                style:{fontSize:11,width:'100%',padding:'3px 6px'},
+                                onChange:e=>{const val=e.target.value;setMarkTestForm(f=>({...f,[g.k]:val}));}
+                              })
+                            )),
+                            React.createElement('div',{style:{display:'flex',gap:6,marginTop:6}},
+                              React.createElement('button',{className:'btn btn-sm btn-primary',onClick:()=>handleMarkAsTestSave(w)},'Kaydet'),
+                              React.createElement('button',{className:'btn btn-sm',onClick:()=>{setMarkTestFor(null);setMarkTestForm({});}},'Vazgeç')
+                            )
+                          );
+                        })()
+                      );
+                    })
                   ),
                   React.createElement(ReceteTablosu,{
                     yapilar:injectRowsFromTpl(_kosuGorunum.displayYapilar,_kosuGorunum.displayTip,day.yapi_notu,day.sure_dk,zones,athlete?.disiplin),
