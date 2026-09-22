@@ -216,6 +216,34 @@ hr{border:none;border-top:1px solid var(--border);margin:.8rem 0}
 .yaris-cols{display:grid;grid-template-columns:1fr 1fr;gap:1rem;align-items:start}
 .yaris-cols>.card{margin-bottom:0}
 
+/* ─ TAMAMLANAN YARIŞLAR TICKER ─ */
+.ticker-viewport{
+  height:420px;overflow:hidden;position:relative;
+  -webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 28px,#000 calc(100% - 28px),transparent 100%);
+  mask-image:linear-gradient(to bottom,transparent 0,#000 28px,#000 calc(100% - 28px),transparent 100%);
+}
+.ticker-track{display:flex;flex-direction:column;animation:ticker-scroll linear infinite}
+.ticker-viewport:hover .ticker-track{animation-play-state:paused}
+@keyframes ticker-scroll{
+  from{transform:translateY(0)}
+  to{transform:translateY(-50%)}
+}
+.ticker-static{display:flex;flex-direction:column}
+.ticker-item{display:flex;align-items:center;gap:.7rem;padding:.65rem .1rem;border-bottom:1px solid var(--border)}
+.ticker-item:last-child{border-bottom:none}
+.ticker-race-icon{
+  width:40px;height:40px;border-radius:8px;flex-shrink:0;overflow:hidden;
+  background:var(--bg3);border:1px solid var(--border);
+  display:flex;align-items:center;justify-content:center;font-size:1.1rem;padding:3px;
+}
+.ticker-race-icon img{width:100%;height:100%;object-fit:contain}
+.ticker-body{flex:1;min-width:0}
+.ticker-race-name{font-size:.84rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ticker-athlete{display:flex;align-items:center;gap:.4rem;margin-top:.25rem}
+.ticker-ath-avatar{width:20px;height:20px;font-size:.58rem;flex-shrink:0}
+.ticker-athlete span.ticker-ath-name{font-size:.74rem;color:var(--muted2)}
+.ticker-time{flex-shrink:0;font-family:monospace}
+
 /* ─ RESPONSIVE ─ */
 @media(max-width:600px){
   .form-row.cols2,.form-row.cols3{grid-template-columns:1fr}
@@ -754,8 +782,11 @@ function renderYarislar(){
   renderGelecekYarislar();
 }
 
+function findAthlete(athleteId){
+  return yarisSporcular.find(x=>(x.id||x.ad)===athleteId);
+}
 function athAdSoyad(athleteId){
-  const a=yarisSporcular.find(x=>(x.id||x.ad)===athleteId);
+  const a=findAthlete(athleteId);
   return a?((a.ad||'')+' '+(a.soyad||'')).trim()||'Sporcu':'Sporcu';
 }
 function fmtSure(r){
@@ -768,34 +799,62 @@ function fmtDateTR(dstr){
   if(!dstr)return'';
   return new Date(dstr+'T12:00:00').toLocaleDateString('tr-TR',{day:'numeric',month:'short',year:'numeric'});
 }
+// Yıl farklı olsa da aynı yarış sayılsın diye ad üzerinden anahtar üretir (yıl rakamlarını ayıklar)
+function raceNameKey(ad){
+  return (ad||'').toLowerCase().replace(/\b(19|20)\d{2}\b/g,'').replace(/\s+/g,' ').trim();
+}
 
-// ── Tamamlanan Yarışlar: sporcu + yarış + bitirme süresi, tarihe göre (yeniden→eskiye) sıralı ──
+// ── Tamamlanan Yarışlar: sporcu + yarış + bitirme süresi. Aynı sporcunun aynı
+// yarışı (yıl bağımsız) birden çok kez tamamlamış olması durumunda sadece en
+// güncel sonucu gösterilir; kayan (ticker) liste olarak tasarlanmıştır.
 function renderTamamlananYarislar(){
   const container=document.getElementById('yaris-tamamlanan-list');
   const raceById={}; yarislar.forEach(r=>{raceById[r.id]=r;});
-  const entries=(yarisSonuclari||[])
-    .map(res=>({res,race:raceById[res.raceId]}))
-    .filter(e=>e.race)
-    .sort((a,b)=>new Date(b.res.date||0)-new Date(a.res.date||0));
-  if(!entries.length){container.innerHTML='<div class="empty">Henüz tamamlanmış yarış kaydı yok.</div>';return;}
-  container.innerHTML='';
-  entries.forEach(({res,race})=>{
-    const d=res.date?new Date(res.date+'T12:00:00'):null;
-    const div=document.createElement('div');
-    div.className='list-item';
-    div.innerHTML=`
-      <div style="text-align:center;min-width:48px">
-        <div style="font-size:1.3rem;font-weight:700;line-height:1">${d?d.getDate():'?'}</div>
-        <div style="font-size:.62rem;color:var(--muted2)">${d?d.toLocaleDateString('tr-TR',{month:'short',year:'numeric'}):''}</div>
-      </div>
-      <div class="list-item-body">
-        <div class="list-item-title">${race.ad||''}</div>
-        <div class="list-item-meta">${athAdSoyad(res.athleteId)}${race.mesafe?' · '+race.mesafe+' km':''}</div>
-      </div>
-      <span class="badge badge-green" style="font-family:monospace">${fmtSure(res)}</span>
-    `;
-    container.appendChild(div);
+
+  const latestMap=new Map();
+  (yarisSonuclari||[]).forEach(res=>{
+    const race=raceById[res.raceId];
+    if(!race)return;
+    const key=res.athleteId+'::'+raceNameKey(race.ad);
+    const existing=latestMap.get(key);
+    if(!existing||new Date(res.date||0)>new Date(existing.res.date||0)){
+      latestMap.set(key,{res,race});
+    }
   });
+  const entries=Array.from(latestMap.values()).sort((a,b)=>new Date(b.res.date||0)-new Date(a.res.date||0));
+
+  if(!entries.length){container.innerHTML='<div class="empty">Henüz tamamlanmış yarış kaydı yok.</div>';return;}
+
+  const rowHTML=({res,race})=>{
+    const a=findAthlete(res.athleteId);
+    const initials=a?(((a.ad||'?')[0]||'')+((a.soyad||'')[0]||'')).toUpperCase():'?';
+    const athFotoHTML=a&&a.foto?`<img src="${a.foto}" style="width:100%;height:100%;object-fit:cover;border-radius:50%">`:initials;
+    const raceIconHTML=race.logo?`<img src="${race.logo}">`:'🏁';
+    return `
+      <div class="ticker-item">
+        <div class="ticker-race-icon">${raceIconHTML}</div>
+        <div class="ticker-body">
+          <div class="ticker-race-name">${race.ad||''}</div>
+          <div class="ticker-athlete">
+            <span class="sporcu-avatar ticker-ath-avatar">${athFotoHTML}</span>
+            <span class="ticker-ath-name">${athAdSoyad(res.athleteId)}</span>
+          </div>
+        </div>
+        <span class="badge badge-green ticker-time">${fmtSure(res)}</span>
+      </div>`;
+  };
+
+  const itemsHTML=entries.map(rowHTML).join('');
+
+  if(entries.length>=2){
+    const durationSec=Math.max(entries.length*3.2,12);
+    container.innerHTML=`
+      <div class="ticker-viewport">
+        <div class="ticker-track" style="animation-duration:${durationSec}s">${itemsHTML}${itemsHTML}</div>
+      </div>`;
+  }else{
+    container.innerHTML=`<div class="ticker-static">${itemsHTML}</div>`;
+  }
 }
 
 // ── Gelecek Yarışlar: Koç Panelindeki "Sporcular & Yarışlar → Yarışlar" kart
