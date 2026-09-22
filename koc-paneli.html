@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.22-0747 --><!DOCTYPE html>
+<!-- Version: v2026.09.22-2110 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.22-0747';
+const APP_VERSION='v2026.09.22-2110';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -2501,6 +2501,35 @@ function gunlukHedefUyumuRozeti(rowOvDay,date,athlete,opts){
   };
   if(opts&&opts.noExport) props['data-no-export']=true; // paylaşılan Haftalık Reçete görselini değiştirme
   return React.createElement('span',props,'🎯 '+(p==null?'—':p+'%'));
+}
+
+// ── Gerçek/Plan köşe rozeti (2026.09.22 — Göksel talebi) ─────────────────────
+// Tamamlanan antrenmanın ✔ işaretinin yanında, 🎯 Hedef Uyumu'nun (SADECE koşu
+// antrenmanlarında — pace/nabız disiplini ölçer, kuvvet/yüzme gibi günlerde
+// anlamsız) yanı sıra HER antrenman türünde (koşu + koşu dışı) TEK KAYNAK
+// calcDayComparison'dan (bkz. tanım ~satır 19503) gelen Gerçek/Plan yük
+// kıyaslamasını gösterir. Simgesi ⚖️ — 🎯 ile (farklı ölçüm: biri pace/nabız
+// disiplini, diğeri toplam antrenman yükü) karışmasın diye ayrı sembol.
+// Renk eşikleri: ok→success, eksik/fazla→warn, atlandı→danger (compBadge'deki
+// ok/eksik/fazla/atlandı sınıflandırmasıyla AYNI, sadece görsel dil farklı).
+// Koç Paneli (HaftalikPlanTab, day.comparison zaten hazır) ve Koşu İzlerim
+// (SporcuPlanView, aynı calcDayComparison'ı yerinde çağırır) BU rozet
+// fonksiyonunu ortak kullanır (panel paritesi) — ayrı hesap/eşik kopyası YOKTUR.
+function gercekPlanRenk(status){
+  if(status==='ok') return {fg:'var(--success)',bg:'var(--success-bg)'};
+  if(status==='eksik'||status==='fazla') return {fg:'var(--warn)',bg:'var(--warn-bg)'};
+  if(status==='atlandı') return {fg:'var(--danger)',bg:'var(--danger-bg)'};
+  return {fg:'var(--text-tertiary)',bg:'var(--bg-tertiary)'};
+}
+function gercekPlanKoseRozeti(c,opts){
+  if(!c||c.pct==null) return null;
+  const col=gercekPlanRenk(c.status);
+  const props={
+    title:'Gerçek/Plan: %'+c.pct+' — Gerçek '+c.actual+' / Plan '+c.planned+' (antrenman yükü)',
+    style:{fontSize:11,fontWeight:800,lineHeight:1,padding:'3px 7px',borderRadius:99,whiteSpace:'nowrap',color:col.fg,background:col.bg,border:'1px solid '+col.fg}
+  };
+  if(opts&&opts.noExport) props['data-no-export']=true;
+  return React.createElement('span',props,'⚖️ '+c.pct+'%');
 }
 
 // 'Tümü' periyodu için plan_snapshots taramasının güvenlik sınırları —
@@ -24981,7 +25010,12 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                 ),
                 // 2026.09.21 — Göksel talebi: ✔'in yanında günün Hedef Uyumu (liderlik skoruna giren
                 // değer) + puana göre renk. Koşu İzlerim'deki ✔ ile AYNI ortak fonksiyon (panel paritesi).
-                isDone&&gunlukHedefUyumuRozeti((planSnap?.rowOverrides||{})[day.date],day.date,athlete,{noExport:true}),
+                // 2026.09.22 — Göksel talebi: 🎯 Hedef Uyumu SADECE koşu antrenmanlarında gösterilir
+                // (pace/nabız disiplini ölçer — kuvvet/yüzme gibi koşu içermeyen günlerde anlamsız).
+                isDone&&split.kosuDone&&gunlukHedefUyumuRozeti((planSnap?.rowOverrides||{})[day.date],day.date,athlete,{noExport:true}),
+                // 2026.09.22 — Göksel talebi: ⚖️ Gerçek/Plan yük kıyaslaması — HER antrenman türünde
+                // (koşu + koşu dışı) gösterilir. day.comparison zaten TEK KAYNAK calcDayComparison'dan geliyor.
+                isDone&&day.comparison&&gercekPlanKoseRozeti(day.comparison),
                 isDone&&React.createElement('span',{style:{fontSize:20,color:'var(--success)',fontWeight:900,lineHeight:1}},'✔'),
                 (isCancelledDay||isYapilmamis)&&React.createElement('span',{style:{fontSize:18,color:'var(--danger)',fontWeight:700,lineHeight:1}},'✕')
               ),
@@ -36939,6 +36973,26 @@ function SporcuPlanView(){
     // Yeni: koşu/çapraz ayrımı (ortak yardımcı)
     const split=splitDayActivities(ov,info.actuals);
     const fullyDone=isCompleted&&split.fullyCompleted;
+    // 2026.09.22 — Göksel talebi: ⚖️ Gerçek/Plan köşe rozeti — Koç Paneli'ndeki (HaftalikPlanTab)
+    // day.comparison ile AYNI TEK KAYNAK calcDayComparison (panel paritesi). Koşu İzlerim'de
+    // plan snapshot'ı hazır bir 'day' nesnesi olarak gelmediğinden (info.actuals/ov), girdi
+    // toplama mantığı generateTwoWeekPlan'daki actualLoad/actualKm/actualDp döngüsüyle
+    // BİREBİR AYNI şekilde burada yerinde tekrarlanır.
+    let _gpComparison=null;
+    if(fullyDone){
+      let _gpActLoad=0,_gpActKm=0,_gpActDp=0;
+      (info.actuals||[]).forEach(w=>{
+        const m=calcMetrics(w,athlete);
+        _gpActLoad+=m.yukObj||0;
+        if((w.spor||'kosu')==='kosu'){_gpActKm+=parseFloat(w.mesafe)||0;_gpActDp+=parseFloat(w.irtifa)||0;}
+      });
+      const _gpPlanIsKosuCapraz=ov?.isKosuCapraz===true||(ov?.tip!=='capraz'&&(ov?.yapilar||[]).some(y=>y&&y._caprazNot));
+      _gpComparison=calcDayComparison({
+        actual:info.actuals||[],actualLoad:_gpActLoad,actualKm:_gpActKm,actualDp:_gpActDp,
+        planTip:ov?.tip,planSureDk:ov?.sure_dk,planYapilar:ov?.yapilar,planIsKosuCapraz:_gpPlanIsKosuCapraz,
+        planYukHedef:ov?.yukHedef||0,athlete,isPast:info.date<todayStr,isToday:info.date===todayStr
+      });
+    }
 
     // Başlık ve emoji
     let title,emoji,titleColor;
@@ -37191,7 +37245,12 @@ function SporcuPlanView(){
         React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)',flex:1}},fmtDate(info.date)),
         // 2026.09.21 — Göksel talebi: ✔'in yanında günün Hedef Uyumu (liderlik skoruna giren
         // değer) + puana göre renk. Koç Paneli'ndeki (HaftalikPlanTab) ✔ ile AYNI ortak fonksiyon (panel paritesi).
-        fullyDone&&gunlukHedefUyumuRozeti(rowOvEff[info.date],info.date,athlete),
+        // 2026.09.22 — Göksel talebi: 🎯 Hedef Uyumu SADECE koşu antrenmanlarında gösterilir
+        // (pace/nabız disiplini ölçer — kuvvet/yüzme gibi koşu içermeyen günlerde anlamsız).
+        fullyDone&&split.kosuDone&&gunlukHedefUyumuRozeti(rowOvEff[info.date],info.date,athlete),
+        // 2026.09.22 — Göksel talebi: ⚖️ Gerçek/Plan yük kıyaslaması — HER antrenman türünde
+        // (koşu + koşu dışı) gösterilir.
+        fullyDone&&_gpComparison&&gercekPlanKoseRozeti(_gpComparison),
         fullyDone&&React.createElement('span',{style:{fontSize:18,color:'var(--success)',fontWeight:900,lineHeight:1}},'✔')
       ),
       // Başlık satırı: emoji + isim + süre
