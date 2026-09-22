@@ -61,8 +61,8 @@
                radial-gradient(ellipse 50% 50% at 10% 80%, rgba(59,130,246,.05) 0%, transparent 50%);
   }
   .hero-track { position:absolute; bottom:0; left:0; right:0; height:6px; background:repeating-linear-gradient(90deg,var(--accent) 0,var(--accent) 80px,transparent 80px,transparent 100px); opacity:.35; }
-  .hero-line { position:absolute; top:50%; left:-100%; width:60%; height:1px; background:linear-gradient(90deg,transparent,var(--accent),transparent); animation:lineRun 4s ease-in-out infinite; opacity:.4; }
-  @keyframes lineRun { 0%{left:-60%;opacity:0} 20%{opacity:.4} 80%{opacity:.4} 100%{left:110%;opacity:0} }
+  .hero-pulse-svg { position:absolute; left:0; top:50%; width:100%; height:70px; transform:translateY(-50%); overflow:visible; pointer-events:none; }
+  .hero-pulse-svg path { fill:none; stroke:var(--accent); stroke-width:1.5; filter:drop-shadow(0 0 4px rgba(249,115,22,.55)); }
   .hero-eyebrow { font-family:'Space Mono',monospace; font-size:.72rem; letter-spacing:.2em; color:var(--accent); text-transform:uppercase; margin-bottom:1.2rem; opacity:0; animation:fadeUp .6s .2s ease forwards; }
   .hero-title { font-family:'Bebas Neue',sans-serif; font-size:clamp(4rem,12vw,9rem); line-height:.92; letter-spacing:.04em; opacity:0; animation:fadeUp .7s .35s ease forwards; }
   .hero-title span { color:var(--accent); }
@@ -365,7 +365,7 @@
   <!-- HERO -->
   <div class="hero edit-target">
     <div class="hero-bg"></div>
-    <div class="hero-line"></div>
+    <svg class="hero-pulse-svg" id="hero-pulse"><path id="hero-pulse-path"></path></svg>
     <div class="hero-track"></div>
     <button class="edit-pencil" onclick="editHero()">✏️</button>
     <p class="hero-eyebrow" id="hero-eyebrow">Koşu İzi Takımı</p>
@@ -662,6 +662,74 @@ function editAthlete(id){
   });
 }
 
+// ── HERO NABIZ ÇİZGİSİ ─────────────────────────────────
+// Soldan sağa ilerleyen çizgi; başlık metnini geçtikten sonra kalan boşluğun
+// tam ortasında bir QRS (kalp atışı) sıçraması yapar, sonra düz çizgi olarak
+// devam eder. Metnin bittiği nokta gerçek DOM ölçümüyle bulunur.
+function setupHeroPulse(){
+  const heroEl=document.querySelector('.hero');
+  const titleEl=document.querySelector('.hero-title');
+  const svg=document.getElementById('hero-pulse');
+  const path=document.getElementById('hero-pulse-path');
+  if(!heroEl||!titleEl||!svg||!path) return;
+
+  let loopTimer=null;
+
+  function build(){
+    const heroRect=heroEl.getBoundingClientRect();
+    const titleRect=titleEl.getBoundingClientRect();
+    const w=Math.max(heroRect.width,1);
+    const h=70, midY=h/2;
+    svg.setAttribute('viewBox',`0 0 ${w} ${h}`);
+
+    const textEndX=Math.min(Math.max(titleRect.right-heroRect.left,0),w);
+    const spikeX=textEndX+(w-textEndX)/2; // metin sonrası boşluğun orta noktası
+    const sw=24; // QRS sıçramasının genişliği
+
+    const d=[
+      `M 0 ${midY}`,
+      `L ${Math.max(spikeX-sw,0)} ${midY}`,
+      `L ${spikeX-sw*0.5} ${midY+6}`,
+      `L ${spikeX-sw*0.18} ${midY-28}`,
+      `L ${spikeX+sw*0.1} ${midY+18}`,
+      `L ${spikeX+sw*0.35} ${midY-5}`,
+      `L ${spikeX+sw*0.65} ${midY}`,
+      `L ${w} ${midY}`
+    ].join(' ');
+    path.setAttribute('d', d);
+
+    const len=path.getTotalLength();
+    clearTimeout(loopTimer);
+    runLoop(len);
+  }
+
+  function runLoop(len){
+    function cycle(){
+      path.style.transition='none';
+      path.style.strokeDasharray=len;
+      path.style.strokeDashoffset=len;
+      path.style.opacity='0';
+      path.getBoundingClientRect(); // reflow
+      requestAnimationFrame(()=>{
+        path.style.transition='stroke-dashoffset 2.6s ease-in-out, opacity .35s ease-in-out';
+        path.style.opacity='.55';
+        path.style.strokeDashoffset='0';
+      });
+      loopTimer=setTimeout(()=>{
+        path.style.transition='opacity .4s ease-in-out';
+        path.style.opacity='0';
+        loopTimer=setTimeout(cycle, 900);
+      }, 2600);
+    }
+    cycle();
+  }
+
+  build();
+  if(document.fonts && document.fonts.ready) document.fonts.ready.then(build).catch(()=>{});
+  let resizeT;
+  window.addEventListener('resize', ()=>{ clearTimeout(resizeT); resizeT=setTimeout(build,200); });
+}
+
 async function init(){
   if(!firebase.apps.length) firebase.initializeApp(firebaseConfig);
   db=firebase.database();
@@ -689,6 +757,7 @@ async function init(){
     return;
   }
   document.getElementById('main-site').style.display='block';
+  setupHeroPulse();
 
   isEditMode = isAdmin && editRequested;
   if(isEditMode){
