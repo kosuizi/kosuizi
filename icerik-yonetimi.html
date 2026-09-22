@@ -145,6 +145,7 @@ a{color:var(--accent);text-decoration:none}
 .badge-orange{background:var(--accent-dim);color:var(--accent);border:1px solid rgba(249,115,22,.25)}
 .badge-blue{background:var(--blue-dim);color:var(--blue);border:1px solid rgba(59,130,246,.25)}
 .badge-gray{background:rgba(100,116,139,.12);color:var(--muted2);border:1px solid var(--border)}
+.badge-red{background:var(--red-dim);color:var(--red);border:1px solid rgba(239,68,68,.25)}
 
 /* ─ TOGGLE ─ */
 .toggle-wrap{display:flex;align-items:center;gap:.8rem}
@@ -336,10 +337,17 @@ hr{border:none;border-top:1px solid var(--border);margin:.8rem 0}
     <div id="tab-yarislar" class="tab-content" style="display:none">
       <div class="card">
         <div class="card-header">
-          <div class="card-title">Yarışlar</div>
+          <div class="card-title">Tamamlanan Yarışlar</div>
           <span style="font-size:.72rem;color:var(--muted2)">Koç panelinden otomatik çekilir</span>
         </div>
-        <div id="yaris-list"><div class="empty">Yükleniyor…</div></div>
+        <div id="yaris-tamamlanan-list"><div class="empty">Yükleniyor…</div></div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Gelecek Yarışlar</div>
+          <span style="font-size:.72rem;color:var(--muted2)">Koç panelinden otomatik çekilir</span>
+        </div>
+        <div id="yaris-gelecek-list"><div class="empty">Yükleniyor…</div></div>
       </div>
     </div>
 
@@ -399,7 +407,7 @@ hr{border:none;border-top:1px solid var(--border);margin:.8rem 0}
         <div class="form-row cols2">
           <div class="fg">
             <label>Ad Soyad</label>
-            <input type="text" id="ant_ad" placeholder="Göksel Öz">
+            <input type="text" id="ant_ad" oninput="if(!antFotoData)renderAntFotoPreview()" placeholder="Göksel Öz">
           </div>
           <div class="fg">
             <label>Unvan</label>
@@ -408,8 +416,15 @@ hr{border:none;border-top:1px solid var(--border);margin:.8rem 0}
         </div>
         <div class="form-row">
           <div class="fg">
-            <label>Avatar Harf (ör. GÖ)</label>
-            <input type="text" id="ant_avatar" maxlength="3" placeholder="GÖ" style="max-width:80px">
+            <label>Profil Fotoğrafı</label>
+            <div style="display:flex;align-items:center;gap:.9rem">
+              <div id="ant_foto_preview" class="sporcu-avatar" style="width:64px;height:64px;font-size:1.1rem">?</div>
+              <div style="display:flex;gap:.5rem">
+                <input type="file" id="ant_foto_input" accept="image/*" style="display:none" onchange="handleAntFotoUpload(this.files[0])">
+                <button type="button" class="btn btn-sm" onclick="document.getElementById('ant_foto_input').click()">📤 Fotoğraf Yükle</button>
+                <button type="button" class="btn btn-sm btn-danger" id="ant_foto_remove" style="display:none" onclick="removeAntFoto()">Kaldır</button>
+              </div>
+            </div>
           </div>
         </div>
         <div class="form-row">
@@ -441,11 +456,7 @@ hr{border:none;border-top:1px solid var(--border);margin:.8rem 0}
             <input type="text" id="ilet_lokasyon" placeholder="İstanbul, Türkiye">
           </div>
         </div>
-        <div class="form-row cols2">
-          <div class="fg">
-            <label>Sosyal Medya Etiketi</label>
-            <input type="text" id="ilet_sosyal" placeholder="@kosuizi">
-          </div>
+        <div class="form-row">
           <div class="fg">
             <label>Sosyal Medya URL</label>
             <input type="text" id="ilet_sosyal_url" placeholder="https://instagram.com/kosuizi">
@@ -716,122 +727,167 @@ async function saveSporcular(){
 }
 
 // ── YARISLAR ─────────────────────────────────────────
-let yarislar=[];
-function cleanRaceName(ad){ return (ad||'').replace(/\s+\d+\s*[Kk][Mm]?\s*$/,'').trim(); }
-function filterAndDedupeRaces(races){
-  const sorted=[...races].filter(r=>r.tarih).sort((a,b)=>new Date(a.tarih)-new Date(b.tarih));
-  const seen=new Set();
-  return sorted.filter(r=>{
-    const clean=cleanRaceName(r.ad);
-    if(seen.has(clean)) return false;
-    seen.add(clean); return true;
-  });
-}
+// Yarış verisi ('races') ve sonuçlar ('race_results') Koç Panelinden otomatik
+// çekilir; burada sadece görüntülenir (21.09.2026 — Göksel isteği: Tamamlanan/
+// Gelecek Yarışlar diye iki bölüm, Gelecek Yarışlar Koç Panelindeki yarış
+// kartlarıyla aynı görünsün — hava durumu rozetleri ve GPX/manuel senkron
+// satırı hariç).
+let yarislar=[], yarisSonuclari=[], yarisSporcular=[];
 async function loadYarislar(){
-  const raw=await fbGet('races')||[];
-  yarislar=Array.isArray(raw)?raw.filter(Boolean):Object.values(raw).filter(Boolean);
+  const [rawRaces,rawResults,rawAth]=await Promise.all([
+    fbGet('races'), fbGet('race_results'), fbGet('ath2')
+  ]);
+  yarislar=Array.isArray(rawRaces)?(rawRaces||[]).filter(Boolean):Object.values(rawRaces||{}).filter(Boolean);
+  yarisSonuclari=Array.isArray(rawResults)?(rawResults||[]).filter(Boolean):Object.values(rawResults||{}).filter(Boolean);
+  yarisSporcular=Array.isArray(rawAth)?(rawAth||[]).filter(Boolean):Object.values(rawAth||{}).filter(Boolean);
   renderYarislar();
 }
 function renderYarislar(){
-  const container=document.getElementById('yaris-list');
-  const filtered=filterAndDedupeRaces(yarislar);
+  renderTamamlananYarislar();
+  renderGelecekYarislar();
+}
+
+function athAdSoyad(athleteId){
+  const a=yarisSporcular.find(x=>(x.id||x.ad)===athleteId);
+  return a?((a.ad||'')+' '+(a.soyad||'')).trim()||'Sporcu':'Sporcu';
+}
+function fmtSure(r){
+  const sa=parseInt(r.sure_sa)||0, dk=parseInt(r.sure_dk)||0, sn=parseInt(r.sure_sn)||0;
+  if(!sa&&!dk&&!sn) return '—';
+  const parts=[]; if(sa)parts.push(sa+'sa'); if(dk||sa)parts.push(String(dk).padStart(sa?2:1,'0')+'dk'); parts.push(String(sn).padStart(2,'0')+'sn');
+  return parts.join(' ');
+}
+function fmtDateTR(dstr){
+  if(!dstr)return'';
+  return new Date(dstr+'T12:00:00').toLocaleDateString('tr-TR',{day:'numeric',month:'short',year:'numeric'});
+}
+
+// ── Tamamlanan Yarışlar: sporcu + yarış + bitirme süresi, tarihe göre (yeniden→eskiye) sıralı ──
+function renderTamamlananYarislar(){
+  const container=document.getElementById('yaris-tamamlanan-list');
+  const raceById={}; yarislar.forEach(r=>{raceById[r.id]=r;});
+  const entries=(yarisSonuclari||[])
+    .map(res=>({res,race:raceById[res.raceId]}))
+    .filter(e=>e.race)
+    .sort((a,b)=>new Date(b.res.date||0)-new Date(a.res.date||0));
+  if(!entries.length){container.innerHTML='<div class="empty">Henüz tamamlanmış yarış kaydı yok.</div>';return;}
+  container.innerHTML='';
+  entries.forEach(({res,race})=>{
+    const d=res.date?new Date(res.date+'T12:00:00'):null;
+    const div=document.createElement('div');
+    div.className='list-item';
+    div.innerHTML=`
+      <div style="text-align:center;min-width:48px">
+        <div style="font-size:1.3rem;font-weight:700;line-height:1">${d?d.getDate():'?'}</div>
+        <div style="font-size:.62rem;color:var(--muted2)">${d?d.toLocaleDateString('tr-TR',{month:'short',year:'numeric'}):''}</div>
+      </div>
+      <div class="list-item-body">
+        <div class="list-item-title">${race.ad||''}</div>
+        <div class="list-item-meta">${athAdSoyad(res.athleteId)}${race.mesafe?' · '+race.mesafe+' km':''}</div>
+      </div>
+      <span class="badge badge-green" style="font-family:monospace">${fmtSure(res)}</span>
+    `;
+    container.appendChild(div);
+  });
+}
+
+// ── Gelecek Yarışlar: Koç Panelindeki "Sporcular & Yarışlar → Yarışlar" kart
+// tasarımıyla aynı (sıralama dahil) — SADECE hava durumu (sıcaklık/nem) rozeti
+// ve "GPX'ten senkronize · Manuel girilen" satırı gösterilmez.
+function raceDiffScore(r){
+  const alt=(parseFloat(r.maks_irtifa||0)+parseFloat(r.min_irtifa||0))/2;
+  const raw=(parseFloat(r.mesafe)||0)+(parseFloat(r.d_plus)||0)/100+((parseInt(r.iklim_zorluk)||1)-1)*5+(alt>800?(alt-800)/200:0);
+  return Math.round(raw*10)/10;
+}
+function calcRacePhase(dateStr,raceDate,prepWeeks,raceInfo){
+  if(!raceDate||!prepWeeks)return'Temel';
+  const d=new Date(dateStr+'T12:00:00'), rd=new Date(raceDate+'T12:00:00');
+  const daysToRace=(rd-d)/864e5;
+  if(daysToRace<-3)return'Yarış Sonrası';
+  const dist=parseFloat(raceInfo?.mesafe||0);
+  const taperW=parseInt(raceInfo?.taper_w)||(dist>42?3:dist>21?2:1);
+  const peakW=parseInt(raceInfo?.peak_w)||(dist>42?4:dist>21?3:2);
+  if(daysToRace<=taperW*7)return'Taper';
+  if(daysToRace<=(taperW+peakW)*7)return'Zirve';
+  if(daysToRace<=prepWeeks*7)return'Gelişme';
+  return'Temel';
+}
+const PHASE_BADGE_CLS={Temel:'badge-gray',Gelişme:'badge-blue',Zirve:'badge-orange',Taper:'badge-red','Yarış Sonrası':'badge-gray'};
+function elevationSparkSVGHtml(profil,w=280,h=56){
+  if(!profil||profil.length<2)return '';
+  const eles=profil.map(p=>p.ele);
+  const minE=Math.min(...eles), maxE=Math.max(...eles);
+  const range=Math.max(1,maxE-minE);
+  const maxKm=profil[profil.length-1].km||1;
+  const pts=profil.map(p=>{
+    const x=(p.km/maxKm)*w, y=h-((p.ele-minE)/range)*h;
+    return x.toFixed(1)+','+y.toFixed(1);
+  }).join(' ');
+  const areaPts=`0,${h} ${pts} ${w},${h}`;
+  return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" style="display:block" preserveAspectRatio="none">`
+    +`<polygon points="${areaPts}" fill="var(--blue)" fill-opacity="0.15"></polygon>`
+    +`<polyline points="${pts}" fill="none" stroke="var(--blue)" stroke-width="1.5"></polyline></svg>`;
+}
+function renderRaceCardHTML(r,idx){
+  const diffScore=raceDiffScore(r);
+  const diffLabel=diffScore>80?'Ultra Zor':diffScore>48?'Çok Zor':diffScore>30?'Zor':'Normal';
+  const diffBadge=diffScore>48?'badge-red':diffScore>30?'badge-orange':'badge-green';
+  const todayStr=(()=>{const t=new Date();return`${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;})();
+  const currentPhase=r.tarih&&r.prep_weeks?calcRacePhase(todayStr,r.tarih,r.prep_weeks,r):null;
+  const daysLeft=r.tarih?Math.ceil((new Date(r.tarih+'T12:00:00')-new Date())/864e5):null;
+  const taperW=parseInt(r.taper_w)||(parseFloat(r.mesafe)>42?3:parseFloat(r.mesafe)>21?2:1);
+  const peakW=parseInt(r.peak_w)||(parseFloat(r.mesafe)>42?4:parseFloat(r.mesafe)>21?3:2);
+
+  const badgesTop=[
+    r.tarih&&`<span class="badge badge-blue">${fmtDateTR(r.tarih)}</span>`,
+    r.mesafe&&`<span class="badge badge-gray">${r.mesafe} km</span>`,
+    r.d_plus&&`<span class="badge badge-gray">D+ ${r.d_plus} m</span>`,
+    `<span class="badge ${r.is_trail?'badge-orange':'badge-blue'}">${r.is_trail?'⛰️ Arazi':'🛣️ Yol'}</span>`
+  ].filter(Boolean).join('');
+
+  const badgesMid=[
+    `<span class="badge ${diffBadge}">${diffLabel} (${diffScore})</span>`,
+    currentPhase&&`<span class="badge ${PHASE_BADGE_CLS[currentPhase]||'badge-gray'}">${currentPhase}</span>`,
+    (daysLeft!==null&&daysLeft>0)&&`<span class="badge ${daysLeft<14?'badge-red':daysLeft<30?'badge-orange':'badge-blue'}">${daysLeft} gün</span>`,
+    r.prep_weeks&&`<span class="badge badge-gray">${r.prep_weeks} hafta hazırlık</span>`,
+    `<span class="badge badge-gray" title="Taper + Zirve hafta ayarları">T:${taperW}h Z:${peakW}h</span>`
+  ].filter(Boolean).join('');
+
+  const gpxSection=r.gpxProfil?`
+      <div style="margin-bottom:10px;padding:10px 12px;background:var(--bg3);border-radius:var(--r);border:1px solid var(--border)">
+        ${r.gpxProfil.enUzunTirmanis?`<div style="margin-bottom:6px"><span class="badge badge-blue" title="Yükleme planında Zirve/Taper haftalarının tek-gün D+ hedefine üst sınır olarak kullanılır">En uzun tırmanış: ${r.gpxProfil.enUzunTirmanis.mesafeKm}km / D+${r.gpxProfil.enUzunTirmanis.dPlus}m (%${r.gpxProfil.enUzunTirmanis.ortEgimYuzde} eğim)</span></div>`:''}
+        ${elevationSparkSVGHtml(r.gpxProfil.profil)}
+      </div>`:'';
+
+  return `
+    <div class="card" style="padding:14px;position:relative;opacity:${r.ertelendi?0.6:1}">
+      <div style="position:absolute;top:10px;right:10px;width:22px;height:22px;border-radius:50%;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:var(--muted2)">${idx+1}</div>
+      <div style="display:flex;gap:12px;align-items:flex-start;margin-bottom:10px">
+        ${r.logo?`<img src="${r.logo}" style="width:48px;height:48px;object-fit:contain;border-radius:6px;border:1px solid var(--border);background:var(--bg3);padding:3px;flex-shrink:0">`:''}
+        <div style="flex:1;min-width:0;padding-right:28px">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+            <div style="font-weight:600;font-size:14px;word-break:break-word;${r.ertelendi?'text-decoration:line-through;color:var(--muted2)':''}">${r.ad||''}</div>
+            ${r.ertelendi?`<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;background:var(--accent-dim);color:var(--accent);border:1px solid var(--accent);flex-shrink:0">Ertelendi</span>`:''}
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">${badgesTop}</div>
+        </div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">${badgesMid}</div>
+      ${gpxSection}
+    </div>`;
+}
+function renderGelecekYarislar(){
+  const container=document.getElementById('yaris-gelecek-list');
   const today=new Date();
-  if(!filtered.length){container.innerHTML='<div class="empty">Koç panelinde henüz yarış tanımlanmamış.</div>';return;}
-  container.innerHTML='';
-  filtered.forEach(r=>{
-    const rDate=new Date(r.tarih+'T12:00:00');
-    const isPast=rDate<today;
-    const daysLeft=isPast?null:Math.ceil((rDate-today)/864e5);
-    const gun=rDate.getDate();
-    const ayYil=rDate.toLocaleDateString('tr-TR',{month:'short',year:'numeric'});
-    const div=document.createElement('div');
-    div.className='list-item';
-    div.style.opacity=isPast?'.5':'1';
-    div.innerHTML=`
-      <div style="text-align:center;min-width:44px">
-        <div style="font-size:1.3rem;font-weight:700;line-height:1">${gun}</div>
-        <div style="font-size:.62rem;color:var(--muted2)">${ayYil}</div>
-      </div>
-      <div class="list-item-body">
-        <div class="list-item-title">${cleanRaceName(r.ad)}</div>
-        <div class="list-item-meta">${r.mesafe?r.mesafe+'km · ':''}${r.kontrol_noktasi||''}${!isPast?' · <strong style="color:var(--accent)">'+daysLeft+' gün kaldı</strong>':''}</div>
-      </div>
-      <span class="badge ${isPast?'badge-green':'badge-orange'}">${isPast?'Tamamlandı':'Yakında'}</span>
-    `;
-    container.appendChild(div);
+  // Koç Panelindeki sıralamayla aynı: tarihe göre değil, zorluk skoruna göre (en zor önce)
+  const scored=[...yarislar].sort((a,b)=>raceDiffScore(b)-raceDiffScore(a));
+  const upcoming=scored.filter(r=>{
+    if(!r.tarih)return true;
+    const dl=Math.ceil((new Date(r.tarih+'T12:00:00')-today)/864e5);
+    return dl>=0;
   });
-}
-function renderYarislar(){
-  const container=document.getElementById('yaris-list');
-  const entries=Object.entries(yarislar).sort((a,b)=>(b[1].sira||0)-(a[1].sira||0));
-  if(!entries.length){container.innerHTML='<div class="empty">Henüz yarış eklenmedi.</div>';return;}
-  container.innerHTML='';
-  entries.forEach(([id,y])=>{
-    const durumMap={yakinda:{cls:'badge-orange',lbl:'Yakında'},hazirlik:{cls:'badge-blue',lbl:'Hazırlık'},tamamlandi:{cls:'badge-green',lbl:'Tamamlandı'}};
-    const d=durumMap[y.durum]||{cls:'badge-gray',lbl:y.durum};
-    const div=document.createElement('div');
-    div.className='list-item';
-    div.innerHTML=`
-      <div style="text-align:center;min-width:44px">
-        <div style="font-size:1.3rem;font-weight:700;line-height:1">${y.gun||'?'}</div>
-        <div style="font-size:.62rem;color:var(--muted2)">${y.ay_yil||''}</div>
-      </div>
-      <div class="list-item-body">
-        <div class="list-item-title">${y.ad||''}</div>
-        <div class="list-item-meta">${y.sehir||''} · ${y.mesafe||''}</div>
-      </div>
-      <div class="list-item-actions">
-        <span class="badge ${d.cls}">${d.lbl}</span>
-        <button class="btn btn-sm btn-icon" title="Düzenle" onclick="editYaris('${id}')">✏️</button>
-        <button class="btn btn-sm btn-icon btn-danger" onclick="deleteYaris('${id}')">🗑</button>
-      </div>
-    `;
-    container.appendChild(div);
-  });
-}
-async function addYaris(){
-  const y={
-    gun:v('r_gun'), ay_yil:v('r_ay_yil'), mesafe:v('r_mesafe'),
-    ad:v('r_ad'), sehir:v('r_sehir'), durum:v('r_durum'),
-    sira: Date.now()
-  };
-  if(!y.ad){ toast('Yarış adı gerekli','err'); return; }
-  const id=await fbPush('landing_content/yarislar',y);
-  yarislar[id]=y;
-  renderYarislar();
-  ['r_gun','r_ay_yil','r_mesafe','r_ad','r_sehir'].forEach(id=>{ const el=document.getElementById(id); if(el)el.value=''; });
-  toast('Yarış eklendi');
-}
-async function deleteYaris(id){
-  if(!confirm('Bu yarışı silmek istediğinize emin misiniz?')) return;
-  await fbRemove('landing_content/yarislar/'+id);
-  delete yarislar[id];
-  renderYarislar();
-  toast('Yarış silindi');
-}
-function editYaris(id){
-  const y=yarislar[id];
-  currentEditType='yaris'; currentEditId=id;
-  document.getElementById('modal-title-text').textContent='Yarış Düzenle';
-  document.getElementById('modal-body').innerHTML=`
-    <div class="form-row cols3">
-      <div class="fg"><label>Gün</label><input type="number" id="m_gun" value="${y.gun||''}"></div>
-      <div class="fg"><label>Ay–Yıl</label><input type="text" id="m_ay_yil" value="${y.ay_yil||''}"></div>
-      <div class="fg"><label>Mesafe</label><input type="text" id="m_mesafe" value="${y.mesafe||''}"></div>
-    </div>
-    <div class="form-row cols2">
-      <div class="fg"><label>Ad</label><input type="text" id="m_ad" value="${y.ad||''}"></div>
-      <div class="fg"><label>Şehir</label><input type="text" id="m_sehir" value="${y.sehir||''}"></div>
-    </div>
-    <div class="fg"><label>Durum</label>
-      <select id="m_durum">
-        <option value="yakinda" ${y.durum==='yakinda'?'selected':''}>Yakında</option>
-        <option value="hazirlik" ${y.durum==='hazirlik'?'selected':''}>Hazırlık</option>
-        <option value="tamamlandi" ${y.durum==='tamamlandi'?'selected':''}>Tamamlandı</option>
-      </select>
-    </div>
-  `;
-  document.getElementById('edit-modal').classList.add('open');
+  if(!upcoming.length){container.innerHTML='<div class="empty">Koç panelinde yaklaşan yarış bulunmuyor.</div>';return;}
+  container.innerHTML=upcoming.map((r,i)=>renderRaceCardHTML(r,i)).join('');
 }
 
 // ── HABERLER ─────────────────────────────────────────
@@ -909,37 +965,74 @@ function editHaber(id){
 }
 
 // ── ANTRENÖR ─────────────────────────────────────────
+let antFotoData=null;
 async function loadAntrenor(){
   const a=await fbGet('landing_content/antrenor')||{};
   const c=await fbGet('landing_content/iletisim')||{};
-  ['ant_ad','ant_unvan','ant_avatar','ant_bio','ant_sert'].forEach(f=>{
+  ['ant_ad','ant_unvan','ant_bio','ant_sert'].forEach(f=>{
     const el=document.getElementById(f); const key=f.replace('ant_','');
     if(el&&a[key]!==undefined) el.value=a[key];
   });
-  ['ilet_eposta','ilet_lokasyon','ilet_sosyal','ilet_sosyal_url'].forEach(f=>{
+  antFotoData=a.foto||null;
+  renderAntFotoPreview();
+  ['ilet_eposta','ilet_lokasyon','ilet_sosyal_url'].forEach(f=>{
     const el=document.getElementById(f); const key=f.replace('ilet_','');
     if(el&&c[key]!==undefined) el.value=c[key];
   });
 }
+function renderAntFotoPreview(){
+  const el=document.getElementById('ant_foto_preview');
+  const rm=document.getElementById('ant_foto_remove');
+  if(!el)return;
+  if(antFotoData){
+    el.innerHTML=`<img src="${antFotoData}" style="width:100%;height:100%;object-fit:cover;border-radius:50%">`;
+    if(rm)rm.style.display='inline-block';
+  }else{
+    el.innerHTML=((v('ant_ad')||'?')[0]||'?').toUpperCase();
+    if(rm)rm.style.display='none';
+  }
+}
+function handleAntFotoUpload(file){
+  if(!file)return;
+  const reader=new FileReader();
+  reader.onload=(e)=>{
+    const img=new Image();
+    img.onload=()=>{
+      const maxW=300,maxH=300;
+      let w=img.width,h=img.height;
+      if(w>maxW||h>maxH){ const ratio=Math.min(maxW/w,maxH/h); w=Math.round(w*ratio); h=Math.round(h*ratio); }
+      const canvas=document.createElement('canvas');
+      canvas.width=w; canvas.height=h;
+      canvas.getContext('2d').drawImage(img,0,0,w,h);
+      antFotoData=canvas.toDataURL('image/jpeg',0.85);
+      renderAntFotoPreview();
+    };
+    img.onerror=()=>toast('Görsel okunamadı','err');
+    img.src=e.target.result;
+  };
+  reader.onerror=()=>toast('Dosya okunamadı','err');
+  reader.readAsDataURL(file);
+}
+function removeAntFoto(){
+  antFotoData=null;
+  const inp=document.getElementById('ant_foto_input'); if(inp)inp.value='';
+  renderAntFotoPreview();
+}
 async function saveAntrenor(){
   await fbSet('landing_content/antrenor',{
-    ad:v('ant_ad'), unvan:v('ant_unvan'), avatar:v('ant_avatar'),
+    ad:v('ant_ad'), unvan:v('ant_unvan'), foto:antFotoData||'',
     bio:v('ant_bio'), sert:v('ant_sert')
   });
   await fbSet('landing_content/iletisim',{
     eposta:v('ilet_eposta'), lokasyon:v('ilet_lokasyon'),
-    sosyal:v('ilet_sosyal'), sosyal_url:v('ilet_sosyal_url')
+    sosyal_url:v('ilet_sosyal_url')
   });
   toast('Antrenör ve iletişim bilgileri kaydedildi');
 }
 
 // ── MODAL SAVE ───────────────────────────────────────
 document.getElementById('modal-save-btn').addEventListener('click', async()=>{
-  if(currentEditType==='yaris'){
-    const y={...yarislar[currentEditId], gun:v('m_gun'), ay_yil:v('m_ay_yil'), mesafe:v('m_mesafe'), ad:v('m_ad'), sehir:v('m_sehir'), durum:v('m_durum')};
-    await fbSet('landing_content/yarislar/'+currentEditId, y);
-    yarislar[currentEditId]=y; renderYarislar();
-  } else if(currentEditType==='haber'){
+  if(currentEditType==='haber'){
     const h={...haberler[currentEditId], baslik:v('m_baslik'), etiket:v('m_etiket'), tarih:v('m_tarih'), icerik:v('m_icerik'), one_cikan:v('m_tur')};
     await fbSet('landing_content/haberler/'+currentEditId, h);
     haberler[currentEditId]=h; renderHaberler();
