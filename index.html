@@ -63,6 +63,19 @@
   .hero-track { position:absolute; bottom:0; left:0; right:0; height:6px; background:repeating-linear-gradient(90deg,var(--accent) 0,var(--accent) 80px,transparent 80px,transparent 100px); opacity:.35; }
   .hero-pulse-svg { position:absolute; left:0; top:50%; width:100%; height:70px; transform:translateY(-50%); overflow:visible; pointer-events:none; }
   .hero-pulse-svg path { fill:none; stroke:var(--accent); stroke-width:1.5; filter:drop-shadow(0 0 4px rgba(249,115,22,.55)); }
+  .hero-pulse-logo {
+    position:absolute; top:50%; left:0; z-index:2; pointer-events:none;
+    transform:translate(-50%,-50%) scale(1);
+    font-family:'Bebas Neue',sans-serif; font-size:1.15rem; letter-spacing:.1em; white-space:nowrap;
+    color:var(--text); opacity:.9;
+    transition:transform .5s cubic-bezier(.34,1.7,.64,1), text-shadow .5s ease, opacity .5s ease;
+  }
+  .hero-pulse-logo span { color:var(--accent); }
+  .hero-pulse-logo.pulsing {
+    transform:translate(-50%,-50%) scale(1.4);
+    text-shadow:0 0 12px rgba(249,115,22,.85), 0 0 26px rgba(249,115,22,.5);
+    opacity:1;
+  }
   .hero-eyebrow { font-family:'Space Mono',monospace; font-size:.72rem; letter-spacing:.2em; color:var(--accent); text-transform:uppercase; margin-bottom:1.2rem; opacity:0; animation:fadeUp .6s .2s ease forwards; }
   .hero-title { font-family:'Bebas Neue',sans-serif; font-size:clamp(4rem,12vw,9rem); line-height:.92; letter-spacing:.04em; opacity:0; animation:fadeUp .7s .35s ease forwards; align-self:flex-start; }
   .hero-title span { color:var(--accent); }
@@ -366,6 +379,7 @@
   <div class="hero edit-target">
     <div class="hero-bg"></div>
     <svg class="hero-pulse-svg" id="hero-pulse"><path id="hero-pulse-path"></path></svg>
+    <div class="hero-pulse-logo" id="hero-pulse-logo">Koşu<span>İZİ</span></div>
     <div class="hero-track"></div>
     <button class="edit-pencil" onclick="editHero()">✏️</button>
     <p class="hero-eyebrow" id="hero-eyebrow">Koşu İzi Takımı</p>
@@ -662,18 +676,21 @@ function editAthlete(id){
   });
 }
 
-// ── HERO NABIZ ÇİZGİSİ ─────────────────────────────────
+// ── HERO NABIZ ÇİZGİSİ + LOGO ──────────────────────────
 // Soldan sağa ilerleyen çizgi; başlık metnini geçtikten sonra kalan boşluğun
-// tam ortasında bir QRS (kalp atışı) sıçraması yapar, sonra düz çizgi olarak
-// devam eder. Metnin bittiği nokta gerçek DOM ölçümüyle bulunur.
+// tam ortasında KoşuİZİ logosu duruyor. Çizginin çizilme animasyonu tam o
+// noktaya ulaştığı an logo bir kalp atışı gibi büyüyüp parlıyor (nabız).
+// Metnin bittiği nokta gerçek DOM ölçümüyle bulunur.
 function setupHeroPulse(){
   const heroEl=document.querySelector('.hero');
   const titleEl=document.querySelector('.hero-title');
   const svg=document.getElementById('hero-pulse');
   const path=document.getElementById('hero-pulse-path');
-  if(!heroEl||!titleEl||!svg||!path) return;
+  const logoEl=document.getElementById('hero-pulse-logo');
+  if(!heroEl||!titleEl||!svg||!path||!logoEl) return;
 
-  let loopTimer=null;
+  const DRAW_MS=2600, GAP_MS=900, PULSE_MS=500;
+  let loopTimer=null, pulseTimer=null, spikeFrac=0.5;
 
   function build(){
     const heroRect=heroEl.getBoundingClientRect();
@@ -684,23 +701,19 @@ function setupHeroPulse(){
 
     const textEndX=Math.min(Math.max(titleRect.right-heroRect.left,0),w);
     const spikeX=textEndX+(w-textEndX)/2; // metin sonrası boşluğun orta noktası
-    const sw=24; // QRS sıçramasının genişliği
+    spikeFrac=spikeX/w;
 
-    const d=[
-      `M 0 ${midY}`,
-      `L ${Math.max(spikeX-sw,0)} ${midY}`,
-      `L ${spikeX-sw*0.5} ${midY+6}`,
-      `L ${spikeX-sw*0.18} ${midY-28}`,
-      `L ${spikeX+sw*0.1} ${midY+18}`,
-      `L ${spikeX+sw*0.35} ${midY-5}`,
-      `L ${spikeX+sw*0.65} ${midY}`,
-      `L ${w} ${midY}`
-    ].join(' ');
-    path.setAttribute('d', d);
+    path.setAttribute('d', `M 0 ${midY} L ${w} ${midY}`);
+    logoEl.style.left=spikeX+'px';
 
     const len=path.getTotalLength();
-    clearTimeout(loopTimer);
+    clearTimeout(loopTimer); clearTimeout(pulseTimer);
     runLoop(len);
+  }
+
+  function pulseLogo(){
+    logoEl.classList.add('pulsing');
+    setTimeout(()=>logoEl.classList.remove('pulsing'), PULSE_MS);
   }
 
   function runLoop(len){
@@ -711,15 +724,16 @@ function setupHeroPulse(){
       path.style.opacity='0';
       path.getBoundingClientRect(); // reflow
       requestAnimationFrame(()=>{
-        path.style.transition='stroke-dashoffset 2.6s ease-in-out, opacity .35s ease-in-out';
+        path.style.transition=`stroke-dashoffset ${DRAW_MS}ms ease-in-out, opacity .35s ease-in-out`;
         path.style.opacity='.55';
         path.style.strokeDashoffset='0';
       });
+      pulseTimer=setTimeout(pulseLogo, DRAW_MS*spikeFrac);
       loopTimer=setTimeout(()=>{
         path.style.transition='opacity .4s ease-in-out';
         path.style.opacity='0';
-        loopTimer=setTimeout(cycle, 900);
-      }, 2600);
+        loopTimer=setTimeout(cycle, GAP_MS);
+      }, DRAW_MS);
     }
     cycle();
   }
