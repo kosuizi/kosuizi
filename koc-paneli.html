@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.23-0746 --><!DOCTYPE html>
+<!-- Version: v2026.09.23-2116 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.23-0746';
+const APP_VERSION='v2026.09.23-2116';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -1866,7 +1866,7 @@ function extractFeedbackSignals(allSnapsObj, athlete){
           :null;
         if(_paceOverrideSig&&!_tempoluKolayExcludesPace){
           ({paceOk,paceDir,paceDiff,paceTol}=_paceOverrideSig);
-        } else if(!_tempoluKolayExcludesPace&&(pm>0||ps>0)&&row.type!=='rest'&&row.type!=='walk'&&!_rpeExcludesPace&&!_isRaceRow){
+        } else if(!_tempoluKolayExcludesPace&&(pm>0||ps>0)&&row.type!=='rest'&&(row.type!=='walk'||_fk==='pace')&&!_rpeExcludesPace&&!_isRaceRow){
           const origPace=row._targetPaceSec!=null?row._targetPaceSec:row._origPaceSec;
           if(enteredSec>0&&origPace>0){
             // ── Panel Parite Düzeltmesi (2026.08.11 — Göksel talebi): ReceteTablosu'ndaki
@@ -1889,7 +1889,8 @@ function extractFeedbackSignals(allSnapsObj, athlete){
             // bile geçmiş fazların zone genişliği kaymaz. HR eşleşmesi de aynı kaynağı kullanıyor
             // (bkz. aşağıdaki `hr` değişkeni, _origLoBpm/_origHiBpm donmuşsa onu tercih eder;
             // donmamışsa artık CANLI değil, o GÜNÜN zone'una düşer — HR için de aynı iyileşme).
-            const pz=zi!=null?zones?.paceZones?.[zi]:null;
+            // 2026.09.23: yürüyüş + Pace Odaklı → zon bandı kullanılmaz (koşu bandıdır), nokta-bazlı fallback (paceValidation ile aynı)
+            const pz=(zi!=null&&row.type!=='walk')?zones?.paceZones?.[zi]:null;
             // 2026.09.19: _isGapRow satırında gerçek D+ yoksa (GAP hesaplanamaz) düz zon bandı
             // yerine planlanan (yavaşlatılmış) hedef pace'e düşülür — paceValidation ile aynı kural.
             if(!(row._isGapRow&&!_gapApplied)&&pz?.lo_ms&&pz?.hi_ms){
@@ -7343,7 +7344,14 @@ function SporcularTab({athletes,races,athHistory,allHistory,workouts,onAdd,onUpd
             r.mesafe&&React.createElement('span',{className:'badge badge-gray'},r.mesafe+' km'),
             r.d_plus&&React.createElement('span',{className:'badge badge-gray'},'D+ '+r.d_plus+' m'),
             React.createElement('span',{className:'badge '+(r.is_trail?'badge-warn':'badge-info')},r.is_trail?'⛰️ Arazi':'🛣️ Yol')
-          )
+          ),
+          // Mesafe/D+/irtifa GPX'ten senkronize edilmişse (18.09.2026 — Göksel
+          // isteği), üstteki değerlerin artık manuel girişten değil GPX'ten
+          // geldiğini ve orijinal manuel girişin ne olduğunu şeffaf göster.
+          r.manuelMesafe!==undefined&&(String(r.manuelMesafe)!==String(r.mesafe)||String(r.manuelDPlus)!==String(r.d_plus)||String(r.manuelMaksIrtifa)!==String(r.maks_irtifa)||String(r.manuelMinIrtifa)!==String(r.min_irtifa))&&
+            React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:4}},
+              '📡 GPX\'ten senkronize (mesafe/D+/irtifa) · Manuel girilen: '+(r.manuelMesafe||'—')+'km / D+'+(r.manuelDPlus||'—')+'m / '+(r.manuelMinIrtifa||'—')+'–'+(r.manuelMaksIrtifa||'—')+'m irtifa'
+            )
         )
       ),
       // Zorluk + bilgiler + faz
@@ -11938,7 +11946,10 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     // tutarlıdır (bkz. ~satır 1062: "if(row.type==='rest'||row.type==='walk') return;").
     // Pace hâlâ kayıt altına alınır (mesafe/pm/ps hücreleri hiç değişmedi) — sadece bu
     // fazlarda pace'e dayalı bir rozet artık ÜRETİLMEZ.
-    if(row.type==='rest'||row.type==='walk') return null;
+    // 2026.09.23 — Göksel talebi: koç yürüyüş satırında elle "Pace Odaklı" seçtiyse pace rozeti üretilir
+    // (yürüyüş pace'i koşu zon bandıyla DEĞİL, planlanan yürüyüş pace'iyle nokta-bazlı kıyaslanır — aşağıda).
+    const _walkPaceFocus=row.type==='walk'&&focusOverrideKey(row)==='pace';
+    if((row.type==='rest'||row.type==='walk')&&!_walkPaceFocus) return null;
     const pm=row.pm; const ps=row.ps;
     // Hem pm hem ps boş/sıfır → henüz giriş yok, validasyon yapma
     if((pm==null||pm===0)&&(ps==null||ps===0)) return null;
@@ -11971,6 +11982,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
         :{label:'Çok Hızlı',color:'#ef4444',bg:'#fef2f2',icon:'▲▲'};
     };
     if(row._isGapRow&&!_gapFac&&_plannedPace>0) return _plannedTargetLabel();
+    if(_walkPaceFocus) return _plannedPace>0?_plannedTargetLabel():null; // yürüyüş: zon bandı yok, planlanan pace'e nokta-bazlı (puanlamayla aynı tolerans)
     // NOT: eski "OP-YK1" (Yürü-Koş yürüyüş satırı için sabit 10:00/km pace hedefi) bloğu
     // kaldırıldı — bkz. yukarıdaki OP-YK3 notu. row.type==='walk' artık fonksiyonun en
     // başında return null ile eleniyor, bu satıra hiç ulaşmıyor.
@@ -12060,7 +12072,11 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     const hrActive=!row._isSprint&&tip!=='serbest'&&tip!=='yaris'&&tip!=='yokus_uzun'&&tip!=='power_hiking'&&!_isSprintRestRow;
     // paceValidation'ın (~satır 10018) kapı koşullarıyla BİREBİR AYNI.
     const paceActive=hrActive&&!(row.rpe&&tip!=='yuru_kos'&&row.type!=='walk')&&!_isWarmCool&&row.type!=='rest'&&row.type!=='walk';
-    return {hrActive,paceActive};
+    // 2026.09.23 — Göksel talebi: Yürüyüş (type:'walk') satırlarında da koç "Pace Odaklı" seçebilsin.
+    // Otomatik davranış DEĞİŞMEZ (paceActive aynı — yürüyüş hâlâ otomatik Nabız Odaklı); bu kapı sadece
+    // MANUEL seçim listesine Pace'i ekler. Isınma/Soğuma ve 'rest' satırları hariç (aynı sebep).
+    const walkPaceSelectable=hrActive&&!_isWarmCool&&row.type==='walk';
+    return {hrActive,paceActive,walkPaceSelectable};
   };
   const autoFocusIndicator=(row)=>{
     if(!row||row.type==='header') return null;
@@ -12081,7 +12097,9 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
   //  • Sistemde zaten Hissiyat olan satırlar (sprint/yarış/serbest/uzun yokuş/power hiking/sprint
   //    arası dinlenme) → seçici YOK (hedef pace/nabız bölgesi hiç yok, anlamlı bir odak değişimi olamaz).
   //  • Pace hiç değerlendirilmeyen satırlar (Isınma/Soğuma/Dinlenme/Yürüyüş/RPE'li) → Nabız ↔ Hissiyat
-  //    (sistemde bu satırlarda "Pace Odaklı" diye bir tasarım yok).
+  //    (sistemde bu satırlarda "Pace Odaklı" diye bir tasarım yok). İSTİSNA (2026.09.23 — Göksel talebi):
+  //    Yürüyüş (type:'walk', Isınma/Soğuma hariç) satırlarında Pace de seçilebilir (walkPaceSelectable);
+  //    otomatik odak yine Nabız — sadece koç isterse Pace Odaklı yapar (bkz. paceValidation/extractFeedbackSignals).
   //  • Pace+nabız ikisi de değerlendirilen ana fazlar → Nabız / Pace / Hissiyat.
   //  • Aralık/Yürü-Koş (tekrarlı) yapılar (2026.09.21 — Göksel talebi) → seçim BACAK bazlı: ana tablodaki
   //    "koşu" özet satırı ve "dinlenme/yürüyüş" özet satırı için ayrı ayrı; seçim o bacağın TÜM tekrarlarına
@@ -12093,7 +12111,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     const g=_focusGates(row);
     if(!g.hrActive) return null;
     const opts=[FOCUS_OPTIONS.hr];
-    if(g.paceActive) opts.push(FOCUS_OPTIONS.pace);
+    if(g.paceActive||g.walkPaceSelectable) opts.push(FOCUS_OPTIONS.pace);
     opts.push(FOCUS_OPTIONS.feel);
     return opts;
   };
