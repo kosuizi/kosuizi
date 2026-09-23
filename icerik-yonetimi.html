@@ -387,6 +387,18 @@ hr{border:none;border-top:1px solid var(--border);margin:.8rem 0}
             <textarea id="h_icerik" placeholder="Haber içeriği…" style="min-height:100px"></textarea>
           </div>
         </div>
+        <div class="form-row cols2">
+          <div class="fg">
+            <label>Fotoğraf (opsiyonel)</label>
+            <input type="file" accept="image/*" id="h_foto_file" onchange="onHaberFotoChange(this)">
+            <div id="h_foto_preview" style="margin-top:.5rem"></div>
+          </div>
+          <div class="fg">
+            <label>Video Bağlantısı (opsiyonel)</label>
+            <input type="text" id="h_video_url" placeholder="https://youtube.com/watch?v=... veya Instagram linki">
+            <p style="font-size:.7rem;color:var(--muted2);margin-top:.35rem">Video dosyası buradan yüklenmiyor — YouTube/Instagram'a yükleyip linkini yapıştırın.</p>
+          </div>
+        </div>
         <div class="flex-gap" style="margin-top:.5rem">
           <button class="btn btn-primary" onclick="addHaber()">+ Haber Ekle</button>
         </div>
@@ -901,6 +913,75 @@ async function loadHaberler(){
   haberler=await fbGet('landing_content/haberler')||{};
   renderHaberler();
 }
+// Fotoğraf sıkıştırma yardımcıları — Firebase Storage/Blaze planı gerektirmemesi
+// için görsel istemci tarafında küçültülüp base64 olarak Realtime Database'e
+// yazılır (2026.09.23 — Göksel'in "nereye yüklenir/kapasitemiz ne kadar"
+// sorusuna cevap: mevcut ücretsiz Firebase planında Storage aktif değil; bu
+// yöntem hiçbir ek altyapı/plan gerektirmiyor). Video dosyası YÜKLENMİYOR —
+// sadece YouTube/Instagram linki saklanıyor (bkz. aşağıdaki alan).
+function compressImageToDataURL(file,maxDim=1280,quality=0.72){
+  return new Promise((resolve,reject)=>{
+    if(!file){ resolve(null); return; }
+    const reader=new FileReader();
+    reader.onerror=()=>reject(new Error('Dosya okunamadı'));
+    reader.onload=()=>{
+      const img=new Image();
+      img.onerror=()=>reject(new Error('Görsel yüklenemedi'));
+      img.onload=()=>{
+        let w=img.width,h=img.height;
+        if(w>maxDim||h>maxDim){
+          if(w>h){ h=Math.round(h*maxDim/w); w=maxDim; }
+          else { w=Math.round(w*maxDim/h); h=maxDim; }
+        }
+        const canvas=document.createElement('canvas');
+        canvas.width=w; canvas.height=h;
+        canvas.getContext('2d').drawImage(img,0,0,w,h);
+        resolve(canvas.toDataURL('image/jpeg',quality));
+      };
+      img.src=reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+function dataURLSizeKB(dataURL){
+  if(!dataURL) return 0;
+  const base64=dataURL.split(',')[1]||'';
+  return Math.round(base64.length*0.75/1024);
+}
+function renderFotoPreview(containerId,dataURL,onRemove){
+  const el=document.getElementById(containerId); if(!el) return;
+  if(!dataURL){ el.innerHTML=''; return; }
+  const kb=dataURLSizeKB(dataURL);
+  el.innerHTML=`
+    <div style="display:flex;align-items:center;gap:.6rem">
+      <img src="${dataURL}" style="width:80px;height:60px;object-fit:cover;border-radius:6px;border:1px solid var(--border)">
+      <span style="font-size:.7rem;color:var(--muted2)">~${kb} KB</span>
+      <button type="button" class="btn btn-sm btn-icon btn-danger" onclick="${onRemove}">🗑</button>
+    </div>`;
+}
+let newHaberFoto=null;
+async function onHaberFotoChange(input){
+  const file=input.files&&input.files[0];
+  if(!file) return;
+  try{
+    newHaberFoto=await compressImageToDataURL(file);
+    renderFotoPreview('h_foto_preview',newHaberFoto,'removeHaberFoto()');
+  }catch(e){ toast('Fotoğraf işlenemedi: '+(e.message||e),'err'); }
+  input.value='';
+}
+function removeHaberFoto(){ newHaberFoto=null; renderFotoPreview('h_foto_preview',null); }
+let modalFoto=null;
+async function onModalFotoChange(input){
+  const file=input.files&&input.files[0];
+  if(!file) return;
+  try{
+    modalFoto=await compressImageToDataURL(file);
+    renderFotoPreview('m_foto_preview',modalFoto,'removeModalFoto()');
+  }catch(e){ toast('Fotoğraf işlenemedi: '+(e.message||e),'err'); }
+  input.value='';
+}
+function removeModalFoto(){ modalFoto=null; renderFotoPreview('m_foto_preview',null); }
+
 function renderHaberler(){
   const container=document.getElementById('haber-list');
   const entries=Object.entries(haberler).sort((a,b)=>(b[1].sira||0)-(a[1].sira||0));
@@ -910,11 +991,13 @@ function renderHaberler(){
     const div=document.createElement('div');
     div.className='list-item';
     div.innerHTML=`
+      ${h.foto?`<img src="${h.foto}" style="width:56px;height:56px;object-fit:cover;border-radius:6px;border:1px solid var(--border);flex-shrink:0">`:''}
       <div class="list-item-body">
         <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.3rem">
           ${h.one_cikan==='one_cikan'?'<span class="badge badge-orange">Öne Çıkan</span>':''}
           <span class="badge badge-gray">${h.etiket||''}</span>
           <span style="font-size:.65rem;color:var(--muted2)">${h.tarih||''}</span>
+          ${h.video_url?'<span class="badge badge-blue">🎬 Video</span>':''}
         </div>
         <div class="list-item-title">${h.baslik||''}</div>
         <div class="list-item-meta" style="margin-top:.2rem;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${h.icerik||''}</div>
@@ -930,13 +1013,15 @@ function renderHaberler(){
 async function addHaber(){
   const h={
     baslik:v('h_baslik'), etiket:v('h_etiket'), tarih:v('h_tarih'),
-    icerik:v('h_icerik'), one_cikan:v('h_tur'), sira:Date.now()
+    icerik:v('h_icerik'), one_cikan:v('h_tur'), sira:Date.now(),
+    foto:newHaberFoto||null, video_url:v('h_video_url')||null
   };
   if(!h.baslik){ toast('Başlık gerekli','err'); return; }
   const id=await fbPush('landing_content/haberler',h);
   haberler[id]=h;
   renderHaberler();
-  ['h_baslik','h_etiket','h_tarih','h_icerik'].forEach(id=>{ const el=document.getElementById(id); if(el)el.value=''; });
+  ['h_baslik','h_etiket','h_tarih','h_icerik','h_video_url'].forEach(id=>{ const el=document.getElementById(id); if(el)el.value=''; });
+  newHaberFoto=null; renderFotoPreview('h_foto_preview',null);
   toast('Haber eklendi');
 }
 async function deleteHaber(id){
@@ -949,6 +1034,7 @@ async function deleteHaber(id){
 function editHaber(id){
   const h=haberler[id];
   currentEditType='haber'; currentEditId=id;
+  modalFoto=h.foto||null;
   document.getElementById('modal-title-text').textContent='Haber Düzenle';
   document.getElementById('modal-body').innerHTML=`
     <div class="form-row cols2">
@@ -965,7 +1051,19 @@ function editHaber(id){
       </div>
     </div>
     <div class="fg"><label>İçerik</label><textarea id="m_icerik" style="min-height:120px">${h.icerik||''}</textarea></div>
+    <div class="form-row cols2" style="margin-top:.7rem">
+      <div class="fg">
+        <label>Fotoğraf (opsiyonel)</label>
+        <input type="file" accept="image/*" id="m_foto_file" onchange="onModalFotoChange(this)">
+        <div id="m_foto_preview" style="margin-top:.5rem"></div>
+      </div>
+      <div class="fg">
+        <label>Video Bağlantısı (opsiyonel)</label>
+        <input type="text" id="m_video_url" value="${(h.video_url||'').replace(/"/g,'&quot;')}" placeholder="https://youtube.com/watch?v=...">
+      </div>
+    </div>
   `;
+  renderFotoPreview('m_foto_preview',modalFoto,'removeModalFoto()');
   document.getElementById('edit-modal').classList.add('open');
 }
 
@@ -1029,7 +1127,7 @@ function editIletisim(){
 // ── MODAL SAVE ───────────────────────────────────────
 document.getElementById('modal-save-btn').addEventListener('click', async()=>{
   if(currentEditType==='haber'){
-    const h={...haberler[currentEditId], baslik:v('m_baslik'), etiket:v('m_etiket'), tarih:v('m_tarih'), icerik:v('m_icerik'), one_cikan:v('m_tur')};
+    const h={...haberler[currentEditId], baslik:v('m_baslik'), etiket:v('m_etiket'), tarih:v('m_tarih'), icerik:v('m_icerik'), one_cikan:v('m_tur'), foto:modalFoto||null, video_url:v('m_video_url')||null};
     await fbSet('landing_content/haberler/'+currentEditId, h);
     haberler[currentEditId]=h; renderHaberler();
   } else if(currentEditType==='genel'){
