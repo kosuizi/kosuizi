@@ -94,8 +94,9 @@
   /* ── SPORCULAR ── */
   .athletes-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:1.5px; background:var(--line); }
   .athlete-card { background:var(--bg2); padding:2rem 1.6rem; position:relative; overflow:hidden; transition:background .2s; height:100%; }
-  .athlete-card:hover { background:var(--bg3); }
-  .athlete-card:hover .athlete-accent { width:100%; }
+  @media (hover:hover) and (pointer:fine) { .athlete-card:hover { background:var(--bg3); } .athlete-card:hover .athlete-accent { width:100%; } }
+  .athlete-card.tap-active { background:var(--bg3); }
+  .athlete-card.tap-active .athlete-accent { width:100%; }
   .athlete-accent { position:absolute; bottom:0; left:0; height:2px; width:0; background:var(--accent); transition:width .35s ease; }
   .athlete-avatar { width:72px; height:72px; border-radius:50%; background:var(--bg3); border:2px solid var(--line); display:flex; align-items:center; justify-content:center; font-family:'Bebas Neue',sans-serif; font-size:1.6rem; color:var(--accent); margin-bottom:1rem; overflow:hidden; }
   .athlete-name { font-weight:600; font-size:1rem; margin-bottom:.2rem; }
@@ -117,7 +118,8 @@
   /* ── YARISLAR: koç panelindeki yarış kartlarının birebir yansıması ── */
   .race-cards-grid { display:grid; grid-template-columns:1fr; gap:1.2rem; }
   .rc-card { background:var(--bg2); border:1px solid var(--line); border-radius:8px; padding:1.4rem; position:relative; transition:border-color .2s; }
-  .rc-card:hover { border-color:var(--accent); }
+  @media (hover:hover) and (pointer:fine) { .rc-card:hover { border-color:var(--accent); } }
+  .rc-card.tap-active { border-color:var(--accent); }
   .rc-rank { position:absolute; top:.9rem; right:.9rem; width:24px; height:24px; border-radius:50%; background:var(--bg3); display:flex; align-items:center; justify-content:center; font-size:.68rem; font-weight:600; color:var(--muted); }
   .rc-head { display:flex; gap:1rem; align-items:flex-start; margin-bottom:.8rem; }
   .rc-logo { width:56px; height:56px; object-fit:contain; border-radius:6px; border:1px solid var(--line); background:var(--bg3); padding:4px; flex-shrink:0; }
@@ -131,7 +133,7 @@
   .rc-badge-green { background:rgba(34,197,94,.12); color:var(--green); border-color:rgba(34,197,94,.28); }
   .rc-badge-red { background:rgba(239,68,68,.12); color:var(--red); border-color:rgba(239,68,68,.28); }
   .rc-link { display:inline-flex; margin-top:.7rem; font-size:.7rem; letter-spacing:.06em; text-transform:uppercase; color:var(--accent); text-decoration:none; border:1px solid var(--line); padding:.35rem .8rem; border-radius:4px; }
-  .rc-link:hover { background:rgba(249,115,22,.08); }
+  @media (hover:hover) and (pointer:fine) { .rc-link:hover { background:rgba(249,115,22,.08); } }
 
 
   /* ── YARISLAR: iki sütun (Tamamlanan / Yaklaşan) ── */
@@ -162,7 +164,8 @@
   /* ── HABERLER ── */
   .news-grid { display:grid; grid-template-columns:2fr 1fr; gap:1.5px; background:var(--line); }
   .news-card { background:var(--bg2); padding:2.2rem; position:relative; overflow:hidden; transition:background .2s; }
-  .news-card:hover { background:var(--bg3); }
+  @media (hover:hover) and (pointer:fine) { .news-card:hover { background:var(--bg3); } }
+  .news-card.tap-active { background:var(--bg3); }
   .news-card.featured { grid-row:span 2; }
   .news-meta { font-family:'Space Mono',monospace; font-size:.65rem; letter-spacing:.12em; color:var(--accent); margin-bottom:.8rem; display:flex; align-items:center; gap:.6rem; }
   .news-meta::before { content:''; display:inline-block; width:18px; height:1px; background:var(--accent); }
@@ -479,7 +482,7 @@
   <footer>
     <div class="footer-logo">Koşu<span>İZİ</span></div>
     <div class="footer-copy">© 2026 KoşuİZİ · kosuizi.com</div>
-    <div class="footer-copy" style="opacity:.5;margin-top:.3rem">v2026.09.23-1516</div>
+    <div class="footer-copy" style="opacity:.5;margin-top:.3rem">v2026.09.23-1913</div>
   </footer>
 </div><!-- /main-site -->
 
@@ -725,6 +728,28 @@ function pickOneAthlete(pool,excludeIds){
   const candidates=filtered.length?filtered:pool;
   return candidates[Math.floor(Math.random()*candidates.length)];
 }
+// Sütun sayısı: grid'in gerçek (çözümlenmiş) sütun sayısı; alınamazsa
+// auto-fill/minmax(240px,1fr) formülüyle hesaplanır.
+function getAthleteCols(grid){
+  let cols=0;
+  try{
+    const t=getComputedStyle(grid).gridTemplateColumns;
+    if(t && t!=='none') cols=t.trim().split(/\s+/).length;
+  }catch(e){}
+  if(!cols){
+    const w=grid.clientWidth||window.innerWidth;
+    cols=Math.floor((w+1.5)/(240+1.5));
+  }
+  return Math.max(1,cols);
+}
+let athleteGridCols=0, athleteResizeTimer=null;
+window.addEventListener('resize',()=>{
+  clearTimeout(athleteResizeTimer);
+  athleteResizeTimer=setTimeout(()=>{
+    const g=document.getElementById('athletes-grid');
+    if(g && athleteGridCols && getAthleteCols(g)!==athleteGridCols) renderAthletes();
+  },250);
+});
 function renderAthletes(){
   const grid=document.getElementById('athletes-grid');
   athleteRotationTimers.forEach(id=>clearTimeout(id));
@@ -741,37 +766,56 @@ function renderAthletes(){
 
   if(!pool.length){ grid.innerHTML='<div style="padding:2rem;color:#6b7280;font-size:.85rem">Henüz sporcu eklenmedi.</div>'; return; }
 
-  // Edit modunda (yönetim) rotasyon yok — tüm sporcular her zaman görünür
-  if(isEditMode || pool.length<=4){
-    grid.innerHTML=pool.map(entry=>`<div class="athlete-card-slot">${buildAthleteCardHTML(entry)}</div>`).join('');
+  // Ekrandaki kart sayısı sütun sayısının katı olmalı ki son satırda boş alan
+  // kalmasın (2026.09.23 — Göksel talebi). Hedef en az 4 kart; sütun sayısı
+  // 4'ün böleni değilse (ör. 3 sütun) bir sonraki tam satıra yuvarlanır.
+  const cols=getAthleteCols(grid);
+  athleteGridCols=cols;
+  const target=cols*Math.ceil(4/cols);
+  const n=Math.min(target, Math.floor(pool.length/cols)*cols);
+
+  // Rotasyon yok (edit modu ya da tüm sporcular zaten sığıyor): hepsini göster;
+  // son satır eksikse son kart kalan boşluğu doldurur.
+  if(isEditMode || n<=0 || pool.length<=n){
+    const rem=pool.length%cols;
+    grid.innerHTML=pool.map((entry,i)=>{
+      const st=(rem && i===pool.length-1)?` style="grid-column:span ${cols-rem+1}"`:'';
+      return `<div class="athlete-card-slot"${st}>${buildAthleteCardHTML(entry)}</div>`;
+    }).join('');
     return;
   }
 
-  // Her kart 3/4/5/6 sn arasında rastgele, birbirinden BAĞIMSIZ bir süreyle
-  // döner (senkron değil) — her dönüşte yeni rastgele süre seçilir
-  // (2026.09.23 — Göksel talebi).
-  const ROTATE_DURATIONS=[3000,4000,5000,6000];
-  let currentDisplayed=pickRandomAthletes(pool,4);
+  // Sıralı dönüş: soldan sağa (satır sonunda alt satıra geçerek) kartlar sırayla
+  // 3,5 sn, 4 sn, 4,5 sn, 5 sn ... (her kart için +0,5 sn) sonra dönmeye başlar.
+  // Son kartın dönüşü tamamlandıktan 3,5 sn sonra birinci kart yeniden başlar
+  // ve döngü aynı şekilde tekrar eder.
+  const FLIP_START_MS=3500, FLIP_STEP_MS=500, FLIP_FULL_MS=620; // 300 çıkış + 320 giriş
+  let currentDisplayed=pickRandomAthletes(pool,n);
   grid.innerHTML=currentDisplayed.map(entry=>`<div class="athlete-card-slot"><div class="athlete-card-flip">${buildAthleteCardHTML(entry)}</div></div>`).join('');
 
-  const scheduleFlip=(slotIndex)=>{
-    const delay=ROTATE_DURATIONS[Math.floor(Math.random()*ROTATE_DURATIONS.length)];
-    athleteRotationTimers[slotIndex]=setTimeout(()=>{
-      const slot=grid.querySelectorAll('.athlete-card-flip')[slotIndex];
-      if(!slot) return;
-      const next=pickOneAthlete(pool, currentDisplayed.map(x=>x.id));
-      slot.classList.add('flip-out');
-      setTimeout(()=>{
-        slot.innerHTML=buildAthleteCardHTML(next);
-        slot.classList.remove('flip-out');
-        slot.classList.add('flip-in');
-        setTimeout(()=>slot.classList.remove('flip-in'),320);
-        currentDisplayed[slotIndex]=next;
-      },300);
-      scheduleFlip(slotIndex);
-    },delay);
+  const doFlip=(slotIndex)=>{
+    const slot=grid.querySelectorAll('.athlete-card-flip')[slotIndex];
+    if(!slot) return;
+    const next=pickOneAthlete(pool, currentDisplayed.map(x=>x.id));
+    slot.classList.add('flip-out');
+    setTimeout(()=>{
+      slot.innerHTML=buildAthleteCardHTML(next);
+      slot.classList.remove('flip-out');
+      slot.classList.add('flip-in');
+      setTimeout(()=>slot.classList.remove('flip-in'),320);
+      currentDisplayed[slotIndex]=next;
+    },300);
   };
-  currentDisplayed.forEach((_,i)=>scheduleFlip(i));
+  const runCycle=()=>{
+    athleteRotationTimers=[];
+    for(let i=0;i<n;i++){
+      athleteRotationTimers.push(setTimeout(()=>{
+        doFlip(i);
+        if(i===n-1) athleteRotationTimers.push(setTimeout(runCycle,FLIP_FULL_MS));
+      },FLIP_START_MS+FLIP_STEP_MS*i));
+    }
+  };
+  runCycle();
 }
 function editAthlete(id){
   const a=findAthleteById(id); if(!a) return;
@@ -1247,6 +1291,16 @@ async function start(){
   await loadScript('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js');
   await init();
 }
+
+// Kart "tıklama efekti" — CSS :hover'a değil gerçek click event'ine bağlı,
+// bu yüzden scroll/kaydırma sırasında tarayıcının hover simülasyonu
+// yüzünden başka kartlara asla sızmaz: sadece fiilen tıklanan/dokunulan
+// kart tap-active class'ını alır, başka bir yere tıklanınca kalkar.
+document.addEventListener('click', function(e){
+  const card=e.target.closest('.rc-card, .athlete-card, .news-card');
+  document.querySelectorAll('.tap-active').forEach(c=>{ if(c!==card) c.classList.remove('tap-active'); });
+  if(card) card.classList.toggle('tap-active');
+});
 
 document.addEventListener('DOMContentLoaded', ()=> start().catch(console.error));
 </script>
