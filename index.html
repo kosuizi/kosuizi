@@ -85,7 +85,7 @@
   /* ── SECTIONS ── */
   section { padding:6rem 2.5rem; max-width:1200px; margin:0 auto; }
   section.full { max-width:100%; }
-  .section-header { display:flex; align-items:flex-end; justify-content:space-between; margin-bottom:3rem; padding-bottom:1rem; border-bottom:1px solid var(--line); }
+  .section-header { display:flex; align-items:flex-end; justify-content:space-between; margin-bottom:3rem; padding-bottom:1rem; border-bottom:1px solid var(--line); position:relative; }
   .section-tag { font-family:'Space Mono',monospace; font-size:.68rem; letter-spacing:.18em; color:var(--accent); text-transform:uppercase; margin-bottom:.5rem; }
   .section-title { font-family:'Bebas Neue',sans-serif; font-size:clamp(2rem,4vw,3rem); letter-spacing:.04em; line-height:1; }
 
@@ -106,6 +106,11 @@
   .athlete-strava a:hover { text-decoration:underline; }
   .athlete-next-race { margin-top:.6rem; font-size:.72rem; color:var(--muted); display:flex; align-items:center; gap:.3rem; }
   .athlete-next-race strong { color:var(--text); }
+  .athlete-card-slot { perspective:1200px; }
+  .athlete-card-flip { transform-style:preserve-3d; transition:transform .3s ease-in; }
+  .athlete-card-flip.flip-out { transform:rotateY(90deg); }
+  .athlete-card-flip.flip-in { animation:athleteFlipIn .32s ease-out; }
+  @keyframes athleteFlipIn { from{transform:rotateY(-90deg)} to{transform:rotateY(0deg)} }
 
   /* ── YARISLAR: koç panelindeki yarış kartlarının birebir yansıması ── */
   .race-cards-grid { display:grid; grid-template-columns:1fr; gap:1.2rem; }
@@ -395,6 +400,7 @@
   <section id="sporcular" class="full">
     <div style="max-width:1200px;margin:0 auto">
       <div class="section-header">
+        <button class="edit-pencil" onclick="editSectionTitle('sporcular')">✏️</button>
         <div>
           <div class="section-tag" id="section-tag-sporcular">01 — Takım</div>
           <div class="section-title" id="section-title-sporcular">Sporcular</div>
@@ -414,6 +420,7 @@
   <!-- YARISLAR -->
   <section id="yarislar">
     <div class="section-header">
+      <button class="edit-pencil" onclick="editSectionTitle('yarislar')">✏️</button>
       <div>
         <div class="section-tag" id="section-tag-yarislar">02 — Takvim</div>
         <div class="section-title" id="section-title-yarislar">Yarışlar</div>
@@ -438,6 +445,7 @@
   <!-- HABERLER -->
   <section id="haberler">
     <div class="section-header">
+      <button class="edit-pencil" onclick="editSectionTitle('haberler')">✏️</button>
       <div>
         <div class="section-tag" id="section-tag-haberler">03 — Güncel</div>
         <div class="section-title" id="section-title-haberler">Haberler & Duyurular</div>
@@ -452,6 +460,7 @@
   <!-- ANTRENÖR -->
   <section id="antrenor" style="padding-bottom:2rem">
     <div class="section-header">
+      <button class="edit-pencil" onclick="editSectionTitle('antrenor')">✏️</button>
       <div>
         <div class="section-tag" id="section-tag-antrenor">04 — Ekip</div>
         <div class="section-title" id="section-title-antrenor">Antrenör & İletişim</div>
@@ -595,68 +604,156 @@ function editHero(){
   openEditor({
     title:'Hero Bölümü',
     bodyHTML:`
+      <div class="ef-cols2">
+        <div class="ef-row"><label>Ana Başlık (1. satır)</label><input type="text" id="ef-hero-baslik" value="${(document.getElementById('hero-baslik').textContent||'').replace(/"/g,'&quot;')}"></div>
+        <div class="ef-row"><label>Ana Başlık (2. satır, vurgulu)</label><input type="text" id="ef-vurgu" value="${(document.getElementById('hero-vurgu').textContent||'').replace(/"/g,'&quot;')}"></div>
+      </div>
       <div class="ef-row"><label>Kuruluş / Dönem Etiketi</label><input type="text" id="ef-eyebrow" value="${(document.getElementById('hero-eyebrow').textContent||'').replace(/"/g,'&quot;')}"></div>
       <div class="ef-row"><label>Alt Açıklama</label><input type="text" id="ef-alt" value="${(document.getElementById('hero-alt').textContent||'').replace(/"/g,'&quot;')}"></div>
     `,
     onSave: async ()=>{
+      const baslik=document.getElementById('ef-hero-baslik').value.trim();
+      const vurgu=document.getElementById('ef-vurgu').value.trim();
       const eyebrow=document.getElementById('ef-eyebrow').value.trim();
       const alt=document.getElementById('ef-alt').value.trim();
       const settings=await fbGet('landing_content/settings')||{};
+      settings.hero_baslik=baslik; settings.hero_vurgu=vurgu;
       settings.hero_eyebrow=eyebrow; settings.hero_alt=alt;
       await fbSet('landing_content/settings', settings);
+      document.getElementById('hero-baslik').textContent=baslik;
+      document.getElementById('hero-vurgu').textContent=vurgu;
       document.getElementById('hero-eyebrow').textContent=eyebrow;
       document.getElementById('hero-alt').textContent=alt;
     }
   });
 }
 
+const SECTION_TITLES_DEFS=[
+  {key:'sporcular', label:'Sporcular Bölümü', tagPh:'01 — Takım', titlePh:'Sporcular'},
+  {key:'yarislar',  label:'Yarışlar Bölümü', tagPh:'02 — Takvim', titlePh:'Yarışlar', hasSezon:true},
+  {key:'haberler',  label:'Haberler Bölümü', tagPh:'03 — Güncel', titlePh:'Haberler & Duyurular'},
+  {key:'antrenor',  label:'Antrenör Bölümü', tagPh:'04 — Ekip', titlePh:'Antrenör & İletişim'}
+];
+function editSectionTitle(key){
+  const def=SECTION_TITLES_DEFS.find(d=>d.key===key);
+  const tagEl=document.getElementById('section-tag-'+key);
+  const titleEl=document.getElementById('section-title-'+key);
+  const sezonEl=def.hasSezon?document.getElementById('section-sezon-'+key):null;
+  const navEl=document.getElementById('nav-link-'+key);
+  openEditor({
+    title:def.label,
+    bodyHTML:`
+      <div class="ef-cols2">
+        <div class="ef-row"><label>Üst Etiket</label><input type="text" id="ef-section-tag" value="${(tagEl.textContent||'').replace(/"/g,'&quot;')}"></div>
+        <div class="ef-row"><label>Başlık</label><input type="text" id="ef-section-title" value="${(titleEl.textContent||'').replace(/"/g,'&quot;')}"></div>
+      </div>
+      ${def.hasSezon?`<div class="ef-row"><label>Sezon Etiketi</label><input type="text" id="ef-section-sezon" value="${(sezonEl.textContent||'').replace(/"/g,'&quot;')}"></div>`:''}
+    `,
+    onSave: async ()=>{
+      const tag=document.getElementById('ef-section-tag').value.trim();
+      const title=document.getElementById('ef-section-title').value.trim();
+      const sezon=def.hasSezon?document.getElementById('ef-section-sezon').value.trim():null;
+      await fbSet('landing_content/settings/section_'+key+'_tag', tag);
+      await fbSet('landing_content/settings/section_'+key+'_title', title);
+      if(def.hasSezon) await fbSet('landing_content/settings/section_'+key+'_sezon', sezon);
+      tagEl.textContent=tag; titleEl.textContent=title;
+      if(navEl) navEl.textContent=title;
+      if(sezonEl) sezonEl.textContent=sezon;
+    }
+  });
+}
+
 // ── SPORCULAR ──────────────────────────────────────────
 function findAthleteById(id){ return athletes.find(a=>(a.id||a.ad)===id); }
+// Genel sitede ziyaretçiye (edit modu dışında) her zaman TÜM sporcular değil,
+// rastgele seçilmiş 4 sporcu kartı gösterilir; 5 saniyede bir kart çevirme
+// efektiyle farklı 4 sporcuya geçilir. Yönetim (edit modu) her zaman TÜM
+// sporcuları gösterir — rastgele seçim sadece kozmetik, veri kaybı yok
+// (2026.09.23 — Göksel talebi).
+let athleteRotationTimer=null;
+function buildAthleteCardHTML(entry){
+  const {a,ld,hidden,id}=entry;
+  const initials=((a.ad||'?')[0]+((a.soyad||'')[0]||'')).toUpperCase();
+  const avatarContent=a.foto
+    ?`<img src="${a.foto}" style="width:100%;height:100%;object-fit:cover;border-radius:50%">`
+    :initials;
+
+  const prPairs=[
+    a.pb_m   &&{val:a.pb_m,   lbl:'MAR'},
+    a.pb_hm  &&{val:a.pb_hm,  lbl:'YM'},
+    a.pb_10k &&{val:a.pb_10k, lbl:'10K'},
+    a.pb_5k  &&{val:a.pb_5k,  lbl:'5K'},
+  ].filter(Boolean).slice(0,2);
+  const prBlock=prPairs.length?`<div class="athlete-pr">${prPairs.map(p=>`
+    <div class="pr-item"><div class="pr-val">${p.val}</div><div class="pr-dist">${p.lbl}</div></div>`).join('')}</div>`:'';
+
+  const stravaBlock=a.strava?`<div class="athlete-strava"><a href="${a.strava}" target="_blank" rel="noopener">Strava ↗</a></div>`:'';
+
+  const athRaceIds=a.yarıslar||[];
+  const upcomingRaces=races.filter(r=>athRaceIds.includes(r.id)&&new Date(r.tarih+'T12:00:00')>todayDate).sort((x,y)=>new Date(x.tarih)-new Date(y.tarih));
+  const nextRace=upcomingRaces[0];
+  const daysLeft=nextRace?Math.ceil((new Date(nextRace.tarih+'T12:00:00')-todayDate)/864e5):null;
+  const raceBlock=nextRace?`<div class="athlete-next-race">🏁 <strong>${nextRace.ad}</strong> · ${daysLeft} gün</div>`:'';
+
+  return `
+    <div class="athlete-card edit-target" style="${hidden?'opacity:.4':''}">
+      <button class="edit-pencil" onclick="editAthlete('${id}')">✏️</button>
+      ${hidden?'<span style="position:absolute;top:.7rem;left:.7rem;font-size:.6rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);background:var(--bg3);border:1px solid var(--line);padding:.2rem .5rem;border-radius:99px;z-index:4">Gizli</span>':''}
+      <div class="athlete-avatar">${avatarContent}</div>
+      <div class="athlete-name">${a.ad||''} ${a.soyad||''}</div>
+      ${ld.specialty?`<div class="athlete-specialty">${ld.specialty}</div>`:''}
+      ${ld.biyografi?`<div class="athlete-bio">${ld.biyografi}</div>`:''}
+      ${prBlock}${stravaBlock}${raceBlock}
+      <div class="athlete-accent"></div>
+    </div>`;
+}
+function pickRandomAthletes(pool,n,exclude){
+  let candidates=pool;
+  if(exclude&&pool.length>n){
+    const excludeIds=new Set(exclude.map(x=>x.id));
+    const filtered=pool.filter(x=>!excludeIds.has(x.id));
+    if(filtered.length>=n) candidates=filtered;
+  }
+  return [...candidates].sort(()=>Math.random()-0.5).slice(0,n);
+}
 function renderAthletes(){
   const grid=document.getElementById('athletes-grid');
-  grid.innerHTML='';
-  let shown=0;
+  if(athleteRotationTimer){ clearInterval(athleteRotationTimer); athleteRotationTimer=null; }
+
+  const pool=[];
   athletes.forEach(a=>{
     const id=a.id||a.ad;
     const ld=spLanding[id]||{};
     const hidden=ld.goster===false;
     if(hidden && !isEditMode) return;
-    shown++;
-    const initials=((a.ad||'?')[0]+((a.soyad||'')[0]||'')).toUpperCase();
-    const avatarContent=a.foto
-      ?`<img src="${a.foto}" style="width:100%;height:100%;object-fit:cover;border-radius:50%">`
-      :initials;
-
-    const prPairs=[
-      a.pb_m   &&{val:a.pb_m,   lbl:'MAR'},
-      a.pb_hm  &&{val:a.pb_hm,  lbl:'YM'},
-      a.pb_10k &&{val:a.pb_10k, lbl:'10K'},
-      a.pb_5k  &&{val:a.pb_5k,  lbl:'5K'},
-    ].filter(Boolean).slice(0,2);
-    const prBlock=prPairs.length?`<div class="athlete-pr">${prPairs.map(p=>`
-      <div class="pr-item"><div class="pr-val">${p.val}</div><div class="pr-dist">${p.lbl}</div></div>`).join('')}</div>`:'';
-
-    const stravaBlock=a.strava?`<div class="athlete-strava"><a href="${a.strava}" target="_blank" rel="noopener">Strava ↗</a></div>`:'';
-
-    const athRaceIds=a.yarıslar||[];
-    const upcomingRaces=races.filter(r=>athRaceIds.includes(r.id)&&new Date(r.tarih+'T12:00:00')>todayDate).sort((x,y)=>new Date(x.tarih)-new Date(y.tarih));
-    const nextRace=upcomingRaces[0];
-    const daysLeft=nextRace?Math.ceil((new Date(nextRace.tarih+'T12:00:00')-todayDate)/864e5):null;
-    const raceBlock=nextRace?`<div class="athlete-next-race">🏁 <strong>${nextRace.ad}</strong> · ${daysLeft} gün</div>`:'';
-
-    grid.innerHTML+=`
-      <div class="athlete-card edit-target" style="${hidden?'opacity:.4':''}">
-        <button class="edit-pencil" onclick="editAthlete('${id}')">✏️</button>
-        ${hidden?'<span style="position:absolute;top:.7rem;left:.7rem;font-size:.6rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);background:var(--bg3);border:1px solid var(--line);padding:.2rem .5rem;border-radius:99px;z-index:4">Gizli</span>':''}
-        <div class="athlete-avatar">${avatarContent}</div>
-        <div class="athlete-name">${a.ad||''} ${a.soyad||''}</div>
-        ${ld.specialty?`<div class="athlete-specialty">${ld.specialty}</div>`:''}
-        ${ld.biyografi?`<div class="athlete-bio">${ld.biyografi}</div>`:''}
-        ${prBlock}${stravaBlock}${raceBlock}
-        <div class="athlete-accent"></div>
-      </div>`;
+    pool.push({id,a,ld,hidden});
   });
-  if(!shown) grid.innerHTML='<div style="padding:2rem;color:#6b7280;font-size:.85rem">Henüz sporcu eklenmedi.</div>';
+
+  if(!pool.length){ grid.innerHTML='<div style="padding:2rem;color:#6b7280;font-size:.85rem">Henüz sporcu eklenmedi.</div>'; return; }
+
+  // Edit modunda (yönetim) rotasyon yok — tüm sporcular her zaman görünür
+  if(isEditMode || pool.length<=4){
+    grid.innerHTML=pool.map(entry=>`<div class="athlete-card-slot">${buildAthleteCardHTML(entry)}</div>`).join('');
+    return;
+  }
+
+  let current=pickRandomAthletes(pool,4);
+  grid.innerHTML=current.map(entry=>`<div class="athlete-card-slot"><div class="athlete-card-flip">${buildAthleteCardHTML(entry)}</div></div>`).join('');
+
+  athleteRotationTimer=setInterval(()=>{
+    const slots=grid.querySelectorAll('.athlete-card-flip');
+    const next=pickRandomAthletes(pool,4,current);
+    slots.forEach((slot,i)=>{
+      slot.classList.add('flip-out');
+      setTimeout(()=>{
+        slot.innerHTML=buildAthleteCardHTML(next[i]);
+        slot.classList.remove('flip-out');
+        slot.classList.add('flip-in');
+        setTimeout(()=>slot.classList.remove('flip-in'),320);
+      },300);
+    });
+    current=next;
+  },5000);
 }
 function editAthlete(id){
   const a=findAthleteById(id); if(!a) return;
