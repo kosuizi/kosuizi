@@ -291,10 +291,14 @@ hr{border:none;border-top:1px solid var(--border);margin:.8rem 0}
           <div class="card-title">Hero Bölümü</div>
           <button class="btn btn-sm btn-icon" title="Düzenle" onclick="editGenel()">✏️</button>
         </div>
-        <div class="form-row">
+        <div class="form-row cols2">
           <div class="fg">
-            <label>Alt Açıklama</label>
-            <div class="ro-text" id="ro_hero_alt">—</div>
+            <label>Ana Başlık (1. satır)</label>
+            <div class="ro-text" id="ro_hero_baslik">—</div>
+          </div>
+          <div class="fg">
+            <label>Ana Başlık (2. satır, vurgulu)</label>
+            <div class="ro-text" id="ro_hero_vurgu">—</div>
           </div>
         </div>
         <div class="form-row">
@@ -303,6 +307,18 @@ hr{border:none;border-top:1px solid var(--border);margin:.8rem 0}
             <div class="ro-text" id="ro_hero_eyebrow">—</div>
           </div>
         </div>
+        <div class="form-row">
+          <div class="fg">
+            <label>Alt Açıklama</label>
+            <div class="ro-text" id="ro_hero_alt">—</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><div class="card-title">Bölüm Başlıkları</div></div>
+        <span style="font-size:.72rem;color:var(--muted2)">Genel sitenin üst menüsünü (Sporcular · Yarışlar · Haberler · Antrenör) ve bölüm başlıklarını buradan değiştirebilirsiniz</span>
+        <div id="section-titles-list"></div>
       </div>
 
       <div class="card">
@@ -599,7 +615,7 @@ async function saveContentPassword(){
 
 // ── LOAD ALL ─────────────────────────────────────────
 async function loadAllData(){
-  await Promise.all([loadGenel(), loadAthletes(), loadYarislar(), loadHaberler(), loadAntrenor()]);
+  await Promise.all([loadGenel(), loadSectionTitles(), loadAthletes(), loadYarislar(), loadHaberler(), loadAntrenor()]);
 }
 
 // ── PUBLISH TOGGLE ───────────────────────────────────
@@ -636,12 +652,17 @@ function roText(id,val,placeholder){
   el.classList.toggle('empty',!has);
 }
 function renderGenelText(){
+  roText('ro_hero_baslik', genelData.hero_baslik, 'Henüz girilmedi');
+  roText('ro_hero_vurgu', genelData.hero_vurgu, 'Henüz girilmedi');
   roText('ro_hero_alt', genelData.hero_alt, 'Henüz girilmedi');
   roText('ro_hero_eyebrow', genelData.hero_eyebrow, 'Henüz girilmedi');
 }
 async function loadGenel(){
   const s=await fbGet('landing_content/settings')||{};
-  genelData={ hero_alt:s.hero_alt||'', hero_eyebrow:s.hero_eyebrow||'' };
+  genelData={
+    hero_baslik:s.hero_baslik||'', hero_vurgu:s.hero_vurgu||'',
+    hero_alt:s.hero_alt||'', hero_eyebrow:s.hero_eyebrow||''
+  };
   renderGenelText();
   updatePublishUI(!!s.published);
 }
@@ -649,12 +670,70 @@ function editGenel(){
   currentEditType='genel'; currentEditId=null;
   document.getElementById('modal-title-text').textContent='Hero Bölümünü Düzenle';
   document.getElementById('modal-body').innerHTML=`
-    <div class="form-row">
-      <div class="fg"><label>Alt Açıklama</label><input type="text" id="m_hero_alt" value="${(genelData.hero_alt||'').replace(/"/g,'&quot;')}" placeholder="Dayanıklılık koşusu odaklı bir topluluk..."></div>
+    <div class="form-row cols2">
+      <div class="fg"><label>Ana Başlık (1. satır)</label><input type="text" id="m_hero_baslik" value="${(genelData.hero_baslik||'').replace(/"/g,'&quot;')}" placeholder="Her Adım"></div>
+      <div class="fg"><label>Ana Başlık (2. satır, vurgulu)</label><input type="text" id="m_hero_vurgu" value="${(genelData.hero_vurgu||'').replace(/"/g,'&quot;')}" placeholder="İz Bırakır"></div>
     </div>
     <div class="form-row">
       <div class="fg"><label>Kuruluş / Dönem Etiketi</label><input type="text" id="m_hero_eyebrow" value="${(genelData.hero_eyebrow||'').replace(/"/g,'&quot;')}" placeholder="Koşu İzi Takımı — Est. 2020"></div>
     </div>
+    <div class="form-row">
+      <div class="fg"><label>Alt Açıklama</label><input type="text" id="m_hero_alt" value="${(genelData.hero_alt||'').replace(/"/g,'&quot;')}" placeholder="Dayanıklılık koşusu odaklı bir topluluk..."></div>
+    </div>
+  `;
+  document.getElementById('edit-modal').classList.add('open');
+}
+
+// ── BÖLÜM BAŞLIKLARI (genel sitedeki 4 bölümün üst etiketi + başlığı) ──
+const SECTION_TITLES_DEFS=[
+  {key:'sporcular', label:'Sporcular Bölümü', tagPh:'01 — Takım', titlePh:'Sporcular'},
+  {key:'yarislar',  label:'Yarışlar Bölümü', tagPh:'02 — Takvim', titlePh:'Yarışlar', hasSezon:true},
+  {key:'haberler',  label:'Haberler Bölümü', tagPh:'03 — Güncel', titlePh:'Haberler & Duyurular'},
+  {key:'antrenor',  label:'Antrenör Bölümü', tagPh:'04 — Ekip', titlePh:'Antrenör & İletişim'}
+];
+let sectionTitlesData={};
+function renderSectionTitles(){
+  const container=document.getElementById('section-titles-list');
+  container.innerHTML='';
+  SECTION_TITLES_DEFS.forEach(def=>{
+    const d=sectionTitlesData[def.key]||{};
+    const div=document.createElement('div');
+    div.className='list-item';
+    div.innerHTML=`
+      <div class="list-item-body">
+        <div class="list-item-title">${d.title||def.titlePh}</div>
+        <div class="list-item-meta">${d.tag||def.tagPh}${def.hasSezon?' · '+(d.sezon||'2025–26'):''}</div>
+      </div>
+      <div class="list-item-actions">
+        <button class="btn btn-sm btn-icon" title="Düzenle" onclick="editSectionTitle('${def.key}')">✏️</button>
+      </div>
+    `;
+    container.appendChild(div);
+  });
+}
+async function loadSectionTitles(){
+  const s=await fbGet('landing_content/settings')||{};
+  sectionTitlesData={};
+  SECTION_TITLES_DEFS.forEach(def=>{
+    sectionTitlesData[def.key]={
+      tag:s['section_'+def.key+'_tag']||'',
+      title:s['section_'+def.key+'_title']||'',
+      sezon:s['section_'+def.key+'_sezon']||''
+    };
+  });
+  renderSectionTitles();
+}
+function editSectionTitle(key){
+  const def=SECTION_TITLES_DEFS.find(d=>d.key===key);
+  const d=sectionTitlesData[key]||{};
+  currentEditType='section_title'; currentEditId=key;
+  document.getElementById('modal-title-text').textContent=def.label+' Etiketini Düzenle';
+  document.getElementById('modal-body').innerHTML=`
+    <div class="form-row cols2">
+      <div class="fg"><label>Üst Etiket</label><input type="text" id="m_section_tag" value="${(d.tag||'').replace(/"/g,'&quot;')}" placeholder="${def.tagPh}"></div>
+      <div class="fg"><label>Başlık</label><input type="text" id="m_section_title" value="${(d.title||'').replace(/"/g,'&quot;')}" placeholder="${def.titlePh}"></div>
+    </div>
+    ${def.hasSezon?`<div class="form-row"><div class="fg"><label>Sezon Etiketi</label><input type="text" id="m_section_sezon" value="${(d.sezon||'').replace(/"/g,'&quot;')}" placeholder="2025–26"></div></div>`:''}
   `;
   document.getElementById('edit-modal').classList.add('open');
 }
@@ -1131,10 +1210,20 @@ document.getElementById('modal-save-btn').addEventListener('click', async()=>{
     await fbSet('landing_content/haberler/'+currentEditId, h);
     haberler[currentEditId]=h; renderHaberler();
   } else if(currentEditType==='genel'){
-    genelData={ hero_alt:v('m_hero_alt'), hero_eyebrow:v('m_hero_eyebrow') };
+    genelData={ hero_baslik:v('m_hero_baslik'), hero_vurgu:v('m_hero_vurgu'), hero_alt:v('m_hero_alt'), hero_eyebrow:v('m_hero_eyebrow') };
+    await fbSet('landing_content/settings/hero_baslik', genelData.hero_baslik);
+    await fbSet('landing_content/settings/hero_vurgu', genelData.hero_vurgu);
     await fbSet('landing_content/settings/hero_alt', genelData.hero_alt);
     await fbSet('landing_content/settings/hero_eyebrow', genelData.hero_eyebrow);
     renderGenelText();
+  } else if(currentEditType==='section_title'){
+    const def=SECTION_TITLES_DEFS.find(d=>d.key===currentEditId);
+    const d={ tag:v('m_section_tag'), title:v('m_section_title'), sezon:def.hasSezon?v('m_section_sezon'):'' };
+    sectionTitlesData[currentEditId]=d;
+    await fbSet('landing_content/settings/section_'+currentEditId+'_tag', d.tag);
+    await fbSet('landing_content/settings/section_'+currentEditId+'_title', d.title);
+    if(def.hasSezon) await fbSet('landing_content/settings/section_'+currentEditId+'_sezon', d.sezon);
+    renderSectionTitles();
   } else if(currentEditType==='antrenor'){
     antrenorData={ ad:v('m_ant_ad'), unvan:v('m_ant_unvan'), avatar:v('m_ant_avatar'), bio:v('m_ant_bio'), sert:v('m_ant_sert') };
     await fbSet('landing_content/antrenor', antrenorData);
