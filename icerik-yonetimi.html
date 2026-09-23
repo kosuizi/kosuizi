@@ -73,7 +73,7 @@
   body.edit-mode .hero-text-block { padding-top:2.6rem; }
   .hero-title { font-family:'Bebas Neue',sans-serif; font-size:clamp(4rem,12vw,9rem); line-height:.92; letter-spacing:.04em; opacity:0; animation:fadeUp .7s .35s ease forwards; align-self:flex-start; }
   .hero-title span { color:var(--accent); }
-  .hero-sub { margin-top:1.6rem; font-size:1.05rem; color:var(--muted); max-width:460px; font-weight:300; opacity:0; animation:fadeUp .7s .5s ease forwards; }
+  .hero-sub { margin-top:1.6rem; font-size:1.05rem; color:var(--muted); max-width:460px; font-weight:300; opacity:0; animation:fadeUp .7s .5s ease forwards; white-space:pre-wrap; }
   .hero-stats { display:flex; gap:3rem; margin-top:3rem; opacity:0; animation:fadeUp .7s .65s ease forwards; }
   .stat-num { font-family:'Bebas Neue',sans-serif; font-size:2.8rem; line-height:1; }
   .stat-num small { font-size:2rem; color:var(--accent); }
@@ -93,7 +93,7 @@
 
   /* ── SPORCULAR ── */
   .athletes-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:1.5px; background:var(--line); }
-  .athlete-card { background:var(--bg2); padding:2rem 1.6rem; position:relative; overflow:hidden; transition:background .2s; }
+  .athlete-card { background:var(--bg2); padding:2rem 1.6rem; position:relative; overflow:hidden; transition:background .2s; height:100%; }
   .athlete-card:hover { background:var(--bg3); }
   .athlete-card:hover .athlete-accent { width:100%; }
   .athlete-accent { position:absolute; bottom:0; left:0; height:2px; width:0; background:var(--accent); transition:width .35s ease; }
@@ -108,8 +108,8 @@
   .athlete-strava a:hover { text-decoration:underline; }
   .athlete-next-race { margin-top:.6rem; font-size:.72rem; color:var(--muted); display:flex; align-items:center; gap:.3rem; }
   .athlete-next-race strong { color:var(--text); }
-  .athlete-card-slot { perspective:1200px; }
-  .athlete-card-flip { transform-style:preserve-3d; transition:transform .3s ease-in; }
+  .athlete-card-slot { perspective:1200px; height:100%; }
+  .athlete-card-flip { transform-style:preserve-3d; transition:transform .3s ease-in; height:100%; }
   .athlete-card-flip.flip-out { transform:rotateY(90deg); }
   .athlete-card-flip.flip-in { animation:athleteFlipIn .32s ease-out; }
   @keyframes athleteFlipIn { from{transform:rotateY(-90deg)} to{transform:rotateY(0deg)} }
@@ -613,7 +613,7 @@ function editHero(){
         <div class="ef-row"><label>Ana Başlık (2. satır, vurgulu)</label><input type="text" id="ef-vurgu" value="${(document.getElementById('hero-vurgu').textContent||'').replace(/"/g,'&quot;')}"></div>
       </div>
       <div class="ef-row"><label>Kuruluş / Dönem Etiketi</label><input type="text" id="ef-eyebrow" value="${(document.getElementById('hero-eyebrow').textContent||'').replace(/"/g,'&quot;')}"></div>
-      <div class="ef-row"><label>Alt Açıklama</label><input type="text" id="ef-alt" value="${(document.getElementById('hero-alt').textContent||'').replace(/"/g,'&quot;')}"></div>
+      <div class="ef-row"><label>Alt Açıklama (Enter ile alt satır)</label><textarea id="ef-alt" style="min-height:70px">${document.getElementById('hero-alt').textContent||''}</textarea></div>
     `,
     onSave: async ()=>{
       const baslik=document.getElementById('ef-hero-baslik').value.trim();
@@ -674,7 +674,7 @@ function findAthleteById(id){ return athletes.find(a=>(a.id||a.ad)===id); }
 // efektiyle farklı 4 sporcuya geçilir. Yönetim (edit modu) her zaman TÜM
 // sporcuları gösterir — rastgele seçim sadece kozmetik, veri kaybı yok
 // (2026.09.23 — Göksel talebi).
-let athleteRotationTimer=null;
+let athleteRotationTimers=[];
 function buildAthleteCardHTML(entry){
   const {a,ld,hidden,id}=entry;
   const initials=((a.ad||'?')[0]+((a.soyad||'')[0]||'')).toUpperCase();
@@ -720,9 +720,15 @@ function pickRandomAthletes(pool,n,exclude){
   }
   return [...candidates].sort(()=>Math.random()-0.5).slice(0,n);
 }
+function pickOneAthlete(pool,excludeIds){
+  const filtered=pool.filter(x=>!excludeIds.includes(x.id));
+  const candidates=filtered.length?filtered:pool;
+  return candidates[Math.floor(Math.random()*candidates.length)];
+}
 function renderAthletes(){
   const grid=document.getElementById('athletes-grid');
-  if(athleteRotationTimer){ clearInterval(athleteRotationTimer); athleteRotationTimer=null; }
+  athleteRotationTimers.forEach(id=>clearTimeout(id));
+  athleteRotationTimers=[];
 
   const pool=[];
   athletes.forEach(a=>{
@@ -741,23 +747,31 @@ function renderAthletes(){
     return;
   }
 
-  let current=pickRandomAthletes(pool,4);
-  grid.innerHTML=current.map(entry=>`<div class="athlete-card-slot"><div class="athlete-card-flip">${buildAthleteCardHTML(entry)}</div></div>`).join('');
+  // Her kart 3/4/5/6 sn arasında rastgele, birbirinden BAĞIMSIZ bir süreyle
+  // döner (senkron değil) — her dönüşte yeni rastgele süre seçilir
+  // (2026.09.23 — Göksel talebi).
+  const ROTATE_DURATIONS=[3000,4000,5000,6000];
+  let currentDisplayed=pickRandomAthletes(pool,4);
+  grid.innerHTML=currentDisplayed.map(entry=>`<div class="athlete-card-slot"><div class="athlete-card-flip">${buildAthleteCardHTML(entry)}</div></div>`).join('');
 
-  athleteRotationTimer=setInterval(()=>{
-    const slots=grid.querySelectorAll('.athlete-card-flip');
-    const next=pickRandomAthletes(pool,4,current);
-    slots.forEach((slot,i)=>{
+  const scheduleFlip=(slotIndex)=>{
+    const delay=ROTATE_DURATIONS[Math.floor(Math.random()*ROTATE_DURATIONS.length)];
+    athleteRotationTimers[slotIndex]=setTimeout(()=>{
+      const slot=grid.querySelectorAll('.athlete-card-flip')[slotIndex];
+      if(!slot) return;
+      const next=pickOneAthlete(pool, currentDisplayed.map(x=>x.id));
       slot.classList.add('flip-out');
       setTimeout(()=>{
-        slot.innerHTML=buildAthleteCardHTML(next[i]);
+        slot.innerHTML=buildAthleteCardHTML(next);
         slot.classList.remove('flip-out');
         slot.classList.add('flip-in');
         setTimeout(()=>slot.classList.remove('flip-in'),320);
+        currentDisplayed[slotIndex]=next;
       },300);
-    });
-    current=next;
-  },5000);
+      scheduleFlip(slotIndex);
+    },delay);
+  };
+  currentDisplayed.forEach((_,i)=>scheduleFlip(i));
 }
 function editAthlete(id){
   const a=findAthleteById(id); if(!a) return;
