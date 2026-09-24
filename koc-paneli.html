@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.24-1249 --><!DOCTYPE html>
+<!-- Version: v2026.09.24-1330 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.24-1249';
+const APP_VERSION='v2026.09.24-1330';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -29079,7 +29079,7 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,o
                       ),
                       testDef&&testDef.girdi.map(g=>React.createElement('div',{key:g.k,className:'form-group'},
                         React.createElement('label',null,g.l),
-                        React.createElement('input',{type:g.type||'text',value:editForm[g.k]||'',placeholder:g.ph||'',min:g.min,max:g.max,onChange:e=>setEF(g.k,e.target.value)})
+                        React.createElement('input',{type:g.type||'text',value:editForm[g.k]||'',placeholder:'kayıtlı değil',min:g.min,max:g.max,onChange:e=>setEF(g.k,e.target.value)})
                       ))
                     ),
                     testDef&&(()=>{const prev=testDef.hesapla(editForm);return prev&&React.createElement('div',{style:{fontSize:13,fontWeight:600,padding:'8px 12px',marginBottom:8,background:'var(--success-bg)',borderRadius:'var(--radius)',color:'var(--success)'}},'📊 '+prev.label);})(),
@@ -32367,8 +32367,56 @@ async function gpxPersistToRecete({athleteId,dateStr,weekKey,baseRows,measureZon
   return {__zoneDist:__zd,__gapData:__gd};
 }
 
+// ── MAF testi otomatik doldurma (24.09.2026, Göksel talebi) ──────────────────
+// KÖK NEDEN: GPX Analiz "Reçeteye Ekle" sadece normal antrenman kaydı (mesafe/süre/
+// nabız) yazıyordu; Test Geçmişi'nin okuduğu _isTest/_testTur/_testSonuc alanları
+// hiç üretilmiyordu. Sonuç: tur='test_maf' olan kayıt Test Geçmişi'nde boş (sadece
+// "GPX/TCX analiziyle eklendi" notu) görünüyor, MAF nabzı ve 1./3./5. km pace'leri
+// elle girilmek zorunda kalıyordu. Burada aynı TEST_TURLERI.maf.hesapla kullanılır —
+// Test Gir / Düzenle ile BİREBİR aynı sonuç şekli (km1/km3/km5 sn, ort. pace, fark).
+// Bu bir GPX-Analiz (koç paneli, Ekle sekmesi) özelliğidir; Koşu İzlerim
+// (SporcuPlanView) test sonucu/Test Geçmişi göstermez — panel paritesi gerekmez.
+function gpxIsMafTestDay(planInfo,formBase,testPlanlar,athleteId,dateStr){
+  const ex=planInfo?.existingKosuActual||null;
+  if(ex&&(ex._testTur==='maf'||ex.tur==='test_maf')) return true;
+  if(formBase&&formBase.tur==='test_maf') return true;
+  if(planInfo?.displayTip==='test_maf'||planInfo?.dayLike?.tip==='test_maf') return true;
+  if((testPlanlar||[]).some(p=>p.athId===athleteId&&p.testTur==='maf'&&p.date===dateStr)) return true;
+  return false;
+}
+// Test bloğu = fazlar arasında (tekrar bacağı OLMAYAN) en uzun mesafeli 'run' satırı
+// (Isınma/Soğuma 'edge' olduğundan otomatik dışarıda kalır). 1./3./5. km, BLOĞUN
+// başlangıcından ölçülür (dosyanın başından değil). Blok, km sınırına 50 m'den fazla
+// yaklaşmıyorsa o km hesaplanmaz (boş kalır — uydurulmaz).
+function gpxMafTestFromPhases(athlete,points,phaseRows){
+  if(!points||!phaseRows) return null;
+  const runs=phaseRows.filter(r=>r.kind==='run'&&!r.legKind&&r.distKm>0);
+  if(!runs.length) return null;
+  const row=runs.reduce((a,b)=>b.distKm>a.distKm?b:a);
+  const d0=gpxDistAtTime(points,row.t0),d1=gpxDistAtTime(points,row.t1);
+  const blockM=d1-d0;
+  const paceAt=(k)=>{
+    if(blockM<k*1000-50) return null;
+    const a=d0+(k-1)*1000,b=Math.min(d0+k*1000,d1);
+    const ta=gpxTimeAtDist(points,a),tb=gpxTimeAtDist(points,b);
+    const dKm=(b-a)/1000;
+    return (tb>ta&&dKm>0)?(tb-ta)/dKm:null;
+  };
+  const p1=paceAt(1),p3=paceAt(3),p5=paceAt(5);
+  if(!p1) return null;
+  // MAF nabzı: mafNabizDetay ile AYNI kural (sabit referans 180−yaş, düzeltmesiz).
+  // Doğum tarihi yoksa test bloğunun GPX ort. nabzına düşülür.
+  const yas=athlete?.dogum?new Date().getFullYear()-new Date(athlete.dogum).getFullYear():null;
+  let mafHr=yas!=null?180-yas:null,hrKaynak='180−yaş';
+  if(mafHr==null&&row.hr?.avg!=null){mafHr=Math.round(row.hr.avg);hrKaynak='test bloğu ort. nabzı';}
+  const form={maf_nabiz:mafHr!=null?String(mafHr):'',km1_pace:secToPace(p1),km3_pace:p3?secToPace(p3):'',km5_pace:p5?secToPace(p5):''};
+  const sonuc=TEST_TURLERI.maf.hesapla(form);
+  if(!sonuc) return null;
+  return {form,sonuc,blockKm:blockM/1000,hrKaynak};
+}
+
 // ── GPX Analiz modalı — Ekle sekmesinden açılır ────────────────────────────────
-function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistory, races, testPlanlar, onUpdateWorkout, onSaveWorkout, onAutoFillFromGpx, onClose}){
+function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistory, races, testPlanlar, onUpdateWorkout, onSaveWorkout, onAutoFillFromGpx, onUpdateAthlete, onClose}){
   const [date,setDate]=useState(initialDate||localDateStr(new Date()));
   const [loadingPlan,setLoadingPlan]=useState(true);
   const [planInfo,setPlanInfo]=useState(null);
@@ -32390,6 +32438,7 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
   const [applying,setApplying]=useState(false);
   const [applyMsg,setApplyMsg]=useState(null);
   const [updateAggregate,setUpdateAggregate]=useState(false);
+  const [mafOverride,setMafOverride]=useState(null); // null=plandan otomatik, true/false=koç seçimi
   const chartRef=useRef(null);
   const fileInputRef=useRef(null);
 
@@ -32399,6 +32448,7 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
     setPhaseResult(null);
     setDriftResult([]);
     setApplyMsg(null);
+    setMafOverride(null);
     gpxResolveDayPlan(athlete,date,allHistory,races,workouts,testPlanlar).then(info=>{
       if(cancelled) return;
       setPlanInfo(info);
@@ -32520,6 +32570,10 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
   })();
 
   const canApply=!!(phaseResult&&planInfo?.baseRows?.length&&blocks.length&&!noRecete);
+  // MAF testi (24.09.2026): plandan/kayıttan algılanır, koç kutuyla değiştirebilir.
+  const mafAuto=gpxIsMafTestDay(planInfo,formSnapshot,testPlanlar,athlete?.id,date);
+  const saveAsMaf=mafOverride!=null?mafOverride:mafAuto;
+  const mafTest=(phaseResult&&points)?gpxMafTestFromPhases(athlete,points,phaseResult.rows):null;
 
   const handleApply=async()=>{
     if(!canApply||applying) return;
@@ -32535,6 +32589,8 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
       }
       const isNewWorkout=!planInfo.existingKosuActual;
       const workoutId=planInfo.existingKosuActual?.id||uid();
+      const mafSave=(saveAsMaf&&mafTest)?mafTest:null;
+      const _withTestNote=(n)=>[String(n||'').replace(/\s*·?\s*Test sonucu:.*$/,'').trim(),'Test sonucu: '+mafSave.sonuc.label].filter(Boolean).join(' · ');
       const measureZones=calcZones(athleteAtDate(athlete,date));
       const totalSec=Math.round(phaseResult.totalEndT||0);
       const hms=secToHMS(totalSec);
@@ -32586,7 +32642,8 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
           ort_nabiz:ortNabiz?String(ortNabiz):(base.ort_nabiz||''),
           maks_nabiz:maksNabiz?String(maksNabiz):(base.maks_nabiz||''),
           ...driftPatch,
-          notlar:mergedNotlar,savedAt:new Date().toISOString()
+          ...(mafSave?{_isTest:true,_testTur:'maf',_testSonuc:mafSave.sonuc}:{}),
+          notlar:mafSave?_withTestNote(mergedNotlar):mergedNotlar,savedAt:new Date().toISOString()
         });
         // KÖK NEDEN NOTU: yeni antrenman kaydı onSaveWorkout (App seviyesi) üzerinden
         // persistFreshFormSnap'i TETİKLER — bu fonksiyon plan_snapshots/{ath}/{weekKey}
@@ -32616,6 +32673,11 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
         // yazılıp yazılmayacağını yönetir; drift bu özellikten önce hiç yoktu,
         // üzerine yazılacak eski bir coach kararı yok (Göksel talebi, 2026.09.12).
         Object.assign(patch,driftPatch);
+        // MAF testi → Test Geçmişi (24.09.2026): updateAggregate işaretinden BAĞIMSIZ.
+        if(mafSave){
+          patch._isTest=true;patch._testTur='maf';patch._testSonuc=mafSave.sonuc;
+          if(!isNewWorkout) patch.notlar=_withTestNote(planInfo.existingKosuActual?.notlar);
+        }
         if(updateAggregate&&!isNewWorkout){
           patch.mesafe=totalDistKm?totalDistKm.toFixed(2):planInfo.existingKosuActual.mesafe;
           patch.sure_sa=String(hms.h);patch.sure_dk=String(hms.m);patch.sure_sn=String(hms.s);
@@ -32625,9 +32687,16 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
         if(Object.keys(patch).length) onUpdateWorkout(workoutId,patch);
       }
 
-      setApplyMsg({type:'ok',text:isNewWorkout
+      // Test Gir / "Test olarak işaretle" ile aynı: sporcu profilindeki MAF pace güncellenir —
+      // ama daha yeni tarihli bir MAF testi zaten varsa (geçmişe dönük ekleme) EZİLMEZ.
+      if(mafSave&&onUpdateAthlete&&mafSave.sonuc.maf_pace){
+        const _newerMaf=(workouts||[]).some(w=>w.athleteId===athlete.id&&w.id!==workoutId&&(w._testTur==='maf'||w.tur==='test_maf')&&w._testSonuc&&w.date>date);
+        if(!_newerMaf) onUpdateAthlete({...athlete,maf_pace:mafSave.sonuc.maf_pace});
+      }
+      const _mafMsg=mafSave?(' 🧪 MAF testi Test Geçmişi\'ne işlendi: '+mafSave.sonuc.label+'.'):(saveAsMaf?' ⚠ MAF test sonucu üretilemedi (test bloğu bulunamadı).':'');
+      setApplyMsg({type:'ok',text:(isNewWorkout
         ?'Antrenman kaydı oluşturuldu ve reçeteye eklendi. Rozetler ve skor için Koşu İzlerim / Plan sekmesine bakabilirsin.'
-        :'Reçeteye eklendi. Rozetler ve skor için Plan sekmesine bakabilirsin.'});
+        :'Reçeteye eklendi. Rozetler ve skor için Plan sekmesine bakabilirsin.')+_mafMsg});
 
       // EK GÜVENLİK (arka planda, bekletmeden): yeni antrenman kaydı durumunda
       // persistFreshFormSnap'in gecikmeli tamamlanma ihtimaline karşı aynı
@@ -32783,6 +32852,19 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
         ),
         React.createElement('canvas',{ref:chartRef,style:{width:'100%',height:180,display:'block',marginTop:10}}),
 
+        // MAF testi → Test Geçmişi (24.09.2026): plandan algılanır; kutuyla açılıp kapanır.
+        React.createElement('div',{style:{marginTop:14,padding:'10px 12px',border:'1px solid '+(saveAsMaf?'var(--info)':'var(--border)'),borderRadius:'var(--radius)',background:saveAsMaf?'var(--info-bg)':'transparent',fontSize:12}},
+          React.createElement('label',{style:{display:'flex',alignItems:'center',gap:6,cursor:'pointer',fontWeight:600}},
+            React.createElement('input',{type:'checkbox',checked:saveAsMaf,onChange:e=>setMafOverride(e.target.checked)}),
+            '🧪 MAF testi olarak Test Geçmişi\'ne de işle'+((mafAuto&&mafOverride==null)?' (plandan algılandı)':'')
+          ),
+          saveAsMaf&&mafTest&&React.createElement('div',{style:{marginTop:6,lineHeight:1.5}},
+            React.createElement('div',null,'1. km ',React.createElement('b',null,mafTest.form.km1_pace),' · 3. km ',React.createElement('b',null,mafTest.form.km3_pace||'—'),' · 5. km ',React.createElement('b',null,mafTest.form.km5_pace||'—'),' · MAF nabzı ',React.createElement('b',null,mafTest.form.maf_nabiz?mafTest.form.maf_nabiz+' bpm':'—'),React.createElement('span',{style:{color:'var(--text-tertiary)'}},' ('+mafTest.hrKaynak+')')),
+            (!mafTest.form.km3_pace||!mafTest.form.km5_pace)&&React.createElement('div',{style:{color:'var(--warn)',marginTop:4}},'⚠ Test bloğu '+mafTest.blockKm.toFixed(2)+' km — '+(!mafTest.form.km3_pace?'3. ':'')+((!mafTest.form.km3_pace&&!mafTest.form.km5_pace)?'ve ':'')+(!mafTest.form.km5_pace?'5. ':'')+'km hesaplanamadı. Bloğu mesafe (m) olarak 5000 girip yeniden analiz edebilirsin.')
+          ),
+          saveAsMaf&&!mafTest&&React.createElement('div',{style:{marginTop:6,color:'var(--warn)'}},'⚠ Test bloğu bulunamadı (reçetede tek parça bir ana koşu bloğu gerekir) — Test Geçmişi doldurulamaz.')
+        ),
+
         React.createElement('div',{style:{marginTop:16,paddingTop:14,borderTop:'1px solid var(--border)'}},
           !canApply&&React.createElement('div',{style:{fontSize:12,color:'var(--warn)',marginBottom:8}},'Bu gün için reçete satırları eşleştirilemedi — reçeteye otomatik ekleme yapılamaz.'),
           canApply&&planInfo?.existingKosuActual&&React.createElement('label',{style:{display:'flex',alignItems:'center',gap:6,fontSize:12,marginBottom:10,cursor:'pointer'}},
@@ -32799,7 +32881,7 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
 }
 
 
-function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,workouts,races,testPlanlar,onUpdateWorkout,seed}){
+function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,workouts,races,testPlanlar,onUpdateWorkout,onUpdateAthlete,seed}){
   // Bugün/Yarın kartından gelen otomatik doldurma verisi (seed) varsa, ilk
   // render'da EMPTY_W üzerine uygulanır (bkz. buildEkleSeedFromDayPlan). Bu
   // bileşen tab değişince tamamen unmount/mount olduğundan (App'te sadece
@@ -32938,7 +33020,7 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,wor
 
       showGpxModal&&selId&&React.createElement(GpxAnalizModal,{
         athlete:selectedAth,initialDate:form.date,formSnapshot:form,workouts,allHistory,races,testPlanlar,
-        onUpdateWorkout,onSaveWorkout:onSave,
+        onUpdateWorkout,onUpdateAthlete,onSaveWorkout:onSave,
         // Göksel talebi (2026.09.04) — GPX/TCX dosyası yüklenir yüklenmez, dosyadan
         // gerçekten okunabilen alanlar bu formun state'ine yazılır (bkz. gpxAutoFillPatch).
         onAutoFillFromGpx:patch=>setForm(f=>({...f,...patch})),
@@ -35523,7 +35605,7 @@ function App(){
           persistFreshFormSnap(ath,athWksNew,races,baseSnapForForm)
             .then(merged=>{if(merged&&selId===ath.id)setPlanSnapApp(merged);});
         }
-      },athlete,athletes,selId,onSelChange:setSelId,allHistory,workouts,races,testPlanlar,onUpdateWorkout:handleUpdateWorkout,seed:ekleSeed}),
+      },athlete,athletes,selId,onSelChange:setSelId,allHistory,workouts,races,testPlanlar,onUpdateWorkout:handleUpdateWorkout,onUpdateAthlete:handleUpdateAthlete,seed:ekleSeed}),
       tab==='antrenmanlar'&&React.createElement(AntrenmanlarTab,{athlete,workouts}),
       tab==='gecmis'&&React.createElement(ErrorBoundary,null,React.createElement(Gecmis,{workouts,athletes,races,onDelete:id=>setWorkouts(p=>p.filter(x=>x.id!==id)),onBulkDelete:ids=>setWorkouts(p=>p.filter(x=>!ids.includes(x.id))),onUpdate:handleUpdateWorkout})),
       tab==='analiz'&&React.createElement(AntrenmanAnalizTab,{workouts,athletes,races,raceResults,ctlCalibration,onUpdateCtlAnchors:handleUpdateCtlAnchors}),
