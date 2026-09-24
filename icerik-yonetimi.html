@@ -102,28 +102,12 @@
   @media (max-width:1100px) { .hero-photos { opacity:.6; } }
   @media (max-width:768px) { .hero-photos { left:0; right:0; width:auto; top:9%; bottom:auto; height:52%; opacity:.4; } }
 
-  /* ── ÇİZGİ + QRS: çizgi fotoğraf alanının ortasına varınca QRS sıçramasıyla biter ── */
-  .hero { --line-end:74%; }
-  @media (max-width:768px) { .hero { --line-end:50%; } }
-  .hero-line .qrs { display:none; position:absolute; right:-96px; top:50%; margin-top:-50px; width:160px; height:100px; overflow:visible; }
-  .hero-line .qrs path { fill:none; stroke:var(--accent); stroke-width:1.6; stroke-linejoin:round; stroke-dasharray:100; stroke-dashoffset:100; opacity:0; filter:drop-shadow(0 0 4px var(--accent)); }
-  .hero.line-beat .hero-line { background:linear-gradient(90deg,transparent,var(--accent)); animation:lineBeat 5s ease-in-out infinite; }
-  .hero.line-beat .hero-line .qrs { display:block; }
-  .hero.line-beat .hero-line .qrs path { animation:qrsDraw 5s linear infinite; }
-  @keyframes lineBeat {
-    0%   { left:-60%; opacity:0 }
-    10%  { opacity:.6 }
-    62%  { left:calc(var(--line-end) - 60%); opacity:.9 }
-    90%  { left:calc(var(--line-end) - 60%); opacity:.9 }
-    100% { left:calc(var(--line-end) - 60%); opacity:0 }
-  }
-  /* %62→%78 arası QRS çizilir; R tepesi ≈ %67.8 (JS'teki HERO_BEAT ile aynı) */
-  @keyframes qrsDraw {
-    0%, 61.9% { stroke-dashoffset:100; opacity:0 }
-    62%  { stroke-dashoffset:100; opacity:1 }
-    78%  { stroke-dashoffset:0; opacity:1 }
-    100% { stroke-dashoffset:0; opacity:1 }
-  }
+  /* ── YOL → QRS: çizgi sol alttan yol gibi kıvrılıp fotoğraf alanının başında QRS ile biter ── */
+  .hero-road { display:none; position:absolute; inset:0; width:100%; height:100%; overflow:visible; pointer-events:none; }
+  .hero.line-beat .hero-road { display:block; }
+  .hero.line-beat .hero-line { display:none; }
+  .hero-road path { fill:none; stroke:var(--accent); stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; opacity:0; filter:drop-shadow(0 0 4px rgba(249,115,22,.65)); }
+  @media (max-width:768px) { .hero-road path { stroke-width:1.6; } }
 
   /* ── SECTIONS ── */
   section { padding:6rem 2.5rem; max-width:1200px; margin:0 auto; }
@@ -446,7 +430,8 @@
   <div class="hero edit-target">
     <div class="hero-bg"></div>
     <div class="hero-photos" id="hero-photos" aria-hidden="true"></div>
-    <div class="hero-line"><svg class="qrs" viewBox="0 0 160 100" aria-hidden="true"><path pathLength="100" d="M0 50H26C30 42 38 42 42 50H50L56 56L64 6L72 84L78 50H92C100 38 112 38 118 50H160"/></svg></div>
+    <div class="hero-line"></div>
+    <svg class="hero-road" id="hero-road" aria-hidden="true"><path id="hero-road-path" d=""/></svg>
     <div class="hero-track"></div>
     <div class="hero-text-block">
       <button class="edit-pencil" onclick="editHero()">✏️</button>
@@ -537,7 +522,7 @@
   <footer>
     <div class="footer-logo">Koşu<span>İZİ</span></div>
     <div class="footer-copy">© 2026 KoşuİZİ · kosuizi.com</div>
-    <div class="footer-copy" style="opacity:.5;margin-top:.3rem">v2026.09.24-0811</div>
+    <div class="footer-copy" style="opacity:.5;margin-top:.3rem">v2026.09.24-0914</div>
   </footer>
 </div><!-- /main-site -->
 
@@ -693,6 +678,7 @@ function editHero(){
       document.getElementById('hero-vurgu').textContent=vurgu;
       document.getElementById('hero-eyebrow').textContent=eyebrow;
       document.getElementById('hero-alt').textContent=alt;
+      if(heroFotolar.length) buildHeroRoad(); // alt açıklama değişmiş olabilir
       const yeniFoto=(window.__pendingHeroFotolar||[]).slice();
       const fotoDegisti=yeniFoto.length!==heroFotolar.length || yeniFoto.some((f,i)=>f!==heroFotolar[i]);
       if(fotoDegisti){
@@ -706,9 +692,8 @@ function editHero(){
 
 // ── HERO GİRİŞ GÖRSELLERİ ─────────────────────────────
 // Görseller sağdaki alanda gösterilir; .hero-line çizgisi alanın ortasına varıp
-// QRS sıçramasıyla bittiği anda (R tepesi) bir sonraki görsele geçilir.
+// QRS sıçramasıyla bittiği anda (R tepesi) bir sonraki görsele geçilir (bkz. buildHeroRoad).
 const HERO_FOTO_MAX=8;
-const HERO_BEAT=0.678; // QRS'nin R tepesi (5 sn'lik çizgi döngüsünün %67.8'i)
 let heroFotolar=[], __heroSyncRAF=0, __heroIdx=0;
 async function loadHeroPhotos(){
   try{
@@ -716,6 +701,7 @@ async function loadHeroPhotos(){
     heroFotolar=v?Object.values(v).filter(Boolean):[];
   }catch(e){ heroFotolar=[]; }
   renderHeroPhotos();
+  if(document.fonts&&document.fonts.ready) document.fonts.ready.then(()=>{ if(heroFotolar.length) buildHeroRoad(); });
 }
 function renderHeroPhotos(){
   const box=document.getElementById('hero-photos');
@@ -724,30 +710,76 @@ function renderHeroPhotos(){
   box.innerHTML=heroFotolar.map((f,i)=>`<img src="${f}" alt="" draggable="false"${i===0?' class="active"':''}>`).join('');
   box.classList.toggle('has-photos', heroFotolar.length>0);
   __heroIdx=0;
-  const hero=document.querySelector('.hero');
-  const line=document.querySelector('.hero-line');
-  if(hero) hero.classList.toggle('line-beat', heroFotolar.length>0);
-  if(heroFotolar.length<2 || !line) return;
+  buildHeroRoad();
+}
+// Logodaki gibi: yol sol alttan (alt açıklama hizasından) başlar, S kıvrımıyla mevcut
+// çizgi yüksekliğine çıkar, sağa doğru ilerler ve fotoğraf alanının hemen başında
+// QRS'ye dönüşür. Görsel, QRS'nin R tepesi çizildiği anda değişir.
+const HERO_CYCLE=6500;
+let __heroRoadAnim=null, __heroRoadResizeT=null;
+function buildHeroRoad(){
+  cancelAnimationFrame(__heroSyncRAF);
+  if(__heroRoadAnim){ __heroRoadAnim.cancel(); __heroRoadAnim=null; }
+  const hero=document.querySelector('.hero'), box=document.getElementById('hero-photos');
+  const path=document.getElementById('hero-road-path');
+  if(!hero||!box||!path) return;
+  hero.classList.toggle('line-beat', heroFotolar.length>0);
+  if(!heroFotolar.length) return;
+  const hr=hero.getBoundingClientRect();
+  if(!hr.width) return;
+  const W=hr.width, H=hr.height, mobile=W<=768;
+  const tb=hero.querySelector('.hero-text-block'), alt=document.getElementById('hero-alt');
+  const yL=Math.max(120,Math.min(H*0.5,(tb?tb.offsetTop:H)-30)); // çizgi metne (etiket/başlık) çarpmasın
+  const k=mobile?0.5:0.75;                       // QRS ölçeği
+  const padL=parseFloat(getComputedStyle(hero).paddingLeft)||20;
+  const s=Math.min(1,padL/40);                   // yol kıvrımı sol boşluğa sığsın
+  let yS=(tb&&alt)?tb.offsetTop+alt.offsetTop+alt.offsetHeight:H-90;
+  yS=Math.min(H-24,Math.max(yS,yL+160));
+  const r=Math.max(28,Math.min(56,(yS-yL)*0.3));
+  const x0=10*s;
+  const f=n=>Math.round(n*10)/10, pt=(x,y)=>f(x)+','+f(y);
+  const boxLeft=box.getBoundingClientRect().left-hr.left;
+  const rx=mobile?W*0.55:boxLeft-45;             // R tepesi: fotoğraf alanının biraz öncesi
+  const ax=Math.max(rx-30*k, x0+r+30);
+  const P=(dx,dy)=>pt(ax+dx*k,yL+dy*k);
+  const head='M'+pt(-8,yS+22)
+    +' C'+pt(x0+46*s,yS-40)+' '+pt(x0,yL+r+(yS-yL)*0.45)+' '+pt(x0,yL+r)
+    +' C'+pt(x0,yL+r*0.4477)+' '+pt(x0+r*0.4477,yL)+' '+pt(x0+r,yL)
+    +' L'+pt(ax,yL)+' L'+P(30,-135);            // ... R tepesi
+  const tail=' L'+P(78,75)+' L'+P(128,-50)+' L'+P(140,0)+' L'+pt(ax+140*k+36,yL);
+  path.setAttribute('d',head); const lenR=path.getTotalLength();
+  path.setAttribute('d',head+tail); const L=path.getTotalLength();
+  path.style.strokeDasharray=L+' '+(L+60);
+  __heroRoadAnim=path.animate([
+    {strokeDashoffset:L, opacity:0,  offset:0},
+    {strokeDashoffset:L, opacity:.9, offset:.02, easing:'ease-in-out'},
+    {strokeDashoffset:0, opacity:.9, offset:.72},
+    {strokeDashoffset:0, opacity:.9, offset:.9},
+    {strokeDashoffset:0, opacity:0,  offset:1}
+  ],{duration:HERO_CYCLE,iterations:Infinity});
+  if(heroFotolar.length<2) return;
   const imgs=box.children;
-  const swap=()=>{
-    imgs[__heroIdx].classList.remove('active');
-    __heroIdx=(__heroIdx+1)%imgs.length;
-    imgs[__heroIdx].classList.add('active');
-  };
   let prev=null;
   const tick=()=>{
-    // Görsel değişimi, çizgi animasyonunun kendi saatine bağlı: QRS'nin R tepesinde tetiklenir
-    const a=(line.getAnimations?line.getAnimations():[]).find(x=>x.animationName==='lineBeat');
-    if(a && a.currentTime!=null){
-      const dur=a.effect.getComputedTiming().duration;
-      const t=(Number(a.currentTime)%dur)/dur;
-      if(prev!==null && prev<HERO_BEAT && t>=HERO_BEAT) swap();
-      prev=t;
+    // Çizim ucu R tepesine ulaştığı kare, çizginin gerçek çizim değerinden okunur
+    const off=parseFloat(getComputedStyle(path).strokeDashoffset);
+    if(!isNaN(off)){
+      const drawn=L-off;
+      if(prev!==null && prev<lenR && drawn>=lenR){
+        imgs[__heroIdx].classList.remove('active');
+        __heroIdx=(__heroIdx+1)%imgs.length;
+        imgs[__heroIdx].classList.add('active');
+      }
+      prev=drawn;
     }
     __heroSyncRAF=requestAnimationFrame(tick);
   };
   __heroSyncRAF=requestAnimationFrame(tick);
 }
+window.addEventListener('resize',()=>{
+  clearTimeout(__heroRoadResizeT);
+  __heroRoadResizeT=setTimeout(()=>{ if(heroFotolar.length) buildHeroRoad(); },200);
+});
 function renderHeroPhotoGrid(){
   const g=document.getElementById('ef-hero-photo-grid');
   if(!g) return;
