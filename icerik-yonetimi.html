@@ -102,6 +102,29 @@
   @media (max-width:1100px) { .hero-photos { opacity:.6; } }
   @media (max-width:768px) { .hero-photos { left:0; right:0; width:auto; top:9%; bottom:auto; height:52%; opacity:.4; } }
 
+  /* ── ÇİZGİ + QRS: çizgi fotoğraf alanının ortasına varınca QRS sıçramasıyla biter ── */
+  .hero { --line-end:74%; }
+  @media (max-width:768px) { .hero { --line-end:50%; } }
+  .hero-line .qrs { display:none; position:absolute; right:-96px; top:50%; margin-top:-50px; width:160px; height:100px; overflow:visible; }
+  .hero-line .qrs path { fill:none; stroke:var(--accent); stroke-width:1.6; stroke-linejoin:round; stroke-dasharray:100; stroke-dashoffset:100; opacity:0; filter:drop-shadow(0 0 4px var(--accent)); }
+  .hero.line-beat .hero-line { background:linear-gradient(90deg,transparent,var(--accent)); animation:lineBeat 5s ease-in-out infinite; }
+  .hero.line-beat .hero-line .qrs { display:block; }
+  .hero.line-beat .hero-line .qrs path { animation:qrsDraw 5s linear infinite; }
+  @keyframes lineBeat {
+    0%   { left:-60%; opacity:0 }
+    10%  { opacity:.6 }
+    62%  { left:calc(var(--line-end) - 60%); opacity:.9 }
+    90%  { left:calc(var(--line-end) - 60%); opacity:.9 }
+    100% { left:calc(var(--line-end) - 60%); opacity:0 }
+  }
+  /* %62→%78 arası QRS çizilir; R tepesi ≈ %67.8 (JS'teki HERO_BEAT ile aynı) */
+  @keyframes qrsDraw {
+    0%, 61.9% { stroke-dashoffset:100; opacity:0 }
+    62%  { stroke-dashoffset:100; opacity:1 }
+    78%  { stroke-dashoffset:0; opacity:1 }
+    100% { stroke-dashoffset:0; opacity:1 }
+  }
+
   /* ── SECTIONS ── */
   section { padding:6rem 2.5rem; max-width:1200px; margin:0 auto; }
   section.full { max-width:100%; }
@@ -423,7 +446,7 @@
   <div class="hero edit-target">
     <div class="hero-bg"></div>
     <div class="hero-photos" id="hero-photos" aria-hidden="true"></div>
-    <div class="hero-line"></div>
+    <div class="hero-line"><svg class="qrs" viewBox="0 0 160 100" aria-hidden="true"><path pathLength="100" d="M0 50H26C30 42 38 42 42 50H50L56 56L64 6L72 84L78 50H92C100 38 112 38 118 50H160"/></svg></div>
     <div class="hero-track"></div>
     <div class="hero-text-block">
       <button class="edit-pencil" onclick="editHero()">✏️</button>
@@ -514,7 +537,7 @@
   <footer>
     <div class="footer-logo">Koşu<span>İZİ</span></div>
     <div class="footer-copy">© 2026 KoşuİZİ · kosuizi.com</div>
-    <div class="footer-copy" style="opacity:.5;margin-top:.3rem">v2026.09.24-0738</div>
+    <div class="footer-copy" style="opacity:.5;margin-top:.3rem">v2026.09.24-0811</div>
   </footer>
 </div><!-- /main-site -->
 
@@ -682,9 +705,10 @@ function editHero(){
 }
 
 // ── HERO GİRİŞ GÖRSELLERİ ─────────────────────────────
-// Görseller sağdaki alanda gösterilir; .hero-line çizgisi alanın ortasından
-// geçtiği anda bir sonraki görsele geçilir (çizgiyle senkron).
+// Görseller sağdaki alanda gösterilir; .hero-line çizgisi alanın ortasına varıp
+// QRS sıçramasıyla bittiği anda (R tepesi) bir sonraki görsele geçilir.
 const HERO_FOTO_MAX=8;
+const HERO_BEAT=0.678; // QRS'nin R tepesi (5 sn'lik çizgi döngüsünün %67.8'i)
 let heroFotolar=[], __heroSyncRAF=0, __heroIdx=0;
 async function loadHeroPhotos(){
   try{
@@ -700,20 +724,25 @@ function renderHeroPhotos(){
   box.innerHTML=heroFotolar.map((f,i)=>`<img src="${f}" alt="" draggable="false"${i===0?' class="active"':''}>`).join('');
   box.classList.toggle('has-photos', heroFotolar.length>0);
   __heroIdx=0;
+  const hero=document.querySelector('.hero');
   const line=document.querySelector('.hero-line');
+  if(hero) hero.classList.toggle('line-beat', heroFotolar.length>0);
   if(heroFotolar.length<2 || !line) return;
   const imgs=box.children;
+  const swap=()=>{
+    imgs[__heroIdx].classList.remove('active');
+    __heroIdx=(__heroIdx+1)%imgs.length;
+    imgs[__heroIdx].classList.add('active');
+  };
   let prev=null;
   const tick=()=>{
-    const b=box.getBoundingClientRect(), l=line.getBoundingClientRect();
-    if(b.width>0){
-      const cx=b.left+b.width/2, lc=l.left+l.width/2;
-      if(prev!==null && prev<cx && lc>=cx){
-        imgs[__heroIdx].classList.remove('active');
-        __heroIdx=(__heroIdx+1)%imgs.length;
-        imgs[__heroIdx].classList.add('active');
-      }
-      prev=lc;
+    // Görsel değişimi, çizgi animasyonunun kendi saatine bağlı: QRS'nin R tepesinde tetiklenir
+    const a=(line.getAnimations?line.getAnimations():[]).find(x=>x.animationName==='lineBeat');
+    if(a && a.currentTime!=null){
+      const dur=a.effect.getComputedTiming().duration;
+      const t=(Number(a.currentTime)%dur)/dur;
+      if(prev!==null && prev<HERO_BEAT && t>=HERO_BEAT) swap();
+      prev=t;
     }
     __heroSyncRAF=requestAnimationFrame(tick);
   };
