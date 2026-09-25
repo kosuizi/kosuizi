@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.25-2352 --><!DOCTYPE html>
+<!-- Version: v2026.09.26-0038 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.25-2352';
+const APP_VERSION='v2026.09.26-0038';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -11591,9 +11591,24 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     // h/m/s'yi güncel base pace × override mesafeyle yeniden hesapla.
     // Sebep: zone değiştiğinde base row pm/ps güncellenir ama eski override'daki
     // h/m/s eski pace'e göre kalabilir → tutarsız (ör. 1000m + 7dk + 4:15) üçlüsü.
+    // İSTİSNA (2026.09.26 — Göksel bildirimi "60 dk yazınca pace hatalı hesaplanıyor"):
+    // D+/GAP-tabanlı satırlarda (_isGapRow — tırmanış ana bölümü ve D+ hedefli genel
+    // bloklar) süre, koçun açıklama metnine ELLE yazdığı ("60 dk" gibi) ve saveCue'nun
+    // doğrudan override'a yazdığı DEĞERDİR — mesafe ise HER ZAMAN türetilen bir yan
+    // üründür, koçun kilitlediği bir hedef değil. Genel daldaki mantık burada TERS
+    // çalışır: süre (row.h/m/s, override'dan zaten doğru) SABİT kalır, mesafe her
+    // render'da güncel (D+/GAP-düzeltmeli) pace'e göre YENİDEN hesaplanır. Aksi halde
+    // mesafe önceki (artık eski) pace'e göre donuk kalıyor, süre — okunan tek "gerçek"
+    // değer — ONA göre geriye doğru yeniden hesaplanıp yazılan sayıdan sürükleniyordu
+    // (örn. "60 dk" yazınca satır "62:49" gösteriyordu).
     if(_ovForRow&&!_ovStale&&rowOverrides[i].mesafe!=null&&rowOverrides[i].pm==null&&rowOverrides[i].ps==null&&row.type!=='header'){
       const basePaceSec=(r.pm||0)*60+(r.ps||0);
-      if(basePaceSec>0&&row.mesafe>0){
+      if(r._isGapRow){
+        const curDurSec=(row.h||0)*3600+(row.m||0)*60+(row.s||0);
+        if(basePaceSec>0&&curDurSec>0){
+          row={...row,mesafe:Math.round(curDurSec/basePaceSec*1000)};
+        }
+      } else if(basePaceSec>0&&row.mesafe>0){
         const dur=Math.round(row.mesafe/1000*basePaceSec);
         row={...row,h:Math.floor(dur/3600),m:Math.floor((dur%3600)/60),s:Math.round(dur%60)};
       }
