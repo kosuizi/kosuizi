@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.26-0056 --><!DOCTYPE html>
+<!-- Version: v2026.09.26-0114 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.26-0056';
+const APP_VERSION='v2026.09.26-0114';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -22784,9 +22784,30 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       return guncelKosuGunleriProto.includes(dayShortProto)||guncelCaprazGunleriProto.includes(dayShortProto);
     };
     const protectedDates=new Set();
-    // 1. Gerçek antrenman yapılmış günler (geçmiş)
+    const mismatchDates=new Set(); // gerçek antrenman girilmiş ama mevcut override profille (kosu_gunleri/capraz_gunleri) UYUMSUZ — düzeltilecek
+    const mismatchOriginal=new Map(); // ds -> eski (uyumsuz) override, sadece reviewLog metni için
+    // 1. Gerçek antrenman yapılmış günler (geçmiş) — SADECE mevcut override profille UYUMLUYSA korunur.
+    // (26.09.2026 — Göksel talebi, kök neden: bu tarih önceden approved durumuna VE tipe hiç
+    // bakılmaksızın koşulsuz korunuyordu — yanlışlıkla "Ata" ile atanmış profille uyumsuz bir
+    // antrenman bu yüzden onay kaldırılıp Planı Güncelle'ye basılsa da hiç silinmiyordu. Artık:
+    // tikliyse (her zaman), tip özel ise (dinlenme/yarış/serbest) ya da override yoksa aynı
+    // şekilde korunur; aksi halde (tip profille uyumsuz — örn. çapraz günü olan bir güne koşu
+    // atanmışsa) korunmaz, mismatchDates'e eklenir — aşağıdaki blok günü profile uygun taze
+    // bir önerle DOĞRUDAN düzeltir (generatePlanSnapshot bu tarihlere hiç yazmadığından, bkz.
+    // "isPastWithActual/isTodayWithActual", boş bırakmak yerine burada dolduruluyor).
     const athWkDates=new Set(freshWorkouts.filter(w=>w.athleteId===freshAthlete.id).map(w=>w.date));
-    athWkDates.forEach(ds=>protectedDates.add(ds));
+    athWkDates.forEach(ds=>{
+      const ov=curSnapProt.overrideMap?.[ds];
+      if(!ov){ protectedDates.add(ds); return; }
+      if(kocTikliMi(ov)){ protectedDates.add(ds); return; } // TİK MUTLAK KORUMADIR
+      if(ov.tip==='dinlenme'||ov.tip==='yaris'||ov.tip==='serbest'){ protectedDates.add(ds); return; }
+      const dayShortWk=DAYS_SHORT[new Date(ds+'T12:00:00').getDay()];
+      const uyumlu=ov.tip==='capraz'
+        ? guncelCaprazGunleriProto.includes(dayShortWk)
+        : guncelKosuGunleriProto.includes(dayShortWk);
+      if(uyumlu){ protectedDates.add(ds); }
+      else { mismatchDates.add(ds); mismatchOriginal.set(ds,ov); }
+    });
     // 2. Geçmiş tüm override girişleri
     if(curSnapProt.manualOverrides){
       Object.keys(curSnapProt.manualOverrides).forEach(ds=>{if(ds<todayStr) protectedDates.add(ds);});
@@ -22848,6 +22869,38 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       });
       newSnap.rowOverrides={...(newSnap.rowOverrides||{}),...filteredRow};
     }
+
+    // ── Profille uyumsuz atamaları düzelt (mismatchDates) ────────────────────
+    // generatePlanSnapshot bu tarihlere (geçmiş/bugün + gerçek antrenman) hiç overrideMap
+    // yazmaz (bkz. generatePlanSnapshot "isPastWithActual"/"isTodayWithActual") — bu yüzden
+    // burada AYNI günü generateTwoWeekPlan ile tekrar hesaplayıp profile uygun taze öneriyle
+    // dolduruyoruz. Eski manuel atamaya ait rowOverrides/manualOverrides kalıntıları da silinir
+    // (aksi halde overrideMap düzelir ama "Manuel: Koşu" gibi eski rozet/not asılı kalır).
+    if(mismatchDates.size>0){
+      const _mismatchPlan=generateTwoWeekPlan(freshAthlete,history,racesForSnap,freshWorkouts,testPlanlar||[],planMode==='optimize',null,curSnap.weekEff||null);
+      const _mismatchDays=(_mismatchPlan?.weeks||[]).flatMap(w=>w.days||[]);
+      mismatchDates.forEach(ds=>{
+        const freshDay=_mismatchDays.find(d=>d.date===ds);
+        if(!freshDay) return;
+        let injectedYapilar=freshDay.yapilar||[];
+        try{
+          const injZ=calcZones(freshAthlete);
+          injectedYapilar=injectRowsFromTpl(injectedYapilar,freshDay.tip,freshDay.yapi_notu,freshDay.sure_dk,injZ,freshAthlete.disiplin,ctlBand(0));
+        }catch(e){}
+        newSnap.overrideMap[ds]={
+          tip:freshDay.tip,baslik:freshDay.baslik,yapi_notu:freshDay.yapi_notu||'',
+          sure_dk:freshDay.sure_dk,yukHedef:freshDay.yukHedef||0,dpHedef:freshDay.dpHedef||0,
+          isKosuCapraz:freshDay.isKosuCapraz||false,isTest:freshDay.isTest||false,testTur:freshDay.testTur||null,
+          approved:false,
+          yapilar:injectedYapilar.map(y=>({baslik:y.baslik,detay:y.detay||'',_caprazNot:y._caprazNot||false,...(y._rows&&y._rows.length?{_rows:y._rows}:{})}))
+        };
+        if(newSnap.rowOverrides?.[ds]) delete newSnap.rowOverrides[ds];
+        if(newSnap.manualOverrides?.[ds]) delete newSnap.manualOverrides[ds];
+        const _eskiOv=mismatchOriginal.get(ds);
+        newSnap.reviewLog=[...(newSnap.reviewLog||[]),{at:new Date().toISOString(),reason:`${ds}: profille uyumsuz atama düzeltildi (${TIP_NAMES[_eskiOv?.tip]||_eskiOv?.tip||'?'} → ${TIP_NAMES[freshDay.tip]||freshDay.tip})`}].slice(-10);
+      });
+    }
+
     if(curSnap.cancelledDays) newSnap.cancelledDays=curSnap.cancelledDays;
     // weekEff kilidinini koru — Plan Güncelle mevcut haftanın hedefini sıfırlamamalı.
     // weekEff hafta başında bir kez yazılır ve weekKey damgasıyla dondurulur.
