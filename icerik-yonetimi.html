@@ -124,7 +124,6 @@
   .section-header { display:flex; align-items:flex-end; justify-content:space-between; margin-bottom:3rem; padding-bottom:1rem; border-bottom:1px solid var(--line); position:relative; }
   .section-tag { font-family:'Space Mono',monospace; font-size:.68rem; letter-spacing:.18em; color:var(--accent); margin-bottom:.5rem; }
   .section-title { font-family:'Oswald',sans-serif; font-weight:600; font-size:clamp(2rem,4vw,3rem); letter-spacing:.01em; line-height:1; }
-  .section-note { font-family:'DM Sans',sans-serif; font-weight:300; font-size:.7rem; line-height:1.4; color:var(--muted); margin-top:.6rem; }
 
   /* ── SPORCULAR ── */
   .athletes-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(240px,100%),1fr)); grid-auto-rows:1fr; gap:1.5px; background:var(--line); }
@@ -495,7 +494,6 @@
       <div>
         <div class="section-tag" id="section-tag-yarislar">02 — Takvim</div>
         <div class="section-title" id="section-title-yarislar">Yarışlar</div>
-        <div class="section-note">Logolar ilgili yarış organizasyonlarına aittir; resmi bir ilişkimiz bulunmamaktadır.</div>
       </div>
       <span style="font-size:.8rem;color:var(--muted)" id="section-sezon-yarislar">2025–26</span>
     </div>
@@ -1101,11 +1099,16 @@ function renderAthletes(){
   athleteRotationTimers.forEach(id=>clearTimeout(id));
   athleteRotationTimers=[];
 
+  // Görünürlük artık ayrı bir "Ana sayfada göster" anahtarına değil,
+  // doğrudan sporcunun Sporcu Anketi'ndeki "Paylaşılabilir Görsellerde Yer
+  // Alma İzni" onayına (reklam_izni) bağlıdır — izin yoksa sporcu sitede
+  // hiç görünmez. Bu ayar sadece Koç Panelinden/anketten değişir
+  // (2026.09.25 — Göksel talebi).
   const pool=[];
   athletes.forEach(a=>{
     const id=a.id||a.ad;
     const ld=spLanding[id]||{};
-    const hidden=ld.goster===false;
+    const hidden=!a.reklam_izni;
     if(hidden && !isEditMode) return;
     pool.push({id,a,ld,hidden});
   });
@@ -1193,19 +1196,19 @@ function renderAthletes(){
 function editAthlete(id){
   const a=findAthleteById(id); if(!a) return;
   const ld=spLanding[id]||{};
+  const izinVer=!!a.reklam_izni;
   openEditor({
     title:'Sporcu — '+((a.ad||'')+' '+(a.soyad||'')).trim(),
     bodyHTML:`
-      <div class="ef-note">İsim, fotoğraf ve dereceler Koç Panelinden gelir; burada yalnızca site görünürlüğü, uzmanlık ve biyografi düzenlenir.</div>
-      <div class="ef-row ef-check"><input type="checkbox" id="ef-goster" ${ld.goster!==false?'checked':''}><label for="ef-goster">Ana sayfada göster</label></div>
+      <div class="ef-note">İsim, fotoğraf ve dereceler Koç Panelinden gelir; burada yalnızca uzmanlık ve biyografi düzenlenir. Sitede görünüp görünmeme, sporcunun Sporcu Anketi'ndeki "Paylaşılabilir Görsellerde Yer Alma İzni" onayına bağlıdır — bu ayar buradan değiştirilemez.</div>
+      <div class="ef-row"><label>Görünürlük</label><div style="font-size:.85rem;${izinVer?'':'color:var(--muted)'}">${izinVer?'✅ İzin verildi — sitede görünüyor':'🚫 İzin verilmedi — sitede görünmüyor'}</div></div>
       <div class="ef-row"><label>Uzmanlık</label><input type="text" id="ef-specialty" value="${(ld.specialty||'').replace(/"/g,'&quot;')}" placeholder="Ultra Trail, Maraton…"></div>
       <div class="ef-row"><label>Kısa Biyografi</label><textarea id="ef-bio">${ld.biyografi||''}</textarea></div>
     `,
     onSave: async ()=>{
-      const goster=document.getElementById('ef-goster').checked;
       const specialty=document.getElementById('ef-specialty').value.trim();
       const bio=document.getElementById('ef-bio').value.trim();
-      spLanding[id]={...spLanding[id], goster, specialty, biyografi:bio};
+      spLanding[id]={...spLanding[id], specialty, biyografi:bio};
       await fbSet('landing_content/sporcu_landing', spLanding);
       renderAthletes();
     }
@@ -1342,7 +1345,12 @@ async function init(){
     const existing=latestMap.get(key);
     if(!existing||new Date(res.date||0)>new Date(existing.res.date||0)) latestMap.set(key,{res,race});
   });
-  const tamamlananEntries=Array.from(latestMap.values()).sort((a,b)=>new Date(b.res.date||0)-new Date(a.res.date||0));
+  // İzin vermeyen (reklam_izni!==true) sporcunun sonucu bu listede de hiç
+  // görünmez — görünürlük tek kaynaktan (sporcu anketi) yönetilir
+  // (2026.09.25 — Göksel talebi).
+  const tamamlananEntries=Array.from(latestMap.values())
+    .filter(({res})=>{ const a=athletes.find(x=>(x.id||x.ad)===res.athleteId); return a&&a.reklam_izni; })
+    .sort((a,b)=>new Date(b.res.date||0)-new Date(a.res.date||0));
   const tamamlananList=document.getElementById('tamamlanan-list');
   if(!tamamlananEntries.length){
     tamamlananList.innerHTML='<div style="padding:2rem;color:#6b7280;font-size:.85rem;border:1px dashed var(--line);border-radius:4px;text-align:center">Henüz tamamlanmış yarış kaydı yok.</div>';
