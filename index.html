@@ -247,6 +247,10 @@
   .coach-bio { font-size:.88rem; color:var(--muted); line-height:1.7; margin-bottom:1.5rem; }
   .coach-certs { display:flex; flex-wrap:wrap; gap:.5rem; }
   .cert-tag { padding:.25rem .7rem; border:1px solid var(--line); border-radius:3px; font-size:.68rem; letter-spacing:.06em; color:var(--muted); }
+  .coach-cert-verify { display:flex; align-items:center; gap:.7rem; margin-top:.8rem; }
+  .cert-qr-img { width:64px; height:64px; border-radius:6px; border:1px solid var(--line); background:#fff; padding:3px; flex-shrink:0; }
+  .cert-qr-label { font-size:.72rem; color:var(--muted); line-height:1.4; }
+  .coach-cert-note { font-size:.72rem; color:var(--muted); margin-top:.5rem; line-height:1.5; }
   .contact-title { font-family:'Oswald',sans-serif; font-weight:600; font-size:2rem; letter-spacing:.01em; margin-bottom:2rem; }
   .contact-items { display:flex; flex-direction:column; gap:1.4rem; }
   .contact-item { display:flex; align-items:flex-start; gap:1rem; }
@@ -577,7 +581,7 @@
   <footer>
     <div class="footer-logo">Koşu<span>İZİ</span></div>
     <div class="footer-copy">© 2026 KoşuİZİ · kosuizi.com</div>
-    <div class="footer-copy" style="opacity:.5;margin-top:.3rem">v2026.09.25-2208</div>
+    <div class="footer-copy" style="opacity:.5;margin-top:.3rem">v2026.09.26-1251</div>
   </footer>
 </div><!-- /main-site -->
 
@@ -669,6 +673,7 @@ function closeEditor(){
   document.getElementById('editor-overlay').classList.remove('open');
   __editorOnSave=null; __editorOnDelete=null;
   window.__pendingCoachFoto=undefined;
+  window.__pendingCoachQR=undefined;
   window.__pendingHaberFotolar=undefined;
   window.__pendingIYFoto=undefined;
   window.__pendingHeroFotolar=undefined;
@@ -1583,7 +1588,9 @@ function renderCoachContact(){
     <div class="coach-name">${ant.ad||''}</div>
     <div class="coach-title-label">${ant.unvan||''}</div>
     <div class="coach-bio">${ant.bio||''}</div>
-    ${sertList?`<div class="coach-certs">${sertList}</div>`:''}`;
+    ${sertList?`<div class="coach-certs">${sertList}</div>`:''}
+    ${ant.sertKare?`<div class="coach-cert-verify"><a href="${ant.sertKare}" target="_blank" title="Kare kodu büyüt"><img class="cert-qr-img" src="${ant.sertKare}" alt="Sertifika doğrulama kare kodu"></a>${ant.sertKareEtiket?`<span class="cert-qr-label">${ant.sertKareEtiket}</span>`:''}</div>`:''}
+    ${ant.sertNot?`<div class="coach-cert-note">${ant.sertNot}</div>`:''}`;
   document.getElementById('icerikyon-card').innerHTML=`
     <button class="edit-pencil" onclick="editIcerikYoneticisi()">✏️</button>
     <div class="coach-photo">${iyPhotoHTML}</div>
@@ -1620,6 +1627,18 @@ function editCoach(){
       </div>
       <div class="ef-row"><label>Biyografi</label><textarea id="ef-bio">${antData.bio||''}</textarea></div>
       <div class="ef-row"><label>Sertifikalar (virgülle ayırın)</label><input type="text" id="ef-sert" value="${(antData.sert||'').replace(/"/g,'&quot;')}"></div>
+      <div class="ef-row">
+        <label>Doğrulama Kare Kodu (opsiyonel)</label>
+        <div class="ef-photo-row">
+          <div class="ef-photo-preview rect" id="ef-coach-qr-preview">${antData.sertKare?`<img src="${antData.sertKare}">`:'—'}</div>
+          <div>
+            <input type="file" id="ef-coach-qr-input" accept="image/*" style="display:none" onchange="handleCoachQRUpload(this.files[0])">
+            <button type="button" class="et-btn" onclick="document.getElementById('ef-coach-qr-input').click()">Kare Kod Yükle</button>
+          </div>
+        </div>
+      </div>
+      <div class="ef-row"><label>Kare Kod Etiketi (ör. Doğrulama Kodu: 25V895ZL)</label><input type="text" id="ef-sert-kare-etiket" value="${(antData.sertKareEtiket||'').replace(/"/g,'&quot;')}"></div>
+      <div class="ef-row"><label>Ek Doğrulama Notu (opsiyonel, ör. Barkod No)</label><input type="text" id="ef-sert-not" value="${(antData.sertNot||'').replace(/"/g,'&quot;')}"></div>
     `,
     onSave: async ()=>{
       antData={
@@ -1627,10 +1646,14 @@ function editCoach(){
         unvan:document.getElementById('ef-unvan').value.trim(),
         foto: window.__pendingCoachFoto!==undefined?window.__pendingCoachFoto:(antData.foto||''),
         bio:document.getElementById('ef-bio').value.trim(),
-        sert:document.getElementById('ef-sert').value.trim()
+        sert:document.getElementById('ef-sert').value.trim(),
+        sertKare: window.__pendingCoachQR!==undefined?window.__pendingCoachQR:(antData.sertKare||''),
+        sertKareEtiket:document.getElementById('ef-sert-kare-etiket').value.trim(),
+        sertNot:document.getElementById('ef-sert-not').value.trim()
       };
       await fbSet('landing_content/antrenor', antData);
       window.__pendingCoachFoto=undefined;
+      window.__pendingCoachQR=undefined;
       renderCoachContact();
     }
   });
@@ -1648,6 +1671,27 @@ function handleCoachPhotoUpload(file){
       const dataUrl=canvas.toDataURL('image/jpeg',0.85);
       window.__pendingCoachFoto=dataUrl;
       const prev=document.getElementById('ef-coach-photo-preview');
+      if(prev) prev.innerHTML=`<img src="${dataUrl}">`;
+    };
+    img.src=e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+function handleCoachQRUpload(file){
+  if(!file) return;
+  const reader=new FileReader();
+  reader.onload=(e)=>{
+    const img=new Image();
+    img.onload=()=>{
+      const maxW=360,maxH=360; let w=img.width,h=img.height;
+      if(w>maxW||h>maxH){ const ratio=Math.min(maxW/w,maxH/h); w=Math.round(w*ratio); h=Math.round(h*ratio); }
+      const canvas=document.createElement('canvas'); canvas.width=w; canvas.height=h;
+      const ctx=canvas.getContext('2d');
+      ctx.imageSmoothingEnabled=false; // kare kod netliğini/taranabilirliğini bozmamak için
+      ctx.drawImage(img,0,0,w,h);
+      const dataUrl=canvas.toDataURL('image/png'); // kayıpsız PNG — JPEG sıkıştırması kare kodu bozabilir
+      window.__pendingCoachQR=dataUrl;
+      const prev=document.getElementById('ef-coach-qr-preview');
       if(prev) prev.innerHTML=`<img src="${dataUrl}">`;
     };
     img.src=e.target.result;
