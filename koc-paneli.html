@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.27-1352 --><!DOCTYPE html>
+<!-- Version: v2026.09.27-2143 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.27-1352';
+const APP_VERSION='v2026.09.27-2143';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -32402,7 +32402,11 @@ function gpxAdvance(points,curT,lenSpec){
 //    Konum ekseni HER ZAMAN zaman (saniye) üzerinden ilerletilir — mesafe bazlı bir
 //    blok, o mesafenin dosyada ne kadar sürdüğü hesaplanarak zamana çevrilir
 //    (gpxAdvance).
-function gpxComputePhases(points,blockCfgs){
+// repOverrides (opsiyonel, 2026.09.27 — Tekrar Anomali Düzeltmesi): {[blockIdx]:
+//    {[repIndex]:{work?:{value,unit},rest?:{value,unit}}}} — coach'un GpxAnalizModal'da
+//    tek bir tekrar için elle girdiği düzeltme. Verilirse o rep'in work/rest bacağı
+//    bloğun ortak workValue/restValue'su yerine BU değeri kullanır (bkz. gpxDetectRepAnomalies).
+function gpxComputePhases(points,blockCfgs,repOverrides){
   if(!points||points.length<2) return null;
   const totalEndT=points[points.length-1].t;
   const totalEndD=points[points.length-1].d;
@@ -32426,12 +32430,17 @@ function gpxComputePhases(points,blockCfgs){
     } else {
       const reps=Math.max(1,parseInt(b.repCount)||1);
       for(let k=1;k<=reps;k++){
-        const workSpec={value:parseFloat(b.workValue)||0,unit:b.workUnit};
+        // Bu tekrar için elle girilmiş bir düzeltme varsa (bkz. repOverrides notu
+        // yukarıda) bloğun ortak work/rest değeri yerine ONU kullan — diğer tekrarlar
+        // etkilenmez, sadece bu tekten sonraki t ekseni (dolayısıyla rest ve sıradaki
+        // tekrarın başlangıcı) doğal olarak kayar.
+        const ov=repOverrides&&repOverrides[bi]&&repOverrides[bi][k];
+        const workSpec=(ov&&ov.work)?{value:parseFloat(ov.work.value)||0,unit:ov.work.unit}:{value:parseFloat(b.workValue)||0,unit:b.workUnit};
         const workEndT=gpxAdvance(points,t,workSpec);
         native.push({blockIdx:bi,legKind:'work',repIndex:k,kind:'run',t0:t,t1:workEndT});
         t=workEndT;
-        if(b.hasRest&&parseFloat(b.restValue)>0){
-          const restSpec={value:parseFloat(b.restValue)||0,unit:b.restUnit};
+        const restSpec=(ov&&ov.rest)?{value:parseFloat(ov.rest.value)||0,unit:ov.rest.unit}:(b.hasRest?{value:parseFloat(b.restValue)||0,unit:b.restUnit}:null);
+        if(b.hasRest&&restSpec&&parseFloat(restSpec.value)>0){
           const restEndT=gpxAdvance(points,t,restSpec);
           native.push({blockIdx:bi,legKind:'rest',repIndex:k,kind:'walk',t0:t,t1:restEndT});
           t=restEndT;
@@ -32466,6 +32475,62 @@ function gpxComputePhases(points,blockCfgs){
     return {...p,distKm,durSec,pace,hr,hrEdge,dPlus};
   });
   return {rows,totalEndT,totalEndD};
+}
+// ── Tekrar Anomali Tespiti (Göksel talebi, 2026.09.27 — "700m×3'te 3. tekrarda
+//    yanlışlıkla saate basılıyor", "450m×3'te 3. turda erken toparlanmaya geçiliyor") ──
+// Sistem watch'taki lap/tur butonlarına HİÇ bakmaz (bkz. gpxComputePhases yorumu) —
+// her tekrarın work bacağını reçeteden gelen sabit süre/mesafeyi ham GPS akışında
+// ileri sararak bulur. Sporcu bir tekrarda erken toparlanmaya geçmiş ya da başka bir
+// aksama yaşamışsa, bu "ilerletme" hâlâ o kadarlık bir pencereyi "koşu" fazı sayar —
+// ama pencerenin bir kısmı fiilen yürüyüş/toparlanma olabilir. Bu, o tekrarın pace/
+// nabız ölçümünü kirletir. Fonksiyon hiçbir şeyi OTOMATİK düzeltmez — sadece aynı
+// bloktaki diğer tekrarlara göre pace'i belirgin kötü olan tekrarları işaretler ve
+// (mümkünse) "gerçek koşunun muhtemelen nerede bittiğine" dair kaba bir öneri üretir;
+// coach bu öneriyi aynen kabul edebilir, kendi rakamını girebilir ya da yok sayabilir
+// (bkz. GpxAnalizModal içindeki repOverrides/repFixDraft — ~satır 32770).
+const GPX_REP_ANOMALY_MULT=1.18; // medyan pace'den %18+ yavaşsa işaretlenir
+function gpxDetectRepAnomalies(points,phaseRows){
+  if(!phaseRows||phaseRows.length<3) return {};
+  const byBlock={};
+  phaseRows.forEach(r=>{
+    if(r.legKind!=='work'||!(r.durSec>0)||!(r.pace>0)) return;
+    (byBlock[r.blockIdx]=byBlock[r.blockIdx]||[]).push(r);
+  });
+  const flags={};
+  Object.keys(byBlock).forEach(bi=>{
+    const reps=byBlock[bi];
+    if(reps.length<3) return; // en az 3 tekrar olmadan kıyas güvenilir değil (tek yavaş tekrar mı, yoksa yapı öyle mi belli olmaz)
+    const paces=reps.map(r=>r.pace).sort((a,b)=>a-b);
+    const median=paces[Math.floor(paces.length/2)];
+    reps.forEach(r=>{
+      if(r.pace<=median*GPX_REP_ANOMALY_MULT) return;
+      const suggestT1=points?gpxSuggestEarlyCutoff(points,r.t0,r.t1,median):null;
+      flags[bi]=flags[bi]||{};
+      flags[bi][r.repIndex]={pace:r.pace,medianPace:median,suggestT1,suggestDurSec:suggestT1!=null?Math.round(suggestT1-r.t0):null};
+    });
+  });
+  return flags;
+}
+// Şüpheli bir work penceresi [t0,t1] içinde sondan geriye ~5sn adımlarla tarar;
+// [t0,cut] önekinin ortalama pace'i medyana (goodPace) yaklaştığı İLK (t1'e en yakın)
+// cut noktasını "gerçek koşunun muhtemelen bittiği an" olarak önerir — yani "hızlı
+// bölüm + yavaş kuyruk" örüntüsü arar. Pencere baştan sona tekdüze yavaşsa (net bir
+// kesim bulunamazsa, ör. gerçek yorgunluk/genel yavaşlama) null döner — bu durumda
+// coach'a sadece işaret gösterilir, sayısal öneri yapılmaz (uydurma bir rakam verilmez).
+function gpxSuggestEarlyCutoff(points,t0,t1,goodPace){
+  const STEP=5;
+  if((t1-t0)<STEP*4||!(goodPace>0)) return null;
+  const d0=gpxDistAtTime(points,t0);
+  for(let cut=t1-STEP;cut>t0+STEP;cut-=STEP){
+    const dc=gpxDistAtTime(points,cut);
+    const chunkKm=(dc-d0)/1000;
+    const chunkPace=chunkKm>0?(cut-t0)/chunkKm:null;
+    if(chunkPace!=null&&chunkPace<=goodPace*1.15){
+      if((t1-cut)<10) return null; // kuyruk çok kısa (<10sn) — anlamlı bir öneri değil
+      return cut;
+    }
+  }
+  return null;
 }
 // ── Kardiyak Drift — GPX Analiz otomatik tespiti (2026.09.12, Göksel talebi) ──────
 // Antrenmanın YAPISINI (tekrarlı/interval mi, sürekli/tek parça mı) blockCfgs'ten
@@ -32766,6 +32831,16 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
   const [applyMsg,setApplyMsg]=useState(null);
   const [updateAggregate,setUpdateAggregate]=useState(false);
   const [mafOverride,setMafOverride]=useState(null); // null=plandan otomatik, true/false=koç seçimi
+  // ── Tekrar Anomali Düzeltmesi (Göksel talebi, 2026.09.27) ──────────────────────
+  // repAnomalies: gpxDetectRepAnomalies'in ürettiği, {blockIdx:{repIndex:{...}}} şeklinde
+  // OTOMATİK tespit sonucu — her runAnalysis çağrısında phaseResult ile birlikte yeniden hesaplanır.
+  // repOverrides: coach'un "Uygula"ya bastığı, GERÇEKTEN uygulanmış düzeltmeler — aynı şekil,
+  // gpxComputePhases'e geçirilir (bkz. o fonksiyondaki repOverrides notu).
+  // repFixDraft: henüz "Uygula"ya basılmamış, kullanıcının o an yazmakta olduğu taslak değerler —
+  // key: blockIdx+'-'+repIndex → {value,unit}. Bunlar hesaplamaya karışmaz, sadece input'un kendisi.
+  const [repAnomalies,setRepAnomalies]=useState({});
+  const [repOverrides,setRepOverrides]=useState({});
+  const [repFixDraft,setRepFixDraft]=useState({});
   const chartRef=useRef(null);
   const fileInputRef=useRef(null);
 
@@ -32776,6 +32851,7 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
     setDriftResult([]);
     setApplyMsg(null);
     setMafOverride(null);
+    setRepAnomalies({});setRepOverrides({});setRepFixDraft({});
     gpxResolveDayPlan(athlete,date,allHistory,races,workouts,testPlanlar).then(info=>{
       if(cancelled) return;
       setPlanInfo(info);
@@ -32828,6 +32904,7 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
     setPhaseResult(null);
     setDriftResult([]);
     setApplyMsg(null);
+    setRepAnomalies({});setRepOverrides({});setRepFixDraft({});
     const reader=new FileReader();
     reader.onload=(ev)=>{
       try{
@@ -32865,12 +32942,49 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
     reader.readAsText(file);
   };
 
-  const runAnalysis=()=>{
+  // ── Ortak hesaplama çekirdeği — belirli bir repOverrides seti ile phaseResult/
+  // driftResult/repAnomalies'i YENİDEN hesaplar. "Analiz Et" butonu (runAnalysis,
+  // altta) ve tekil tekrar düzeltmeleri (applyRepFix/resetRepFix) İKİSİ DE bunu
+  // çağırır — böylece bir düzeltme uygulandığında kardiyak drift, grafik ve
+  // "Reçeteye Ekle"nin okuduğu phaseResult.rows OTOMATİK olarak düzeltilmiş
+  // sınırları yansıtır, ayrı bir senkronizasyon kodu gerekmez.
+  const runAnalysisWithOverrides=(ov)=>{
     if(!points) return;
-    const result=gpxComputePhases(points,blocks);
+    const result=gpxComputePhases(points,blocks,ov);
     setPhaseResult(result);
     setDriftResult(gpxComputeCardiacDrift(points,blocks,result.rows));
+    setRepAnomalies(gpxDetectRepAnomalies(points,result.rows));
     setApplyMsg(null);
+  };
+  const runAnalysis=()=>{
+    if(!points) return;
+    // Yeni bir analiz (dosya değişti/reçete alanları düzenlendi) önceki tekil tekrar
+    // düzeltmelerini geçersiz kılar — blockIdx/repIndex eşleşmesi artık farklı bir
+    // yapıya ait olabilir, eski değerleri sessizce taşımak yanıltıcı olur.
+    setRepOverrides({});setRepFixDraft({});
+    runAnalysisWithOverrides({});
+  };
+  // Bir tekrar için taslağı (repFixDraft) kalıcı düzeltmeye (repOverrides) çevirir
+  // ve hesaplamayı hemen yeniler. draft boşsa hiçbir şey yapmaz.
+  const applyRepFix=(bi,repIndex)=>{
+    const draftKey=bi+'-'+repIndex;
+    const draft=repFixDraft[draftKey];
+    if(!draft||draft.value===''||draft.value==null||isNaN(parseFloat(draft.value))) return;
+    const newOv={...repOverrides,[bi]:{...(repOverrides[bi]||{}),[repIndex]:{...(repOverrides[bi]?.[repIndex]||{}),work:{value:parseFloat(draft.value),unit:draft.unit||'time'}}}};
+    setRepOverrides(newOv);
+    runAnalysisWithOverrides(newOv);
+  };
+  // Bir tekrarın düzeltmesini kaldırır — o tekrar bloğun ortak work değerine geri döner.
+  const resetRepFix=(bi,repIndex)=>{
+    const newOv={...repOverrides};
+    if(newOv[bi]){
+      const blockOv={...newOv[bi]};
+      delete blockOv[repIndex];
+      if(Object.keys(blockOv).length) newOv[bi]=blockOv; else delete newOv[bi];
+    }
+    setRepOverrides(newOv);
+    setRepFixDraft(d=>{const nd={...d};delete nd[bi+'-'+repIndex];return nd;});
+    runAnalysisWithOverrides(newOv);
   };
 
   useEffect(()=>{
@@ -33155,16 +33269,43 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
               ['Faz','Süre','Mesafe','D+','Pace','Ort.','Maks.','Min.'].map((h,i)=>React.createElement('th',{key:i,style:{textAlign:i===0?'left':'right',padding:'4px 6px',borderBottom:'1px solid var(--border)',color:'var(--text-tertiary)',fontWeight:600}},h))
             )),
             React.createElement('tbody',null,
-              phaseResult.rows.map((r,i)=>React.createElement('tr',{key:i},
-                React.createElement('td',{style:{padding:'4px 6px',borderBottom:'1px solid var(--border)'}},gpxPhaseLabel(r,blocks)),
-                React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},gpxFmtMin(r.durSec)),
-                React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},(r.distKm*1000).toFixed(0)+'m'),
-                React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},r.dPlus!=null?r.dPlus+' m':'—'),
-                React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},gpxFmtPace(r.pace)),
-                React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},r.hr.avg!=null?Math.round(r.hr.avg):'—'),
-                React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},r.hr.max!=null?Math.round(r.hr.max):'—'),
-                React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},r.hr.min!=null?Math.round(r.hr.min):'—')
-              ))
+              phaseResult.rows.map((r,i)=>{
+                // ── Tekrar Anomali Düzeltmesi (2026.09.27) — sadece work bacaklarında
+                // (legKind==='work') anlamlı: rest/tekil bloklar hiç kıyaslanmıyor.
+                const anomaly=(r.legKind==='work')?repAnomalies?.[r.blockIdx]?.[r.repIndex]:null;
+                const activeOv=(r.legKind==='work')?repOverrides?.[r.blockIdx]?.[r.repIndex]?.work:null;
+                const draftKey=r.blockIdx+'-'+r.repIndex;
+                const draft=repFixDraft[draftKey]||(activeOv?{value:activeOv.value,unit:activeOv.unit}:{value:(anomaly&&anomaly.suggestDurSec!=null)?anomaly.suggestDurSec:'',unit:'time'});
+                const rowEl=React.createElement('tr',{key:'r'+i,style:anomaly?{background:'var(--warn-bg)'}:(activeOv?{background:'var(--success-bg)'}:undefined)},
+                  React.createElement('td',{style:{padding:'4px 6px',borderBottom:'1px solid var(--border)'}},gpxPhaseLabel(r,blocks)+(anomaly?' ⚠️':(activeOv?' ✓':''))),
+                  React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},gpxFmtMin(r.durSec)),
+                  React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},(r.distKm*1000).toFixed(0)+'m'),
+                  React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},r.dPlus!=null?r.dPlus+' m':'—'),
+                  React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},gpxFmtPace(r.pace)),
+                  React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},r.hr.avg!=null?Math.round(r.hr.avg):'—'),
+                  React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},r.hr.max!=null?Math.round(r.hr.max):'—'),
+                  React.createElement('td',{style:{padding:'4px 6px',textAlign:'right',borderBottom:'1px solid var(--border)',fontFamily:'monospace'}},r.hr.min!=null?Math.round(r.hr.min):'—')
+                );
+                if(!anomaly&&!activeOv) return rowEl;
+                const fixRow=React.createElement('tr',{key:'fix'+i},
+                  React.createElement('td',{colSpan:8,style:{padding:'2px 6px 10px',borderBottom:'1px solid var(--border)',background:anomaly?'var(--warn-bg)':'var(--success-bg)'}},
+                    anomaly&&React.createElement('div',{style:{fontSize:10.5,color:'var(--warn)',marginBottom:6,lineHeight:1.4}},
+                      '⚠️ Bu tekrarın pace\'i bloktaki diğer tekrarların medyanından belirgin yavaş ('+gpxFmtPace(anomaly.medianPace)+' medyan → '+gpxFmtPace(anomaly.pace)+'). Erken toparlanmaya geçilmiş ya da başka bir aksama (ör. yanlış buton) olmuş olabilir.'+
+                      (anomaly.suggestDurSec!=null?' Pace eğrisine göre gerçek koşu ~'+gpxFmtMin(anomaly.suggestDurSec)+' sürmüş olabilir — öneri aşağıda dolduruldu, gerekirse değiştir.':' Pencerede net bir kesim noktası bulunamadı — aşağıya gerçek süreyi/mesafeyi kendin gir.')
+                    ),
+                    activeOv&&!anomaly&&React.createElement('div',{style:{fontSize:10.5,color:'var(--success)',marginBottom:6}},'✓ Bu tekrar için elle düzeltme uygulandı (artık diğer tekrarlarla tutarlı).'),
+                    React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}},
+                      React.createElement('span',{style:{fontSize:10.5,color:'var(--text-tertiary)'}},'Gerçek koşu:'),
+                      React.createElement('input',{type:'number',value:draft.value,min:0,step:draft.unit==='time'?5:10,style:{width:70},
+                        onChange:e=>setRepFixDraft(d=>({...d,[draftKey]:{...draft,value:e.target.value}}))}),
+                      unitPill(draft.unit,u=>setRepFixDraft(d=>({...d,[draftKey]:{...draft,unit:u}})),'sn','m'),
+                      React.createElement('button',{type:'button',className:'btn btn-sm',onClick:()=>applyRepFix(r.blockIdx,r.repIndex)},'Uygula'),
+                      activeOv&&React.createElement('button',{type:'button',className:'btn btn-sm',onClick:()=>resetRepFix(r.blockIdx,r.repIndex)},'Sıfırla')
+                    )
+                  )
+                );
+                return React.createElement(React.Fragment,{key:'frag'+i},rowEl,fixRow);
+              })
             )
           )
         ),
