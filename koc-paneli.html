@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.27-1246 --><!DOCTYPE html>
+<!-- Version: v2026.09.27-1256 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.27-1246';
+const APP_VERSION='v2026.09.27-1256';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -7029,14 +7029,19 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
             // iken bu iki satır bilgiyi BİREBİR tekrar ediyordu. Artık sadece forceLow
             // AKTİF DEĞİLKEN çalışıyor. GÜNCELLENDİ (Ağustos 2026): eşikler evaluateSignals
             // Öncelik 3'teki yeni "ciddi ihlal" bantlarıyla hizalandı (%55/%35 → %50/%40).
-            // GÜNCELLENDİ (2026.09.27 — Göksel'in talebiyle): forceLow artık 2 haftalık
-            // akut pencere zaten düzelmişse devre dışı kalabiliyor (bkz. evaluateSignals
-            // Öncelik 3, "duzeldi2w" — 4H/2H rolling-average gecikme düzeltmesi). Bu durumda
-            // aşağıdaki satırlar tetiklenir ama SEBEPSİZ görünür — koç "neden bloke edilmedi"
-            // sorusuna cevap bulamaz. zoneReasons'ı ekleyerek (forceLow satırındaki gibi) 2H
-            // kontrolünün sonucunu buraya da taşıyoruz.
-            if(sigs.level!=='forceLow'&&lowPct!==null&&lowPct<50) sorunlar.push('📉 Z1-2 kritik az ('+lowPct+'%, hedef %75-85) — kolay koşu hacmi artırılmalı'+(sigs.zoneReasons?.length?' — '+sigs.zoneReasons.join(' · '):''));
-            if(sigs.level!=='forceLow'&&highPct!==null&&highPct>40) sorunlar.push('📈 Z3-4 çok fazla ('+highPct+'%, hedef %10-15) — tempo/eşik yük azaltılmalı'+(sigs.zoneReasons?.length?' — '+sigs.zoneReasons.join(' · '):''));
+            if(sigs.level!=='forceLow'&&lowPct!==null&&lowPct<50) sorunlar.push('📉 Z1-2 kritik az ('+lowPct+'%, hedef %75-85) — kolay koşu hacmi artırılmalı');
+            if(sigs.level!=='forceLow'&&highPct!==null&&highPct>40) sorunlar.push('📈 Z3-4 çok fazla ('+highPct+'%, hedef %10-15) — tempo/eşik yük azaltılmalı');
+            // EKLENDİ (2026.09.27 — Göksel'in talebiyle, önceki denemenin düzeltmesi):
+            // forceLow, 2 haftalık akut pencere zaten düzelmişse devre dışı kalabiliyor
+            // (bkz. evaluateSignals Öncelik 3, "duzeldi2w"). Bu durumda YUKARIDAKİ İKİ
+            // SATIR (Z1-2/Z3-4) tetiklenmeyebilir bile — ciddi ihlal SADECE anaPct>20
+            // ile oluşmuşsa (üçüncü bir metrik, ayrı satırı yok) hiçbir yerde görünmezdi.
+            // Önceki deneme (mesajı yalnızca Z1-2/Z3-4 satırlarına iliştirmek) bu durumu
+            // kaçırıyordu, ayrıca ikisi birden tetiklenirse mesajı iki kez tekrarlıyordu.
+            // Artık evaluateSignals hangi metrik tetiklerse tetiklesin TEK bir bayrak
+            // (zoneAcuteOverrideMsg) döndürüyor — bağımsız, tekrarsız, üç metriği de kapsayan
+            // tek bir satır.
+            if(sigs.level!=='forceLow'&&sigs.zoneAcuteOverrideMsg) sorunlar.push('ℹ️ '+sigs.zoneAcuteOverrideMsg);
             const band=ctlBand(ctl);
             // mechKardioRatio/mechKardioDanger/mechKardioWarn artık yukarıda (evaluateSignals
             // çağrısından önce) hesaplanıyor — burada tekrar hesaplanmıyor, aynı değerler
@@ -17605,6 +17610,13 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
   let planForceEasy=false, planPreferLow=false;
   let yModZone=1.0;
   const zoneReasons=[];
+  // EKLENDİ (2026.09.27 — Göksel'in talebiyle): "duzeldi2w" release-valve devreye
+  // girdiğinde (aşağıda), Tanı sekmesindeki Sorunlar sütununun BAĞIMSIZ, TEK ve
+  // TEKRARSIZ bir satırla bunu gösterebilmesi için — hangi metrik (lowPct/highPct/
+  // anaPct) ciddi ihlali tetiklemiş olursa olsun. zoneReasons'a eklemek yeterli
+  // değildi çünkü çağıran taraf (Tanı tablosu) zoneReasons'ı yalnızca forceLow
+  // aktifken gösteriyor — forceLow devre dışı kalınca mesaj görünmez kalıyordu.
+  let zoneAcuteOverrideMsg=null;
 
   if(hasZone&&!zone4wPartial){
     zoneReasons.push('ℹ️ Zone-kaynaklı kısıtlamalar bu dönem devre dışı — ölçüm güveni düşük (%'+conf4w+' hassas veri, 4 hafta).');
@@ -17701,7 +17713,8 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
           const ciddiIhlal2w=hasZone2w&&(lowPct2w<50||highPct2w>40||anaPct2w>20);
           const duzeldi2w=hasZone2w&&zone2wFull&&siralama2wDuzgun&&!ciddiIhlal2w;
           if(duzeldi2w){
-            zoneReasons.push('ℹ️ 4 haftalık ortalamada kalıcı ciddi sapma var ama son 2 haftada dağılım zaten düzelmiş (Düşük %'+lowPct2w+', Yüksek %'+highPct2w+', Anaerobik %'+anaPct2w+') — güncel davranışı yansıtmadığı için engelleme uygulanmadı.');
+            zoneAcuteOverrideMsg='4 haftalık ortalamada kalıcı ciddi sapma var ama son 2 haftada dağılım zaten düzelmiş (Düşük %'+lowPct2w+', Yüksek %'+highPct2w+', Anaerobik %'+anaPct2w+') — güncel davranışı yansıtmadığı için engelleme uygulanmadı.';
+            zoneReasons.push('ℹ️ '+zoneAcuteOverrideMsg);
           } else {
             forceLow=true;
             const nedenler=[];
@@ -17727,6 +17740,7 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
     if(acwr>_esik.idealHigh||tsb<_tsbB.dengeliAlt){
       if(!forceLow){
         forceLow=true;
+        zoneAcuteOverrideMsg=null; // Öncelik 3'ün release-valve'ı geçerliliğini yitirdi — farklı bir nedenle bloke edildi
         zoneReasons.push('Aerobik verimlilik düşüşü + yük baskısı (ACWR '+acwr.toFixed(2)+', TSB '+tsb.toFixed(1)+') — tempo/eşik antrenman ertelendi, aerobik öncelikli.');
       }
     } else {
@@ -17796,7 +17810,7 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
   if(isPlanRecoveryNow) yModZone=Math.min(yModZone,0.85);
 
   const level=forceEasy?'forceEasy':forceLow?'forceLow':preferLow?'preferLow':forceQuality?'forceQuality':'normal';
-  return{level,forceEasy,forceLow,preferLow,forceQuality,planForceEasy,planPreferLow,yModZone,zoneReasons,düşükYükIstisnası};
+  return{level,forceEasy,forceLow,preferLow,forceQuality,planForceEasy,planPreferLow,yModZone,zoneReasons,düşükYükIstisnası,zoneAcuteOverrideMsg};
 }
 
 // ── Tür son kullanım & frekans yardımcıları (global) ─────────────────────────
