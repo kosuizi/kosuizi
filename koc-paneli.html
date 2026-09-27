@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.27-0840 --><!DOCTYPE html>
+<!-- Version: v2026.09.27-0907 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.27-0840';
+const APP_VERSION='v2026.09.27-0907';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -17576,6 +17576,7 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
   const z2=zoneDist2w||zoneDist4w||{};
   const anaPct2w=z2.anaPct??anaPct;
   const lowPct2w=z2.lowPct??lowPct;
+  const highPct2w=z2.highPct??highPct;
   const hasZone2w=zoneDist2w!=null&&z2.lowPct!=null;
 
   // ── Zone-kaynaklı kısıtlamalar için veri güveni eşikleri ───────────────────
@@ -17682,12 +17683,27 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
         const ciddiIhlal=lowPct<50||highPct>40||anaPct>20;
         const ciddiIhlalPrev=hasZonePrev&&(lowPctPrev<50||highPctPrev>40||anaPctPrev>20);
         if(ciddiIhlal&&ciddiIhlalPrev){
-          forceLow=true;
-          const nedenler=[];
-          if(lowPct<50) nedenler.push('Düşük Aerobik %'+lowPct+' (hedef %75-85, kritik altı)');
-          if(highPct>40) nedenler.push('Yüksek Aerobik %'+highPct+' (hedef %10-15, aşırı)');
-          if(anaPct>20) nedenler.push('Anaerobik %'+anaPct+' (hedef %5-10, aşırı)');
-          zoneReasons.push('Yük yoğunluk dağılımında 2 hafta üst üste ciddi sapma: '+nedenler.join(', ')+' — aerobik öncelikli.');
+          // EKLENDİ (2026.09.27 — Göksel'in kararıyla): 4 haftalık kronik ortalama,
+          // içindeki eski (artık düzeltilmiş) haftaları taşıdığı için "2 hafta üst üste
+          // ciddi sapma" kalıcılık şartını sağlasa bile GÜNCEL DAVRANIŞI yansıtmayabilir
+          // (rolling-average gecikme etkisi). forceQuality zaten simetriğini uyguluyor:
+          // 4w'de anaerobik düşük görünse bile 2w'de zaten yoğunluk varsa açılmıyor.
+          // Aynı mantık burada da: 2H (akut) penceresi kendi başına GÜVENİLİR (zone2wFull)
+          // ve TEMİZSE (sıralama doğru + kendi ciddi ihlal eşiklerinin altında), sporcu
+          // fiilen düzelmiş demektir — 4H'nin eski verisine dayanarak bloke etmeyelim.
+          const siralama2wDuzgun=hasZone2w&&(lowPct2w>highPct2w&&highPct2w>anaPct2w);
+          const ciddiIhlal2w=hasZone2w&&(lowPct2w<50||highPct2w>40||anaPct2w>20);
+          const duzeldi2w=hasZone2w&&zone2wFull&&siralama2wDuzgun&&!ciddiIhlal2w;
+          if(duzeldi2w){
+            zoneReasons.push('ℹ️ 4 haftalık ortalamada kalıcı ciddi sapma var ama son 2 haftada dağılım zaten düzelmiş (Düşük %'+lowPct2w+', Yüksek %'+highPct2w+', Anaerobik %'+anaPct2w+') — güncel davranışı yansıtmadığı için engelleme uygulanmadı.');
+          } else {
+            forceLow=true;
+            const nedenler=[];
+            if(lowPct<50) nedenler.push('Düşük Aerobik %'+lowPct+' (hedef %75-85, kritik altı)');
+            if(highPct>40) nedenler.push('Yüksek Aerobik %'+highPct+' (hedef %10-15, aşırı)');
+            if(anaPct>20) nedenler.push('Anaerobik %'+anaPct+' (hedef %5-10, aşırı)');
+            zoneReasons.push('Yük yoğunluk dağılımında 2 hafta üst üste ciddi sapma: '+nedenler.join(', ')+' — aerobik öncelikli.');
+          }
         } else if(ciddiIhlal){
           zoneReasons.push('ℹ️ Bu hafta yük yoğunluk dağılımında ciddi sapma görülüyor, kalıcılığı önümüzdeki hafta doğrulanacak — şimdilik engelleme yok.');
         } else {
