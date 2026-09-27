@@ -217,13 +217,13 @@
   .news-card { background:var(--bg2); padding:2.2rem; position:relative; overflow:hidden; transition:background .2s; }
   @media (hover:hover) and (pointer:fine) { .news-card:hover { background:var(--bg3); } }
   .news-card.tap-active { background:var(--bg3); }
-  .news-card.featured { grid-row:span 2; }
+  .news-card.featured { grid-row:span 2; display:flex; flex-direction:column; }
   .news-meta { font-family:'Space Mono',monospace; font-size:.65rem; letter-spacing:.12em; color:var(--accent); margin-bottom:.8rem; display:flex; align-items:center; gap:.6rem; }
   .news-meta::before { content:''; display:inline-block; width:18px; height:1px; background:var(--accent); }
   .news-title { font-weight:600; font-size:1.05rem; line-height:1.4; margin-bottom:.8rem; }
   .news-card.featured .news-title { font-size:1.4rem; line-height:1.3; }
   .news-body { font-size:.85rem; color:var(--text); opacity:.82; line-height:1.65; }
-  .news-card.featured .news-body { font-size:.92rem; }
+  .news-card.featured .news-body { font-size:.92rem; flex:1 1 auto; min-height:0; overflow:hidden; }
   .news-tag { display:inline-block; margin-top:1.2rem; padding:.2rem .6rem; border:1px solid var(--line); border-radius:3px; font-size:.65rem; letter-spacing:.1em; color:var(--muted); }
   /* Haber fotoğrafı: KIRPILMAZ (tam sığar, en-boy oranı korunur) */
   .news-photo-wrap { width:calc(100% + 4.4rem); height:260px; margin:-2.2rem -2.2rem .8rem -2.2rem; padding:1.2rem 1.5rem; box-sizing:border-box; display:flex; align-items:center; justify-content:center; }
@@ -1570,15 +1570,16 @@ function renderNews(){
     if(!oneCikan) oneCikan=entries.find(([,h])=>h.one_cikan==='one_cikan')||entries[0];
     const diger=entries.filter(e=>e!==oneCikan).slice(0,4);
     const TRUNC=120;
-    const TRUNC_FEATURED=480;
+    // Öne çıkan kartta artık sabit karakter sayısı YOK: kart sınırına göre
+    // JS ile (adaptFeaturedNewsBody) kısaltılıyor (27.09.2026 — Göksel isteği,
+    // "kartta daha alan olmasına rağmen ... ile kısaltılıyordu").
     const cardHTML=([id,h],featured)=>{
       const icerik=h.icerik||'';
       const isExpanded=id===__haberFeaturedId;
-      const limit=featured?TRUNC_FEATURED:TRUNC;
-      const uzunMu=icerik.length>limit;
-      const bodyHTML=isExpanded?icerik.replace(/\n/g,'<br>'):icerik.substring(0,limit)+(uzunMu?'…':'');
-      const okuAttr=(!isExpanded&&uzunMu)?` onclick="haberOku('${id}')" style="cursor:pointer"`:'';
-      const okuBtn=(!isExpanded&&uzunMu)?`<button type="button" class="news-read-btn" onclick="haberOku('${id}')">Oku</button>`:'';
+      const uzunMu=icerik.length>TRUNC;
+      const bodyHTML=isExpanded?icerik.replace(/\n/g,'<br>'):(featured?icerik:icerik.substring(0,TRUNC)+(uzunMu?'…':''));
+      const okuAttr=(!isExpanded&&!featured&&uzunMu)?` onclick="haberOku('${id}')" style="cursor:pointer"`:'';
+      const okuBtn=(!isExpanded&&!featured&&uzunMu)?`<button type="button" class="news-read-btn" onclick="haberOku('${id}')">Oku</button>`:'';
       return `
       <div class="news-card edit-target${featured?' featured':''}${isExpanded?' flip-in':''}">
         <button class="edit-pencil" onclick="editHaber('${id}')">✏️</button>
@@ -1593,10 +1594,137 @@ function renderNews(){
       </div>`;
     };
     newsGrid.innerHTML=cardHTML(oneCikan,true)+diger.map(e=>cardHTML(e,false)).join('');
+    const featuredCardEl=newsGrid.querySelector('.news-card.featured');
+    const featuredIsExpanded=oneCikan[0]===__haberFeaturedId;
+    if(featuredIsExpanded){
+      if(featuredCardEl) featuredCardEl.style.maxHeight='';   // okuma görünümünde tam metin zaten gösteriliyor
+    } else if(isMobileNewsLayout()){
+      // Mobilde kartlar tek satırda yan yana kayan eşit genişlikte kartlar
+      // (bkz. @media (max-width:768px) .news-grid); öne çıkanın büyük başlık
+      // fontu komşu kartlarla aynı bütçeye sığmıyor, bu yüzden burada masaüstü
+      // için tasarlanan dinamik sığdırma UYGULANMAZ — önceki, bildirilmemiş
+      // ve çalışan sabit 480 karakterlik kısaltma korunur (27.09.2026).
+      applyStaticFeaturedTruncation(newsGrid,oneCikan[0],oneCikan[1].icerik||'');
+    } else if(diger.length){
+      capFeaturedCardHeight(newsGrid,cardHTML,diger);
+      adaptFeaturedNewsBody(oneCikan[0],oneCikan[1].icerik||'');
+    } else if(featuredCardEl){
+      featuredCardEl.style.maxHeight='';
+    }
   } else {
     newsGrid.innerHTML='<div style="padding:2rem;color:#6b7280;font-size:.85rem;grid-column:1/-1;text-align:center">Henüz haber eklenmedi.</div>';
   }
 }
+// .news-grid'in mobil kuralı (@media max-width:768px) ile BİREBİR aynı eşik
+// olmalı — orada kartlar tek satırda eşit genişlikte kayan kartlara dönüşüyor.
+function isMobileNewsLayout(){
+  return window.matchMedia('(max-width:768px)').matches;
+}
+// Mobilde öne çıkan kart, önceki (bu değişiklikten önceki) davranışla AYNI
+// şekilde sabit 480 karakterde kesilir — bkz. renderNews içindeki not.
+function applyStaticFeaturedTruncation(grid,id,icerik){
+  const card=grid.querySelector('.news-card.featured');
+  const bodyEl=card&&card.querySelector('.news-body');
+  if(!bodyEl) return;
+  if(card) card.style.maxHeight='';
+  const LIMIT=480;
+  const uzunMu=icerik.length>LIMIT;
+  bodyEl.innerHTML=icerik.substring(0,LIMIT)+(uzunMu?'…':'');
+  let oku=card.querySelector('.news-read-btn');
+  if(uzunMu){
+    bodyEl.style.cursor='pointer';
+    bodyEl.setAttribute('onclick',`haberOku('${id}')`);
+    if(!oku){
+      oku=document.createElement('button');
+      oku.type='button';
+      oku.className='news-read-btn';
+      oku.textContent='Oku';
+      bodyEl.insertAdjacentElement('afterend',oku);
+    }
+    oku.onclick=()=>haberOku(id);
+  } else {
+    bodyEl.style.cursor='';
+    bodyEl.removeAttribute('onclick');
+    if(oku) oku.remove();
+  }
+}
+// Öne çıkan kartın satırları, "auto" boyutlanan CSS Grid satırlarında kendi
+// içeriği sağdaki 2 kartın toplamından uzunsa satırları KENDİSİ büyütür — bu
+// yüzden sabit karakter sınırı kaldırılınca uzun bir haberde kart sınırsızca
+// büyür ve kısaltma hiç tetiklenmez. Bunu önlemek için sağdaki 2 kartın DOĞAL
+// (öne çıkanın içeriğinden etkilenmeyen) yüksekliğini görünmez bir kopya
+// üzerinde ölçüp doğrudan öne çıkan karta max-height olarak veriyoruz —
+// stretch davranışı ne olursa olsun kart bu sınırın ötesine büyüyemez.
+// Yalnızca masaüstü (2fr:1fr grid) düzeninde çağrılır (bkz. isMobileNewsLayout).
+function capFeaturedCardHeight(grid,cardHTML,diger){
+  try{
+    const featured=grid.querySelector('.news-card.featured');
+    if(!featured) return;
+    if(!diger.length){ featured.style.maxHeight=''; return; }
+    const realDiger=grid.querySelector('.news-card:not(.featured)');
+    const w=realDiger?realDiger.getBoundingClientRect().width:0;
+    if(!(w>0)){ featured.style.maxHeight=''; return; }
+    const sample=diger.slice(0,2);
+    const m=document.createElement('div');
+    m.style.cssText='position:absolute;left:-99999px;top:0;visibility:hidden;pointer-events:none;width:'+w+'px';
+    m.innerHTML=sample.map(e=>cardHTML(e,false)).join('');
+    document.body.appendChild(m);
+    const kids=Array.from(m.querySelectorAll('.news-card'));
+    let target=0;
+    if(kids.length>=2) target=kids[0].offsetHeight+1.5+kids[1].offsetHeight;
+    else if(kids.length===1) target=kids[0].offsetHeight;
+    m.remove();
+    featured.style.maxHeight=target>0?target+'px':'';
+  }catch(e){}
+}
+// Öne çıkan haber kartının gövdesini, sabit bir karakter sayısına göre değil,
+// kartın GERÇEKTEN render edilen yüksekliğine göre kısaltır (kart sağdaki iki
+// küçük kartın toplam yüksekliğine göre esnediği için bu yükseklik habere göre
+// değişir). İki aşamalı: 1) tam metin sığıyor mu ölçülür, sığmıyorsa 2) "Oku"
+// butonu eklenir (bu da yer kaplar) ve ikili arama ile kalan alana tam sığan
+// en uzun metin bulunup sonuna "…" eklenir. 27.09.2026 — Göksel isteği.
+function adaptFeaturedNewsBody(id,icerik){
+  const grid=document.getElementById('news-grid');
+  const card=grid&&grid.querySelector('.news-card.featured');
+  const bodyEl=card&&card.querySelector('.news-body');
+  if(!bodyEl) return;
+  const fit=()=>{
+    bodyEl.textContent=icerik;
+    let oku=card.querySelector('.news-read-btn');
+    if(bodyEl.scrollHeight<=bodyEl.clientHeight+1){
+      bodyEl.style.cursor='';
+      bodyEl.removeAttribute('onclick');
+      if(oku) oku.remove();
+      return;
+    }
+    if(!oku){
+      oku=document.createElement('button');
+      oku.type='button';
+      oku.className='news-read-btn';
+      oku.textContent='Oku';
+      bodyEl.insertAdjacentElement('afterend',oku);
+    }
+    oku.onclick=()=>haberOku(id);
+    let lo=0,hi=icerik.length;
+    while(lo<hi){
+      const mid=(lo+hi+1)>>1;
+      bodyEl.textContent=icerik.slice(0,mid).trimEnd()+'…';
+      if(bodyEl.scrollHeight<=bodyEl.clientHeight+1) lo=mid; else hi=mid-1;
+    }
+    let cut=lo;
+    const sp=icerik.lastIndexOf(' ',cut);
+    if(sp>cut*0.6) cut=sp;
+    bodyEl.textContent=icerik.slice(0,cut).trimEnd()+'…';
+    bodyEl.style.cursor='pointer';
+    bodyEl.setAttribute('onclick',`haberOku('${id}')`);
+  };
+  requestAnimationFrame(()=>requestAnimationFrame(fit));
+}
+let __newsResizeTimer=null;
+window.addEventListener('resize',()=>{
+  clearTimeout(__newsResizeTimer);
+  __newsResizeTimer=setTimeout(()=>{ if(document.getElementById('news-grid')) renderNews(); },250);
+});
 function haberFotolari(h){
   let arr=[];
   if(h&&h.fotolar) arr=Array.isArray(h.fotolar)?h.fotolar:Object.values(h.fotolar);
