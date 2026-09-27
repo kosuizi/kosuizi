@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.27-1318 --><!DOCTYPE html>
+<!-- Version: v2026.09.27-1352 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.27-1318';
+const APP_VERSION='v2026.09.27-1352';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -2568,6 +2568,82 @@ function rozetAciklamaButonu(show,setShow,opts){
   return React.createElement('button',props,'ⓘ Rozetler ne anlama geliyor?');
 }
 
+// ── Haftalık Yüklenme Değerlendirmesi — Koç Paneli 🏠 Pano + Koşu İzlerim (2026.09.27
+// — Göksel talebi): o haftanın geçmiş+bugünkü TÜM günlerini ⚖️ rozetiyle AYNI TEK KAYNAK
+// calcDayComparison ile tek tek toplar, toplam gerçek/toplam plan oranına göre (yine AYNI
+// %80–%120 tolerans bandı — bkz. gercekPlanRenk) motive edici bir değerlendirme döner.
+// weekOffset:0=bu hafta, -1=geçen hafta vb. "Bugün" ve hafta sınırları KOÇUN/sporcunun
+// CİHAZINA değil, sporcunun kartındaki ÜLKESİNE göre (athleteWeekBoundsUTC/
+// athleteLocalDateStr) hesaplanır — aksi halde farklı saat diliminde bir sporcuda gün
+// kayması olur (bkz. calcMergedRecovery'deki AYNI 13.08.2026 düzeltmesi).
+function haftalikYukDegerlendirmesi(athlete,workouts,overrideMap,weekOffset){
+  if(!athlete?.id) return null;
+  const {start}=athleteWeekBoundsUTC(athlete,weekOffset||0);
+  const todayStr=athleteLocalDateStr(athlete);
+  let toplamActual=0,toplamPlanned=0,gunSayisi=0;
+  for(let i=0;i<7;i++){
+    const d=new Date(start.getTime());d.setUTCDate(d.getUTCDate()+i);
+    const dateStr=`${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`;
+    if(dateStr>todayStr) continue; // henüz gelmemiş gün — sayılmaz
+    const isPast=dateStr<todayStr,isToday=dateStr===todayStr;
+    const actual=(workouts||[]).filter(w=>w.athleteId===athlete.id&&w.date===dateStr);
+    let actualLoad=0,actualKm=0,actualDp=0;
+    actual.forEach(w=>{
+      const m=calcMetrics(w,athlete);
+      actualLoad+=m.yukObj||0;
+      if((w.spor||'kosu')==='kosu'){actualKm+=parseFloat(w.mesafe)||0;actualDp+=parseFloat(w.irtifa)||0;}
+    });
+    const ov=overrideMap?.[dateStr];
+    const planIsKosuCapraz=ov?.isKosuCapraz===true||(ov?.tip!=='capraz'&&(ov?.yapilar||[]).some(y=>y&&y._caprazNot));
+    const c=calcDayComparison({actual,actualLoad,actualKm,actualDp,
+      planTip:ov?.tip,planSureDk:ov?.sure_dk,planYapilar:ov?.yapilar,planIsKosuCapraz,
+      planYukHedef:ov?.yukHedef||0,athlete,isPast,isToday});
+    if(!c) continue;
+    toplamActual+=c.actual||0;
+    toplamPlanned+=c.planned||0;
+    gunSayisi++;
+  }
+  if(gunSayisi===0||toplamPlanned<=0) return null;
+  const pct=Math.round(toplamActual/toplamPlanned*100);
+  const status=pct>=80&&pct<=120?'ok':(pct<80?'eksik':'fazla');
+  return{pct,status,actual:round1(toplamActual),planned:round1(toplamPlanned),gunSayisi,weekStart:start};
+}
+// Yukarıdaki değerlendirmeye göre ÇEŞİTLİ (tekdüze olmayan) motive edici bir cümle seçer.
+// Aynı hafta+sporcu için sayfa her render olduğunda AYNI mesaj kalsın diye seçim
+// Math.random() değil, hafta başlangıcının epoch değerinden türeyen sabit bir indekstir.
+const HAFTALIK_YUK_MESAJLARI={
+  ok:[
+    '✅ Bu hafta hedeflenen antrenman yükünü tam kıvamında tuttun!',
+    '🎯 Bu hafta planlanan yüke sadık kaldın — istikrar tam da böyle inşa edilir.',
+    '👏 Bu hafta hedeflenen yükü karşıladın, tebrikler!',
+    '💪 Yük dengen bu hafta gayet iyi — plana sadakat işe yarıyor.',
+    '🌟 Bu hafta tam hedefindesin — bu tempoyu koru.'
+  ],
+  eksik:[
+    '📉 Bu hafta hedeflenen yükün altında kaldın — gelecek hafta telafi fırsatı var.',
+    '🌤️ Bu hafta biraz hafif geçti, hedeflenen yüke ulaşamadın — dinlenmiş olman da bir kazanç olabilir.',
+    '📊 Bu hafta planlanan yükün gerisinde kaldın — nedenini birlikte değerlendirelim.',
+    '🔄 Bu hafta hedefin altında kaldın, önemli değil — sürdürülebilirlik hız yapmaktan önemlidir.',
+    '🌱 Bu hafta biraz eksik kaldı — form kaybolmaz, devam edelim.'
+  ],
+  fazla:[
+    '🔥 Bu hafta hedeflenen yükün üzerine çıktın — harika bir çaba, toparlanmaya dikkat!',
+    '📈 Bu hafta planlananın ötesine geçtin — form yükseliyor, aşırı yüklenmeye dikkat et.',
+    '⚡ Bu hafta hedefin üstünde bir performans sergiledin — dinlenme günlerini atlama.',
+    '🚀 Bu hafta beklenenden fazla yüklendin — motivasyon harika, ama sakatlık riskini gözden kaçırma.',
+    '💥 Bu hafta hedefi aştın — güçlü bir hafta, vücudunu dinlemeyi de unutma.'
+  ]
+};
+function haftalikYukMesaji(deger){
+  if(!deger) return null;
+  const liste=HAFTALIK_YUK_MESAJLARI[deger.status]||[];
+  if(!liste.length) return null;
+  const anahtar=String(deger.weekStart.getTime())+'_'+deger.status;
+  let hash=0;
+  for(let i=0;i<anahtar.length;i++) hash=(hash*31+anahtar.charCodeAt(i))>>>0;
+  return liste[hash%liste.length];
+}
+
 // 'Tümü' periyodu için plan_snapshots taramasının güvenlik sınırları —
 // VerilenAntrenmaniYapabilmePuaniKarti (sporcu kartı) ve PaceDisiplinSiralamasiKarti
 // (Karşılaştır sekmesi takım sıralaması) tarafından ortak kullanılır.
@@ -4203,6 +4279,42 @@ function zonedWallTimeToUtc(y,mo,d,h,mi,tz){
 function athleteTZ(ath){
   const c=COUNTRIES.find(x=>x.code===(ath&&ath.ulke||'TR'));
   return c?c.tz:'Europe/Istanbul';
+}
+
+// ── Sporcunun Yerel "Şimdi"si — 2026.09.27 (Göksel talebi: haftalık yük özeti
+// koçun/sporcunun bulunduğu cihazın saat dilimine göre değil, sporcunun kart
+// üzerinde tanımlı ÜLKESİNE göre "hangi gün/Pazar mı" karar vermeli — calcMergedRecovery'
+// deki 13.08.2026 düzeltmesiyle AYNI ilke, AYNI tzOffsetMinutes altyapısı). ──────────────
+// DÖNDÜRÜLEN Date nesnesinin LOKAL getter'ları (getDate/getDay/setHours vb.) KULLANILMAZ —
+// yalnızca getUTC* okuyucularıyla okunmalıdır, aksi halde tarayıcının kendi saat diliminden
+// ikinci (yanlış) bir kayma eklenir.
+function athleteLocalNow(athlete){
+  const tz=athleteTZ(athlete);
+  const now=new Date();
+  const off=tzOffsetMinutes(now,tz);
+  return new Date(now.getTime()+off*60000);
+}
+// YYYY-MM-DD — sporcunun o ANDAKİ yerel tarihi.
+function athleteLocalDateStr(athlete){
+  const d=athleteLocalNow(athlete);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`;
+}
+// 0=Pazar…6=Cumartesi — sporcunun o ANDAKİ yerel haftanın günü.
+function athleteLocalWeekday(athlete){ return athleteLocalNow(athlete).getUTCDay(); }
+// getWeekBounds ile AYNI Pazartesi–Pazar mantığı, ama sporcunun yerel "an"ına göre —
+// getWeekBounds'a (30+ çağrı yeri var, dokunulmaz) DOKUNMADAN, sadece UTC getter/setter
+// kullanarak ayrıştırılmış hâli.
+function athleteWeekBoundsUTC(athlete,offset){
+  const now=athleteLocalNow(athlete);
+  const day=now.getUTCDay();
+  const diffToMon=day===0?-6:1-day;
+  const mon=new Date(now.getTime());
+  mon.setUTCDate(mon.getUTCDate()+diffToMon+(offset||0)*7);
+  mon.setUTCHours(0,0,0,0);
+  const sun=new Date(mon.getTime());
+  sun.setUTCDate(mon.getUTCDate()+6);
+  sun.setUTCHours(23,59,59,999);
+  return{start:mon,end:sun};
 }
 
 // ── Giriş Anketi — yeni sporcu onboarding formu ────────────────────────────
@@ -30404,6 +30516,18 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
   const wkKm=round1(wks.reduce((s,w)=>s+(parseFloat(w.mesafe)||0),0));
   const wkMech=round1(wks.reduce((s,w)=>s+(calcMetrics(w,athlete).mechLoad||0),0));
 
+  // 2026.09.27 — Göksel talebi: haftanın TÜM yüklenme değerleri (⚖️ Gerçek/Plan ile
+  // AYNI TEK KAYNAK) analiz edilerek Pano'da motive edici bir özet cümle gösterilir.
+  // Sadece sporcunun YEREL Pazar günü oluşur (bkz. athleteLocalWeekday — ülkesine göre,
+  // koçun cihaz saatinden bağımsız). restBandSnap bu haftanın overrideMap'ini zaten
+  // taşıyor (yukarıdaki Dinlenme Uyarı Bandı ile AYNI kaynak — ikinci bir okuma gerekmez).
+  const haftalikYukDeger=React.useMemo(
+    ()=>athleteLocalWeekday(athlete)===0?haftalikYukDegerlendirmesi(athlete,workouts,restBandSnap?.overrideMap,0):null,
+    [athlete,workouts,restBandSnap]
+  );
+  const haftalikYukMsg=React.useMemo(()=>haftalikYukMesaji(haftalikYukDeger),[haftalikYukDeger]);
+
+
   // Son antrenman toparlanma bilgisi — calcMergedRecovery: aynı gün birden fazla antrenman varsa
   // sadece sortedW[0]'ı değil, son 72s içindeki TÜM antrenmanları değerlendirir.
   const athWorkouts=(workouts||[]).filter(w=>w.athleteId===athlete?.id).sort((a,b)=>new Date(b.date)-new Date(a.date));
@@ -30642,6 +30766,18 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
       React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}},
         React.createElement('div',{className:'card-title',style:{margin:0}},'Haftalık Özet'),
         React.createElement(ShareBtn,{elRef:refHaftalik,filename:'haftalik_ozet.png',title:'Haftalık Özet',text:athlete?.ad+' bu hafta antrenman özeti'})
+      ),
+      // 2026.09.27 — Göksel talebi: haftanın hedeflenen yüke göre nerede durduğunu
+      // (⚖️ Gerçek/Plan ile AYNI tolerans) özetleyen motive edici şerit.
+      haftalikYukMsg&&React.createElement('div',{style:{
+        display:'flex',alignItems:'center',gap:8,marginBottom:10,padding:'8px 12px',borderRadius:8,
+        fontSize:12,fontWeight:600,lineHeight:1.4,
+        color:haftalikYukDeger.status==='ok'?'var(--success)':'var(--warn)',
+        background:haftalikYukDeger.status==='ok'?'var(--success-bg)':'var(--warn-bg)',
+        border:'1px solid '+(haftalikYukDeger.status==='ok'?'var(--success)':'var(--warn)')
+      }},
+        React.createElement('span',{style:{flex:1}},haftalikYukMsg),
+        React.createElement('span',{style:{fontSize:11,fontWeight:800,whiteSpace:'nowrap'}},'%'+haftalikYukDeger.pct)
       ),
       React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))',gap:12}},
         (()=>{
@@ -37863,6 +37999,15 @@ function SporcuPlanView(){
           );
         };
 
+        // 2026.09.27 — Göksel talebi: haftanın TÜM yüklenme değerleri (⚖️ Gerçek/Plan ile
+        // AYNI TEK KAYNAK) analiz edilerek motive edici bir özet — Koç Paneli 🏠 Pano ile
+        // AYNI ORTAK fonksiyonlar (panel paritesi). Sadece sporcunun YEREL Pazar günü
+        // oluşur (bkz. athleteLocalWeekday — ülkesine göre, cihaz saatinden bağımsız).
+        const haftalikYukDeger=athleteLocalWeekday(athlete)===0
+          ?haftalikYukDegerlendirmesi(athlete,workouts,planSnap?.overrideMap,0)
+          :null;
+        const haftalikYukMsg=haftalikYukMesaji(haftalikYukDeger);
+
         const durumKart=React.createElement('div',{className:'ki-card'},
           React.createElement(AcilirKartBaslik,{baslik:'📊 Durumum',acik:durumAcik,onToggle:toggleDurum}),
           accordionWrap(durumAcik,()=>React.createElement(React.Fragment,null,
@@ -37883,6 +38028,18 @@ function SporcuPlanView(){
                     '⏱ Tahmini süre — Yük, tür, D+ ve CTL bandınıza göre hesaplanır. Uyku kalitesi, beslenme ve HRV bu süreyi değiştirebilir.'
                   )
                 )
+          ),
+
+          // 2026.09.27 — Göksel talebi: haftalık yüklenme değerlendirmesi (bkz. yukarısı).
+          haftalikYukMsg&&React.createElement('div',{style:{
+            display:'flex',alignItems:'center',gap:8,marginBottom:12,padding:'8px 10px',borderRadius:8,
+            fontSize:11,fontWeight:600,lineHeight:1.4,
+            color:haftalikYukDeger.status==='ok'?'var(--success)':'var(--warn)',
+            background:haftalikYukDeger.status==='ok'?'var(--success-bg)':'var(--warn-bg)',
+            border:'1px solid '+(haftalikYukDeger.status==='ok'?'var(--success)':'var(--warn)')
+          }},
+            React.createElement('span',{style:{flex:1}},haftalikYukMsg),
+            React.createElement('span',{style:{fontSize:10,fontWeight:800,whiteSpace:'nowrap'}},'%'+haftalikYukDeger.pct)
           ),
 
           // Haftalık Hedef İlerlemesi
