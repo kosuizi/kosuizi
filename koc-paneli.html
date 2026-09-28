@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.28-1311 --><!DOCTYPE html>
+<!-- Version: v2026.09.28-1358 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -8,44 +8,42 @@
 <meta http-equiv="Expires" content="0">
 <title>Antrenman Takip</title>
 <script>
-// ── Otomatik Güncel Sürüm Kontrolü (18.09.2026 — Göksel isteği; 28.09.2026'da yeniden yazıldı) ──
-// Sporcuların/koçun tarayıcı önbelleğinden (veya CDN önbelleğinden) ESKİ bir koc-paneli.html
-// görmesini önler. Önceki sürüm sunucudaki dosyanın ETag imzasını localStorage'a "son görülen"
-// diye kaydedip bir sonrakiyle kıyaslıyordu; bu, ilk açılışta ESKİ (önbellekteki) kopya
-// çalışırken sunucudaki YENİ imzayı "görüldü" diye kaydedip bir daha hiç yenilememe açığı
-// taşıyordu (kod doğru ama ekranda eski sayfa). Şimdi kıyas, ÇALIŞAN kopyanın kendi sürümü
-// (RUNNING) ile sunucudaki dosyanın en üstündeki "Version:" HTML yorumu arasında yapılır;
-// saklanan bir durum yoktur, bu yüzden eski kopya her açılışta yakalanır. Sadece dosyanın ilk
-// birkaç KB'ı okunur (tam 2+ MB indirilmez). Farklıysa sayfa önbelleği atlayan (?_v=) bir
-// adresle TAZE yüklenir; sessionStorage koruması 15 sn içinde en fazla bir yenilemeye izin verir.
-// NOT: bu düzeltmeden ÖNCEKİ bir kopya bu kontrolü içermez — o cihazda EN AZ BİR KEZ tam yenileme
-// (Ctrl+Shift+R) gerekir; ondan sonra her güncelleme otomatik yakalanır.
-// RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
+// ── Otomatik Güncel Sürüm Kontrolü (18.09.2026 — Göksel isteği) ─────────────
+// Sporcuların/koçun tarayıcı önbelleğinden (veya CDN önbelleğinden) ESKİ bir
+// koc-paneli.html görmesini önler. Sayfa açıldığında (VE tarayıcının
+// "geri-ileri önbelleği" bfcache'ten bu sayfayı canlandırdığında, VE sekme
+// arka plandan öne geldiğinde) sunucudaki dosyanın ETag/Last-Modified imzasını
+// hafif bir HEAD isteğiyle (cache:'no-store' — bu istek asla önbellekten
+// yanıtlanmaz) kontrol eder. Önceki ziyarette kaydedilen imzadan FARKLIYSA,
+// bu cihazda gerçekten YENİ bir sürüm var demektir — sayfa, önbelleği atlayan
+// (rastgele ?_v= parametreli) bir adrese yönlendirilerek TAZE olarak yeniden
+// yüklenir. Bu, tüm ağır kütüphaneler (React, Chart.js vb.) indirilmeden ÖNCE,
+// mümkün olan en erken noktada çalışır. sessionStorage koruması aynı sekmede
+// 15 saniye içinde en fazla bir zorunlu yenilemeye izin verir (sonsuz döngü
+// riski olmaz). NOT: bu script'in KENDİSİ de eski bir önbellekten geliyorsa
+// (bu düzeltmeden ÖNCEKİ bir kopya), o eski kopyada bu kontrol hiç yok —
+// o durumda cihazın EN AZ BİR KEZ elle/tam yenilenmesi gerekir; ondan sonra
+// her gelecekteki güncelleme otomatik yakalanır.
 (function(){
   try{
-    var RUNNING='v2026.09.28-1311';
+    var SIG_KEY='kosuizi_last_sig';
     var GUARD_KEY='kosuizi_stale_reload_at';
-    var reload=function(){
-      var last=parseInt(sessionStorage.getItem(GUARD_KEY)||'0',10);
-      if(Date.now()-last<=15000)return;
-      sessionStorage.setItem(GUARD_KEY,String(Date.now()));
-      var u=new URL(location.href);
-      u.searchParams.set('_v',Date.now());
-      location.replace(u.toString());
-    };
-    var head=function(r){
-      if(!r||!r.body||!r.body.getReader)return r.text();
-      var rd=r.body.getReader();
-      return rd.read().then(function(x){
-        try{rd.cancel();}catch(e){}
-        return new TextDecoder().decode(x.value||new Uint8Array());
-      });
-    };
     var check=function(){
       try{
-        fetch(location.pathname,{cache:'no-store',headers:{'Range':'bytes=0-4095'}}).then(head).then(function(txt){
-          var m=new RegExp('<!'+'--\\s*Version:\\s*(v[0-9.\\-]+)\\s*--'+'>').exec(String(txt).slice(0,2000));
-          if(m&&m[1]!==RUNNING)reload();
+        fetch(location.pathname,{method:'HEAD',cache:'no-store'}).then(function(r){
+          var sig=r.headers.get('etag')||r.headers.get('last-modified')||'';
+          if(!sig)return;
+          var prev=localStorage.getItem(SIG_KEY);
+          localStorage.setItem(SIG_KEY,sig);
+          if(prev&&prev!==sig){
+            var last=parseInt(sessionStorage.getItem(GUARD_KEY)||'0',10);
+            if(Date.now()-last>15000){
+              sessionStorage.setItem(GUARD_KEY,String(Date.now()));
+              var u=new URL(location.href);
+              u.searchParams.set('_v',Date.now());
+              location.replace(u.toString());
+            }
+          }
         }).catch(function(){});
       }catch(e){}
     };
@@ -136,7 +134,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 .btn{padding:8px 14px;border-radius:var(--radius);border:1px solid var(--border);background:var(--bg-primary);color:var(--text-primary);font-size:13px;cursor:pointer;transition:all .15s;font-family:inherit}
 .btn:hover{background:var(--bg-secondary)}
 .btn-primary{background:var(--info-bg);color:var(--info);border-color:transparent}
-.btn-primary:hover{opacity:.85}
+.btn-primary:hover{background:var(--info-bg);opacity:.85}
+/* 2026.09.28 — Optimize/Orijinal gibi ikili seçimler: yalnızca iki net görünüm (seçili=dolu, seçili değil=çerçeveli).
+   .btn:hover arka planı eskiden seçili butonun rengini ezip "kararsız" bir görüntü üretiyordu (mobilde dokunma sonrası takılı hover). */
+.seg-btn{padding:5px 12px;font-size:12px;border-radius:var(--radius);border:1px solid var(--border);background:var(--bg-primary);color:var(--text-secondary);cursor:pointer;font-family:inherit;transition:none;-webkit-tap-highlight-color:transparent}
+.seg-btn.on{background:var(--info);color:#fff;border-color:var(--info);font-weight:600}
+.seg-btn.off{background:var(--bg-primary);color:var(--text-secondary)}
+@media (hover:hover){.seg-btn.off:hover{background:var(--bg-secondary)}}
+.seg-btn:focus{outline:none}
+.seg-btn:focus-visible{outline:2px solid var(--info);outline-offset:1px}
 .btn-success{background:var(--success-bg);color:var(--success);border-color:transparent}
 .btn-danger{color:var(--danger);border-color:var(--danger)}
 .btn-sm{padding:5px 10px;font-size:12px}
@@ -311,7 +317,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.28-1311';
+const APP_VERSION='v2026.09.28-1358';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -3824,36 +3830,6 @@ const EMAILJS_CONFIG={
 
 // SporcuAnketi formundan okunabilir bir metin özeti üretir (e-posta içeriği için).
 // mhrPatch/lthrPatch verilirse (onay bekleyen öneriler), bunlar ayrı satır olarak eklenir.
-// ── Sporcu bağlantıları (Instagram / Strava / Blog) — 2026.09.28 Göksel talebi ──
-// Web sitesi (index.html) bu üç alanı DOĞRUDAN <a href="..."> olarak basar; bu yüzden
-// kayıttan ÖNCE geçerli bir http(s) adresine çevrilir. Instagram için "@kullanici"
-// veya sadece "kullanici" yazmak yeterlidir. Geçersiz/başka şemalı (javascript: vb.)
-// girişler reddedilir. Boş değer = alan temizlenir.
-function normalizeSosyalUrl(kind,raw){
-  const v=String(raw==null?'':raw).trim();
-  if(!v)return{ok:true,url:''};
-  const etiket={instagram:'Instagram',strava:'Strava',blog:'Blog'}[kind]||'Bağlantı';
-  let cand=v;
-  if(kind==='instagram'){
-    const h=v.replace(/^@/,'');
-    if(/^[A-Za-z0-9._]{1,30}$/.test(h))cand='https://www.instagram.com/'+h+'/';
-  }
-  if(!/^[a-z][a-z0-9+.-]*:\/\//i.test(cand)){
-    if(/^[a-z][a-z0-9+.-]*:/i.test(cand)&&!/^[^\s\/]+\.[^\s\/]+/.test(cand))return{ok:false,err:etiket+': geçerli bir web adresi girin.'};
-    cand='https://'+cand;
-  }
-  let u;
-  try{u=new URL(cand);}catch(e){return{ok:false,err:etiket+': geçerli bir web adresi girin.'};}
-  if(u.protocol!=='https:'&&u.protocol!=='http:')return{ok:false,err:etiket+': yalnızca http/https adresleri kabul edilir.'};
-  if(u.protocol==='http:')u.protocol='https:';
-  const host=u.hostname.toLowerCase();
-  if(host.indexOf('.')<0)return{ok:false,err:etiket+': geçerli bir web adresi girin.'};
-  const hostEnds=function(d){return host===d||host.endsWith('.'+d);};
-  if(kind==='instagram'&&!hostEnds('instagram.com'))return{ok:false,err:'Instagram: adres instagram.com ile olmalı (ör. @kullaniciadi).'};
-  if(kind==='strava'&&!(hostEnds('strava.com')||hostEnds('strava.app.link')))return{ok:false,err:'Strava: adres strava.com ile olmalı.'};
-  return{ok:true,url:u.href};
-}
-
 function anketOzetiOlustur(formLive,mhrPatch,lthrPatch){
   const satirlar=[];
   const ekle=function(etiket,deger){
@@ -3873,9 +3849,6 @@ function anketOzetiOlustur(formLive,mhrPatch,lthrPatch){
   ekle('Çapraz Antrenman Günleri',(formLive.capraz_gunleri||[]).join(', '));
   const uzunArr=Array.isArray(formLive.uzun_gun)?formLive.uzun_gun:[formLive.uzun_gun].filter(Boolean);
   ekle('Uzun Koşu Günü',uzunArr.join(', '));
-  ekle('Instagram',formLive.instagram);
-  ekle('Strava',formLive.strava);
-  ekle('Blog',formLive.blog);
   return satirlar.join('\n');
 }
 
@@ -4286,7 +4259,7 @@ const SPOR_OFSET_GUVEN={
 // (bkz. kuvvet günlerinde %581/%438 gibi sahte "aşırı yük" uyarıları hatası).
 const RPE_VARSAYILAN={kuvvet:5, pilates:4, yoga:3, diger:5};
 
-const EMPTY_A={ad:'',soyad:'',foto:'',strava:'',instagram:'',blog:'',cinsiyet:'Erkek',dogum:'',kilo:'',boy:'',rhr:'',mhr:'',lthr:'',ftp:'',vo2max:'',vlt:'',disiplin:'karma',uzun_gun:[],kosu_gunleri:[],capraz_gunleri:[],hrv_durum:'',hrv_7gun:'',sakatlık:'1',motivasyon:'3',dinlenme_siklik:'3x1',pb_5k:'',pb_10k:'',pb_hm:'',pb_m:'',pb_5k_tarih:'',pb_10k_tarih:'',pb_hm_tarih:'',pb_m_tarih:'',yarıslar:[],anket_pin:'',kuvvet_link:'',kuvvet_link2:'',kuvvet_link3:'',kuvvet_aciklama:'',seviye:'baslangic',antrenman_amaci:'',antrenman_amaci_tarih:'',pasif:false,giris_anketi:null,giris_anketi_tarih:'',ulke:'TR'};
+const EMPTY_A={ad:'',soyad:'',foto:'',strava:'',cinsiyet:'Erkek',dogum:'',kilo:'',boy:'',rhr:'',mhr:'',lthr:'',ftp:'',vo2max:'',vlt:'',disiplin:'karma',uzun_gun:[],kosu_gunleri:[],capraz_gunleri:[],hrv_durum:'',hrv_7gun:'',sakatlık:'1',motivasyon:'3',dinlenme_siklik:'3x1',pb_5k:'',pb_10k:'',pb_hm:'',pb_m:'',pb_5k_tarih:'',pb_10k_tarih:'',pb_hm_tarih:'',pb_m_tarih:'',yarıslar:[],anket_pin:'',kuvvet_link:'',kuvvet_link2:'',kuvvet_link3:'',kuvvet_aciklama:'',seviye:'baslangic',antrenman_amaci:'',antrenman_amaci_tarih:'',pasif:false,giris_anketi:null,giris_anketi_tarih:'',ulke:'TR'};
 
 // ── Sporcunun bulunduğu ülke & saat dilimi ────────────────────────────────────
 // Amaç: Strava'dan gelen antrenman date/time alanları sporcunun O ANKİ yerel
@@ -5715,23 +5688,6 @@ function SporcuModal({onClose,onSave,initial,races}){
           'Otomatik çekim CORS nedeniyle çalışmayabilir. Başarısız olursa manuel yükleme yapın.'
         )
       ),
-      // Instagram / Blog (2026.09.28 — sporcu anketiyle aynı alanlar; site kartında ikon olarak görünür)
-      [
-        {k:'instagram',l:'Instagram (@kullaniciadi veya link)',ph:'@kullaniciadi'},
-        {k:'blog',l:'Blog / Web Sitesi',ph:'https://bloguniz.com'}
-      ].map(function(x){
-        const chk=f[x.k]?normalizeSosyalUrl(x.k,f[x.k]):{ok:true};
-        return React.createElement('div',{key:x.k,className:'form-group',style:{marginBottom:8}},
-          React.createElement('label',null,x.l),
-          React.createElement('input',{
-            type:'text',inputMode:'url',autoCapitalize:'none',autoCorrect:'off',spellCheck:false,
-            value:f[x.k]||'',placeholder:x.ph,
-            onChange:e=>set(x.k,e.target.value),
-            onBlur:()=>{const r=normalizeSosyalUrl(x.k,f[x.k]);if(r.ok&&r.url!==(f[x.k]||''))set(x.k,r.url);}
-          }),
-          !chk.ok&&React.createElement('div',{style:{fontSize:11,color:'var(--danger)',marginTop:3}},chk.err)
-        );
-      }),
       // SN-5: Kuvvet antrenmanı video/program linkleri
       React.createElement('div',{className:'form-group',style:{marginBottom:8}},
         React.createElement('label',null,'💪 Kuvvet Antrenman Linkleri (Koşu İzlerim\'de görünür)'),
@@ -6055,10 +6011,6 @@ function SporcuModal({onClose,onSave,initial,races}){
       React.createElement('div',{className:'flex-gap',style:{marginTop:16}},
         React.createElement('button',{className:'btn btn-primary',onClick:()=>{
           if(!f.ad.trim())return alert('Ad alanı zorunlu!');
-          // Instagram/Blog: site bunları doğrudan href olarak basar — kayıttan önce normalize et
-          const _sosyal={};const _sosyalHata=[];
-          ['instagram','blog'].forEach(k=>{const r=normalizeSosyalUrl(k,f[k]);if(r.ok)_sosyal[k]=r.url;else _sosyalHata.push(r.err);});
-          if(_sosyalHata.length)return alert('⚠️ Kaydedilmedi:\n\n'+_sosyalHata.join('\n'));
           // KALİBRASYON SAYAÇ SIFIRLAMA (Temmuz 2026): vLT manuel olarak (bu formdan)
           // değiştirildiğinde, Reçete Geri Bildirim Kalibrasyonu'nun "son kalibrasyon"
           // damgası artık geçerli değil — manuel değer artık taban alınmalı, sistem
@@ -6070,7 +6022,7 @@ function SporcuModal({onClose,onSave,initial,races}){
           // boundaryLastCalib sıfırlanır — eski damga, yeni LTHR referansıyla alınan taze
           // sinyalleri "zaten yakın zamanda kalibre edildi" sanıp gereksiz yere bekletmesin.
           const _lthrChanged=String(f.lthr||'')!==String((initial?.lthr)||'');
-          const _payload={...f,..._sosyal,id:f.id||uid()};
+          const _payload={...f,id:f.id||uid()};
           if(_vltChanged){_payload.fbLastCalib=null;}
           if(_lthrChanged){_payload.boundaryLastCalib=null;}
           onSave(_payload);
@@ -16319,6 +16271,25 @@ function calcWeeklyTargets(athlete, races, workouts, optimizeMode=false, history
     plan:calcWeeklyTargetsCore(athlete,races.map(x=>({...x,__force:x.id===r.id})),workouts,r,history)
   }));
 
+  // KÖK NEDEN DÜZELTMESİ (28.09.2026 — "Chianti seçip Optimize'a basınca bu haftanın hedefi,
+  // İstanbul Maratonu seçip Optimize'a basınca olandan farklı"): eskiden ağırlık 1.0'ı her zaman
+  // O AN SEÇİLİ hedef yarışın planı alıyordu, diğerleri ise 0.1–0.5 alıyordu. Yani hedef yarışı
+  // değiştirmek — "tüm yarışlar entegre" olmasına rağmen — aynı haftanın optimize hedefini
+  // değiştiriyordu (Taper sınırı ve yarış haftası koruması da yalnızca seçili yarışa bağlıydı).
+  // Artık 1.0 ağırlığı SEÇİMDEN BAĞIMSIZ "çıpa" yarış alır (A/B önceliği → en zor, yani
+  // Otomatik'in seçeceği yarış; Otomatik davranış AYNEN korunur). Tüm yarışlar aynı kuralla
+  // katkı verir; Taper sınırı ve yarış haftası koruması TÜM yarışlar için geçerlidir.
+  let _anchorId=null;
+  try{
+    const _autoRaces=(races||[]).map(x=>{if(!x.__force)return x;const c={...x};delete c.__force;return c;});
+    _anchorId=selectRaces(athlete,_autoRaces).primary?.id||null;
+  }catch(e){_anchorId=null;}
+  const _proxWeight=(race,weekStart)=>{
+    const d=Math.max(0,Math.ceil((new Date(race.tarih+'T12:00:00')-weekStart)/864e5));
+    return Math.max(0.1,0.5*(1-(d>365?1:d/365)*0.7));
+  };
+  const _raceWeight=(race,weekStart)=>race.id===_anchorId?1:_proxWeight(race,weekStart);
+
   // Orijinal planın her haftasını diğer yarışlarla entegre et
   const entegre=orijinalPlan.map(wk=>{
     // YARIŞ HAFTASI: Optimizasyonu atla. Yarışın kesin koşulacağı varsayılır,
@@ -16327,11 +16298,20 @@ function calcWeeklyTargets(athlete, races, workouts, optimizeMode=false, history
     if(wk.isRaceWeek){
       return {...wk, _optimize:false, _origKm:wk.targetKm, _origDp:wk.targetDp};
     }
-    // Diğer yarışların bu haftaya ağırlıklı katkısı
-    // Ağırlık = yarışa kalan süreye ters orantılı (yakın yarış daha ağır)
-    let kmSum=wk.targetKm, dpSum=wk.targetDp, weightSum=1;
-    const daysToMain=Math.ceil((new Date(primary.tarih+'T12:00:00')-wk.weekStart)/864e5);
-    const mainWeight=Math.max(0.3,1-(daysToMain>365?1:daysToMain/365)*0.5);
+    // Hafta, DİĞER bir yarışın yarış haftasıysa aynı koruma uygulanır (seçimden bağımsızlık için):
+    // o yarışın kendi yarış haftası hedefi aynen alınır.
+    for(const {plan:dp2} of digerPlanlar){
+      const rw=dp2.find(w2=>w2.isRaceWeek&&Math.abs(w2.weekStart-wk.weekStart)<7*864e5);
+      if(rw&&rw.targetKm>0){
+        return {...wk, targetKm:rw.targetKm, targetDp:rw.targetDp, phase:'Taper',
+          _optimize:true, _origKm:wk.targetKm, _origDp:wk.targetDp};
+      }
+    }
+    // Ağırlıklı ortalama: seçili (primary) yarışın planı da, diğerleri de AYNI kuralla katkı verir
+    const baseW=_raceWeight(primary,wk.weekStart);
+    let kmSum=wk.targetKm*baseW, dpSum=wk.targetDp*baseW, weightSum=baseW;
+    const taperKms=[], taperDps=[];
+    if(wk.phase==='Taper'){taperKms.push(wk.targetKm);taperDps.push(wk.targetDp);}
 
     digerPlanlar.forEach(({race:r,plan:dp2})=>{
       // Bu hafta diğer yarışın planında karşılık geldiği haftayı bul
@@ -16340,13 +16320,13 @@ function calcWeeklyTargets(athlete, races, workouts, optimizeMode=false, history
         return diff<7*864e5;
       });
       if(!match||match.targetKm<=0)return;
-      // Uzak yarışlar daha az ağırlık
       const daysToOther=Math.ceil((new Date(r.tarih+'T12:00:00')-wk.weekStart)/864e5);
       if(daysToOther<0)return; // Geçmiş yarış
-      const otherWeight=Math.max(0.1,0.5*(1-(daysToOther>365?1:daysToOther/365)*0.7));
+      const otherWeight=_raceWeight(r,wk.weekStart);
       kmSum+=match.targetKm*otherWeight;
       dpSum+=match.targetDp*otherWeight;
       weightSum+=otherWeight;
+      if(match.phase==='Taper'){taperKms.push(match.targetKm);taperDps.push(match.targetDp);}
     });
 
     const optKm=round1(kmSum/weightSum);
@@ -16361,9 +16341,9 @@ function calcWeeklyTargets(athlete, races, workouts, optimizeMode=false, history
         enKısıtlayıcıFaz=match.phase;
     });
 
-    // Faz Taper ise km'yi orijinal taper hedefine sınırla
-    const finalKm=enKısıtlayıcıFaz==='Taper'?Math.min(optKm,wk.targetKm):optKm;
-    const finalDp=enKısıtlayıcıFaz==='Taper'?Math.min(optDp,wk.targetDp):optDp;
+    // Faz Taper ise km'yi TAPER'daki yarış(lar)ın en düşük hedefine sınırla (seçimden bağımsız)
+    const finalKm=(enKısıtlayıcıFaz==='Taper'&&taperKms.length)?Math.min(optKm,...taperKms):optKm;
+    const finalDp=(enKısıtlayıcıFaz==='Taper'&&taperDps.length)?Math.min(optDp,...taperDps):optDp;
 
     const changed=Math.abs(finalKm-wk.targetKm)>0.5||Math.abs(finalDp-wk.targetDp)>50;
     return{
@@ -22380,14 +22360,19 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       setRampModeOn(false);
       setRampRatePct(15);
       setRampDpRatePct(15);
+      // 2026.09.28: hedef yarış / plan modu da sporcu değişince önceki sporcudan miras KALMAZ
+      setSelectedPrimary(null);
+      setPlanModeLocal('optimize');
       prevRampAthleteIdRef.current=athlete.id;
     }
+    // Sporcu düzeyinde kalıcı tercih (hedef yarış + Optimize/Orijinal) — hafta ve snapshot'tan bağımsız
+    const _prefsPromise=fbGet(`plan_snapshots/${athlete.id}/_prefs`).catch(()=>null);
     fbGet(`plan_snapshots/${athlete.id}/${prevWeekKey}`).then(prev=>{
       if(rampDeepSearchTokenRef.current!==_rampToken) return prev; // sporcu bu sırada değişti — geç dönen prevWeekSnap'i yazma
       if(prev?.weekEff?.isRevised) setPrevWeekSnap(prev);
       return prev;
     }).catch(()=>null).then(prev=>{
-      fbGet(`plan_snapshots/${athlete.id}/${weekKey}`).then(stored=>{
+      Promise.all([fbGet(`plan_snapshots/${athlete.id}/${weekKey}`),_prefsPromise]).then(([stored,_prefs])=>{
         // KÖK NEDEN DÜZELTMESİ (Temmuz 2026 — sporcular arası veri sızıntısı):
         // Koç hızlı sporcu değiştirdiğinde, önceki sporcunun bu zincirdeki fbGet'i
         // GEÇ dönebiliyordu. Token kontrolü olmadan setPlanSnap(snap) burada önceki
@@ -22401,10 +22386,18 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         if(rampDeepSearchTokenRef.current!==_rampToken) return;
         const snap=stored||null;
         snapFetchOkRef.current=true;
-        if(snap){
-          setPlanSnap(snap);
-          if(snap.selectedPrimary!==undefined) setSelectedPrimary(snap.selectedPrimary||null);
-          if(snap.planMode) setPlanModeLocal(snap.planMode);
+        if(snap) setPlanSnap(snap);
+        // KÖK NEDEN DÜZELTMESİ (28.09.2026 — "yarış seçimimi hatırlamıyor, Otomatiğe dönüyor"):
+        // Hedef yarış + plan modu eskiden SADECE o haftanın snapshot'ına yazılıyordu ve o
+        // snapshot yoksa (yeni hafta / henüz plan üretilmemiş) HİÇ kaydedilmiyordu; yeni hafta
+        // ya da sayfa yenilemesinde de okunacak kayıt olmadığından varsayılana (Otomatik) düşüyordu.
+        // Artık öncelik sırası: sporcu düzeyi tercih (_prefs) → bu haftanın snapshot'ı →
+        // önceki haftanın snapshot'ı → varsayılan (Otomatik / Optimize).
+        {
+          const _has=(o)=>!!(o&&(o.planMode||o.selectedPrimary));
+          const _src=_has(_prefs)?_prefs:(_has(snap)?snap:(_has(prev)?prev:null));
+          setSelectedPrimary(_src?(_src.selectedPrimary||null):null);
+          setPlanModeLocal(_src?(_src.planMode||'optimize'):'optimize');
         }
         // DÜZELTME: Rampa ayarı (rampModeOn/rampRatePct) bu haftanın snapshot'ında
         // henüz yoksa (yeni hafta, koç henüz dokunmadı) varsayılana (kapalı/%15)
@@ -22492,6 +22485,39 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
   const athRaceIds=(athlete?.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
   const today=new Date();
   const upcomingRaces=(races||[]).filter(r=>athRaceIds.includes(r.id)&&new Date(r.tarih+'T12:00:00')>today).sort((a,b)=>new Date(a.tarih)-new Date(b.tarih));
+
+  // Hedef yarış + Optimize/Orijinal seçimini KALICI kaydet (28.09.2026).
+  //  1) plan_snapshots/{sporcu}/_prefs — sporcu düzeyi, hafta/snapshot varlığından bağımsız
+  //  2) bu haftanın snapshot'ı varsa oradaki kopya (SADECE değişen alanlar — kardeş alanlar ezilmez)
+  // lastSavedAt'e dokunulmaz: hedef seçmek planı yeniden üretmek değildir.
+  const persistPlanPrefs=(prim,mode)=>{
+    if(!athlete?.id) return;
+    const nowIso=new Date().toISOString();
+    fbUpdate(`plan_snapshots/${athlete.id}/_prefs`,{selectedPrimary:prim||null,planMode:mode,updatedAt:nowIso})
+      .catch(e=>console.error('plan tercihi kayıt hatası:',e));
+    const s=planSnapRef.current;
+    if(s){
+      const u={...s,selectedPrimary:prim||null,planMode:mode};
+      setPlanSnap(u);
+      fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,{selectedPrimary:prim||null,planMode:mode})
+        .then(()=>{ _planSnapsCache[athlete.id]=stripUndefined(u); })
+        .catch(e=>console.error('plan tercihi (snapshot) kayıt hatası:',e));
+    }
+  };
+  // Yarış değişince mod otomatik 'Orijinal'e döner; koç isterse sonradan Optimize seçer.
+  const handlePrimaryChange=(val)=>{
+    const v=val||null;
+    setSelectedPrimary(v);
+    setPlanModeLocal('orijinal');
+    persistPlanPrefs(v,'orijinal');
+  };
+  const handleModeChange=(m)=>{
+    if(m===planMode) return;
+    setPlanModeLocal(m);
+    persistPlanPrefs(selectedPrimary,m);
+  };
+  // Seçili yarış artık gelecekte değilse (geçmiş/silinmiş) select 'Otomatik'i gösterir — durum da öyle davranır
+  const selectedPrimaryValid=(selectedPrimary&&upcomingRaces.some(r=>r.id===selectedPrimary))?selectedPrimary:'';
 
   // 3. taperEdit/peakEdit: sporcu veya birincil yarış değişince mevcut override'ı yükle
   useEffect(()=>{
@@ -24061,27 +24087,14 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
           upcomingRaces.length>1&&React.createElement('div',{className:'flex-gap'},
             React.createElement('span',{style:{fontSize:12,color:'var(--text-secondary)'}},'Hedef:'),
             React.createElement('select',{
-              value:selectedPrimary||'',
-              onChange:e=>{
-                const val=e.target.value||null;
-                setSelectedPrimary(val);
-                // Otomatik Firebase kaydı
-                const curSnap=planSnapRef.current;
-                if(curSnap&&(db||initFirebase())){
-                  const updated={...curSnap,selectedPrimary:val,lastSavedAt:new Date().toISOString()};
-                  setPlanSnap(updated);
-                  const _primSnap=stripUndefined(updated);
-                  fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,_primSnap)
-                    .then(()=>{ _planSnapsCache[athlete.id]=_primSnap; })
-                    .catch(e=>console.error('selectedPrimary kayıt hatası:',e));
-                }
-              },
+              value:selectedPrimaryValid,
+              onChange:e=>handlePrimaryChange(e.target.value),
               style:{fontSize:12,padding:'4px 8px',border:'1px solid var(--border)',borderRadius:'var(--radius)',background:'var(--bg-primary)',color:'var(--text-primary)'}
             },
               React.createElement('option',{value:''},'Otomatik (A/B önceliği → en zor)'),
               upcomingRaces.map(r=>React.createElement('option',{key:r.id,value:r.id},r.ad+' — '+fmtDate(r.tarih)))
             ),
-            selectedPrimary&&React.createElement('span',{style:{fontSize:11,color:'var(--warn)'},title:'Otomatik seçimden farklı'},'⚠ Manuel seçim')
+            selectedPrimaryValid&&React.createElement('span',{style:{fontSize:11,color:'var(--warn)'},title:'Otomatik seçimden farklı'},'⚠ Manuel seçim')
           ),
           weekTargets.length>0&&React.createElement('button',{
             className:'btn btn-sm'+(showLoading?' btn-primary':''),
@@ -24176,27 +24189,22 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         ),
         React.createElement('div',{style:{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}},
           React.createElement('span',{style:{fontSize:11,color:'var(--text-secondary)'}},'Plan:'),
+          // Optimize / Orijinal — her an TAM OLARAK biri seçili (dolu = seçili, çerçeveli = seçili değil)
           React.createElement('button',{
-            className:'btn btn-sm'+(planMode==='optimize'?' btn-primary':''),
-            onClick:()=>{
-              setPlanModeLocal('optimize');
-              const s=planSnapRef.current;
-              if(s&&(db||initFirebase())){const u={...s,planMode:'optimize',lastSavedAt:new Date().toISOString()};setPlanSnap(u);fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(u)).catch(()=>{});}
-            },
+            className:'seg-btn '+(planMode==='optimize'?'on':'off'),
+            'aria-pressed':planMode==='optimize',
+            onClick:(e)=>{ handleModeChange('optimize'); if(e.currentTarget)e.currentTarget.blur(); },
             title:'Tüm yarışları optimize ederek haftalık hedef belirle'
           },'⚡ Optimize'),
           React.createElement('button',{
-            className:'btn btn-sm'+(planMode==='orijinal'?' btn-primary':''),
-            onClick:()=>{
-              setPlanModeLocal('orijinal');
-              const s=planSnapRef.current;
-              if(s&&(db||initFirebase())){const u={...s,planMode:'orijinal',lastSavedAt:new Date().toISOString()};setPlanSnap(u);fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(u)).catch(()=>{});}
-            },
+            className:'seg-btn '+(planMode==='orijinal'?'on':'off'),
+            'aria-pressed':planMode==='orijinal',
+            onClick:(e)=>{ handleModeChange('orijinal'); if(e.currentTarget)e.currentTarget.blur(); },
             title:'Sadece birincil yarış için orijinal yükleme planı'
           },'📋 Orijinal'),
-          planMode==='optimize'&&React.createElement('span',{
+          React.createElement('span',{
             style:{fontSize:10,color:'var(--info)',background:'var(--info-bg)',padding:'2px 6px',borderRadius:4}
-          },'Tüm yarışlar entegre')
+          },planMode==='optimize'?'Tüm yarışlara entegre':'Yalnızca hedef yarış')
         )
       ),
       // ── Rampa Projeksiyon Kontrolü ────────────────────────────────────────
@@ -36525,7 +36533,6 @@ function SporcuAnketi(){
         mhr:a.mhr||'',lthr:a.lthr||'',vo2max:a.vo2max||'',
         hrv_durum:a.hrv_durum||'',hrv_7gun:a.hrv_7gun||'',
         sakatlık:a.sakatlık||'1',
-        instagram:a.instagram||'',strava:a.strava||'',blog:a.blog||'',
         reklam_izni:!!a.reklam_izni,
         kosu_gunleri:a.kosu_gunleri||[],
         capraz_gunleri:a.capraz_gunleri||[],
@@ -36549,7 +36556,6 @@ function SporcuAnketi(){
       mhr:a.mhr||'',lthr:a.lthr||'',vo2max:a.vo2max||'',
       hrv_durum:a.hrv_durum||'',hrv_7gun:a.hrv_7gun||'',
       sakatlık:a.sakatlık||'1',
-        instagram:a.instagram||'',strava:a.strava||'',blog:a.blog||'',
         reklam_izni:!!a.reklam_izni,
       kosu_gunleri:a.kosu_gunleri||[],
       capraz_gunleri:a.capraz_gunleri||[],
@@ -36569,7 +36575,6 @@ function SporcuAnketi(){
           mhr:a.mhr||'',lthr:a.lthr||'',vo2max:a.vo2max||'',
           hrv_durum:a.hrv_durum||'',hrv_7gun:a.hrv_7gun||'',
           sakatlık:a.sakatlık||'1',
-        instagram:a.instagram||'',strava:a.strava||'',blog:a.blog||'',
         reklam_izni:!!a.reklam_izni,
           kosu_gunleri:a.kosu_gunleri||[],
           capraz_gunleri:a.capraz_gunleri||[],
@@ -36663,18 +36668,6 @@ function SporcuAnketi(){
       const formLive=Object.assign({},form);
       delete formLive.mhr;
       delete formLive.lthr;
-      // Instagram/Strava/Blog: geçerli https adresine normalize et (site bunları
-      // doğrudan href olarak basar). Geçersizse KAYDETMEDEN uyar.
-      const sosyalHatalar=[];
-      ['instagram','strava','blog'].forEach(function(k){
-        const r=normalizeSosyalUrl(k,form[k]);
-        if(r.ok)formLive[k]=r.url;else sosyalHatalar.push(r.err);
-      });
-      if(sosyalHatalar.length){
-        alert('⚠️ Bağlantılar kaydedilmedi:\n\n'+sosyalHatalar.join('\n'));
-        setSaving(false);
-        return;
-      }
 
       // Her anket kaydında snapshot atılır — değer değişmemiş olsa bile.
       // Amaç: sporcu değerlerini değiştirmeden "Kaydet" dese dahi profileHistory'de
@@ -36694,7 +36687,6 @@ function SporcuAnketi(){
 
       setAthletes(updated);
       setDataLoadedAt(new Date());
-      setForm(function(f){return Object.assign({},f,{instagram:formLive.instagram,strava:formLive.strava,blog:formLive.blog});});
       setSaved(true);
       setTimeout(function(){setSaved(false);},3000);
 
@@ -37111,30 +37103,6 @@ function SporcuAnketi(){
       })()
     ),
 
-    // ── Bağlantılarım — 2026.09.28 Göksel talebi ─────────────────────────────
-    // Instagram / Strava / Blog: web sitesindeki sporcu kartında ikon buton olarak
-    // görünür (index.html linksBlock). Kayıtta normalizeSosyalUrl ile https adresine
-    // çevrilir. Sitede görünürlük ayrıca reklam_izni'ne bağlıdır (aşağıdaki kutu).
-    React.createElement('div',{className:'card',style:{marginBottom:12}},
-      React.createElement('div',{className:'card-title'},'🔗 Bağlantılarım'),
-      React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:10,lineHeight:1.5}},
-        'İstersen Instagram, Strava ve blog adresini ekle; takım sitesindeki sporcu kartında ikon olarak görünür. Boş bırakabilirsin. Sitede görünmen için aşağıdaki paylaşım iznini de işaretlemiş olman gerekir.'),
-      [
-        {k:'instagram',l:'Instagram',ph:'@kullaniciadi'},
-        {k:'strava',l:'Strava Profil Linki',ph:'https://www.strava.com/athletes/12345678'},
-        {k:'blog',l:'Blog / Web Sitesi',ph:'https://bloguniz.com'}
-      ].map(function(x){
-        return React.createElement('div',{key:x.k,className:'form-group',style:{marginBottom:8}},
-          React.createElement('label',null,x.l),
-          React.createElement('input',{
-            type:'text',inputMode:'url',autoCapitalize:'none',autoCorrect:'off',spellCheck:false,
-            value:form[x.k]||'',placeholder:x.ph,
-            onChange:function(e){const val=e.target.value;setForm(function(f){return Object.assign({},f,{[x.k]:val});});}
-          })
-        );
-      })
-    ),
-
     // ── Reklam İzni — 2026.09.01 Göksel talebi, 2026.09.25 genişletildi ──────
     // Üç ayrı özelliği kapsar: (1) Koç Paneli → Reklam sekmesindeki (ReklamTab)
     // mockup podyum kartında gerçek isim/fotoğraf kullanımı, (2) Koç Paneli →
@@ -37308,8 +37276,7 @@ function SporcuAnketi(){
       sonAnketEl,
       pinEl,
       formEl,
-      planLinkEl,
-      React.createElement('div',{style:{textAlign:'center',fontSize:10,color:'var(--text-tertiary)',marginTop:16}},APP_VERSION)
+      planLinkEl
     ),
     girisModalEl
   );
