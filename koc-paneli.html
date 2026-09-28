@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.27-2349 --><!DOCTYPE html>
+<!-- Version: v2026.09.28-0805 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -308,7 +308,7 @@ const round2=(v)=>Math.round(v*100)/100;
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.27-2349';
+const APP_VERSION='v2026.09.28-0805';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -35061,6 +35061,17 @@ function AnketlerTab({athletes,onUpdateAthlete}){
       [field]:val,[field+'_pending']:null,[field+'_pending_tarih']:null
     }));
   };
+  // Koç öneriyi REDDEDER: bekleyen değer silinir, canlı değer değişmez. Sporcuya
+  // bilgi verilebilsin diye reddedilen değer/tarih *_red alanında tutulur (sporcu bir
+  // sonraki anket kaydında bu alan temizlenir — bkz. SporcuAnketi→buildPendingPatch).
+  const rejectPending=(ath,field)=>{
+    const val=ath[field+'_pending'];
+    if(val==null||val==='')return;
+    onUpdateAthlete&&onUpdateAthlete(Object.assign({},ath,{
+      [field+'_pending']:null,[field+'_pending_tarih']:null,
+      [field+'_red']:{deger:val,tarih:new Date().toISOString()}
+    }));
+  };
   const pendingApprovalBlock=(ath)=>{
     const rows=['mhr','lthr'].map(field=>{
       const pv=ath[field+'_pending'];
@@ -35079,7 +35090,13 @@ function AnketlerTab({athletes,onUpdateAthlete}){
         onUpdateAthlete&&React.createElement('button',{
           className:'btn btn-sm btn-primary',
           onClick:()=>approvePending(ath,field)
-        },'✓ '+meta.label+' Onayla')
+        },'✓ '+meta.label+' Onayla'),
+        onUpdateAthlete&&React.createElement('button',{
+          className:'btn btn-sm',
+          style:{color:'var(--danger,#f87171)',borderColor:'var(--danger,#f87171)'},
+          title:'Öneriyi reddet — mevcut değer ('+(ath[field]||'—')+' '+meta.unit+') kullanılmaya devam eder',
+          onClick:()=>rejectPending(ath,field)
+        },'✕ '+meta.label+' Reddet')
       );
     }).filter(Boolean);
     return rows.length?React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:6}},rows):null;
@@ -36489,16 +36506,18 @@ function SporcuAnketi(){
       // (bkz. AnketlerTab → approvePending) canlı alana geçer. Sporcu, önerdiği değeri
       // canlı değere geri çekerse (aynı değeri tekrar girerse) bekleyen öneri iptal edilir.
       const buildPendingPatch=function(field){
+        // Sporcu anketi tekrar kaydettiğinde, koçun önceki reddi bilgisi temizlenir
+        const clearRed=mevcut[field+'_red']!=null?{[field+'_red']:null}:{};
         const submitted=String(form[field]||'').trim();
-        if(submitted==='')return {}; // boş bırakılmışsa ne canlı ne bekleyen değere dokun
+        if(submitted==='')return clearRed; // boş bırakılmışsa ne canlı ne bekleyen değere dokun
         const subNum=parseFloat(submitted);
-        if(isNaN(subNum))return {};
+        if(isNaN(subNum))return clearRed;
         const liveNum=parseFloat(mevcut[field]);
         if(!isNaN(liveNum)&&subNum===liveNum){
           // Sporcu canlı (onaylı) değere geri döndü — bekleyen öneri varsa iptal edilir
-          return mevcut[field+'_pending']!=null?{[field+'_pending']:null,[field+'_pending_tarih']:null}:{};
+          return Object.assign({},clearRed,mevcut[field+'_pending']!=null?{[field+'_pending']:null,[field+'_pending_tarih']:null}:{});
         }
-        return {[field+'_pending']:submitted,[field+'_pending_tarih']:new Date().toISOString()};
+        return Object.assign({},clearRed,{[field+'_pending']:submitted,[field+'_pending_tarih']:new Date().toISOString()});
       };
       const mhrPatch=buildPendingPatch('mhr');
       const lthrPatch=buildPendingPatch('lthr');
@@ -36790,6 +36809,9 @@ function SporcuAnketi(){
             onChange:function(e){setForm(function(f){return Object.assign({},f,{mhr:e.target.value});});}}),
           _selAth&&_selAth.mhr_pending!=null&&_selAth.mhr_pending!==''&&React.createElement('div',{style:{fontSize:11,color:'var(--warn)',marginTop:3}},
             '⏳ '+_selAth.mhr_pending+' bpm önerin koç onayını bekliyor. Onaylanana kadar antrenmanlarında '+(_selAth.mhr||'—')+' bpm kullanılmaya devam edecek.'
+          ),
+          _selAth&&_selAth.mhr_red&&_selAth.mhr_red.deger!=null&&(_selAth.mhr_pending==null||_selAth.mhr_pending==='')&&React.createElement('div',{style:{fontSize:11,color:'var(--danger,#f87171)',marginTop:3}},
+            '✕ '+_selAth.mhr_red.deger+' bpm önerin koç tarafından onaylanmadı. Antrenmanlarında '+(_selAth.mhr||'—')+' bpm kullanılmaya devam ediyor.'
           )
         ),
         React.createElement('div',{className:'form-group'},
@@ -36798,6 +36820,9 @@ function SporcuAnketi(){
             onChange:function(e){setForm(function(f){return Object.assign({},f,{lthr:e.target.value});});}}),
           _selAth&&_selAth.lthr_pending!=null&&_selAth.lthr_pending!==''&&React.createElement('div',{style:{fontSize:11,color:'var(--warn)',marginTop:3}},
             '⏳ '+_selAth.lthr_pending+' bpm önerin koç onayını bekliyor. Onaylanana kadar antrenmanlarında '+(_selAth.lthr||'—')+' bpm kullanılmaya devam edecek.'
+          ),
+          _selAth&&_selAth.lthr_red&&_selAth.lthr_red.deger!=null&&(_selAth.lthr_pending==null||_selAth.lthr_pending==='')&&React.createElement('div',{style:{fontSize:11,color:'var(--danger,#f87171)',marginTop:3}},
+            '✕ '+_selAth.lthr_red.deger+' bpm önerin koç tarafından onaylanmadı. Antrenmanlarında '+(_selAth.lthr||'—')+' bpm kullanılmaya devam ediyor.'
           )
         ),
         React.createElement('div',{className:'form-group'},
