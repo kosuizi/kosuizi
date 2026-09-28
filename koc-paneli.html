@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.28-1148 --><!DOCTYPE html>
+<!-- Version: v2026.09.28-1311 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -8,42 +8,44 @@
 <meta http-equiv="Expires" content="0">
 <title>Antrenman Takip</title>
 <script>
-// ── Otomatik Güncel Sürüm Kontrolü (18.09.2026 — Göksel isteği) ─────────────
-// Sporcuların/koçun tarayıcı önbelleğinden (veya CDN önbelleğinden) ESKİ bir
-// koc-paneli.html görmesini önler. Sayfa açıldığında (VE tarayıcının
-// "geri-ileri önbelleği" bfcache'ten bu sayfayı canlandırdığında, VE sekme
-// arka plandan öne geldiğinde) sunucudaki dosyanın ETag/Last-Modified imzasını
-// hafif bir HEAD isteğiyle (cache:'no-store' — bu istek asla önbellekten
-// yanıtlanmaz) kontrol eder. Önceki ziyarette kaydedilen imzadan FARKLIYSA,
-// bu cihazda gerçekten YENİ bir sürüm var demektir — sayfa, önbelleği atlayan
-// (rastgele ?_v= parametreli) bir adrese yönlendirilerek TAZE olarak yeniden
-// yüklenir. Bu, tüm ağır kütüphaneler (React, Chart.js vb.) indirilmeden ÖNCE,
-// mümkün olan en erken noktada çalışır. sessionStorage koruması aynı sekmede
-// 15 saniye içinde en fazla bir zorunlu yenilemeye izin verir (sonsuz döngü
-// riski olmaz). NOT: bu script'in KENDİSİ de eski bir önbellekten geliyorsa
-// (bu düzeltmeden ÖNCEKİ bir kopya), o eski kopyada bu kontrol hiç yok —
-// o durumda cihazın EN AZ BİR KEZ elle/tam yenilenmesi gerekir; ondan sonra
-// her gelecekteki güncelleme otomatik yakalanır.
+// ── Otomatik Güncel Sürüm Kontrolü (18.09.2026 — Göksel isteği; 28.09.2026'da yeniden yazıldı) ──
+// Sporcuların/koçun tarayıcı önbelleğinden (veya CDN önbelleğinden) ESKİ bir koc-paneli.html
+// görmesini önler. Önceki sürüm sunucudaki dosyanın ETag imzasını localStorage'a "son görülen"
+// diye kaydedip bir sonrakiyle kıyaslıyordu; bu, ilk açılışta ESKİ (önbellekteki) kopya
+// çalışırken sunucudaki YENİ imzayı "görüldü" diye kaydedip bir daha hiç yenilememe açığı
+// taşıyordu (kod doğru ama ekranda eski sayfa). Şimdi kıyas, ÇALIŞAN kopyanın kendi sürümü
+// (RUNNING) ile sunucudaki dosyanın en üstündeki "Version:" HTML yorumu arasında yapılır;
+// saklanan bir durum yoktur, bu yüzden eski kopya her açılışta yakalanır. Sadece dosyanın ilk
+// birkaç KB'ı okunur (tam 2+ MB indirilmez). Farklıysa sayfa önbelleği atlayan (?_v=) bir
+// adresle TAZE yüklenir; sessionStorage koruması 15 sn içinde en fazla bir yenilemeye izin verir.
+// NOT: bu düzeltmeden ÖNCEKİ bir kopya bu kontrolü içermez — o cihazda EN AZ BİR KEZ tam yenileme
+// (Ctrl+Shift+R) gerekir; ondan sonra her güncelleme otomatik yakalanır.
+// RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var SIG_KEY='kosuizi_last_sig';
+    var RUNNING='v2026.09.28-1311';
     var GUARD_KEY='kosuizi_stale_reload_at';
+    var reload=function(){
+      var last=parseInt(sessionStorage.getItem(GUARD_KEY)||'0',10);
+      if(Date.now()-last<=15000)return;
+      sessionStorage.setItem(GUARD_KEY,String(Date.now()));
+      var u=new URL(location.href);
+      u.searchParams.set('_v',Date.now());
+      location.replace(u.toString());
+    };
+    var head=function(r){
+      if(!r||!r.body||!r.body.getReader)return r.text();
+      var rd=r.body.getReader();
+      return rd.read().then(function(x){
+        try{rd.cancel();}catch(e){}
+        return new TextDecoder().decode(x.value||new Uint8Array());
+      });
+    };
     var check=function(){
       try{
-        fetch(location.pathname,{method:'HEAD',cache:'no-store'}).then(function(r){
-          var sig=r.headers.get('etag')||r.headers.get('last-modified')||'';
-          if(!sig)return;
-          var prev=localStorage.getItem(SIG_KEY);
-          localStorage.setItem(SIG_KEY,sig);
-          if(prev&&prev!==sig){
-            var last=parseInt(sessionStorage.getItem(GUARD_KEY)||'0',10);
-            if(Date.now()-last>15000){
-              sessionStorage.setItem(GUARD_KEY,String(Date.now()));
-              var u=new URL(location.href);
-              u.searchParams.set('_v',Date.now());
-              location.replace(u.toString());
-            }
-          }
+        fetch(location.pathname,{cache:'no-store',headers:{'Range':'bytes=0-4095'}}).then(head).then(function(txt){
+          var m=new RegExp('<!'+'--\\s*Version:\\s*(v[0-9.\\-]+)\\s*--'+'>').exec(String(txt).slice(0,2000));
+          if(m&&m[1]!==RUNNING)reload();
         }).catch(function(){});
       }catch(e){}
     };
@@ -309,7 +311,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.28-1148';
+const APP_VERSION='v2026.09.28-1311';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -1506,20 +1508,6 @@ const FOCUS_OPTIONS=Object.freeze({
   pace:Object.freeze({key:'pace',label:'Pace Odaklı',    icon:'↔️',color:'#1d4ed8',bg:'#eff6ff'}),
   feel:Object.freeze({key:'feel',label:'Hissiyat Odaklı',icon:'🤍',color:'#7c3aed',bg:'#f5f3ff'})
 });
-// ── Süre / Mesafe Odaklı rozeti — 2026.09.28, Göksel talebi ──────────────────────────────
-// Nabız/Pace/Hissiyat rozetinden BAĞIMSIZ, ikinci bir eksen: "antrenman hangi ŞİDDET parametresiyle
-// (nabız/pace/his) koşulur" ile "antrenman hangi HACİM parametresiyle (süre/mesafe) uygulanır" ayrı
-// sorulardır — bir satır aynı anda hem "Nabız Odaklı" hem "Süre Odaklı" olabilir. Koç ikisini ayrı ayrı
-// seçer (satırda iki ayrı rozet). Bu rozet BİLGİLENDİRME amaçlıdır: pace/nabız değerlendirmesine,
-// Hedef Uyumu puanına ve kalibrasyona DOKUNMAZ (kayıt: rowOverrides[i]._volFocusOverride).
-const VOL_FOCUS_OPTIONS=Object.freeze({
-  time:Object.freeze({key:'time',label:'Süre Odaklı',  icon:'⏱️',color:'#0f766e',bg:'#f0fdfa'}),
-  dist:Object.freeze({key:'dist',label:'Mesafe Odaklı',icon:'📏',color:'#b45309',bg:'#fffbeb'})
-});
-function volFocusOverrideKey(row){
-  const k=row&&row._volFocusOverride&&row._volFocusOverride.key;
-  return (k==='time'||k==='dist')?k:null;
-}
 // Satırdaki manuel odak seçimi ('hr'|'pace'|'feel') ya da null. Tanınmayan/bozuk değer → null (otomatik).
 function focusOverrideKey(row){
   const k=row&&row._focusOverride&&row._focusOverride.key;
@@ -3836,6 +3824,36 @@ const EMAILJS_CONFIG={
 
 // SporcuAnketi formundan okunabilir bir metin özeti üretir (e-posta içeriği için).
 // mhrPatch/lthrPatch verilirse (onay bekleyen öneriler), bunlar ayrı satır olarak eklenir.
+// ── Sporcu bağlantıları (Instagram / Strava / Blog) — 2026.09.28 Göksel talebi ──
+// Web sitesi (index.html) bu üç alanı DOĞRUDAN <a href="..."> olarak basar; bu yüzden
+// kayıttan ÖNCE geçerli bir http(s) adresine çevrilir. Instagram için "@kullanici"
+// veya sadece "kullanici" yazmak yeterlidir. Geçersiz/başka şemalı (javascript: vb.)
+// girişler reddedilir. Boş değer = alan temizlenir.
+function normalizeSosyalUrl(kind,raw){
+  const v=String(raw==null?'':raw).trim();
+  if(!v)return{ok:true,url:''};
+  const etiket={instagram:'Instagram',strava:'Strava',blog:'Blog'}[kind]||'Bağlantı';
+  let cand=v;
+  if(kind==='instagram'){
+    const h=v.replace(/^@/,'');
+    if(/^[A-Za-z0-9._]{1,30}$/.test(h))cand='https://www.instagram.com/'+h+'/';
+  }
+  if(!/^[a-z][a-z0-9+.-]*:\/\//i.test(cand)){
+    if(/^[a-z][a-z0-9+.-]*:/i.test(cand)&&!/^[^\s\/]+\.[^\s\/]+/.test(cand))return{ok:false,err:etiket+': geçerli bir web adresi girin.'};
+    cand='https://'+cand;
+  }
+  let u;
+  try{u=new URL(cand);}catch(e){return{ok:false,err:etiket+': geçerli bir web adresi girin.'};}
+  if(u.protocol!=='https:'&&u.protocol!=='http:')return{ok:false,err:etiket+': yalnızca http/https adresleri kabul edilir.'};
+  if(u.protocol==='http:')u.protocol='https:';
+  const host=u.hostname.toLowerCase();
+  if(host.indexOf('.')<0)return{ok:false,err:etiket+': geçerli bir web adresi girin.'};
+  const hostEnds=function(d){return host===d||host.endsWith('.'+d);};
+  if(kind==='instagram'&&!hostEnds('instagram.com'))return{ok:false,err:'Instagram: adres instagram.com ile olmalı (ör. @kullaniciadi).'};
+  if(kind==='strava'&&!(hostEnds('strava.com')||hostEnds('strava.app.link')))return{ok:false,err:'Strava: adres strava.com ile olmalı.'};
+  return{ok:true,url:u.href};
+}
+
 function anketOzetiOlustur(formLive,mhrPatch,lthrPatch){
   const satirlar=[];
   const ekle=function(etiket,deger){
@@ -3855,6 +3873,9 @@ function anketOzetiOlustur(formLive,mhrPatch,lthrPatch){
   ekle('Çapraz Antrenman Günleri',(formLive.capraz_gunleri||[]).join(', '));
   const uzunArr=Array.isArray(formLive.uzun_gun)?formLive.uzun_gun:[formLive.uzun_gun].filter(Boolean);
   ekle('Uzun Koşu Günü',uzunArr.join(', '));
+  ekle('Instagram',formLive.instagram);
+  ekle('Strava',formLive.strava);
+  ekle('Blog',formLive.blog);
   return satirlar.join('\n');
 }
 
@@ -4265,7 +4286,7 @@ const SPOR_OFSET_GUVEN={
 // (bkz. kuvvet günlerinde %581/%438 gibi sahte "aşırı yük" uyarıları hatası).
 const RPE_VARSAYILAN={kuvvet:5, pilates:4, yoga:3, diger:5};
 
-const EMPTY_A={ad:'',soyad:'',foto:'',strava:'',cinsiyet:'Erkek',dogum:'',kilo:'',boy:'',rhr:'',mhr:'',lthr:'',ftp:'',vo2max:'',vlt:'',disiplin:'karma',uzun_gun:[],kosu_gunleri:[],capraz_gunleri:[],hrv_durum:'',hrv_7gun:'',sakatlık:'1',motivasyon:'3',dinlenme_siklik:'3x1',pb_5k:'',pb_10k:'',pb_hm:'',pb_m:'',pb_5k_tarih:'',pb_10k_tarih:'',pb_hm_tarih:'',pb_m_tarih:'',yarıslar:[],anket_pin:'',kuvvet_link:'',kuvvet_link2:'',kuvvet_link3:'',kuvvet_aciklama:'',seviye:'baslangic',antrenman_amaci:'',antrenman_amaci_tarih:'',pasif:false,giris_anketi:null,giris_anketi_tarih:'',ulke:'TR'};
+const EMPTY_A={ad:'',soyad:'',foto:'',strava:'',instagram:'',blog:'',cinsiyet:'Erkek',dogum:'',kilo:'',boy:'',rhr:'',mhr:'',lthr:'',ftp:'',vo2max:'',vlt:'',disiplin:'karma',uzun_gun:[],kosu_gunleri:[],capraz_gunleri:[],hrv_durum:'',hrv_7gun:'',sakatlık:'1',motivasyon:'3',dinlenme_siklik:'3x1',pb_5k:'',pb_10k:'',pb_hm:'',pb_m:'',pb_5k_tarih:'',pb_10k_tarih:'',pb_hm_tarih:'',pb_m_tarih:'',yarıslar:[],anket_pin:'',kuvvet_link:'',kuvvet_link2:'',kuvvet_link3:'',kuvvet_aciklama:'',seviye:'baslangic',antrenman_amaci:'',antrenman_amaci_tarih:'',pasif:false,giris_anketi:null,giris_anketi_tarih:'',ulke:'TR'};
 
 // ── Sporcunun bulunduğu ülke & saat dilimi ────────────────────────────────────
 // Amaç: Strava'dan gelen antrenman date/time alanları sporcunun O ANKİ yerel
@@ -5694,6 +5715,23 @@ function SporcuModal({onClose,onSave,initial,races}){
           'Otomatik çekim CORS nedeniyle çalışmayabilir. Başarısız olursa manuel yükleme yapın.'
         )
       ),
+      // Instagram / Blog (2026.09.28 — sporcu anketiyle aynı alanlar; site kartında ikon olarak görünür)
+      [
+        {k:'instagram',l:'Instagram (@kullaniciadi veya link)',ph:'@kullaniciadi'},
+        {k:'blog',l:'Blog / Web Sitesi',ph:'https://bloguniz.com'}
+      ].map(function(x){
+        const chk=f[x.k]?normalizeSosyalUrl(x.k,f[x.k]):{ok:true};
+        return React.createElement('div',{key:x.k,className:'form-group',style:{marginBottom:8}},
+          React.createElement('label',null,x.l),
+          React.createElement('input',{
+            type:'text',inputMode:'url',autoCapitalize:'none',autoCorrect:'off',spellCheck:false,
+            value:f[x.k]||'',placeholder:x.ph,
+            onChange:e=>set(x.k,e.target.value),
+            onBlur:()=>{const r=normalizeSosyalUrl(x.k,f[x.k]);if(r.ok&&r.url!==(f[x.k]||''))set(x.k,r.url);}
+          }),
+          !chk.ok&&React.createElement('div',{style:{fontSize:11,color:'var(--danger)',marginTop:3}},chk.err)
+        );
+      }),
       // SN-5: Kuvvet antrenmanı video/program linkleri
       React.createElement('div',{className:'form-group',style:{marginBottom:8}},
         React.createElement('label',null,'💪 Kuvvet Antrenman Linkleri (Koşu İzlerim\'de görünür)'),
@@ -6017,6 +6055,10 @@ function SporcuModal({onClose,onSave,initial,races}){
       React.createElement('div',{className:'flex-gap',style:{marginTop:16}},
         React.createElement('button',{className:'btn btn-primary',onClick:()=>{
           if(!f.ad.trim())return alert('Ad alanı zorunlu!');
+          // Instagram/Blog: site bunları doğrudan href olarak basar — kayıttan önce normalize et
+          const _sosyal={};const _sosyalHata=[];
+          ['instagram','blog'].forEach(k=>{const r=normalizeSosyalUrl(k,f[k]);if(r.ok)_sosyal[k]=r.url;else _sosyalHata.push(r.err);});
+          if(_sosyalHata.length)return alert('⚠️ Kaydedilmedi:\n\n'+_sosyalHata.join('\n'));
           // KALİBRASYON SAYAÇ SIFIRLAMA (Temmuz 2026): vLT manuel olarak (bu formdan)
           // değiştirildiğinde, Reçete Geri Bildirim Kalibrasyonu'nun "son kalibrasyon"
           // damgası artık geçerli değil — manuel değer artık taban alınmalı, sistem
@@ -6028,7 +6070,7 @@ function SporcuModal({onClose,onSave,initial,races}){
           // boundaryLastCalib sıfırlanır — eski damga, yeni LTHR referansıyla alınan taze
           // sinyalleri "zaten yakın zamanda kalibre edildi" sanıp gereksiz yere bekletmesin.
           const _lthrChanged=String(f.lthr||'')!==String((initial?.lthr)||'');
-          const _payload={...f,id:f.id||uid()};
+          const _payload={...f,..._sosyal,id:f.id||uid()};
           if(_vltChanged){_payload.fbLastCalib=null;}
           if(_lthrChanged){_payload.boundaryLastCalib=null;}
           onSave(_payload);
@@ -10865,7 +10907,7 @@ async function saveCueGlobal(label, text){
 }
 
 // Aralıklar editörü — tekrarlı antrenmanlarda her bir tekrarın koşu+dinlenme pace'lerini ayrı düzenler
-function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange, paceValidation, focusIndicator, volFocusIndicator, paceToZoneIdx, liveRowColor, gapZoneColor, zones, measureZones, readOnly, isWorkoutLogged}){
+function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange, paceValidation, focusIndicator, paceToZoneIdx, liveRowColor, gapZoneColor, zones, measureZones, readOnly, isWorkoutLogged}){
   const [editKey, setEditKey] = React.useState(null); // 'rep:type:field'
   const e = React.createElement;
   // 2026.08.23 — KÖK NEDEN DÜZELTMESİ: ReceteTablosu'daki _mZones (measureZones||zones,
@@ -11137,8 +11179,7 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
               e('td',{style:{...cellSt,color:'#000'}},rep),
               e('td',{style:{...cellSt,textAlign:'left',color:'#000'}},
                 runData.label,
-                (()=>{const fi=focusIndicator?focusIndicator(runData):null;return fi?e('span',{title:fi.label,style:{marginLeft:4,fontSize:9}},fi.icon):null;})(),
-                (()=>{const vi=volFocusIndicator?volFocusIndicator(runData):null;return vi?e('span',{title:vi.label,style:{marginLeft:2,fontSize:9}},vi.icon):null;})()
+                (()=>{const fi=focusIndicator?focusIndicator(runData):null;return fi?e('span',{title:fi.label,style:{marginLeft:4,fontSize:9}},fi.icon):null;})()
               ),
               e('td',{style:{padding:'4px 4px',verticalAlign:'middle',textAlign:'center'}},
                 e('div',{style:{display:'flex',flexDirection:'column',gap:3,alignItems:'center'}},
@@ -11197,8 +11238,7 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
               e('td',{style:{...cellSt,color:'#000'}},''),
               e('td',{style:{...cellSt,textAlign:'left',color:'#000',fontStyle:'italic',fontSize:10}},
                 '↳ '+restData.label,
-                (()=>{const fi=focusIndicator?focusIndicator(restData):null;return fi?e('span',{title:fi.label,style:{marginLeft:4,fontSize:9}},fi.icon):null;})(),
-                (()=>{const vi=volFocusIndicator?volFocusIndicator(restData):null;return vi?e('span',{title:vi.label,style:{marginLeft:2,fontSize:9}},vi.icon):null;})()
+                (()=>{const fi=focusIndicator?focusIndicator(restData):null;return fi?e('span',{title:fi.label,style:{marginLeft:4,fontSize:9}},fi.icon):null;})()
               ),
               e('td',{style:{padding:'4px 4px',verticalAlign:'middle',textAlign:'center'}},
                 e('div',{style:{display:'flex',flexDirection:'column',gap:3,alignItems:'center'}},
@@ -12387,23 +12427,6 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     return opts;
   };
 
-  // ── Süre / Mesafe Odaklı (2026.09.28 — Göksel talebi) — standart rozet + koç seçimi ──────────
-  // Standart: antrenman mantığına göre. Reçeteler süre (dk) bazlı üretildiği için varsayılan Süre Odaklı;
-  // Mesafe Odaklı = mesafesi sabit hedef olan satırlar: Yarış, ve etiketinde sabit mesafe geçen tekrarlar
-  // (ör. "Depar 50m", "LTHR 1600m Tekrar"). Koç her satırda değiştirebilir (↺ Otomatik ile standarda döner).
-  const autoVolFocus=(row)=>{
-    if(!row||row.type==='header') return null;
-    if(tip==='yaris') return VOL_FOCUS_OPTIONS.dist;
-    if(/\d+(?:[.,]\d+)?\s*(?:m|km)\b/i.test(row.label||'')) return VOL_FOCUS_OPTIONS.dist;
-    return VOL_FOCUS_OPTIONS.time;
-  };
-  const volFocusIndicator=(row)=>{
-    if(!row||row.type==='header') return null;
-    const k=volFocusOverrideKey(row);
-    if(k) return VOL_FOCUS_OPTIONS[k];
-    return autoVolFocus(row);
-  };
-
   // ── Mesafe Hedefi rozeti (2026.08.04 — Göksel talebi) ───────────────────────
   // extractFeedbackSignals() ile BİREBİR aynı mantık (aynı tolerans, aynı zon bazlı
   // asimetri) — reçetede görünen rozet ile Hedef Uyumu puanına giren sinyal HER ZAMAN
@@ -12853,67 +12876,6 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
       const __gd=computeGapDataFromRows(baseRows,newOverrides);
       onSaveOverrides(_withLoggedFlag({...newOverrides,__aralik:aralikOverrides,...(__zd?{__zoneDist:__zd}:{}),...(__gd?{__gapData:__gd}:{})}));
     }
-  };
-  // Süre/Mesafe Odaklı seçimi — setFocusOverride ile AYNI kalıcılık yolu (onSaveOverrides → plan_snapshots),
-  // ayrı alan (_volFocusOverride) → şiddet odağı (_focusOverride) ile birbirini ezmez. Puanlamaya etkisi yok.
-  const setVolFocusOverride=(rowIdx,opt)=>{
-    const r=baseRows[rowIdx];
-    if(!r) return;
-    const cur=rowOverrides[rowIdx]||{};
-    const auto=autoVolFocus(rows[rowIdx]);
-    const clear=!opt||(auto&&auto.key===opt.key);
-    let rec;
-    if(clear){
-      const {_volFocusOverride:_rm,...rest}=cur;
-      rec=rest;
-    } else {
-      const fp={};
-      if(r._origPaceSec>0) fp._origPaceSec=r._origPaceSec;
-      if(r._origZIdx!=null) fp._origZIdx=r._origZIdx;
-      if(r._isSprint) fp._isSprint=true;
-      if(r.rpe) fp.rpe=r.rpe;
-      if(r.label) fp.label=r.label;
-      if(r.type) fp.type=r.type;
-      rec={...fp,...cur,_volFocusOverride:{key:opt.key,label:opt.label,icon:opt.icon,color:opt.color,bg:opt.bg}};
-    }
-    const newOverrides={...rowOverrides,[rowIdx]:rec};
-    setRowOverrides(newOverrides);
-    setBadgePicker(null);
-    if(onSaveOverrides){
-      const __zd=computeZoneDistFromRows(baseRows,newOverrides,_mZones,aralikOverrides);
-      const __gd=computeGapDataFromRows(baseRows,newOverrides);
-      onSaveOverrides(_withLoggedFlag({...newOverrides,__aralik:aralikOverrides,...(__zd?{__zoneDist:__zd}:{}),...(__gd?{__gapData:__gd}:{})}));
-    }
-  };
-  const volFocusBadgeWithPicker=(rowIdx,r)=>{
-    const vi=volFocusIndicator(r);
-    if(!vi) return null;
-    const baseStyle={display:'inline-block',marginLeft:4,padding:'1px 5px',borderRadius:3,fontSize:8,fontWeight:700,color:vi.color,background:vi.bg,whiteSpace:'nowrap',lineHeight:1.4,verticalAlign:'middle'};
-    if(readOnly) return React.createElement('span',{title:vi.label,style:baseStyle},vi.icon+' '+vi.label);
-    const hasOv=!!volFocusOverrideKey(r);
-    const isOpen=badgePicker?.rowIdx===rowIdx&&badgePicker?.field==='_volFocusOverride';
-    if(isOpen){
-      return React.createElement('div',{'data-no-export':true,style:{display:'flex',flexDirection:'column',gap:2,alignItems:'stretch',background:'#fff',border:'1px solid var(--border)',borderRadius:4,padding:3,minWidth:110,marginTop:3,fontWeight:400}},
-        [VOL_FOCUS_OPTIONS.time,VOL_FOCUS_OPTIONS.dist].map((opt)=>React.createElement('button',{
-          key:opt.key,type:'button',
-          onClick:()=>setVolFocusOverride(rowIdx,opt),
-          style:{display:'flex',alignItems:'center',gap:4,padding:'2px 5px',borderRadius:3,fontSize:8,fontWeight:700,color:opt.color,background:opt.bg,border:'none',cursor:'pointer',whiteSpace:'nowrap'}
-        },opt.icon+' '+opt.label)),
-        React.createElement('button',{
-          type:'button',onClick:()=>setVolFocusOverride(rowIdx,null),
-          style:{padding:'2px 5px',borderRadius:3,fontSize:8,fontWeight:600,color:'#64748b',background:'#f1f5f9',border:'none',cursor:'pointer'}
-        },'↺ Otomatik'),
-        React.createElement('button',{
-          type:'button',onClick:()=>setBadgePicker(null),
-          style:{padding:'1px 5px',borderRadius:3,fontSize:8,color:'#94a3b8',background:'transparent',border:'none',cursor:'pointer'}
-        },'✕ kapat')
-      );
-    }
-    return React.createElement('span',{
-      title:'Süre/Mesafe odağını değiştirmek için tıkla',
-      onClick:()=>setBadgePicker({rowIdx,field:'_volFocusOverride'}),
-      style:{...baseStyle,cursor:'pointer'}
-    },vi.icon+' '+vi.label+(hasOv?' ✎':''));
   };
   const focusBadgeWithPicker=(rowIdx,r)=>{
     const fi=focusIndicator(r);
@@ -13372,7 +13334,6 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
                     onChange:(rep,type,field,val)=>updateAralikCell(i,rep,type,field,val),
                     paceValidation,
                     focusIndicator,
-                    volFocusIndicator,
                     paceToZoneIdx,
                     liveRowColor,
                     gapZoneColor,
@@ -13424,13 +13385,12 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
               React.createElement('div',{style:{flex:1,minWidth:0}},
               r.label,
               focusBadgeWithPicker(i,r),
-              volFocusBadgeWithPicker(i,r),
               (()=>{
                 const src=r._srcBaslik||r.label;
                 // Öncelik sırası: 1) _cuePatch (row-label bazlı kullanıcı düzenlemesi)
                 // 2) r._cue (şablondan gelen _rows._cue) 3) getCueForRow (yapilar.detay / otomatik)
                 const _patchedCue=savedCuePatches?.[r.label];
-                const cue=fixPace60(enrichBareZones(_patchedCue!==undefined?_patchedCue:(r._cue!==undefined&&r._cue!==null?r._cue:getCueForRow(r.label,src)),_mZones));
+                const cue=fixPace60(_patchedCue!==undefined?_patchedCue:(r._cue!==undefined&&r._cue!==null?r._cue:getCueForRow(r.label,src)));
                 const isEditing=editingLabel===r.label;
                 if(isEditing) return React.createElement('div',{style:{marginTop:4,display:'flex',gap:4,alignItems:'center'}},
                   React.createElement('input',{
@@ -13711,35 +13671,6 @@ function refreshDetayZones(detay, zones){
   });
 }
 
-
-// ── Çıplak zon etiketine güncel aralığı ekle (2026.09.28 — Göksel talebi) ─────────────────────
-// Reçete metninde "15 dk Z1 kolay koşu" gibi zon adı TEK BAŞINA geçiyorsa (yanında nabız/pace yoksa)
-// güncel nabız + pace aralığı, uygulamanın mevcut biçimiyle (zoneInfo/zoneInfoZ1 — Z1'de alt sınır yok)
-// eklenir: "15 dk Z1 · < 133 bpm · > 6:22 /km · kolay koşu". Çıktı refreshDetayZones'un tanıdığı
-// "ZN · … bpm · … /km" biçimindedir → sonradan LTHR/vLT değişirse aynı yolla güncellenir.
-// Dokunulmayanlar (metin bozulmasın): zaten aralığı olan zon (" ·" devamı ya da yakında bpm|/km),
-// aralık/çoklu zon ("Z1–Z2", "Z2/Z3"), ek almış biçimler ("Z2'de"), zon verisi (LTHR/vLT) olmayan sporcu.
-// Saf görüntü katmanıdır — kayıtlı veriyi, puanlamayı, rozetleri DEĞİŞTİRMEZ.
-function enrichBareZones(text, zones){
-  if(!text||typeof text!=='string'||!zones) return text;
-  const zMap={'1':0,'2':1,'3':2,'4':3,'5a':4,'5b':5,'5c':6,'5':4};
-  return text.replace(/Z(5[abc]|[1-5])(?![0-9A-Za-z'\u2019])/g,(m,code,off,str)=>{
-    if(off>0&&/[A-Za-z0-9]/.test(str[off-1])) return m;              // kelime içi
-    const before=str.slice(0,off), after=str.slice(off+m.length);
-    if(/Z(?:5[abc]|[1-5])\s*[\u2013\-\/]\s*$/i.test(before)) return m; // "Z1–Z2" ikinci parça
-    if(/^\s*[\u2013\-\/]\s*Z?\d/i.test(after)) return m;              // "Z1–Z2" birinci parça
-    if(/^\s*\u00b7/.test(after)) return m;                              // zaten "Z2 · 136–142 bpm …"
-    if(/^[^\n]{0,40}?(?:bpm|\/km)/i.test(after)) return m;             // yakında nabız/pace yazılı
-    const zi=zMap[code.toLowerCase()];
-    if(zi===undefined) return m;
-    const info=zi===0?zoneInfoZ1(zones):zoneInfo(zones,zi);
-    const i=info?info.indexOf(' \u00b7 '):-1;
-    if(i<0) return m;                                                    // zon verisi yok → dokunma
-    const ranges=info.slice(i);                                          // " · 136–142 bpm · 6:59–6:10 (6:35) /km"
-    const sep=/^\s*[A-Za-z\u00c7\u011e\u0130\u00d6\u015e\u00dc\u00e7\u011f\u0131\u00f6\u015f\u00fc]/.test(after)?' \u00b7':'';
-    return m+ranges+sep;
-  });
-}
 
 // yapi_notu string'inden şablonu yeniden üret
 function tplFromYapiNotu(tur, yapiNotu, band, sure_dk, zones, disiplin, phase, ctl, recentLongRuns, ath){
@@ -21649,7 +21580,7 @@ function ManuelAtamaModal(props){
             e('span',{style:{color:'var(--info)',fontWeight:700,fontSize:10,marginTop:2}},i+1+'.'),
             e('div',null,
               e('div',{style:{fontWeight:600,fontSize:11}},y.baslik),
-              y.detay&&e('div',{style:{fontSize:10,color:'var(--text-secondary)'}},fixPace60(enrichBareZones(y.detay,zones)))
+              y.detay&&e('div',{style:{fontSize:10,color:'var(--text-secondary)'}},fixPace60(y.detay))
             )
           );
         })
@@ -36594,6 +36525,7 @@ function SporcuAnketi(){
         mhr:a.mhr||'',lthr:a.lthr||'',vo2max:a.vo2max||'',
         hrv_durum:a.hrv_durum||'',hrv_7gun:a.hrv_7gun||'',
         sakatlık:a.sakatlık||'1',
+        instagram:a.instagram||'',strava:a.strava||'',blog:a.blog||'',
         reklam_izni:!!a.reklam_izni,
         kosu_gunleri:a.kosu_gunleri||[],
         capraz_gunleri:a.capraz_gunleri||[],
@@ -36617,6 +36549,7 @@ function SporcuAnketi(){
       mhr:a.mhr||'',lthr:a.lthr||'',vo2max:a.vo2max||'',
       hrv_durum:a.hrv_durum||'',hrv_7gun:a.hrv_7gun||'',
       sakatlık:a.sakatlık||'1',
+        instagram:a.instagram||'',strava:a.strava||'',blog:a.blog||'',
         reklam_izni:!!a.reklam_izni,
       kosu_gunleri:a.kosu_gunleri||[],
       capraz_gunleri:a.capraz_gunleri||[],
@@ -36636,6 +36569,7 @@ function SporcuAnketi(){
           mhr:a.mhr||'',lthr:a.lthr||'',vo2max:a.vo2max||'',
           hrv_durum:a.hrv_durum||'',hrv_7gun:a.hrv_7gun||'',
           sakatlık:a.sakatlık||'1',
+        instagram:a.instagram||'',strava:a.strava||'',blog:a.blog||'',
         reklam_izni:!!a.reklam_izni,
           kosu_gunleri:a.kosu_gunleri||[],
           capraz_gunleri:a.capraz_gunleri||[],
@@ -36729,6 +36663,18 @@ function SporcuAnketi(){
       const formLive=Object.assign({},form);
       delete formLive.mhr;
       delete formLive.lthr;
+      // Instagram/Strava/Blog: geçerli https adresine normalize et (site bunları
+      // doğrudan href olarak basar). Geçersizse KAYDETMEDEN uyar.
+      const sosyalHatalar=[];
+      ['instagram','strava','blog'].forEach(function(k){
+        const r=normalizeSosyalUrl(k,form[k]);
+        if(r.ok)formLive[k]=r.url;else sosyalHatalar.push(r.err);
+      });
+      if(sosyalHatalar.length){
+        alert('⚠️ Bağlantılar kaydedilmedi:\n\n'+sosyalHatalar.join('\n'));
+        setSaving(false);
+        return;
+      }
 
       // Her anket kaydında snapshot atılır — değer değişmemiş olsa bile.
       // Amaç: sporcu değerlerini değiştirmeden "Kaydet" dese dahi profileHistory'de
@@ -36748,6 +36694,7 @@ function SporcuAnketi(){
 
       setAthletes(updated);
       setDataLoadedAt(new Date());
+      setForm(function(f){return Object.assign({},f,{instagram:formLive.instagram,strava:formLive.strava,blog:formLive.blog});});
       setSaved(true);
       setTimeout(function(){setSaved(false);},3000);
 
@@ -37164,6 +37111,30 @@ function SporcuAnketi(){
       })()
     ),
 
+    // ── Bağlantılarım — 2026.09.28 Göksel talebi ─────────────────────────────
+    // Instagram / Strava / Blog: web sitesindeki sporcu kartında ikon buton olarak
+    // görünür (index.html linksBlock). Kayıtta normalizeSosyalUrl ile https adresine
+    // çevrilir. Sitede görünürlük ayrıca reklam_izni'ne bağlıdır (aşağıdaki kutu).
+    React.createElement('div',{className:'card',style:{marginBottom:12}},
+      React.createElement('div',{className:'card-title'},'🔗 Bağlantılarım'),
+      React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:10,lineHeight:1.5}},
+        'İstersen Instagram, Strava ve blog adresini ekle; takım sitesindeki sporcu kartında ikon olarak görünür. Boş bırakabilirsin. Sitede görünmen için aşağıdaki paylaşım iznini de işaretlemiş olman gerekir.'),
+      [
+        {k:'instagram',l:'Instagram',ph:'@kullaniciadi'},
+        {k:'strava',l:'Strava Profil Linki',ph:'https://www.strava.com/athletes/12345678'},
+        {k:'blog',l:'Blog / Web Sitesi',ph:'https://bloguniz.com'}
+      ].map(function(x){
+        return React.createElement('div',{key:x.k,className:'form-group',style:{marginBottom:8}},
+          React.createElement('label',null,x.l),
+          React.createElement('input',{
+            type:'text',inputMode:'url',autoCapitalize:'none',autoCorrect:'off',spellCheck:false,
+            value:form[x.k]||'',placeholder:x.ph,
+            onChange:function(e){const val=e.target.value;setForm(function(f){return Object.assign({},f,{[x.k]:val});});}
+          })
+        );
+      })
+    ),
+
     // ── Reklam İzni — 2026.09.01 Göksel talebi, 2026.09.25 genişletildi ──────
     // Üç ayrı özelliği kapsar: (1) Koç Paneli → Reklam sekmesindeki (ReklamTab)
     // mockup podyum kartında gerçek isim/fotoğraf kullanımı, (2) Koç Paneli →
@@ -37337,7 +37308,8 @@ function SporcuAnketi(){
       sonAnketEl,
       pinEl,
       formEl,
-      planLinkEl
+      planLinkEl,
+      React.createElement('div',{style:{textAlign:'center',fontSize:10,color:'var(--text-tertiary)',marginTop:16}},APP_VERSION)
     ),
     girisModalEl
   );
