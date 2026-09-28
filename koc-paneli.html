@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.28-2012 --><!DOCTYPE html>
+<!-- Version: v2026.09.28-2327 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -23,7 +23,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.09.28-2012';
+    var RUNNING='v2026.09.28-2327';
     var GUARD_KEY='kosuizi_stale_reload_at';
     var reload=function(){
       var last=parseInt(sessionStorage.getItem(GUARD_KEY)||'0',10);
@@ -319,7 +319,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.28-2012';
+const APP_VERSION='v2026.09.28-2327';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -1255,6 +1255,58 @@ function isPlannedLoadReduction(phase,atl,ctl){
   if(phase==='Taper'||phase==='Yarış Sonrası')return true;
   if(ctl>5&&atl!=null&&atl<ctl*0.75)return true;
   return false;
+}
+
+// ── molaDonusuDurumu — TEK PAYLAŞILAN kaynak (2026.09.28 — Göksel talebi:
+// "uzun aradan dönen sporcuyu sistem farklı değerlendirmeli mi?") ──────────
+// ACWR/CTL/ATL modelleri sürekli/düzenli antrenman varsayımıyla kurulu.
+// Uzun bir antrenmansız aradan (mola) sonra iki bilinen sorun çıkar:
+//  (1) ACWR paydası (kronik yük/CTL) çökmüşken oran güvenilmez/gürültülü
+//      olur (Impellizzeri 2020, Lolli 2019 eleştirisi — düşük kronik yükte
+//      ACWR'nin sakatlık riskiyle ilişkisi zayıflar).
+//  (2) "Son 7 gün" temelli trend mesajları (CTL değişimi, haftalık hedef vb.)
+//      aradan önceki asıl düşüşü/tabanı göstermez, dönüş haftasının kendi
+//      (henüz temsili olmayan) yükünü baz alır.
+// Bu fonksiyon geçmişteki (buildHistory çıktısı, ASC sıralı) EN SON
+// ≥MOLA_ESIK_GUN günlük sıfır-yük boşluğunu bulur; hâlâ MOLA_DONUS_PENCERE_GUN
+// içindeyse "dönüş modu" aktif kabul edilir ve mola öncesi taban (son 4
+// haftalık ortalama yük, CTL) ile birlikte döner. Koç Paneli (buildHistory
+// history'sine sahip) BİREBİR burada kullanır; Koşu İzlerim panelinde tam
+// history yoktur (yalnızca formSnap özeti) — bu yüzden sonuç persistFreshFormSnap
+// tarafından formSnap'e yazılır, Koşu İzlerim oradan okur (panel paritesi).
+const MOLA_ESIK_GUN=14;          // bu kadar veya daha uzun sıfır-yük boşluğu "mola" sayılır
+const MOLA_DONUS_PENCERE_GUN=21; // dönüşten itibaren bu kadar gün "dönüş modu" aktif kabul edilir
+function molaDonusuDurumu(history){
+  if(!history||history.length<MOLA_ESIK_GUN+7)return{aktif:false};
+  // Sondan başlayarak İLK (bugüne en yakın) ≥MOLA_ESIK_GUN'lük ardışık sıfır-yük
+  // bloğunu bul — normal dinlenme günleri MOLA_ESIK_GUN'dan kısa olduğu için
+  // atlanır, sadece gerçek uzun boşluk yakalanır.
+  let gapEnd=-1,gapLen=0,j=history.length-1;
+  while(j>=0){
+    if((history[j].load||0)>0){j--;continue;}
+    let k=j;
+    while(k>=0&&(history[k].load||0)===0)k--;
+    const len=j-k;
+    if(len>=MOLA_ESIK_GUN){gapEnd=j+1;gapLen=len;break;}
+    j=k;
+  }
+  if(gapEnd<0||gapEnd>=history.length)return{aktif:false};
+  const donusGunSayisi=(history.length-1)-gapEnd+1;
+  if(donusGunSayisi>MOLA_DONUS_PENCERE_GUN)return{aktif:false};
+  const preBreakEndIdx=gapEnd-gapLen-1;
+  if(preBreakEndIdx<0)return{aktif:false}; // mola geçmişin en başındaysa (öncesi yok) baz alınamaz
+  const baseStart=Math.max(0,preBreakEndIdx-27); // son 4 hafta (28 gün)
+  const baseSlice=history.slice(baseStart,preBreakEndIdx+1);
+  const haftalikOrt=baseSlice.length?round1(baseSlice.reduce((s,h)=>s+(h.load||0),0)/baseSlice.length*7):0;
+  const ctlOnce=history[preBreakEndIdx].ctl||0;
+  const ctlSimdi=history[history.length-1].ctl||0;
+  const buHaftaYuk=round1(history.slice(-7).reduce((s,h)=>s+(h.load||0),0));
+  return{
+    aktif:true, molaGunSayisi:gapLen, donusGunSayisi,
+    haftalikOrt, ctlOnce, ctlSimdi,
+    ctlOrani:ctlOnce>0?round2(ctlSimdi/ctlOnce):null,
+    buHaftaYukOrani:haftalikOrt>0?Math.round(buHaftaYuk/haftalikOrt*100):null,
+  };
 }
 
 // ── targetCTLForDistance — TEK PAYLAŞILAN kaynak ─────────────────────────
@@ -9917,11 +9969,21 @@ function calcPeriodZoneDist(workouts,athlete,weeks=4,anchorDate=null){
 
 
 // Dağılım durumu — Seiler 80/20 modeli referans
+// 2026.09.28 — Göksel talebi: çok az toplam dakikada (ör. uzun aradan dönüşün
+// ilk haftası — bkz. molaDonusuDurumu) yüzdeler anlamsız/gürültülü olur. Örn.
+// 4 haftada 62 dk'da %100 "düşük aerobik" hem "sıralama bozuk" (0=0 karşılaştırması
+// eşitliği sıralama sayılmaz) hem "çok düşük yoğunluk" alarmını yanlış tetikler.
+// Örneklem bu eşiğin altındaysa iki yargı da bastırılır, yerine tek bilgi notu kalır.
+const YOGUNLUK_MIN_DK=90;
 function zoneDist_status(dist, dist2w){
   if(!dist)return null;
-  const {lowPct,highPct,anaPct}=dist;
+  const {lowPct,highPct,anaPct,totalMin}=dist;
   const issues=[];
   const flags=[];
+  if((totalMin??0)<YOGUNLUK_MIN_DK){
+    flags.push({type:'veri_az',msg:'Bu pencerede toplam ~'+Math.round(totalMin||0)+' dk antrenman var — dağılım yüzdeleri (sıralama/yoğunluk yargısı) güvenilir yorum için yetersiz.'});
+    return{issues,flags,isOk:true,score:100,veriYetersiz:true,label:'Veri az',cls:'badge-info'};
+  }
 
   // YENİDEN TASARLANDI (Ağustos 2026 — Göksel'in kararıyla): evaluateSignals'daki
   // Öncelik 3 ("Yük Yoğunluk Dağılımı") kriterleriyle hizalı. Hedef: Düşük Aerobik
@@ -23248,17 +23310,23 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     if(!snap)return;
     const last=history[history.length-1];
     if(!last)return;
+    // 2026.09.28 — mola dönüşü bilgisi (bkz. molaDonusuDurumu, TEK KAYNAK) — persistFreshFormSnap
+    // ile AYNI alanlar, aynı gerekçe (panel paritesi: Koşu İzlerim'in tam history'si yok).
+    const _mola=molaDonusuDurumu(history);
     const newFormSnap={
       ctl:last.ctl??null,
       atl:last.atl??null,
       tsb:last.tsb??null,
       acwr:last.acwr??null,
       phase:last.phase??null,
-      date:last.date||null
+      date:last.date||null,
+      molaAktif:_mola.aktif||false,
+      molaHaftalikOrt:_mola.aktif?_mola.haftalikOrt:null
     };
     const ex=snap.formSnap;
     if(ex&&ex.ctl===newFormSnap.ctl&&ex.atl===newFormSnap.atl&&
-       ex.tsb===newFormSnap.tsb&&ex.acwr===newFormSnap.acwr&&ex.phase===newFormSnap.phase&&ex.date===newFormSnap.date)return;
+       ex.tsb===newFormSnap.tsb&&ex.acwr===newFormSnap.acwr&&ex.phase===newFormSnap.phase&&ex.date===newFormSnap.date&&
+       ex.molaAktif===newFormSnap.molaAktif&&ex.molaHaftalikOrt===newFormSnap.molaHaftalikOrt)return;
     const updated={...snap,formSnap:newFormSnap};
     setPlanSnap(updated);
     // Bkz. yukarıdaki weekEff effect'indeki kök neden notu (18.07.2026) — bu effect `history`
@@ -30835,7 +30903,12 @@ async function persistFreshFormSnap(athlete,athleteWorkouts,races,localSnap){
     const hist=buildHistory(athleteWorkouts,athlete,races);
     const last=hist[hist.length-1];
     if(!last) return null;
-    const newFormSnap={ctl:last.ctl??null,atl:last.atl??null,tsb:last.tsb??null,acwr:last.acwr??null,phase:last.phase??null,date:last.date||null};
+    // 2026.09.28 — mola dönüşü bilgisi (bkz. molaDonusuDurumu, TEK KAYNAK) formSnap'e
+    // eklendi: Koşu İzlerim'in tam history'si yok (yalnızca bu özet), bu alanlar
+    // olmadan "Gelecek Hafta Hedef" iki panelde farklı (paritesiz) çıkardı.
+    const _mola=molaDonusuDurumu(hist);
+    const newFormSnap={ctl:last.ctl??null,atl:last.atl??null,tsb:last.tsb??null,acwr:last.acwr??null,phase:last.phase??null,date:last.date||null,
+      molaAktif:_mola.aktif||false,molaHaftalikOrt:_mola.aktif?_mola.haftalikOrt:null};
     // GÜVENLİK KİLİDİ (24.07.2026 — sporcular arası veri sızıntısı, 2. savunma katmanı):
     // localSnap çağıran taraftan (ör. Ekle paneli) gelir ve BAŞKA bir sporcuya ait olabilir
     // (bkz. AntrenmanEkle onSave'deki kök neden notu). athId eşleşmiyorsa localSnap'e asla
@@ -30843,7 +30916,7 @@ async function persistFreshFormSnap(athlete,athleteWorkouts,races,localSnap){
     const trustedLocalSnap=(localSnap&&localSnap.athId&&localSnap.athId!==athlete.id)?null:localSnap;
     const baseSnap=trustedLocalSnap||(await fbGet('plan_snapshots/'+athlete.id+'/'+weekKey))||null;
     const ex=baseSnap?.formSnap;
-    if(ex&&ex.ctl===newFormSnap.ctl&&ex.atl===newFormSnap.atl&&ex.tsb===newFormSnap.tsb&&ex.acwr===newFormSnap.acwr&&ex.phase===newFormSnap.phase&&ex.date===newFormSnap.date){
+    if(ex&&ex.ctl===newFormSnap.ctl&&ex.atl===newFormSnap.atl&&ex.tsb===newFormSnap.tsb&&ex.acwr===newFormSnap.acwr&&ex.phase===newFormSnap.phase&&ex.date===newFormSnap.date&&ex.molaAktif===newFormSnap.molaAktif&&ex.molaHaftalikOrt===newFormSnap.molaHaftalikOrt){
       return baseSnap; // değişiklik yok — gereksiz yazma yapma
     }
     const merged={...(baseSnap||{}),formSnap:newFormSnap};
@@ -31015,6 +31088,10 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
   })();
   const acwrS=acwrStatus(last?.acwr,last?.phase,athlete);
   const tsbS=tsbStatus(last?.tsb,athlete);
+  // 2026.09.28 — mola dönüşü tespiti (bkz. molaDonusuDurumu, TEK KAYNAK) — Genel
+  // Toparlanma Değerlendirmesi, ATL/CTL trend notu ve Gelecek Hafta Hedef kapağı
+  // hepsi BURADA hesaplanan tek sonucu kullanır.
+  const molaDurumu=React.useMemo(()=>molaDonusuDurumu(history),[history]);
 
   // Paylaş ref'leri
   const refAtlCtl=useRef();const refAcwr=useRef();
@@ -31051,7 +31128,12 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
 
   // Yük artış çarpanı
   const lm=calcLoadMultiplier(last?.acwr,last?.phase,hrvEfektifDurum(athlete),athlete?.sakatlık);
-  const nextWkTarget=wkLoad>0?round1(wkLoad*lm.mult):null;
+  let nextWkTarget=wkLoad>0?round1(wkLoad*lm.mult):null;
+  // Mola dönüşü kapağı — hesap bu haftanın (henüz temsili olmayan, dönüş sonrası)
+  // yüküne dayanıyor; mola öncesi haftalık tabanı asla aşmasın (bkz. molaDurumu).
+  if(nextWkTarget!=null&&molaDurumu.aktif&&molaDurumu.haftalikOrt>0){
+    nextWkTarget=round1(Math.min(nextWkTarget,molaDurumu.haftalikOrt));
+  }
 
   // En yakın yarış
   const today=new Date();
@@ -31183,6 +31265,15 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
         const bindingIdeal=enBuyuk(sistemler,'gunIdeal');
         const dikkatteki=sistemler.filter(s=>s.st!=='ok').map(s=>s.ad).join(' + ');
         mesajlar.push({cls:'warn',text:'⚠ Genel değerlendirme: '+dikkatteki+' dikkat bandında. Tam durmak şart değil — kademeli yük azaltımıyla ~'+fmtGun(bindingIdeal.gunIdeal)+' gün içinde dengeye dönebilir (belirleyici: '+bindingIdeal.ad+').'});
+      }
+      // 2026.09.28 — Göksel talebi: uzun aradan (mola) dönüşte ACWR güvenilmezliği
+      // (bkz. molaDurumu/molaDonusuDurumu) — payda (CTL) tabana çökmüşken oran şişer/
+      // gürültülü olur (Impellizzeri 2020, Lolli 2019). Yukarıdaki mesajlar (varsa)
+      // KORUNUR — bu sadece bağlam ekler, "tam dinlenme" yerine mutlak yüke ve
+      // kademeli artışa yönlendirir; sert kısıtı bilerek değiştirmez (koç kararı kalır).
+      const acwrSis=sistemler.find(s=>s.ad==='ACWR');
+      if(molaDurumu.aktif&&acwrSis&&acwrSis.st!=='ok'){
+        mesajlar.push({cls:'warn',text:'🔄 Uzun aradan dönüş: '+molaDurumu.molaGunSayisi+' gün antrenmansız, dönüşten '+molaDurumu.donusGunSayisi+' gün geçti. ACWR bu durumda güvenilmez — kronik yük (CTL) tabana çökmüşken payda küçük olduğu için oran şişer/gürültülü olur (Impellizzeri 2020, Lolli 2019 eleştirisi). Ek dinlenme yerine mutlak yüke bak: bu hafta ~'+(molaDurumu.buHaftaYukOrani??'—')+'% (mola öncesi haftalık ortalama '+molaDurumu.haftalikOrt+'\'e göre). Öneri: mola öncesi ortalamanın %50–70\'inden başla, haftalık %10–15 artır.'});
       }
       return React.createElement('div',{className:'card',style:{marginBottom:12,display:'flex',flexDirection:'column',gap:6}},
         React.createElement('div',{className:'card-title',style:{margin:0,marginBottom:2}},'🧭 Genel Toparlanma Değerlendirmesi'),
@@ -31356,6 +31447,12 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
             }
           }
           else msgs.push({cls:'info',text:'➡ CTL stabil ('+round1(ctl)+') — kondisyon korunuyor.'});
+        }
+        // 2026.09.28 — Göksel talebi: yukarıdaki mesaj SADECE son 7 günü kıyaslar —
+        // uzun aradan (mola) dönüşte bu, aradan önceki asıl düşüşü gizler (bkz.
+        // molaDurumu/molaDonusuDurumu). Bilgi notu olarak eklenir, üsttekini değiştirmez.
+        if(molaDurumu.aktif){
+          msgs.push({cls:'info',text:'ℹ️ '+molaDurumu.molaGunSayisi+' gün antrenmansız aradan '+molaDurumu.donusGunSayisi+' gün önce dönüldü — CTL mola öncesi '+molaDurumu.ctlOnce+"'den şu an "+round1(ctl)+"'e düşmüş (%"+Math.round((molaDurumu.ctlOrani||0)*100)+'). Son 7 günlük değişim bu daha büyük düşüşü yansıtmaz.'});
         }
         // TSB yorumu — TEK PAYLAŞILAN kaynak: tsbBant() (üst rozetteki tsbStatus ile
         // aynı sınırlar; 07.09.2026 sohbeti — önceden burada ayrı/tutarsız -25/-10/5/15
@@ -38699,7 +38796,11 @@ function SporcuPlanView(){
           atl:_formSnapMain?.atl??null,
           tsb:_formSnapMain?.tsb??null,
           acwr:_formSnapMain?.acwr??null,
-          phase:_formSnapMain?.phase??null
+          phase:_formSnapMain?.phase??null,
+          // 2026.09.28 — mola dönüşü bilgisi (bkz. molaDonusuDurumu / persistFreshFormSnap,
+          // TEK KAYNAK) — panel paritesi: Koç Panelindeki "Gelecek Hafta Hedef" kapağı
+          molaAktif:_formSnapMain?.molaAktif||false,
+          molaHaftalikOrt:_formSnapMain?.molaHaftalikOrt??null
         };
 
         // ── SOL: Durumum (Toparlanma + Form + Haftalık Hedef) ────────────────
@@ -38841,7 +38942,13 @@ function SporcuPlanView(){
             const avgIF7=wkPower7.map(w=>calcMetrics(w,athlete).IF).filter(v=>v>0);
             const meanIF7=avgIF7.length?round2(avgIF7.reduce((s,v)=>s+v,0)/avgIF7.length):null;
             const lm7=calcLoadMultiplier(last?.acwr,last?.phase,hrvEfektifDurum(athlete),athlete?.sakatlık);
-            const nextWkTarget7=wkLoad7>0?round1(wkLoad7*lm7.mult):null;
+            let nextWkTarget7=wkLoad7>0?round1(wkLoad7*lm7.mult):null;
+            // 2026.09.28 — Mola dönüşü kapağı (bkz. molaDonusuDurumu) — Koç Panelindeki
+            // AYNI kısıt (panel paritesi): hesap bu haftanın (henüz temsili olmayan,
+            // dönüş sonrası) yüküne dayanıyor — mola öncesi haftalık tabanı asla aşmasın.
+            if(nextWkTarget7!=null&&last?.molaAktif&&last?.molaHaftalikOrt>0){
+              nextWkTarget7=round1(Math.min(nextWkTarget7,last.molaHaftalikOrt));
+            }
             return React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(110px,1fr))',gap:8,marginBottom:12,paddingBottom:10,borderBottom:'1px solid var(--border)'}},
               React.createElement('div',{className:'metric'},React.createElement('div',{className:'metric-label'},'Bu Hafta Yük'),React.createElement('div',{className:'metric-val'},wkLoad7),React.createElement('div',{className:'metric-sub'},wks7.length+' antrenman')),
               React.createElement('div',{className:'metric'},React.createElement('div',{className:'metric-label'},'Bu Hafta Mesafe'),React.createElement('div',{className:'metric-val'},wkKm7+' km'),React.createElement('div',{className:'metric-sub'},'Son 7 gün')),
