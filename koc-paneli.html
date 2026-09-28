@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.28-1358 --><!DOCTYPE html>
+<!-- Version: v2026.09.28-1415 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -317,7 +317,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.28-1358';
+const APP_VERSION='v2026.09.28-1415';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -22518,6 +22518,21 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
   };
   // Seçili yarış artık gelecekte değilse (geçmiş/silinmiş) select 'Otomatik'i gösterir — durum da öyle davranır
   const selectedPrimaryValid=(selectedPrimary&&upcomingRaces.some(r=>r.id===selectedPrimary))?selectedPrimary:'';
+  // GÜNLÜK PLAN için yarış listesi (28.09.2026 — "Chianti/İstanbul seçince bu haftanın hedefi farklı"):
+  // Optimize modu "tüm yarışlara entegre" demektir; bu haftanın revize hedefi (koyu sayı) ve haftanın uzunu
+  // GÜNLÜK plandan (yol/patika disiplini, yarış mesafesine bağlı uzun koşu tavanı, yarışa kalan gün) çıkar.
+  // Günlük plan seçili yarışa göre üretilirse aynı haftanın hedefi seçime göre değişir. Bu yüzden Optimize'da
+  // günlük plan HER ZAMAN Otomatik'in seçeceği ana yarışla (A/B önceliği → en zor) üretilir; hedef yarış
+  // seçimi yalnızca Yükleme Planı tablosunu (hazırlık takvimi, İdeal, taper/zirve) belirler.
+  // Orijinal modunda günlük plan seçili yarışa göre üretilir (eskisi gibi).
+  const dayRaces=React.useMemo(()=>(planMode!=='optimize'&&selectedPrimary)?races.map(r=>({...r,__force:r.id===selectedPrimary})):races,[races,selectedPrimary,planMode]);
+  // Ekranda gösterilen hedef yarış (başlık, İdeal, taper/zirve): seçili yarış varsa o, yoksa planın ana yarışı
+  const dispSel=React.useMemo(()=>{
+    try{
+      const rs=selectedPrimaryValid?races.map(r=>({...r,__force:r.id===selectedPrimaryValid})):races;
+      return selectRaces(athlete,rs);
+    }catch(e){return{primary:null,intermediate:[]};}
+  },[athlete,races,selectedPrimaryValid]);
 
   // 3. taperEdit/peakEdit: sporcu veya birincil yarış değişince mevcut override'ı yükle
   useEffect(()=>{
@@ -22540,7 +22555,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     // Snapshot varsa (lastSavedAt ile kilitli): generateTwoWeekPlan çağırma
     // Sadece geçmiş günler + overrideMap'ten geleceği göster
     if(planSnap?.lastSavedAt&&planSnap?.overrideMap){
-      const racesOverride=selectedPrimary?races.map(r=>({...r,__force:r.id===selectedPrimary})):races;
+      const racesOverride=dayRaces;
       // Iskelet hâlâ gerekli (simState, phase vb. için) ama bağımlılıkları azalt
       // history'yi önceki hafta sonuna kırp → week.wt.targetKm hafta içi sabit kalır
       const _prevEndStr=localDateStr(getWeekBounds(-1).end);
@@ -22720,7 +22735,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       return generated;
     }
     // Snapshot yok: taze üret
-    const racesOverride=selectedPrimary?races.map(r=>({...r,__force:r.id===selectedPrimary})):races;
+    const racesOverride=dayRaces;
     const _prevEndStr2=localDateStr(getWeekBounds(-1).end);
     const _stableHist2=(history||[]).filter(h=>h.date<=_prevEndStr2);
     return generateTwoWeekPlan(athlete,_stableHist2,racesOverride,workouts,testPlanlar||[],planMode==='optimize',history[history.length-1],(()=>{
@@ -22730,7 +22745,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       return{..._we,week1Proj:{effKm:_p1Km,effDp:0,isRevised:true},_rampCfg:{km:rampRatePct,dp:rampDpRatePct}};
     })());
     }catch(e){console.error('plan useMemo error:',e);return{_error:e.message};}
-  },[athlete,history,races,workouts,selectedPrimary,planSnap,rampModeOn,rampRatePct,rampDpRatePct]);
+  },[athlete,history,races,workouts,selectedPrimary,planMode,dayRaces,planSnap,rampModeOn,rampRatePct,rampDpRatePct]);
 
   const weekTargets=React.useMemo(()=>{
     if(!athlete)return[];
@@ -23133,7 +23148,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     freshAthlete={...freshAthlete,_planRotOffset:newRotOffset};
 
     // Seçili hedef yarış + Optimize modu — Yükleme Planı ve manuel atama ile AYNI girdi
-    const racesForSnap=selectedPrimary?races.map(r=>({...r,__force:r.id===selectedPrimary})):races;
+    const racesForSnap=dayRaces;
     const newSnap=generatePlanSnapshot(freshAthlete,history,racesForSnap,freshWorkouts,testPlanlar||[],null,curSnap.weekEff||null,planMode==='optimize');
     newSnap.rotOffset=newRotOffset;
     newSnap.planMode=planMode;
@@ -23741,7 +23756,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     const newCancelled={...cancelledDays,[dateStr]:true};
     const todayStr=localDateStr(new Date());
     const now=new Date();
-    const racesOv=selectedPrimary?races.map(r=>({...r,__force:r.id===selectedPrimary})):races;
+    const racesOv=dayRaces;
     const newPlan=generateTwoWeekPlan(athlete,history,racesOv,workouts,testPlanlar||[]);
     // ── OP-6: İptal edilen günün yükünü hesapla ──
     const iptalEdilen=planSnap?.overrideMap?.[dateStr];
@@ -23803,7 +23818,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     const newCancelled={...cancelledDays};delete newCancelled[dateStr];
     const todayStr=localDateStr(new Date());
     const now=new Date();
-    const racesOv=selectedPrimary?races.map(r=>({...r,__force:r.id===selectedPrimary})):races;
+    const racesOv=dayRaces;
     const newPlan=generateTwoWeekPlan(athlete,history,racesOv,workouts,testPlanlar||[]);
     const newMap={...(planSnap?.overrideMap||{})};
     newPlan.weeks.forEach(wk=>wk.days.forEach(day=>{
@@ -23909,7 +23924,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
 
     // Swap sonrası gelecek günleri yeniden hesapla (yük sıralaması değişti → TSB/ACWR etkilenir)
     const laterDate=sourceDateStr>targetDateStr?sourceDateStr:targetDateStr;
-    const racesOv=selectedPrimary?races.map(r=>({...r,__force:r.id===selectedPrimary})):races;
+    const racesOv=dayRaces;
     const freshPlan=generateTwoWeekPlan(athlete,history,racesOv,workouts,testPlanlar||[]);
 
     // Swap edilen günlerden SONRAKİ manuel atanmamış günleri taze planla güncelle
@@ -24065,19 +24080,19 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     React.createElement('div',{className:'card',style:{marginBottom:12,padding:'12px 16px'}},
       React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:10}},
         React.createElement('div',null,
-          plan.primary&&React.createElement('div',{className:'flex-gap',style:{flexWrap:'wrap',marginBottom:4}},
+          (dispSel.primary||plan.primary)&&React.createElement('div',{className:'flex-gap',style:{flexWrap:'wrap',marginBottom:4}},
             React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)'}},'🏆 Birincil: '),
-            React.createElement('strong',null,plan.primary.ad),
-            plan.primary.tarih&&React.createElement('span',{className:'badge badge-info'},
-              Math.ceil((new Date(plan.primary.tarih+'T12:00:00')-new Date())/864e5)+' gün · '+fmtDate(plan.primary.tarih)
+            React.createElement('strong',null,(dispSel.primary||plan.primary).ad),
+            (dispSel.primary||plan.primary).tarih&&React.createElement('span',{className:'badge badge-info'},
+              Math.ceil((new Date((dispSel.primary||plan.primary).tarih+'T12:00:00')-new Date())/864e5)+' gün · '+fmtDate((dispSel.primary||plan.primary).tarih)
             ),
             React.createElement('span',{className:'badge '+(PHASE_COLORS[(weekTargets.find(wt=>wt.isCurrent)||weekTargets[0])?.phase]||PHASE_COLORS[plan.weeks[0]?.days.find(d=>d.isToday||!d.isPast)?.phase]||'badge-gray')},
               (weekTargets.find(wt=>wt.isCurrent)||weekTargets[0])?.phase||plan.weeks[0]?.days.find(d=>d.isToday||!d.isPast)?.phase||history[history.length-1]?.phase||'Temel'
             )
           ),
-          plan.intermediate.length>0&&React.createElement('div',{className:'flex-gap'},
+          (dispSel.primary?dispSel.intermediate:plan.intermediate).length>0&&React.createElement('div',{className:'flex-gap'},
             React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)'}},'🏅 Ara: '),
-            plan.intermediate.map(r=>React.createElement('span',{key:r.id,className:'badge badge-warn'},
+            (dispSel.primary?dispSel.intermediate:plan.intermediate).map(r=>React.createElement('span',{key:r.id,className:'badge badge-warn'},
               r.ad+' ('+Math.ceil((new Date(r.tarih+'T12:00:00')-new Date())/864e5)+' gün)'
             ))
           )
@@ -24182,9 +24197,9 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     showLoading&&weekTargets.length>0&&React.createElement('div',{className:'card',style:{marginBottom:12}},
       React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8,flexWrap:'wrap',gap:8}},
         React.createElement('div',null,
-          React.createElement('div',{className:'card-title',style:{margin:0}},plan.primary?.ad+' — Hazırlık Yükleme Planı ('+weekTargets.length+' hafta)'),
+          React.createElement('div',{className:'card-title',style:{margin:0}},(dispSel.primary||plan.primary)?.ad+' — Hazırlık Yükleme Planı ('+weekTargets.length+' hafta)'),
           React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},
-            'Hedef yarış: '+plan.primary?.mesafe+'km · D+ '+plan.primary?.d_plus+'m'
+            'Hedef yarış: '+(dispSel.primary||plan.primary)?.mesafe+'km · D+ '+(dispSel.primary||plan.primary)?.d_plus+'m'
           )
         ),
         React.createElement('div',{style:{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}},
@@ -24295,8 +24310,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
           'Sabit %10/hafta (mesafe ve D+) · Büyük açıklar için Rampa\'yı açın (mesafe ve D+ için ayrı %11–%25)'
         )
       ),
-      plan.primary&&(()=>{
-        const pRace=plan.primary;
+      (dispSel.primary||plan.primary)&&(()=>{
+        const pRace=(dispSel.primary||plan.primary);
         const km=parseFloat(pRace.mesafe)||0;
         const raceTaperW=parseInt(pRace.taper_w)||(km>42?3:km>21?2:1);
         const racePeakW=parseInt(pRace.peak_w)||(km>42?4:km>21?3:2);
@@ -24365,7 +24380,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       (()=>{
         // Bu haftanın görünen hedefi — başlıktaki "Hedef:" rozetiyle AYNI kaynak (resolveWeekDisplayTarget)
         const _peakDisp=resolveWeekDisplayTarget(displayCurWeekEff,weekTargets.find(w=>w.isCurrent)||null);
-        const evalRes=evaluatePeakReachability(weekTargets,plan.primary,athlete,rampModeOn,rampRatePct,displayCurWeekEff?.isRevised?displayCurWeekEff.effKm:null,displayCurWeekEff?.isRevised?displayCurWeekEff.effDp:null,_peakDisp.km,_peakDisp.dp,rampDpRatePct);
+        const evalRes=evaluatePeakReachability(weekTargets,(dispSel.primary||plan.primary),athlete,rampModeOn,rampRatePct,displayCurWeekEff?.isRevised?displayCurWeekEff.effKm:null,displayCurWeekEff?.isRevised?displayCurWeekEff.effDp:null,_peakDisp.km,_peakDisp.dp,rampDpRatePct);
         if(!evalRes)return null;
         // Status → renk eşleştirmesi
         const colorMap={
@@ -24428,7 +24443,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               // ── İdeal Hazırlık — salt görsel referans (15.07.2026 sohbeti) ──────
               // CTL/gerçekleşen antrenmandan bağımsız, saf yarış formülüne göre
               // hesaplanan hedef; mevcut hedef/revizyon zincirini etkilemez.
-              const _idealTargets=calcIdealWeeklyTargets(plan.primary,athlete);
+              const _idealTargets=calcIdealWeeklyTargets((dispSel.primary||plan.primary),athlete);
               const _idealByWeekKey={};
               _idealTargets.forEach(iw=>{_idealByWeekKey[localDateStr(iw.weekStart)]=iw;});
 
