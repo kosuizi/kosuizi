@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.28-1616 --><!DOCTYPE html>
+<!-- Version: v2026.09.28-1824 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -23,7 +23,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.09.28-1616';
+    var RUNNING='v2026.09.28-1824';
     var GUARD_KEY='kosuizi_stale_reload_at';
     var reload=function(){
       var last=parseInt(sessionStorage.getItem(GUARD_KEY)||'0',10);
@@ -319,7 +319,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.28-1616';
+const APP_VERSION='v2026.09.28-1824';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -835,13 +835,28 @@ function hrv7KisiselBaz(athlete){
   const m=Math.floor(vals.length/2);
   return vals.length%2?vals[m]:(vals[m-1]+vals[m])/2;
 }
-function hrv7Esik(athlete){
-  const kisisel=hrv7KisiselBaz(athlete);
-  if(kisisel!=null) return Math.round(kisisel*0.85);
+function hrv7NufusBaz(athlete){
   const yas=athlete.dogum?new Date().getFullYear()-new Date(athlete.dogum).getFullYear():35;
   let baz=yas<25?65:yas<35?55:yas<45?47:yas<55?40:yas<65?33:27;
   if((athlete.cinsiyet||'Erkek')==='Kadın') baz-=5;
-  return Math.round(baz*0.75);
+  return baz;
+}
+function hrv7Esik(athlete){
+  const kisisel=hrv7KisiselBaz(athlete);
+  if(kisisel!=null) return Math.round(kisisel*0.85);
+  return Math.round(hrv7NufusBaz(athlete)*0.75);
+}
+// 2026.09.28 — "Sağlıklı HRV bölgesi" (Garmin'deki dengeli aralık benzeri). ALT sınır = hrv7Esik (karar
+// motorundaki "düşük" eşiğiyle AYNI değer — grafik ile uyarılar çelişmesin). ÜST sınır: kişisel medyan × 1.15
+// (alt sınırın simetriği); kişisel baz yoksa nüfus normu × 1.25. Sabitler tek yerden ayarlanır.
+const HRV_BANT_UST_KISISEL=1.15, HRV_BANT_UST_NUFUS=1.25;
+function hrv7Bant(athlete){
+  if(!athlete) return null;
+  const kisisel=hrv7KisiselBaz(athlete);
+  const lo=hrv7Esik(athlete);
+  const orta=kisisel!=null?kisisel:hrv7NufusBaz(athlete);
+  const hi=Math.round(orta*(kisisel!=null?HRV_BANT_UST_KISISEL:HRV_BANT_UST_NUFUS));
+  return {lo,hi,orta:Math.round(orta),kaynak:kisisel!=null?'kisisel':'nufus'};
 }
 
 function calcLoadMultiplier(acwr,phase,hrv_durum,sakatlık){
@@ -31486,7 +31501,7 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
     // ── Son 24 Hafta Özeti (mesafe/süre/tempo sadece koşu, yük tüm sporlar) ──
     React.createElement(Hafta24Karti,{workouts,athlete}),
 
-    profHist.length>0&&React.createElement(MetrikGrafikKarti,{profHist,metrikList:METRIK_LIST}),
+    profHist.length>0&&React.createElement(MetrikGrafikKarti,{profHist,metrikList:METRIK_LIST,hrvBand:hrv7Bant(athlete)}),
 
     // ── Doğum Günü Postu ────────────────────────────────────────────────────
     React.createElement(IyiKiDogdunPosti,{athlete,teamLogo,teamName}),
@@ -35138,7 +35153,7 @@ function ShareBtn({elRef,filename,title,text,style}){
 
 // ── Sporcu Metrik Grafik Kartı ────────────────────────────────────────────────
 
-function MetrikGrafikKarti({profHist,metrikList}){
+function MetrikGrafikKarti({profHist,metrikList,hrvBand}){
   const [aktif,setAktif]=useState(metrikList[0]?.key||'kilo');
   const [period,setPeriod]=useState(4);
   const canvasRef=useRef(null);
@@ -35206,26 +35221,39 @@ function MetrikGrafikKarti({profHist,metrikList}){
     // noktalar arasındaki gün farkı görsel mesafeye yansır (chartjs-adapter
     // olmadan da çalışır; tick/tooltip formatlaması elle yapılır).
     const data=grafikVerisi.map(s=>({x:new Date(s.date+'T12:00:00').getTime(),y:parseFloat(s[aktif])??null}));
+    // Sağlıklı HRV bölgesi: yalnızca HRV sekmesinde, alt+üst sınır çizgisi arası yeşil dolgu (Chart.js fill:'-1')
+    const bandVar=aktif==='hrv_7gun'&&hrvBand&&hrvBand.hi>hrvBand.lo&&data.length>=2;
+    const bx0=data[0].x, bx1=data[data.length-1].x;
+    const bandSets=bandVar?[
+      {label:'HRV alt sınır',data:[{x:bx0,y:hrvBand.lo},{x:bx1,y:hrvBand.lo}],borderColor:'rgba(52,211,153,.55)',borderWidth:1,borderDash:[4,3],pointRadius:0,pointHoverRadius:0,fill:false,order:3},
+      {label:'HRV üst sınır',data:[{x:bx0,y:hrvBand.hi},{x:bx1,y:hrvBand.hi}],borderColor:'rgba(52,211,153,.55)',borderWidth:1,borderDash:[4,3],pointRadius:0,pointHoverRadius:0,backgroundColor:'rgba(52,211,153,.14)',fill:'-1',order:3}
+    ]:[];
+    const noktaRenk=function(ctx){
+      if(!bandVar||!ctx.raw)return metrik.color;
+      const y=ctx.raw.y;
+      return y<hrvBand.lo?'#f87171':y>hrvBand.hi?'#fbbf24':metrik.color;
+    };
     instRef.current=new Chart(canvasRef.current,{
       type:'line',
       data:{
-        datasets:[{
+        datasets:[...bandSets,{
           label:metrik.label,
           data,
           borderColor:metrik.color,
           backgroundColor:metrik.color+'22',
           borderWidth:2,
-          pointBackgroundColor:metrik.color,
+          pointBackgroundColor:noktaRenk,
           pointRadius:4,
           tension:0.3,
-          fill:true
+          fill:!bandVar,
+          order:1
         }]
       },
       options:{
         responsive:true,maintainAspectRatio:false,
         plugins:{
           legend:{display:false},
-          tooltip:{callbacks:{
+          tooltip:{filter:function(item){return item.dataset.label===metrik.label;},callbacks:{
             title:function(items){return items.length?new Date(items[0].parsed.x).toLocaleDateString('tr-TR',{day:'2-digit',month:'short',year:'numeric'}):'';},
             label:function(ctx){return ctx.parsed.y+' '+metrik.unit;}
           }}
@@ -35245,7 +35273,7 @@ function MetrikGrafikKarti({profHist,metrikList}){
       }
     });
     return()=>{if(instRef.current)instRef.current.destroy();};
-  },[aktif,grafikVerisi]);
+  },[aktif,grafikVerisi,hrvBand]);
 
   if(!metrikList.length)return null;
 
@@ -35285,6 +35313,15 @@ function MetrikGrafikKarti({profHist,metrikList}){
       :React.createElement('div',{style:{height:180,position:'relative'}},
         React.createElement('canvas',{ref:canvasRef})
       ),
+    // Sağlıklı HRV bölgesi açıklaması (yalnızca HRV sekmesi)
+    aktif==='hrv_7gun'&&hrvBand&&hrvBand.hi>hrvBand.lo&&grafikVerisi.length>=2&&React.createElement('div',{style:{marginTop:6,fontSize:11,color:'var(--text-secondary)'}},
+      React.createElement('span',{style:{display:'inline-block',width:10,height:10,borderRadius:2,background:'rgba(52,211,153,.35)',border:'1px solid rgba(52,211,153,.7)',marginRight:6,verticalAlign:'middle'}}),
+      'Sağlıklı bölge: ',React.createElement('strong',null,hrvBand.lo+'–'+hrvBand.hi+' ms'),
+      hrvBand.kaynak==='kisisel'
+        ?' · kişisel baz (medyan '+hrvBand.orta+' ms, son 120 gün)'
+        :' · yaş/cinsiyet normu (kişisel baz için ≥4 kayıt gerekir)',
+      React.createElement('div',{style:{color:'var(--text-tertiary)',marginTop:2}},'🔴 bölgenin altı = toparlanma baskısı · 🟡 üstü')
+    ),
     // Son değer
     grafikVerisi.length>0&&React.createElement('div',{style:{
       marginTop:8,display:'flex',justifyContent:'space-between',
