@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.28-1824 --><!DOCTYPE html>
+<!-- Version: v2026.09.28-1844 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -23,7 +23,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.09.28-1824';
+    var RUNNING='v2026.09.28-1844';
     var GUARD_KEY='kosuizi_stale_reload_at';
     var reload=function(){
       var last=parseInt(sessionStorage.getItem(GUARD_KEY)||'0',10);
@@ -319,7 +319,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.28-1824';
+const APP_VERSION='v2026.09.28-1844';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -27497,11 +27497,18 @@ function ChartATLCTL({history}){
     const gridColor=isDark?'rgba(255,255,255,.08)':'rgba(0,0,0,.08)';
     const tickColor=isDark?'#777':'#888';
     if(inst.current)inst.current.destroy();
+    // 2026.09.28 — İDEAL ATL BÖLGESİ (Garmin "akut yük" aralığı benzeri): ACWR = ATL/CTL olduğundan, ChartACWR'deki
+    // faz-bazlı ideal bant (acwrFazBand ±0.15) CTL ile çarpılarak ATL cinsinden bant elde edilir → ATL bandın içindeyse
+    // ACWR de ChartACWR'de bandın içindedir (tek kaynak, çelişki yok). ACWR henüz hesaplanmayan (ısınma) günlerde çizilmez.
+    const atlBandBot=data.map(d=>(d.acwr!=null&&d.ctl>0)?round1(Math.max(0,d.ctl*(acwrFazBand(d.phase).peak-0.15))):null);
+    const atlBandTop=data.map(d=>(d.acwr!=null&&d.ctl>0)?round1(d.ctl*(acwrFazBand(d.phase).peak+0.15)):null);
     inst.current=new Chart(ref.current,{
       type:'bar',
       data:{
         labels,
         datasets:[
+          {type:'line',label:'_atlBandBot',data:atlBandBot,borderColor:'transparent',borderWidth:0,pointRadius:0,pointHoverRadius:0,fill:'+1',backgroundColor:'rgba(22,163,74,0.13)',tension:.3,spanGaps:true,order:4},
+          {type:'line',label:'_atlBandTop',data:atlBandTop,borderColor:'rgba(22,163,74,0.35)',borderWidth:1,borderDash:[4,3],pointRadius:0,pointHoverRadius:0,fill:false,tension:.3,spanGaps:true,order:4},
           {type:'bar',label:'Günlük yük',data:data.map(d=>d.load),backgroundColor:'rgba(37,99,235,.18)',borderRadius:2,order:2},
           {type:'line',label:'CTL',data:data.map(d=>d.ctl),borderColor:'#2563eb',borderWidth:2,pointRadius:0,tension:.3,order:1},
           {type:'line',label:'ATL',data:data.map(d=>d.atl),borderColor:'#d97706',borderWidth:2,pointRadius:0,tension:.3,order:1}
@@ -27509,7 +27516,12 @@ function ChartATLCTL({history}){
       },
       options:{
         responsive:true,maintainAspectRatio:false,
-        plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+(ctx.raw!=null?ctx.raw.toFixed(1):'—')}}},
+        plugins:{legend:{display:false},tooltip:{
+          filter:item=>String(item.dataset.label).charAt(0)!=='_',
+          callbacks:{
+            label:ctx=>ctx.dataset.label+': '+(ctx.raw!=null?ctx.raw.toFixed(1):'—'),
+            afterLabel:ctx=>(ctx.dataset.label==='ATL'&&atlBandBot[ctx.dataIndex]!=null)?'İdeal ATL: '+atlBandBot[ctx.dataIndex]+'–'+atlBandTop[ctx.dataIndex]:''
+          }}},
         scales:{
           x:{ticks:{color:tickColor,font:{size:10},maxTicksLimit:8},grid:{color:gridColor},border:{display:false}},
           y:{ticks:{color:tickColor,font:{size:10}},grid:{color:gridColor},border:{display:false}}
@@ -31207,7 +31219,8 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
       React.createElement('div',{className:'flex-gap',style:{marginBottom:8,fontSize:11}},
         React.createElement('span',{style:{color:'#2563eb'}},'— CTL (fitness)'),
         React.createElement('span',{style:{color:'#d97706'}},'— ATL (yorgunluk)'),
-        React.createElement('span',{style:{color:'rgba(37,99,235,.5)'}},'▬ Günlük yük')
+        React.createElement('span',{style:{color:'rgba(37,99,235,.5)'}},'▬ Günlük yük'),
+        React.createElement('span',{style:{color:'rgba(22,163,74,.85)'}},'▒ İdeal ATL bölgesi (faza göre)')
       ),
       React.createElement(ChartATLCTL,{history:chart}),
       (()=>{
