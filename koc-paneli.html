@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.28-1848 --><!DOCTYPE html>
+<!-- Version: v2026.09.28-1903 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -23,7 +23,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.09.28-1848';
+    var RUNNING='v2026.09.28-1903';
     var GUARD_KEY='kosuizi_stale_reload_at';
     var reload=function(){
       var last=parseInt(sessionStorage.getItem(GUARD_KEY)||'0',10);
@@ -319,7 +319,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.28-1848';
+const APP_VERSION='v2026.09.28-1903';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -856,7 +856,38 @@ function hrv7Bant(athlete){
   const lo=hrv7Esik(athlete);
   const orta=kisisel!=null?kisisel:hrv7NufusBaz(athlete);
   const hi=Math.round(orta*(kisisel!=null?HRV_BANT_UST_KISISEL:HRV_BANT_UST_NUFUS));
-  return {lo,hi,orta:Math.round(orta),kaynak:kisisel!=null?'kisisel':'nufus'};
+  const dusuk=Math.round(lo*HRV_DUSUK_CARPAN);
+  return {lo,hi,dusuk,orta:Math.round(orta),kaynak:kisisel!=null?'kisisel':'nufus'};
+}
+// 2026.09.28 — ÜÇ BÖLGELİ HRV (Garmin durum mantığı): dengeli = [lo,∞) (sağlıklı bölge; üstü sorun sayılmaz),
+// dengesiz = [dusuk,lo) (sağlıklı bölgenin hemen dışı), düşük = <dusuk. dusuk eşiği = lo × HRV_DUSUK_CARPAN.
+// NOT: lo (=hrv7Esik) DEĞİŞMEDİ → mevcut hrv7Low (v<lo) kuralları aynen çalışır; yeni olan dengesiz/düşük ayrımıdır.
+const HRV_DUSUK_CARPAN=0.85;
+const HRV_DURUM_SIDDET={dengeli:0,dengesiz:1,'düşük':2};
+function hrv7Bolge(v,band){
+  if(!(v>0)||!band) return null;
+  return v<band.dusuk?'düşük':v<band.lo?'dengesiz':'dengeli';
+}
+// ÇİFT TARAFLI DOĞRULAMA: sporcunun beyan ettiği hrv_durum (Garmin durumu) ile 7g HRV sayısının düştüğü bölge AYNI
+// yöndeyse hüküm geçerli (uyum:'dogrulandi'). Çelişiyorsa (uyum:'celisiyor') iki taraftan HAFİF olan esas alınır —
+// doğrulanmamış sert kısıt uygulanmaz. Sayı (veya beyan) yoksa doğrulama yapılamaz → beyan aynen kullanılır
+// (önceki davranış korunur). Sayı-tek-başına kuralı (hrv7Low → yoğunluk ×0.85) bundan bağımsız, aynen çalışmaya devam eder.
+function hrvDogrula(athlete){
+  const beyan=athlete?.hrv_durum||'';
+  const deger=parseSayi(athlete?.hrv_7gun)||0;
+  const bolge=athlete?hrv7Bolge(deger,hrv7Bant(athlete)):null;
+  if(!(beyan in HRV_DURUM_SIDDET)||!bolge) return {beyan,bolge,deger,efektif:beyan,uyum:beyan?'sayisiz':'beyansiz'};
+  if(beyan===bolge) return {beyan,bolge,deger,efektif:beyan,uyum:'dogrulandi'};
+  const efektif=HRV_DURUM_SIDDET[beyan]<=HRV_DURUM_SIDDET[bolge]?beyan:bolge;
+  return {beyan,bolge,deger,efektif,uyum:'celisiyor'};
+}
+function hrvEfektifDurum(athlete){return hrvDogrula(athlete).efektif;}
+// Plan motoru girişlerinde sporcu nesnesini "doğrulanmış HRV durumu" ile gölgeler (idempotent).
+function hrvEfektifAth(athlete){
+  if(!athlete||athlete._hrvEfektif) return athlete;
+  const ef=hrvEfektifDurum(athlete);
+  if(ef===(athlete.hrv_durum||'')) return athlete;
+  return {...athlete,hrv_durum:ef,_hrvEfektif:true};
 }
 
 function calcLoadMultiplier(acwr,phase,hrv_durum,sakatlık){
@@ -3531,7 +3562,7 @@ function calcTargetTime(race, ath, ctl, acwr, workouts){
   const boy  = parseSayi(ath.boy)||170;
   const yas  = ath.dogum?new Date().getFullYear()-new Date(ath.dogum).getFullYear():35;
   const bmi  = kilo/((boy/100)**2);
-  const hrv_status = {dengeli:3,dengesiz:2,düşük:1}[ath.hrv_durum]??2.5;
+  const hrv_status = {dengeli:3,dengesiz:2,düşük:1}[hrvEfektifDurum(ath)]??2.5;
   const sakatlık = parseInt(ath.sakatlık)||1;
   const motiv = parseInt(ath.motivasyon)||3;
   const prepWeeks = parseInt(race.prep_weeks)||16;
@@ -7286,8 +7317,8 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
                 const kaliteliEngelSebep=[];
                 const _sakInt=parseInt(ath.sakatlık)||1;
                 if(mechKardioDanger) kaliteliEngelSebep.push('mekanik/kardiyo dengesi zayıf');
-                if(ath.hrv_durum==='düşük') kaliteliEngelSebep.push('HRV düşük');
-                else if(ath.hrv_durum==='dengesiz') kaliteliEngelSebep.push('HRV dengesiz');
+                if(hrvEfektifDurum(ath)==='düşük') kaliteliEngelSebep.push('HRV düşük');
+                else if(hrvEfektifDurum(ath)==='dengesiz') kaliteliEngelSebep.push('HRV dengesiz');
                 if(_sakInt>=4) kaliteliEngelSebep.push('sakatlık '+_sakInt+'/10');
                 if(sigs.level==='forceLow'||sigs.level==='forceEasy') kaliteliEngelSebep.push('zone/yük sinyali ('+sigs.level+')');
                 const sebepMetni=kaliteliEngelSebep.length
@@ -7310,8 +7341,8 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
             } else if(acwr!==null&&acwr<0.65&&tsb>10){
               const blokNeden=[];
               if((parseInt(ath.sakatlık)||1)>=4) blokNeden.push('sakatlık ≥4');
-              if(ath.hrv_durum==='dengesiz') blokNeden.push('HRV dengesiz');
-              if(ath.hrv_durum==='düşük') blokNeden.push('HRV düşük');
+              if(hrvEfektifDurum(ath)==='dengesiz') blokNeden.push('HRV dengesiz');
+              if(hrvEfektifDurum(ath)==='düşük') blokNeden.push('HRV düşük');
               sorunlar.push('⚡ Düşük yük istisnası bloke'+(blokNeden.length?' ('+blokNeden.join(', ')+')':', neden bilinmiyor'));
             }
             // DÜZELTME (Temmuz 2026 — Göksel'in tespitiyle): forceLow zaten AYNI
@@ -16209,10 +16240,11 @@ function collectCurrentWeekFactors(athlete, last, currentWeek){
   }
 
   // HRV
-  const hrvFactor=hrvMod(athlete?.hrv_durum||'');
+  const _hrvEf=hrvEfektifDurum(athlete);
+  const hrvFactor=hrvMod(_hrvEf);
   if(hrvFactor<1.0){
     const pct=Math.round((1-hrvFactor)*100);
-    const lbl=athlete.hrv_durum==='düşük'?'düşük':athlete.hrv_durum==='dengesiz'?'dengesiz':(athlete.hrv_durum||'?');
+    const lbl=_hrvEf==='düşük'?'düşük':_hrvEf==='dengesiz'?'dengesiz':(_hrvEf||'?');
     factors.push({type:'hrv', icon:'🫀', label:'HRV', value:'-%'+pct,
       detail:'HRV durumu "'+lbl+'" — toparlanma yetersiz, günlük süreler ve haftalık hacim azaltıldı'});
   }
@@ -18303,6 +18335,7 @@ function calcTurFrekans(wks, todayStr, nGun){
 
 function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts, planMode='optimize', planTodayDay=null){
   if(!athlete) return null;
+  athlete=hrvEfektifAth(athlete); // HRV hükmü: çift taraflı doğrulanmış durum (bkz. hrvDogrula)
   const last=history[history.length-1];
   const today=new Date();
   const dayShort=DAYS_SHORT[today.getDay()];
@@ -18953,6 +18986,7 @@ function raceZoneFromPace(paceSec,zones){
 
 function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate, wkStats, kosuGunleri, caprazGunleri, race=null){
   if(!athlete)return{tip:'dinlenme',baslik:'Dinlenme',sure_dk:0,yukHedef:0,yapilar:[],isPast:false,isToday:false};
+  athlete=hrvEfektifAth(athlete); // HRV hükmü: çift taraflı doğrulanmış durum (bkz. hrvDogrula)
   // Seviyeye göre önlem/risk toleransı — fonksiyon boyunca kullanılır (bkz.
   // SEVIYE_RISK_CARPANI/ONLEM_TAVAN tanımı).
   const _src=seviyeCarpani(athlete);
@@ -19002,7 +19036,12 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
   const tsb=simState.tsb||0;
   const hrv=athlete.hrv_durum||'';
   const inj=parseInt(athlete.sakatlık)||1;
-  const yMod=Math.min(hrvMod(hrv),inj>=5?0.80:tsb<_tsbB.dengeliAlt?0.85:acwr>_acwrE_real.forceEasyEsik?0.85:1.0);
+  // 7g HRV sayısı SADECE güncel/yakın günler için anlamlı (2 hafta sonrası için "bugünkü HRV" geçerli sayılmaz):
+  // bugün + sonraki 2 gün, sayı sağlıklı bölgenin altındaysa (recommendWorkout'taki hrv7Low ile AYNI kural) yoğunluk ×0.85.
+  const _hrvGunFark=Math.round((d-new Date(localToday+'T12:00:00'))/864e5);
+  const _hrv7v=parseSayi(athlete.hrv_7gun)||0;
+  const _hrvYakinDusuk=!isPast&&_hrvGunFark<=2&&_hrv7v>0&&_hrv7v<hrv7Esik(athlete);
+  const yMod=Math.min(hrvMod(hrv),inj>=5?0.80:tsb<_tsbB.dengeliAlt?0.85:acwr>_acwrE_real.forceEasyEsik?0.85:1.0,_hrvYakinDusuk?0.85:1.0);
 
   const REST={date,dayTR,dayShort,tip:'dinlenme',baslik:'Dinlenme',sure_dk:0,yukHedef:0,yapilar:[],isPast,isToday,simState,phase};
   // Yarış günü — koşu günü seçili olmasa bile yarış bilgisi döndür
@@ -20192,6 +20231,7 @@ function estimateTipikCaprazYuk(athWorkouts,athlete){
 }
 
 function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanlar=[], optimizeMode=false, forceLastEntry=null, weekEffOverride=null){
+  athlete=hrvEfektifAth(athlete); // HRV hükmü: beyan + 7g sayısal bölge çift taraflı doğrulanmış durumla çalış
   const today=new Date();
   // forceLastEntry: _stableHist kırpıldığında bile fitness state (ACWR/TSB/CTL/ATL)
   // daima güncel (bu haftaki antrenmanları içeren) history'nin son girişinden alınır.
@@ -24675,7 +24715,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               // kez hesaplanır, her satırda tekrar hesaplanmaz.
               const _decLast=(history&&history.length>0)?history[history.length-1]:null;
               const _decAcwr=_decLast?.acwr??null;
-              const _decHrvDurum=athlete?.hrv_durum||'';
+              const _decHrvDurum=hrvEfektifDurum(athlete);
               const _decHrv7=parseSayi(athlete?.hrv_7gun);
               const _decHrv7Esik=hrv7Esik(athlete);
               const _decHrv7Low=_decHrv7>0&&_decHrv7<_decHrv7Esik;
@@ -28525,7 +28565,7 @@ function YarislarTab({athlete,races,history,workouts,raceResults,onAddResult,onD
 
   const renderRace=(race)=>{
       const daysLeft=race.tarih?Math.ceil((new Date(race.tarih+'T12:00:00')-today)/864e5):null;
-      const readiness=raceReadinessScore(last?.ctl,last?.acwr,last?.phase,athlete.sakatlık,athlete.hrv_durum,daysLeft,race,athlete,workouts,history);
+      const readiness=raceReadinessScore(last?.ctl,last?.acwr,last?.phase,athlete.sakatlık,hrvEfektifDurum(athlete),daysLeft,race,athlete,workouts,history);
       let target=null;try{target=calcTargetTime(race,athlete,last?.ctl,last?.acwr,workouts);}catch(e){console.error("calcTargetTime err:",e.message);}
       const isPast=daysLeft!==null&&daysLeft<0;
       // Bu yarışa ait sonuçlar
@@ -29078,8 +29118,8 @@ function testGunSertEngeller(testId, athlete, oncekiGunDinlenmeydi){
   const engeller=[];
   if(!athlete)return engeller;
   const sakInt=parseInt(athlete.sakatlık)||1;
-  if(athlete.hrv_durum==='düşük')engeller.push('HRV düşük');
-  else if(athlete.hrv_durum==='dengesiz')engeller.push('HRV dengesiz');
+  if(hrvEfektifDurum(athlete)==='düşük')engeller.push('HRV düşük');
+  else if(hrvEfektifDurum(athlete)==='dengesiz')engeller.push('HRV dengesiz');
   if(sakInt>=4)engeller.push('sakatlık '+sakInt+'/10');
   if(testId&&TEST_TAM_DINLENME_GEREKTIREN.includes(testId)&&oncekiGunDinlenmeydi===false){
     engeller.push((TEST_TURLERI[testId]?.ad||testId)+' öncesi tam dinlenme günü gerekir');
@@ -30102,14 +30142,14 @@ function KarsilastirTab({athletes,races,workouts,allHistory}){
               const tsbS=tsbStatus(last?.tsb,ath);
               const acwrS=acwrStatus(last?.acwr,last?.phase,ath);
               const daysLeft=filteredRace?.tarih?Math.ceil((new Date(filteredRace.tarih+'T12:00:00')-today)/864e5):null;
-              const readiness=filteredRace?raceReadinessScore(last?.ctl,last?.acwr,last?.phase,ath.sakatlık,ath.hrv_durum,daysLeft,filteredRace,ath,workouts,hist):null;
+              const readiness=filteredRace?raceReadinessScore(last?.ctl,last?.acwr,last?.phase,ath.sakatlık,hrvEfektifDurum(ath),daysLeft,filteredRace,ath,workouts,hist):null;
               let target=null;try{target=filteredRace?calcTargetTime(filteredRace,ath,last?.ctl,last?.acwr,workouts):null;}catch(e){console.error("calcTargetTime err:",e.message);}
 
               // Sporcunun yaklaşan yarışları için hazırlık skorları
               const athUpcoming=upcomingRaces.filter(r=>(ath.yarıslar||[]).map(x=>typeof x==='string'?x:x.id).includes(r.id));
               const athReadinessScores=athUpcoming.map(r=>{
                 const dl=Math.ceil((new Date(r.tarih+'T12:00:00')-today)/864e5);
-                const scObj=raceReadinessScore(last?.ctl,last?.acwr,last?.phase,ath.sakatlık,ath.hrv_durum,dl,r,ath,workouts,hist);
+                const scObj=raceReadinessScore(last?.ctl,last?.acwr,last?.phase,ath.sakatlık,hrvEfektifDurum(ath),dl,r,ath,workouts,hist);
                 return{race:r,daysLeft:dl,score:scObj?.score??scObj};
               });
 
@@ -30943,7 +30983,7 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
   },[athWorkouts,athlete]);
 
   // Yük artış çarpanı
-  const lm=calcLoadMultiplier(last?.acwr,last?.phase,athlete?.hrv_durum,athlete?.sakatlık);
+  const lm=calcLoadMultiplier(last?.acwr,last?.phase,hrvEfektifDurum(athlete),athlete?.sakatlık);
   const nextWkTarget=wkLoad>0?round1(wkLoad*lm.mult):null;
 
   // En yakın yarış
@@ -30957,7 +30997,7 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
 
   // Yarış hazırlık skoru — en yakın yarış için (fallback: aşağıdaki
   // activePrepReadiness boşsa kullanılır)
-  const readiness=nextRace?raceReadinessScore(last?.ctl,last?.acwr,last?.phase,athlete?.sakatlık,athlete?.hrv_durum,daysToRace,nextRace,athlete,workouts,history):null;
+  const readiness=nextRace?raceReadinessScore(last?.ctl,last?.acwr,last?.phase,athlete?.sakatlık,hrvEfektifDurum(athlete),daysToRace,nextRace,athlete,workouts,history):null;
 
   // Yarış Hazırlık Skoru — sporcunun hazırlandığı VE yüklenme planı fiilen
   // başlamış (calcPhase 'Temel'/'Yarış Sonrası' dışına çıkmış) TÜM yarışlar
@@ -30977,7 +31017,7 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
   const activePrepReadiness=activePrepRaces.map(r=>({
     race:r,
     daysLeft:r.daysLeft,
-    readiness:raceReadinessScore(last?.ctl,last?.acwr,last?.phase,athlete?.sakatlık,athlete?.hrv_durum,r.daysLeft,r,athlete,workouts,history)
+    readiness:raceReadinessScore(last?.ctl,last?.acwr,last?.phase,athlete?.sakatlık,hrvEfektifDurum(athlete),r.daysLeft,r,athlete,workouts,history)
   }));
 
   // Bölge dağılımı — seçili periyot (görsel çubuk için)
@@ -31517,7 +31557,7 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
     // ── Son 24 Hafta Özeti (mesafe/süre/tempo sadece koşu, yük tüm sporlar) ──
     React.createElement(Hafta24Karti,{workouts,athlete}),
 
-    profHist.length>0&&React.createElement(MetrikGrafikKarti,{profHist,metrikList:METRIK_LIST,hrvBand:hrv7Bant(athlete)}),
+    profHist.length>0&&React.createElement(MetrikGrafikKarti,{profHist,metrikList:METRIK_LIST,hrvBand:hrv7Bant(athlete),hrvDogrulama:hrvDogrula(athlete)}),
 
     // ── Doğum Günü Postu ────────────────────────────────────────────────────
     React.createElement(IyiKiDogdunPosti,{athlete,teamLogo,teamName}),
@@ -35169,7 +35209,7 @@ function ShareBtn({elRef,filename,title,text,style}){
 
 // ── Sporcu Metrik Grafik Kartı ────────────────────────────────────────────────
 
-function MetrikGrafikKarti({profHist,metrikList,hrvBand}){
+function MetrikGrafikKarti({profHist,metrikList,hrvBand,hrvDogrulama}){
   const [aktif,setAktif]=useState(metrikList[0]?.key||'kilo');
   const [period,setPeriod]=useState(4);
   const canvasRef=useRef(null);
@@ -35240,14 +35280,18 @@ function MetrikGrafikKarti({profHist,metrikList,hrvBand}){
     // Sağlıklı HRV bölgesi: yalnızca HRV sekmesinde, alt+üst sınır çizgisi arası yeşil dolgu (Chart.js fill:'-1')
     const bandVar=aktif==='hrv_7gun'&&hrvBand&&hrvBand.hi>hrvBand.lo&&data.length>=2;
     const bx0=data[0].x, bx1=data[data.length-1].x;
+    // Üç bölge (alttan üste): düşük (<dusuk, kırmızı, eksenin dibine kadar) · dengesiz (dusuk–lo, turuncu) · dengeli (lo–hi, yeşil).
+    // Chart.js fill: 'start' = eksen tabanına, '-1' = bir önceki datasete kadar doldur.
+    const cizgi=function(y){return [{x:bx0,y:y},{x:bx1,y:y}];};
     const bandSets=bandVar?[
-      {label:'HRV alt sınır',data:[{x:bx0,y:hrvBand.lo},{x:bx1,y:hrvBand.lo}],borderColor:'rgba(52,211,153,.55)',borderWidth:1,borderDash:[4,3],pointRadius:0,pointHoverRadius:0,fill:false,order:3},
-      {label:'HRV üst sınır',data:[{x:bx0,y:hrvBand.hi},{x:bx1,y:hrvBand.hi}],borderColor:'rgba(52,211,153,.55)',borderWidth:1,borderDash:[4,3],pointRadius:0,pointHoverRadius:0,backgroundColor:'rgba(52,211,153,.14)',fill:'-1',order:3}
+      {label:'HRV düşük eşik',data:cizgi(hrvBand.dusuk),borderColor:'rgba(248,113,113,.6)',borderWidth:1,borderDash:[4,3],pointRadius:0,pointHoverRadius:0,backgroundColor:'rgba(248,113,113,.15)',fill:'start',order:3},
+      {label:'HRV alt sınır',data:cizgi(hrvBand.lo),borderColor:'rgba(245,158,11,.6)',borderWidth:1,borderDash:[4,3],pointRadius:0,pointHoverRadius:0,backgroundColor:'rgba(245,158,11,.17)',fill:'-1',order:3},
+      {label:'HRV üst sınır',data:cizgi(hrvBand.hi),borderColor:'rgba(52,211,153,.55)',borderWidth:1,borderDash:[4,3],pointRadius:0,pointHoverRadius:0,backgroundColor:'rgba(52,211,153,.14)',fill:'-1',order:3}
     ]:[];
     const noktaRenk=function(ctx){
       if(!bandVar||!ctx.raw)return metrik.color;
       const y=ctx.raw.y;
-      return y<hrvBand.lo?'#f87171':y>hrvBand.hi?'#fbbf24':metrik.color;
+      return y<hrvBand.dusuk?'#f87171':y<hrvBand.lo?'#f59e0b':metrik.color;
     };
     instRef.current=new Chart(canvasRef.current,{
       type:'line',
@@ -35284,6 +35328,7 @@ function MetrikGrafikKarti({profHist,metrikList,hrvBand}){
             }
           },
           y:{grid:{color:'rgba(255,255,255,.05)'},ticks:{color:'#94a3b8',font:{size:10}},
+             suggestedMin:bandVar?Math.floor(hrvBand.dusuk*0.8):undefined,
              title:{display:true,text:metrik.unit,color:'#64748b',font:{size:10}}}
         }
       }
@@ -35329,14 +35374,22 @@ function MetrikGrafikKarti({profHist,metrikList,hrvBand}){
       :React.createElement('div',{style:{height:180,position:'relative'}},
         React.createElement('canvas',{ref:canvasRef})
       ),
-    // Sağlıklı HRV bölgesi açıklaması (yalnızca HRV sekmesi)
-    aktif==='hrv_7gun'&&hrvBand&&hrvBand.hi>hrvBand.lo&&grafikVerisi.length>=2&&React.createElement('div',{style:{marginTop:6,fontSize:11,color:'var(--text-secondary)'}},
-      React.createElement('span',{style:{display:'inline-block',width:10,height:10,borderRadius:2,background:'rgba(52,211,153,.35)',border:'1px solid rgba(52,211,153,.7)',marginRight:6,verticalAlign:'middle'}}),
-      'Sağlıklı bölge: ',React.createElement('strong',null,hrvBand.lo+'–'+hrvBand.hi+' ms'),
-      hrvBand.kaynak==='kisisel'
-        ?' · kişisel baz (medyan '+hrvBand.orta+' ms, son 120 gün)'
-        :' · yaş/cinsiyet normu (kişisel baz için ≥4 kayıt gerekir)',
-      React.createElement('div',{style:{color:'var(--text-tertiary)',marginTop:2}},'🔴 bölgenin altı = toparlanma baskısı · 🟡 üstü')
+    // HRV bölgeleri + çift taraflı doğrulama açıklaması (yalnızca HRV sekmesi)
+    aktif==='hrv_7gun'&&hrvBand&&hrvBand.hi>hrvBand.lo&&grafikVerisi.length>=2&&React.createElement('div',{style:{marginTop:6,fontSize:11,color:'var(--text-secondary)',lineHeight:1.6}},
+      React.createElement('div',null,
+        React.createElement('span',{style:{color:'#34d399'}},'■ Dengeli '),React.createElement('strong',null,hrvBand.lo+'–'+hrvBand.hi+' ms'),
+        React.createElement('span',{style:{color:'#f59e0b',marginLeft:10}},'■ Dengesiz '),React.createElement('strong',null,hrvBand.dusuk+'–'+(hrvBand.lo-1)+' ms'),
+        React.createElement('span',{style:{color:'#f87171',marginLeft:10}},'■ Düşük '),React.createElement('strong',null,'<'+hrvBand.dusuk+' ms')
+      ),
+      React.createElement('div',{style:{color:'var(--text-tertiary)'}},
+        hrvBand.kaynak==='kisisel'
+          ?'Kişisel baz (medyan '+hrvBand.orta+' ms, son 120 gün)'
+          :'Yaş/cinsiyet normu (kişisel baz için ≥4 kayıt gerekir)'
+      ),
+      hrvDogrulama&&hrvDogrulama.uyum==='dogrulandi'&&React.createElement('div',{style:{color:'var(--success)'}},
+        '✓ Beyan edilen durum ("'+hrvDogrulama.beyan+'") ile 7g değeri ('+hrvDogrulama.deger+' ms) aynı yönde — doğrulandı.'),
+      hrvDogrulama&&hrvDogrulama.uyum==='celisiyor'&&React.createElement('div',{style:{color:'var(--warn)'}},
+        '⚠ Beyan "'+hrvDogrulama.beyan+'" ama 7g değeri ('+hrvDogrulama.deger+' ms) "'+hrvDogrulama.bolge+'" bölgesinde — doğrulanmadı. Plan motoru daha hafif olanı ("'+hrvDogrulama.efektif+'") esas alır.')
     ),
     // Son değer
     grafikVerisi.length>0&&React.createElement('div',{style:{
@@ -38717,7 +38770,7 @@ function SporcuPlanView(){
             const avgNP7=wkNP7.length?Math.round(wkNP7.reduce((s,m)=>s+m.np,0)/wkNP7.length):null;
             const avgIF7=wkPower7.map(w=>calcMetrics(w,athlete).IF).filter(v=>v>0);
             const meanIF7=avgIF7.length?round2(avgIF7.reduce((s,v)=>s+v,0)/avgIF7.length):null;
-            const lm7=calcLoadMultiplier(last?.acwr,last?.phase,athlete?.hrv_durum,athlete?.sakatlık);
+            const lm7=calcLoadMultiplier(last?.acwr,last?.phase,hrvEfektifDurum(athlete),athlete?.sakatlık);
             const nextWkTarget7=wkLoad7>0?round1(wkLoad7*lm7.mult):null;
             return React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(110px,1fr))',gap:8,marginBottom:12,paddingBottom:10,borderBottom:'1px solid var(--border)'}},
               React.createElement('div',{className:'metric'},React.createElement('div',{className:'metric-label'},'Bu Hafta Yük'),React.createElement('div',{className:'metric-val'},wkLoad7),React.createElement('div',{className:'metric-sub'},wks7.length+' antrenman')),
