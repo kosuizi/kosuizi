@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.28-1941 --><!DOCTYPE html>
+<!-- Version: v2026.09.28-2000 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -23,7 +23,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.09.28-1941';
+    var RUNNING='v2026.09.28-2000';
     var GUARD_KEY='kosuizi_stale_reload_at';
     var reload=function(){
       var last=parseInt(sessionStorage.getItem(GUARD_KEY)||'0',10);
@@ -319,7 +319,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.28-1941';
+const APP_VERSION='v2026.09.28-2000';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -894,6 +894,68 @@ function hrvEfektifAth(athlete){
   const ef=hrvEfektifDurum(athlete);
   if(ef===(athlete.hrv_durum||'')) return athlete;
   return {...athlete,hrv_durum:ef,_hrvEfektif:true};
+}
+
+// 2026.09.28 — TANI SEKMESİ "Sorunlar" sütunu için HRV çift taraflı doğrulama METİNLERİ (tüm senaryolar).
+// Tek kaynak: hrvDogrula() sonucu (beyan × 7g bölgesi × uyum) → plan motorunun GERÇEKTEN uyguladığı etkiyle
+// birebir aynı dille açıklanır. Etkiler (hrvMod / recommendWorkout / planDay ile aynı):
+//   düşük → yoğunluk ×0.70 + haftalık hedef ×0.70;  dengesiz → yoğunluk ×0.85 + Z3 üstüne çıkılmaz;
+//   sayı kuralı (7g < alt sınır) → durumdan bağımsız yoğunluk ×0.85 (bugün + sonraki 2 gün).
+// Dönüş: metin dizisi (boş olabilir — dengeli+dengeli veya hiç veri yoksa sorun yok).
+function hrvSorunMetinleri(athlete){
+  const out=[];
+  if(!athlete) return out;
+  const d=hrvDogrula(athlete);
+  const band=hrv7Bant(athlete);
+  const {beyan,bolge,deger,ust,efektif,uyum}=d;
+  const sayiVar=deger>0&&!!band;
+  const sayiKurali=sayiVar&&deger<band.lo;
+  const etki={
+    'düşük':'yoğunluk ×0.70, haftalık hedef ×0.70, düşük yük istisnası kapalı',
+    'dengesiz':'yoğunluk ×0.85, Z3 üstüne çıkılmaz, düşük yük istisnası kapalı'
+  };
+  const bolgeMetni=b=>{
+    if(!band) return '';
+    if(b==='düşük') return '"düşük" bölgede (<'+band.dusuk+' ms)';
+    if(b==='dengesiz') return '"dengesiz" bölgede ('+band.dusuk+'–'+band.lo+' ms arası)';
+    return ust?'"dengeli" bölgenin üstünde (>'+band.hi+' ms)':'"dengeli" bölgede (≥'+band.lo+' ms)';
+  };
+  const ikon=b=>b==='düşük'?'📉':b==='dengesiz'?'📊':'ℹ️';
+  const sayiNotu=' Ayrıca sayı kuralı UYGULANDI (7g '+deger+' ms < '+(band?band.lo:'?')+' ms → yoğunluk ×0.85, bugün + 2 gün).';
+
+  // 1) Beyan yok
+  if(!beyan||!(beyan in HRV_DURUM_SIDDET)){
+    if(sayiKurali) out.push('📉 HRV durumu beyan edilmemiş; 7g '+deger+' ms '+bolgeMetni(bolge)+' → doğrulanacak beyan yok, durum kısıtı (düşük/dengesiz) UYGULANMADI; yalnızca sayı kuralı UYGULANDI (yoğunluk ×0.85, bugün + 2 gün).');
+    return out;
+  }
+  // 2) Beyan var, 7g sayısı yok → doğrulanamaz, beyan aynen geçerli
+  if(uyum==='sayisiz'){
+    if(beyan!=='dengeli') out.push(ikon(beyan)+' HRV '+beyan+' beyan edilmiş ama 7g HRV değeri girilmemiş → çift taraflı doğrulama YAPILAMADI; beyan aynen UYGULANDI ('+etki[beyan]+').');
+    return out;
+  }
+  // 3) İki taraf AYNI yönde → doğrulandı
+  if(uyum==='dogrulandi'){
+    if(beyan!=='dengeli') out.push(ikon(beyan)+' HRV '+beyan+' beyanı + 7g '+deger+' ms '+(ust?'bandın üstünde (>'+band.hi+' ms; Garmin\'de bandın üstü de "dengesiz" sayılır)':bolgeMetni(bolge))+' → çift taraflı DOĞRULANDI; '+beyan+' kısıtı UYGULANDI ('+etki[beyan]+').');
+    return out;
+  }
+  // 4) Çelişki → iki taraftan HAFİF olan esas alınır (doğrulanmamış sert kısıt uygulanmaz)
+  if(uyum==='celisiyor'){
+    const onEk=ikon(beyan==='dengeli'?bolge:beyan);
+    if(beyan==='dengeli'){
+      // Beyan sağlıklı, sayı düşük/dengesiz bölgede → durum kısıtı yok, yalnızca sayı kuralı
+      out.push(onEk+' HRV dengeli beyan edilmiş ama 7g '+deger+' ms '+bolgeMetni(bolge)+' → doğrulanmadı: '+bolge+' durum kısıtı UYGULANMADI (beyan daha hafif); yalnızca sayı kuralı UYGULANDI (yoğunluk ×0.85, bugün + 2 gün).');
+    } else if(efektif==='dengeli'){
+      // Beyan dengesiz/düşük, sayı sağlıklı bölgede → hiçbir durum kısıtı yok
+      out.push(onEk+' HRV '+beyan+' beyan edilmiş ama 7g '+deger+' ms '+bolgeMetni(bolge)+' → doğrulanmadı: '+beyan+' kısıtı UYGULANMADI; normal plan (yüksek HRV tek başına kısıt gerekçesi değil).');
+    } else if(efektif==='dengesiz'&&beyan==='düşük'){
+      // Beyan düşük, sayı dengesiz → düşük hükmü uygulanmaz, dengesiz uygulanır
+      out.push('📊 HRV düşük beyan edilmiş ama 7g '+deger+' ms '+bolgeMetni(bolge)+' → doğrulanmadı: "düşük" kısıtı UYGULANMADI; yerine "dengesiz" kısıtı UYGULANDI ('+etki['dengesiz']+').'+(sayiKurali?sayiNotu:''));
+    } else {
+      // Beyan dengesiz, sayı düşük bölgede → beyan hafif olduğu için dengesiz uygulanır
+      out.push('📊 HRV dengesiz beyan edilmiş ama 7g '+deger+' ms '+bolgeMetni(bolge)+' → doğrulanmadı: "düşük" kısıtı UYGULANMADI (beyan daha hafif); "dengesiz" kısıtı UYGULANDI ('+etki['dengesiz']+').'+(sayiKurali?sayiNotu:''));
+    }
+  }
+  return out;
 }
 
 function calcLoadMultiplier(acwr,phase,hrv_durum,sakatlık){
@@ -7286,7 +7348,7 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
               powerOverload:false,wkSessions:0,mechKardioDanger,
               zoneDist4w:zoneDist,zoneDist2w:zoneDist2,zoneDist4wPrevWeek:zoneDistPrevWeek,kaliteliYapildi:false,
               planWeek:planWeekReal,prevWeek:prevWeekReal,
-              hrv:ath.hrv_durum||'',
+              hrv:hrvEfektifDurum(ath)||'', // plan motoruyla (generateTwoWeekPlan → hrvEfektifAth) AYNI doğrulanmış durum
               phase,athlete:ath,
             });
             const sorunlar=[];
@@ -7351,6 +7413,8 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
               if(hrvEfektifDurum(ath)==='düşük') blokNeden.push('HRV düşük');
               sorunlar.push('⚡ Düşük yük istisnası bloke'+(blokNeden.length?' ('+blokNeden.join(', ')+')':', neden bilinmiyor'));
             }
+            // 2026.09.28 — HRV çift taraflı doğrulama sonucu (beyan × 7g bölge) her senaryo için açıklanır.
+            hrvSorunMetinleri(ath).forEach(m=>sorunlar.push(m));
             // DÜZELTME (Temmuz 2026 — Göksel'in tespitiyle): forceLow zaten AYNI
             // eşik ihlalini zoneReasons üzerinden daha ayrıntılı biçimde bildiriyor
             // (bkz. yukarıdaki '⚠ Aerobik zorunlu' satırı) — bu yüzden sigLevel==='forceLow'
