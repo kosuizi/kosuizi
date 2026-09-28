@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.28-0805 --><!DOCTYPE html>
+<!-- Version: v2026.09.28-0838 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -305,10 +305,11 @@ const fmtDate=(d)=>{if(!d)return'';try{return new Date(d+'T12:00:00').toLocaleDa
 const fmtShort=(d)=>{if(!d)return'';try{return new Date(d+'T12:00:00').toLocaleDateString('tr-TR',{day:'2-digit',month:'short'})}catch{return d}};
 const round1=(v)=>Math.round(v*10)/10;
 const round2=(v)=>Math.round(v*100)/100;
+const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — round1 küçük değerlerde oranı ±%7 saptırıyordu
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.28-0805';
+const APP_VERSION='v2026.09.28-0838';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -365,10 +366,17 @@ function rpeYukKatsayisi(rhr,mhr,lthr){
   return 100/(rpeEsik*60); // RPE×dakika çarpımını hrTSS ölçeğine taşıyan katsayı
 }
 
-// Mekanik Yük (AU): Trail/ultra için zemin + irtifa tabanlı stres
-// Referans: Gabbett 2016 — muskuloskeletal yük modeli
+// Mekanik Yük (AU): Trail/ultra için zemin + irtifa tabanlı stres.
+// Formül (km + D+/100) trail topluluğunda yaygın "km-effort" yaklaşımıdır; zemin çarpanları
+// (TERRAIN_MULT) ölçüme değil mühendislik yargısına dayanır. Gabbett 2016 yalnızca akut/kronik
+// yük ORANI çerçevesinin kaynağıdır (formülün değil). İniş (D−) ve hız hesapta yok.
+// 2026.09.28 — Darbe/yer tepkisi yükü OLMAYAN sporlar (bisiklet, yüzme, kürek, kuvvet, yoga,
+// pilates, futbol, basketbol) mesafe girilse bile 0 mekanik yük sayılır: bisiklet km'si koşu
+// km'si gibi tendon/kemik yükü üretmez. Kardiyo yükü etkilenmez (bkz. calcMetrics).
 const TERRAIN_MULT={1:1.00,2:1.12,3:1.28,4:1.50,5:1.78};
-function calcMechLoad(mesafe,irtifa,zemin_zorluk){
+const MECH_SPOR_DISI=['bisiklet','yuzme','kuerek','kuvvet','yoga','pilates','futbol','basketbol'];
+function calcMechLoad(mesafe,irtifa,zemin_zorluk,spor){
+  if(spor&&MECH_SPOR_DISI.includes(spor))return 0;
   const km=parseFloat(mesafe)||0;
   const dp=parseFloat(irtifa)||0;
   const z=parseInt(zemin_zorluk)||1;
@@ -513,7 +521,7 @@ function calcMetrics(w,ath){
   const yukFinal=hrGuvenilirSpor
     ? (yukObjSegment!=null?yukObjSegment:(yukObjTek>0?yukObjTek:yukSubj))
     : yukSubj;
-  const mechLoad=calcMechLoad(w.mesafe,w.irtifa,w.zemin_zorluk);
+  const mechLoad=calcMechLoad(w.mesafe,w.irtifa,w.zemin_zorluk,spor);
 
   // Excel Y: Temel Yük — segment-bazlı > hrTSS > TRIMP > HR-based (HR-güvenilir
   // sporlarda); kuvvet/yoga/pilates/diğer'de doğrudan RPE-bazlı yük
@@ -712,6 +720,13 @@ const λ_ctl=1-Math.exp(-1/42);  // τ=42 gün (kronik/fitness)
 const λ_matl=1-Math.exp(-1/14); // τ=14 gün (mekanik akut — tendon kısa-orta vadeli uyum)
 const λ_mctl=1-Math.exp(-1/60); // τ=60 gün (mekanik kronik — bağ dokusu/kemik uzun vadeli uyum)
 const MECH_SCALE=6; // mechLoad (km-eşd.) → TSS ölçeğine normalizasyon (1 km Z2 ≈ 6 TSS)
+// 2026.09.28 — Mekanik yük güvenilirlik ayarları (Göksel talebi: "güvenilirliği doğrultusunda yumuşat"):
+// D+ ölçümü ±%10-30, zemin puanı öznel, MECH_SCALE sabit → mekanik oranlar kardiyodan daha gürültülü.
+// Bu yüzden eşikler ölçüm belirsizliği payıyla GENİŞLETİLDİ (bkz. mechEsikleri/mechKardioEsikleri)
+// ve kronik ortalama oturana kadar mekanik sinyaller SESSİZE alınır.
+const MECH_TOLERANS=1.15;        // ATL/CTL eşiklerine çarpan (ölçüm belirsizliği payı ~%15)
+const MECH_KARDIO_TOLERANS=0.75; // Mech/Kardio alt eşiklerine çarpan (MECH_SCALE + D+ belirsizliği daha yüksek)
+const MECH_ISINMA_GUN=120;       // ilk mekanik kayıttan itibaren: τ_kronik=60 → 2τ; altında Mech CTL düşük, ATL/CTL şişik çıkar
 
 // ── Planlama aşamasında (henüz gerçekleşmemiş gün) tür bazlı dakika-başı mekanik
 // yük tahmini (km-eşdeğeri/dk) — gerçek mesafe/D+ bilinmediğinden calcMechLoad
@@ -869,12 +884,16 @@ function buildHistory(wks,ath,races){
   }
 
   let atl=0,ctl=0,mAtl=0,mCtl=0;
+  let mechIlkGun=null; // ilk mekanik yük>0 kaydın günü (ısınma sayacı başlangıcı)
   return days.map(day=>{
     const {load=0,mech=0,aerEffSum=0,aerEffCount=0,powerEffSum=0,powerEffCount=0}=byDay[day]||{};
     atl=load*λ_atl+atl*(1-λ_atl);
     ctl=load*λ_ctl+ctl*(1-λ_ctl);
     mAtl=mech*λ_matl+mAtl*(1-λ_matl);
     mCtl=mech*λ_mctl+mCtl*(1-λ_mctl);
+    if(mechIlkGun===null&&mech>0)mechIlkGun=day;
+    const mechGun=mechIlkGun?Math.round((new Date(day+'T12:00:00')-new Date(mechIlkGun+'T12:00:00'))/864e5):0;
+    const mechIsinma=mechIlkGun===null||mechGun<MECH_ISINMA_GUN;
     const acwr=ctl>1?round2(atl/ctl):null;
     const phase=calcPhase(day,nextRace?.tarih,nextRace?.prep_weeks,nextRace||{},getAthRaceOverride(ath,nextRace?.id));
     const aerEff=aerEffCount>0?round1(aerEffSum/aerEffCount):null;
@@ -882,7 +901,7 @@ function buildHistory(wks,ath,races){
     return{
       date:day,load:round1(load),mech:round1(mech),
       atl:round1(atl),ctl:round1(ctl),tsb:round1(ctl-atl),acwr,
-      mechAtl:round1(mAtl),mechCtl:round1(mCtl),phase,aerEff,powerEff
+      mechAtl:round3(mAtl),mechCtl:round3(mCtl),mechGun,mechIsinma,phase,aerEff,powerEff
     };
   });
 }
@@ -1009,8 +1028,8 @@ function acwrEsikleri(phase,athlete,isSimulated){
 // mutlak son-dönem yükleme oranını önemser.
 function mechEsikleri(athlete){
   const lvl=seviyeCarpani(athlete);
-  const warn=round2(Math.min(1.1*lvl,ONLEM_TAVAN.mechAclWarnTavan));
-  const danger=round2(Math.min(1.3*lvl,ONLEM_TAVAN.mechAclTavan));
+  const warn=round2(Math.min(1.1*lvl*MECH_TOLERANS,ONLEM_TAVAN.mechAclWarnTavan));
+  const danger=round2(Math.min(1.3*lvl*MECH_TOLERANS,ONLEM_TAVAN.mechAclTavan));
   return{warn,danger};
 }
 // ── mechKardioEsikleri — TEK PAYLAŞILAN kaynak: Mekanik/Kardiyovasküler denge
@@ -1019,8 +1038,8 @@ function mechEsikleri(athlete){
 // kaynak olarak o alındı.
 function mechKardioEsikleri(athlete){
   const lvl=seviyeCarpani(athlete);
-  const warn=round2(Math.max(0.6/lvl,ONLEM_TAVAN.mechImbalansWarnTaban));
-  const danger=round2(Math.max(0.35/lvl,ONLEM_TAVAN.mechImbalansTaban));
+  const warn=round2(Math.max(0.6*MECH_KARDIO_TOLERANS/lvl,ONLEM_TAVAN.mechImbalansWarnTaban));
+  const danger=round2(Math.max(0.35*MECH_KARDIO_TOLERANS/lvl,ONLEM_TAVAN.mechImbalansTaban));
   return{warn,danger};
 }
 
@@ -4466,10 +4485,11 @@ const ONLEM_TAVAN={
   acwrYukSim:2.2,       // yukYuksek simüle-veri tavanı (projeksiyon belirsizliği payı zaten var)
   acwrPlanGercek:1.9,   // acwrOverloadPlan gerçek-veri tavanı
   acwrPlanSim:2.1,      // acwrOverloadPlan simüle-veri tavanı
-  mechAclTavan:1.7,     // mechAclOverload (danger) tavanı (bespoke metrik — orantılı yargı)
-  mechAclWarnTavan:1.5, // mechAclOverload warn-katmanı tavanı (07.09.2026 — tek kaynak birleştirmesi, mechAclTavan'ın altında yeni eklendi)
-  mechImbalansTaban:0.20,// mechKardioImbalancePlan/mechKardioDanger tabanı (bespoke metrik)
-  mechImbalansWarnTaban:0.40, // mechKardioWarn tabanı (bespoke metrik)
+  mechAclTavan:1.9,     // mechAclOverload (danger) tavanı (bespoke metrik — orantılı yargı; 2026.09.28: 1.7→1.9, MECH_TOLERANS ile)
+  mechAclWarnTavan:1.65, // mechAclOverload warn-katmanı tavanı (07.09.2026 tek kaynak; 2026.09.28: 1.5→1.65)
+  mechImbalansTaban:0.15,// mechKardioImbalancePlan/mechKardioDanger tabanı (bespoke metrik; 2026.09.28: 0.20→0.15)
+  mechKardioAsiri:2.0,  // Mech/Kardio ÜST uç: yalnızca bunun üstü forceEasy (2026.09.28 — eskiden ATL/CTL eşiği (~1.3) yanlışlıkla buraya da uygulanıyordu)
+  mechImbalansWarnTaban:0.30, // mechKardioWarn tabanı (bespoke metrik; 2026.09.28: 0.40→0.30)
 };
 const EMPTY_R={ad:'',tarih:'',mesafe:'',d_plus:'',kontrol_noktasi:'',maks_irtifa:'',min_irtifa:'',sicaklik:'',nem:'',iklim_zorluk:'1',zemin_zorluk:'1',ekipman_kg:'',prep_weeks:'',taper_w:'',peak_w:'',url:'',logo:'',is_trail:false};
 // ── Antrenman Türleri Rehberi — Açıklamalar, Enerji Sistemi, Zon ────────────
@@ -7087,8 +7107,9 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
             // yeni mechKardioDanger zoneReasons notu).
             const mechKardioRatio=ctl>5?((last?.mechCtl||0)*MECH_SCALE/ctl):null;
             const _mkETani=mechKardioEsikleri(ath);
-            const mechKardioDanger=mechKardioRatio!==null&&mechKardioRatio<_mkETani.danger;
-            const mechKardioWarn=mechKardioRatio!==null&&mechKardioRatio<_mkETani.warn;
+            const _mechIsinmaTani=!last||!!last.mechIsinma; // 2026.09.28 — ısınma boyunca mekanik sinyaller sessiz
+            const mechKardioDanger=!_mechIsinmaTani&&mechKardioRatio!==null&&mechKardioRatio<_mkETani.danger;
+            const mechKardioWarn=!_mechIsinmaTani&&mechKardioRatio!==null&&mechKardioRatio<_mkETani.warn;
             // Yükleme Planı'ndan bu haftanın (ve bir öncekinin) gerçek durumunu al —
             // Koç Panelindeki plan üreticisiyle aynı planWeek/prevWeek kaynağı olmalı
             // (paritesizlik: bu olmadan planlı-dinlenme-haftası sinyali burada hiç görünmez)
@@ -7101,7 +7122,7 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
             const sigs=evaluateSignals({
               acwr:acwr||1.0,tsb,inj:parseInt(ath.sakatlık)||1,
               ifOverloaded:false,mechOverload:false,
-              mechAclOverload:mechAtl>(mechCtl||1)*mechEsikleri(ath).danger,
+              mechAclOverload:!_mechIsinmaTani&&mechAtl>(mechCtl||1)*mechEsikleri(ath).danger,
               powerOverload:false,wkSessions:0,mechKardioDanger,
               zoneDist4w:zoneDist,zoneDist2w:zoneDist2,zoneDist4wPrevWeek:zoneDistPrevWeek,kaliteliYapildi:false,
               planWeek:planWeekReal,prevWeek:prevWeekReal,
@@ -7193,7 +7214,7 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
             // mechKardioRatio/mechKardioDanger/mechKardioWarn artık yukarıda (evaluateSignals
             // çağrısından önce) hesaplanıyor — burada tekrar hesaplanmıyor, aynı değerler
             // hem `sigs`'i hem aşağıdaki tablo sütununu besliyor (tek kaynak).
-            const mechAclOvl=mechAtl>(mechCtl||1)*mechEsikleri(ath).danger;
+            const mechAclOvl=!_mechIsinmaTani&&mechAtl>(mechCtl||1)*mechEsikleri(ath).danger;
             const weekStart=new Date(today); weekStart.setDate(today.getDate()-today.getDay()+1);
             const weekStartStr=localDateStr(weekStart);
             const kaliteliTipler=KALITELI_TIPLERI;
@@ -18078,20 +18099,24 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   // TEK PAYLAŞILAN kaynak — bkz. acwrEsikleri/tsbBant tanımı (~satır 862/908).
   // Bu fonksiyon her zaman GERÇEK (simüle olmayan) veriyle çalışır.
   const _acwrE=acwrEsikleri(phase,athlete,false), _tsbB=tsbBant(athlete);
+  // 2026.09.28 — Mekanik ısınma (ilk ~120 gün) boyunca TÜM mekanik sinyaller sessiz (bkz. MECH_ISINMA_GUN).
+  const mechIsinma=!last||!!last.mechIsinma;
   const mechRatio=ctl>5?(mechCtl*MECH_SCALE/ctl):0; // normalize: km-eşd. → TSS ölçeği
-  const mechOverload=mechRatio>_mE.danger; // normalize edilmiş oran — mekanik yük kardiyodan orantısız yüksek
+  // Mech/Kardio ÜST taraf: uyarı ATL/CTL eşiğinde (bloklamaz); forceEasy yalnızca aşırı uçta (mechKardioAsiri).
+  const mechOverloadWarn=!mechIsinma&&mechRatio>_mE.danger;
+  const mechOverload=!mechIsinma&&mechRatio>ONLEM_TAVAN.mechKardioAsiri;
 
   // ── Mekanik ATL/CTL oranı (akut mekanik aşırı yük) ───────────────────────
   const mechAtlCtlRatio=(mechCtl>0)?(mechAtl/mechCtl):1;
-  const mechAclOverload=mechAtlCtlRatio>_mE.danger;
+  const mechAclOverload=!mechIsinma&&mechAtlCtlRatio>_mE.danger;
 
   // ── Mekanik/Kardiyovasküler denge ─────────────────────────────────────────
   // mechCtl MECH_SCALE ile normalize edilir → TSS ölçeğinde karşılaştırma
   // Oran < warn: kardio mekaniğin önünde → uyarı
   // Oran < danger: ciddi uçurum → forceLow bloğu
   const mechKardioRatio=ctl>5?(mechCtl*MECH_SCALE/ctl):null;
-  const mechKardioWarn=mechKardioRatio!==null&&mechKardioRatio<_mkE.warn;   // uyarı, bloklamaz
-  const mechKardioDanger=mechKardioRatio!==null&&mechKardioRatio<_mkE.danger; // blok
+  const mechKardioWarn=!mechIsinma&&mechKardioRatio!==null&&mechKardioRatio<_mkE.warn;   // uyarı, bloklamaz
+  const mechKardioDanger=!mechIsinma&&mechKardioRatio!==null&&mechKardioRatio<_mkE.danger; // blok
 
   // ── HRV 7g düşüklüğü — yaş/cinsiyet bazlı eşik ─────────────────────────
   const hrv7Esigi=hrv7Esik(athlete);
@@ -18156,7 +18181,7 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   if(ifOverloaded) warnings.push({icon:'⚡',text:'Son hafta IF ortalaması '+meanIF+' — kronik yüksek yoğunluk. Aerobik taban gerekli.'});
   if(powerOverload) warnings.push({icon:'💪',text:'Güç yükü HR yükünden orantısız yüksek — nöromüsküler aşırı yük riski.'});
   if(aerEffDecline) warnings.push({icon:'📉',text:'Aerobik verimlilik son 4 haftada kötüleşiyor (aynı nabızda daha yavaş) — yorgunluk birikimi işareti.'});
-  if(mechOverload) warnings.push({icon:'🏔',text:'Mekanik yük kardiyovasküler yükün çok üzerinde (normalize Mech/Kardio: '+round1(mechKardioRatio)+') — irtifa/zemin yükü yoğun, dikkat.'});
+  if(mechOverloadWarn) warnings.push({icon:'🏔',text:'Mekanik yük kardiyovasküler yükün çok üzerinde (normalize Mech/Kardio: '+round1(mechKardioRatio)+') — irtifa/zemin yükü yoğun, dikkat.'});
   if(mechAclOverload) warnings.push({icon:'🦵',text:'Akut mekanik yük kronik ortalamanın çok üzerinde (ATL/CTL: '+round1(mechAtlCtlRatio)+') — tendon/kas dokusu aşırı yük riski.'});
   if(mechKardioDanger) warnings.push({icon:'🫀',text:'Mech/Kardio dengesi kritik ('+round1(mechKardioRatio)+') — kardiyovasküler kondisyon mekanik kondisyonu çok geride bıraktı. Aerobik öncelikli.'});
   else if(mechKardioWarn) warnings.push({icon:'🫀',text:'Kardiyovasküler kondisyon mekanik kondisyonun önünde (Mech/Kardio: '+round1(mechKardioRatio)+') — mekanik yük dikkatli artırılsın.'});
@@ -18904,8 +18929,11 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
     :(acwr>_acwrE_real.forceEasyEsik);
   const mechCtlPlan=simState.mechCtl||0;
   const mechAclPlan=simState.mechAtl||simState.atl||0;
-  const mechKardioImbalancePlan=simState.ctl>5
-    ?((mechCtlPlan*MECH_SCALE)/(simState.ctl||1))<Math.max(0.35/_src,ONLEM_TAVAN.mechImbalansTaban)
+  // 2026.09.28 — mekanik ısınma bitmeden (simState.mechIsinma!==false) mekanik sinyaller sessiz;
+  // eşik artık TEK KAYNAK (mechKardioEsikleri) — eskiden burada satır içi kopya vardı.
+  const _mechHazirPlan=simState.mechIsinma===false;
+  const mechKardioImbalancePlan=_mechHazirPlan&&simState.ctl>5
+    ?((mechCtlPlan*MECH_SCALE)/(simState.ctl||1))<mechKardioEsikleri(athlete).danger
     :false;
   // YENİ (2026.09.07 — Göksel talebi: "yorgunluk ve ACWR seviyesine, ve
   // kullanılabilecek diğer göstergelere göre belirlenmeli"): Mekanik Yük
@@ -18915,7 +18943,7 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
   // gün-tipi indirim mantığında (aşağıdaki genel downgrade dalı + Yürü-Koş dalı)
   // ŞİMDİYE KADAR HİÇ kontrol edilmiyordu. Sonuç: ACWR/TSB dengede görünse bile
   // mekanik yük tek başına kırmızıyken sistem normal/kaliteli bir gün önerebiliyordu.
-  const mechAclOverloadPlan=mechAclPlan>(mechCtlPlan||1)*mechEsikleri(athlete).danger;
+  const mechAclOverloadPlan=_mechHazirPlan&&mechAclPlan>(mechCtlPlan||1)*mechEsikleri(athlete).danger;
   const YOGUN_TURLER_PLAN=YOGUN_TURLER; // DÜZELTME: eskiden 'progressive' bu listede yoktu →
   // HRV düşük/dengesiz olduğunda progressive antrenmanlar indirilmiyordu (satır ~12756/12773)
 
@@ -19917,11 +19945,11 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
     for(let i=(history||[]).length-1;i>=0;i--){
       if(history[i]&&history[i].date<=_simBaseDs){row=history[i];break;}
     }
-    if(!row) return{atl:0,ctl:0,mechAtl:0,mechCtl:0}; // haftadan önce hiç yük yok
+    if(!row) return{atl:0,ctl:0,mechAtl:0,mechCtl:0,mechIsinma:true}; // haftadan önce hiç yük yok
     // Satır Pazar'dan eskiyse (veri boşluğu) aradaki yüksüz günler kadar sönümle
     const gap=Math.max(0,Math.round((new Date(_simBaseDs+'T12:00:00')-new Date(row.date+'T12:00:00'))/864e5));
     const dec=(lam)=>Math.pow(1-lam,Math.min(gap,120));
-    return{atl:(row.atl||0)*dec(λ_atl),ctl:(row.ctl||0)*dec(λ_ctl),mechAtl:(row.mechAtl||0)*dec(λ_matl),mechCtl:(row.mechCtl||0)*dec(λ_mctl)};
+    return{atl:(row.atl||0)*dec(λ_atl),ctl:(row.ctl||0)*dec(λ_ctl),mechAtl:(row.mechAtl||0)*dec(λ_matl),mechCtl:(row.mechCtl||0)*dec(λ_mctl),mechIsinma:row.mechIsinma!==false};
   })();
   // Gelecekteki PLANLI saf çapraz günler için tipik yük (eskiden 0 giriyordu)
   const caprazSimYuk=estimateTipikCaprazYuk(athWorkouts,athlete);
@@ -20302,8 +20330,8 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       // Bugün için simState: gerçek history son değerini kullan (simülasyon değil)
       // Geçmiş günler için simüle edilen değerleri kullan (simAtl/simCtl)
       const simState=isToday&&last
-        ?{atl:round1(last.atl||0),ctl:round1(last.ctl||0),tsb:round1((last.ctl||0)-(last.atl||0)),acwr:last.acwr||null,mechCtl:round1(last.mechCtl||0),mechAtl:round1(last.mechAtl||0)}
-        :{atl:round1(simAtl),ctl:round1(simCtl),tsb:round1(simCtl-simAtl),acwr:simCtl>1?round2(simAtl/simCtl):null,mechCtl:round1(simMechCtl),mechAtl:round1(simMechAtl)};
+        ?{atl:round1(last.atl||0),ctl:round1(last.ctl||0),tsb:round1((last.ctl||0)-(last.atl||0)),acwr:last.acwr||null,mechCtl:round3(last.mechCtl||0),mechAtl:round3(last.mechAtl||0),mechIsinma:last.mechIsinma!==false}
+        :{atl:round1(simAtl),ctl:round1(simCtl),tsb:round1(simCtl-simAtl),acwr:simCtl>1?round2(simAtl/simCtl):null,mechCtl:round3(simMechCtl),mechAtl:round3(simMechAtl),mechIsinma:_simBase.mechIsinma!==false};
       // isPast: sadece tarih karşılaştırması — saat farkından etkilenmesin
       const isPast=dateStr<`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
       const dtR=primary?Math.ceil((new Date(primary.tarih+'T12:00:00')-new Date(dateStr+'T12:00:00'))/864e5):null;
@@ -20351,8 +20379,9 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       // isPast veya gerçek antrenman kaydı olan günlere dokunma.
       if(!isPast&&!(isToday&&actual.length>0)&&planned.tip!=='dinlenme'&&planned.tip!=='yaris'){
         const YOGUN_L=YOGUN_TURLER;
-        const mechKardioD=simState.ctl>5?((simState.mechCtl||0)*MECH_SCALE/(simState.ctl||1))<mechKardioEsikleri(athlete).danger:false;
-        const mechAclOvl=(simState.mechAtl||0)>(simState.mechCtl||1)*mechEsikleri(athlete).danger;
+        const _mechHazirSim=simState.mechIsinma===false; // 2026.09.28 — ısınma boyunca sessiz
+        const mechKardioD=_mechHazirSim&&simState.ctl>5?((simState.mechCtl||0)*MECH_SCALE/(simState.ctl||1))<mechKardioEsikleri(athlete).danger:false;
+        const mechAclOvl=_mechHazirSim&&(simState.mechAtl||0)>(simState.mechCtl||1)*mechEsikleri(athlete).danger;
         // Bu haftada kaliteli antrenman yapıldı mı (wkStats güncel)
         const kaliteliVarMi=!wkStats.kaliteliYok;
         const planSigs=evaluateSignals({
@@ -30656,7 +30685,7 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
           gunIdeal:st!=='ok'?tsbHedefGun(atl,ctl,tsbB.dengeliAlt):0});
       }
       // Mekanik Yük ATL/CTL oranı — bkz. mechEsikleri (TEK PAYLAŞILAN kaynak, recommendWorkout'taki mechAclOverload ile aynı)
-      if(mCtl>0){
+      if(mCtl>0&&lastH.mechIsinma===false){ // 2026.09.28 — ısınma (ilk ~120 gün) boyunca mekanik sistem değerlendirmeye katılmaz
         const oran=mAtl/mCtl;
         const mEsik=mechEsikleri(athlete);
         let st='ok';
@@ -30961,6 +30990,12 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
         // TEK PAYLAŞILAN kaynak — bkz. mechEsikleri/mechKardioEsikleri tanımı.
         const mE=mechEsikleri(athlete), mkE=mechKardioEsikleri(athlete);
         const msgs=[];
+        // 2026.09.28 — Isınma: ilk mekanik kayıttan itibaren <MECH_ISINMA_GUN gün → oran uyarıları sessiz.
+        if(lastH.mechIsinma){
+          return React.createElement('div',{style:{marginTop:10,display:'flex',flexDirection:'column',gap:6}},
+            React.createElement('div',{style:{fontSize:12,padding:'8px 12px',borderRadius:'var(--radius)',background:'var(--info-bg)',color:'var(--info)',borderLeft:'3px solid var(--info)'}},
+              '⏳ Mekanik yük referansı oluşuyor ('+(lastH.mechGun||0)+'/'+MECH_ISINMA_GUN+' gün). Kronik ortalama henüz oturmadı; ATL/CTL ve Mech/Kardio oranları bu sürede yanıltıcı olabilir — mekanik uyarılar ve plan kısıtları devre dışı.'));
+        }
         // ATL vs CTL yorumu
         if(atlCtlRatio>mE.danger)
           msgs.push({cls:'danger',text:'⚠ Akut mekanik yük kronik ortalamanın çok üzerinde (ATL/CTL: '+round1(atlCtlRatio)+'). Tendon ve kas dokusunda aşırı yüklenme riski — yoğunluğu düşür.'});
