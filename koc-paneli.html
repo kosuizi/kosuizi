@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.28-1415 --><!DOCTYPE html>
+<!-- Version: v2026.09.28-1515 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -317,7 +317,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.28-1415';
+const APP_VERSION='v2026.09.28-1515';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -22760,6 +22760,22 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     return calcWeeklyTargets(athlete,racesOverride,workouts||[],planMode==='optimize',stableHistory,frozenTargets);
   },[athlete,history,races,selectedPrimary,workouts,planMode,frozenTargets]);
 
+  // BU HAFTANIN REVİZE HEDEFİ İÇİN hafta takvimi (28.09.2026 — "Optimize'da hedef seçilen yarıştan bağımsız olmalı"):
+  // curWeekEffective (koyu sayı) rampa tabanını (computeRampProjection) tüm hazırlık takviminden hesaplar.
+  // Bu takvim SEÇİLİ yarışın hazırlık dönemine dayandığından, Optimize'da bile bu haftanın revize hedefi
+  // seçime göre değişiyordu. Optimize'da revize hedef için takvim HER ZAMAN Otomatik'in ana yarışından
+  // (dayRaces) kurulur; böylece günlük plan + rampa tabanı + hedef tek bir seçimden bağımsız sonuç verir.
+  // Seçim yoksa ya da Orijinal modundaysa weekTargets ile aynıdır (ek hesap yapılmaz).
+  const effTargets=React.useMemo(()=>{
+    if(!athlete)return[];
+    if(planMode!=='optimize'||!selectedPrimary)return weekTargets;
+    try{
+      const prevWeekEndStr=localDateStr(getWeekBounds(-1).end);
+      const stableHistory=(history||[]).filter(h=>h.date<=prevWeekEndStr);
+      return calcWeeklyTargets(athlete,dayRaces,workouts||[],true,stableHistory,frozenTargets);
+    }catch(e){return weekTargets;}
+  },[athlete,history,workouts,planMode,selectedPrimary,dayRaces,frozenTargets,weekTargets]);
+
   // Gerçekleşen haftalık km+D+ hesapla
   const athWks=(workouts||[]).filter(w=>w.athleteId===athlete?.id);
   // Tür son kullanım — kompakt grid badge için (her antrenman türü kaç gün önce yapıldı)
@@ -22791,9 +22807,9 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
   const curWeekEffective=React.useMemo(()=>{
     if(!athlete||!plan)return null;
     try{
-      const cwIdx=weekTargets.findIndex(w=>w.isCurrent);
+      const cwIdx=effTargets.findIndex(w=>w.isCurrent);
       if(cwIdx<0)return null;
-      const cwWt=weekTargets[cwIdx];
+      const cwWt=effTargets[cwIdx];
       const curWeekPlan=plan.weeks.find(w=>w.weekOff===0);
       if(!curWeekPlan)return null;
       const zonesW=calcZones(athlete);
@@ -22831,7 +22847,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       // oranla birlikte taşınır ki yoğunluk (m/km) bozulmasın (bkz. yukarıdaki
       // D+ yoğunluk kontrolü notu, aynı mantık). Bu TEK yerde uygulanır —
       // hem Firebase'e yazılan hem tabloda gösterilen değer buradan gelir.
-      const rampProj=computeRampProjection(weekTargets,rampModeOn,rampRatePct,null,null,rampDpRatePct);
+      const rampProj=computeRampProjection(effTargets,rampModeOn,rampRatePct,null,null,rampDpRatePct);
       const curRampEntry=rampProj[localDateStr(cwWt.weekStart)]||null;
       if(curRampEntry&&curRampEntry.projKm>cappedEffKmFinal){
         cappedEffKmFinal=curRampEntry.projKm;
@@ -22855,7 +22871,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       const isRevised=kmDown>0.05||dpDown>0.10||cwWt.isRaceWeek;
       return{origKm:cwWt.targetKm,origDp:cwWt.targetDp,effKm:cappedEffKmFinal,effDp:cappedEffDp,isRevised};
     }catch(e){return null;}
-  },[athlete,plan,weekTargets,workouts,races,rampModeOn,rampRatePct,rampDpRatePct]);
+  },[athlete,plan,effTargets,workouts,races,rampModeOn,rampRatePct,rampDpRatePct]);
 
   // planSnap'e weekEff yaz — Koşu İzlerim bu alanı okur, kendi hesap yapmaz
   // Dondurma kuralı:
