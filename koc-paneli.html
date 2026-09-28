@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.28-0838 --><!DOCTYPE html>
+<!-- Version: v2026.09.28-1056 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -309,7 +309,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.28-0838';
+const APP_VERSION='v2026.09.28-1056';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -726,6 +726,13 @@ const MECH_SCALE=6; // mechLoad (km-eşd.) → TSS ölçeğine normalizasyon (1 
 // ve kronik ortalama oturana kadar mekanik sinyaller SESSİZE alınır.
 const MECH_TOLERANS=1.15;        // ATL/CTL eşiklerine çarpan (ölçüm belirsizliği payı ~%15)
 const MECH_KARDIO_TOLERANS=0.75; // Mech/Kardio alt eşiklerine çarpan (MECH_SCALE + D+ belirsizliği daha yüksek)
+// 2026.09.28 — ATL/CTL/ACWR/TSB başlangıç sapması düzeltmesi (yeni/kısa geçmişli sporcu):
+// EWMA sıfırdan başlayınca ATL hızlı, CTL yavaş dolar → ilk haftalarda ACWR 2-4 (gerçekte ~1) ve TSB
+// aşırı negatif çıkıp "tam dinlenme/aerobik zorunlu" kararlarını yanlış tetikliyordu (τ=42 → ~8 hafta).
+// Çözüm: gözlenen pencereye göre normalize (ewma / (1-(1-λ)^n)) — başlangıç durumu "gözlenen ortalama yük"
+// varsayılır. n büyüdükçe çarpan 1'e yakınsar (n≥250'de fark <%0.3) → uzun geçmişli sporcu etkilenmez.
+const ACWR_MIN_GUN=14;     // bundan az veri gününde ACWR üretilmez (null) — karar sinyali yok
+const YUK_ISINMA_GUN=126;  // 3τ_kronik: bu süreye kadar değerler "kısa geçmiş için düzeltilmiş" (UI notu)
 const MECH_ISINMA_GUN=120;       // ilk mekanik kayıttan itibaren: τ_kronik=60 → 2τ; altında Mech CTL düşük, ATL/CTL şişik çıkar
 
 // ── Planlama aşamasında (henüz gerçekleşmemiş gün) tür bazlı dakika-başı mekanik
@@ -803,7 +810,24 @@ function hrvReadinessBonus(hrv_durum){
 // HRV 7g "düşük" eşiği — yaş ve cinsiyete göre ayarlı
 // Baz: aktif sporcu RMSSD normları (Nunan 2010, Plews 2013, Shaffer 2017)
 // Eşik = baz × 0.75 → beklenenin %25 altı → kümülatif stres sinyali
+// 2026.09.28 — KİŞİSEL BAZ ÇİZGİSİ: nüfus normu doğal olarak düşük HRV'li sporcuyu sürekli "stresli",
+// yüksek HRV'liyi geç uyarılı gösteriyordu. profileHistory'de son 120 gün içinde (son 10 gün HARİÇ — güncel
+// düşüş baz çizgisini aşağı çekmesin) ≥4 HRV kaydı varsa eşik = kişisel medyan × 0.85; yoksa nüfus eşiği.
+function hrv7KisiselBaz(athlete){
+  const ph=Array.isArray(athlete?.profileHistory)?athlete.profileHistory:[];
+  const now=Date.now();
+  const vals=ph.map(sn=>{
+    const v=parseSayi(sn?.hrv_7gun)||0, t=new Date(sn?.date).getTime();
+    const gun=isFinite(t)?(now-t)/864e5:NaN;
+    return (v>=15&&v<=250&&gun>=10&&gun<=120)?v:null;
+  }).filter(v=>v!=null).sort((a,b)=>a-b);
+  if(vals.length<4) return null;
+  const m=Math.floor(vals.length/2);
+  return vals.length%2?vals[m]:(vals[m-1]+vals[m])/2;
+}
 function hrv7Esik(athlete){
+  const kisisel=hrv7KisiselBaz(athlete);
+  if(kisisel!=null) return Math.round(kisisel*0.85);
   const yas=athlete.dogum?new Date().getFullYear()-new Date(athlete.dogum).getFullYear():35;
   let baz=yas<25?65:yas<35?55:yas<45?47:yas<55?40:yas<65?33:27;
   if((athlete.cinsiyet||'Erkek')==='Kadın') baz-=5;
@@ -885,7 +909,7 @@ function buildHistory(wks,ath,races){
 
   let atl=0,ctl=0,mAtl=0,mCtl=0;
   let mechIlkGun=null; // ilk mekanik yük>0 kaydın günü (ısınma sayacı başlangıcı)
-  return days.map(day=>{
+  return days.map((day,dIdx)=>{
     const {load=0,mech=0,aerEffSum=0,aerEffCount=0,powerEffSum=0,powerEffCount=0}=byDay[day]||{};
     atl=load*λ_atl+atl*(1-λ_atl);
     ctl=load*λ_ctl+ctl*(1-λ_ctl);
@@ -894,13 +918,19 @@ function buildHistory(wks,ath,races){
     if(mechIlkGun===null&&mech>0)mechIlkGun=day;
     const mechGun=mechIlkGun?Math.round((new Date(day+'T12:00:00')-new Date(mechIlkGun+'T12:00:00'))/864e5):0;
     const mechIsinma=mechIlkGun===null||mechGun<MECH_ISINMA_GUN;
-    const acwr=ctl>1?round2(atl/ctl):null;
+    // Başlangıç sapması düzeltmesi (bkz. ACWR_MIN_GUN yorumu) — atl/ctl durum değişkenleri HAM kalır,
+    // yalnızca dışarı verilen değerler normalize edilir. n<ACWR_MIN_GUN iken çarpan 14 günlük pencereye sabitlenir.
+    const yukGun=dIdx+1;
+    const _nEff=Math.max(yukGun,ACWR_MIN_GUN);
+    const atlK=atl/(1-Math.pow(1-λ_atl,_nEff));
+    const ctlK=ctl/(1-Math.pow(1-λ_ctl,_nEff));
+    const acwr=(yukGun>=ACWR_MIN_GUN&&ctlK>1)?round2(atlK/ctlK):null;
     const phase=calcPhase(day,nextRace?.tarih,nextRace?.prep_weeks,nextRace||{},getAthRaceOverride(ath,nextRace?.id));
     const aerEff=aerEffCount>0?round1(aerEffSum/aerEffCount):null;
     const powerEff=powerEffCount>0?round2(powerEffSum/powerEffCount):null;
     return{
       date:day,load:round1(load),mech:round1(mech),
-      atl:round1(atl),ctl:round1(ctl),tsb:round1(ctl-atl),acwr,
+      atl:round1(atlK),ctl:round1(ctlK),tsb:round1(ctlK-atlK),acwr,yukGun,yukIsinma:yukGun<YUK_ISINMA_GUN,
       mechAtl:round3(mAtl),mechCtl:round3(mCtl),mechGun,mechIsinma,phase,aerEff,powerEff
     };
   });
@@ -18076,9 +18106,14 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   const remainingLoad=targetWeeklyLoad?Math.max(0,round1(targetWeeklyLoad-wkLoad)):null;
 
   // ── IF trendi ─────────────────────────────────────────────────────────────
-  const wkIFs=wkMetrics.map(({m})=>m.IF).filter(v=>v>0);
-  const meanIF=wkIFs.length?round2(wkIFs.reduce((s,v)=>s+v,0)/wkIFs.length):null;
-  const ifOverloaded=meanIF!=null&&meanIF>0.90&&wkSessions>=2; // ≥2 seans şartı: tek seansla yanlış tetiklemeyi önler
+  // 2026.09.28 — güvenilirlik: (a) RPE'den TAHMİN edilen nabızla (hrEstimated, güç yoksa) hesaplanan IF dışarıda,
+  // (b) ortalama süre-ağırlıklı (10 dk'lık seans 3 saatlik uzun koşuyla eşit sayılmaz), (c) ≥2 GEÇERLİ seans,
+  // (d) eşik 0.90→0.93: LTHR ±3 bpm belirsizliği IF'i ~±0.03 kaydırır.
+  const IF_OVERLOAD_ESIK=0.93;
+  const ifGecerli=wkMetrics.filter(({m})=>m.IF>0&&m.durSec>0&&!(m.hrEstimated&&!(m.np>0)));
+  const _ifSure=ifGecerli.reduce((s,{m})=>s+m.durSec,0);
+  const meanIF=_ifSure>0?round2(ifGecerli.reduce((s,{m})=>s+m.IF*m.durSec,0)/_ifSure):null;
+  const ifOverloaded=meanIF!=null&&meanIF>IF_OVERLOAD_ESIK&&ifGecerli.length>=2;
 
   // ── Güç yükü analizi ─────────────────────────────────────────────────────
   const wkHasPower=wkMetrics.some(({w})=>parseFloat(w.ort_guc)>0);
@@ -18090,7 +18125,11 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   const olderAerEff=history.slice(-56,-28).filter(d=>d.aerEff!=null).map(d=>d.aerEff);
   const avgRecent=recentAerEff.length?recentAerEff.reduce((s,v)=>s+v,0)/recentAerEff.length:null;
   const avgOlder=olderAerEff.length?olderAerEff.reduce((s,v)=>s+v,0)/olderAerEff.length:null;
-  const aerEffDecline=avgRecent!=null&&avgOlder!=null&&(avgRecent-avgOlder)>5;
+  // 2026.09.28 — güvenilirlik: her pencerede en az AEREFF_MIN_N ölçüm + göreli eşik (%3). Eski mutlak eşik (5 birim ≈ %1.4)
+  // bilek nabız sensörü/sıcaklık/rüzgâr gürültüsüyle tek örnekte bile tetiklenebiliyordu.
+  const AEREFF_MIN_N=4, AEREFF_DECLINE_PCT=0.03;
+  const aerEffDecline=recentAerEff.length>=AEREFF_MIN_N&&olderAerEff.length>=AEREFF_MIN_N
+    &&avgRecent!=null&&avgOlder!=null&&(avgRecent-avgOlder)>avgOlder*AEREFF_DECLINE_PCT;
 
   // ── Nöromüsküler yük oranı ────────────────────────────────────────────────
   // TEK PAYLAŞILAN kaynak: mechEsikleri/mechKardioEsikleri (bkz. tanım, ~satır 862).
@@ -30652,6 +30691,10 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
   ].filter(m=>profHist.some(s=>s[m.key]!=null&&s[m.key]!==''));
 
   return React.createElement('div',null,
+
+    // 2026.09.28 — Kısa yük geçmişi notu (bkz. YUK_ISINMA_GUN): ATL/CTL/ACWR/TSB başlangıç sapmasından arındırılmış gösterilir.
+    last?.yukIsinma&&React.createElement('div',{style:{marginBottom:12,fontSize:12,padding:'8px 12px',borderRadius:'var(--radius)',background:'var(--info-bg)',color:'var(--info)',borderLeft:'3px solid var(--info)'}},
+      'ℹ️ Yük geçmişi '+(last.yukGun||0)+' gün (<'+YUK_ISINMA_GUN+'). ATL/CTL/ACWR/TSB kısa geçmişin başlangıç sapmasından arındırılmış (gözlenen ortalama yükten başlatılmış) hesapla gösteriliyor — ilk haftalarda tahmini olarak okunmalı; ACWR ilk '+ACWR_MIN_GUN+' gün gösterilmez.'),
 
     // ── Genel Toparlanma Değerlendirmesi — ACWR + TSB + Mekanik Yük'ü birleştiren
     // final karar bildirimi. SADECE koç paneli (07.09.2026 sohbeti) — bkz.
