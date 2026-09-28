@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.28-1903 --><!DOCTYPE html>
+<!-- Version: v2026.09.28-1941 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -23,7 +23,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.09.28-1903';
+    var RUNNING='v2026.09.28-1941';
     var GUARD_KEY='kosuizi_stale_reload_at';
     var reload=function(){
       var last=parseInt(sessionStorage.getItem(GUARD_KEY)||'0',10);
@@ -319,7 +319,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.28-1903';
+const APP_VERSION='v2026.09.28-1941';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -872,14 +872,20 @@ function hrv7Bolge(v,band){
 // yöndeyse hüküm geçerli (uyum:'dogrulandi'). Çelişiyorsa (uyum:'celisiyor') iki taraftan HAFİF olan esas alınır —
 // doğrulanmamış sert kısıt uygulanmaz. Sayı (veya beyan) yoksa doğrulama yapılamaz → beyan aynen kullanılır
 // (önceki davranış korunur). Sayı-tek-başına kuralı (hrv7Low → yoğunluk ×0.85) bundan bağımsız, aynen çalışmaya devam eder.
+// GARMİN SİMETRİSİ: Garmin'de "dengesiz" = 7g ortalama baz aralığının ÜSTÜNDE veya ALTINDA; "düşük" sadece alt tarafta
+// (üstte ayrı bir "aşırı" kademesi yok). Bu yüzden değer bandın ÜSTÜNDEYSE (ust=true) beyan "dengesiz" ise doğrulanmış sayılır.
+// Diğer beyanlar için bandın üstü "dengeli" sayılır (yüksek HRV tek başına kısıt gerekçesi DEĞİL — kısıtlar alttan gelir).
 function hrvDogrula(athlete){
   const beyan=athlete?.hrv_durum||'';
   const deger=parseSayi(athlete?.hrv_7gun)||0;
-  const bolge=athlete?hrv7Bolge(deger,hrv7Bant(athlete)):null;
-  if(!(beyan in HRV_DURUM_SIDDET)||!bolge) return {beyan,bolge,deger,efektif:beyan,uyum:beyan?'sayisiz':'beyansiz'};
-  if(beyan===bolge) return {beyan,bolge,deger,efektif:beyan,uyum:'dogrulandi'};
+  const band=athlete?hrv7Bant(athlete):null;
+  const ust=!!band&&deger>band.hi;
+  let bolge=hrv7Bolge(deger,band);
+  if(bolge&&ust&&beyan==='dengesiz') bolge='dengesiz';
+  if(!(beyan in HRV_DURUM_SIDDET)||!bolge) return {beyan,bolge,deger,ust,efektif:beyan,uyum:beyan?'sayisiz':'beyansiz'};
+  if(beyan===bolge) return {beyan,bolge,deger,ust,efektif:beyan,uyum:'dogrulandi'};
   const efektif=HRV_DURUM_SIDDET[beyan]<=HRV_DURUM_SIDDET[bolge]?beyan:bolge;
-  return {beyan,bolge,deger,efektif,uyum:'celisiyor'};
+  return {beyan,bolge,deger,ust,efektif,uyum:'celisiyor'};
 }
 function hrvEfektifDurum(athlete){return hrvDogrula(athlete).efektif;}
 // Plan motoru girişlerinde sporcu nesnesini "doğrulanmış HRV durumu" ile gölgeler (idempotent).
@@ -35286,12 +35292,14 @@ function MetrikGrafikKarti({profHist,metrikList,hrvBand,hrvDogrulama}){
     const bandSets=bandVar?[
       {label:'HRV düşük eşik',data:cizgi(hrvBand.dusuk),borderColor:'rgba(248,113,113,.6)',borderWidth:1,borderDash:[4,3],pointRadius:0,pointHoverRadius:0,backgroundColor:'rgba(248,113,113,.15)',fill:'start',order:3},
       {label:'HRV alt sınır',data:cizgi(hrvBand.lo),borderColor:'rgba(245,158,11,.6)',borderWidth:1,borderDash:[4,3],pointRadius:0,pointHoverRadius:0,backgroundColor:'rgba(245,158,11,.17)',fill:'-1',order:3},
-      {label:'HRV üst sınır',data:cizgi(hrvBand.hi),borderColor:'rgba(52,211,153,.55)',borderWidth:1,borderDash:[4,3],pointRadius:0,pointHoverRadius:0,backgroundColor:'rgba(52,211,153,.14)',fill:'-1',order:3}
+      {label:'HRV üst sınır',data:cizgi(hrvBand.hi),borderColor:'rgba(52,211,153,.55)',borderWidth:1,borderDash:[4,3],pointRadius:0,pointHoverRadius:0,backgroundColor:'rgba(52,211,153,.14)',fill:'-1',order:3},
+      // Garmin simetrisi: bandın ÜSTÜ de "dengesiz" (turuncu) — eksenin tepesine kadar; üstte ayrı "aşırı" kademesi yok.
+      {label:'HRV üst bölge',data:cizgi(hrvBand.hi),borderColor:'transparent',borderWidth:0,pointRadius:0,pointHoverRadius:0,backgroundColor:'rgba(245,158,11,.12)',fill:'end',order:3}
     ]:[];
     const noktaRenk=function(ctx){
       if(!bandVar||!ctx.raw)return metrik.color;
       const y=ctx.raw.y;
-      return y<hrvBand.dusuk?'#f87171':y<hrvBand.lo?'#f59e0b':metrik.color;
+      return y<hrvBand.dusuk?'#f87171':(y<hrvBand.lo||y>hrvBand.hi)?'#f59e0b':metrik.color;
     };
     instRef.current=new Chart(canvasRef.current,{
       type:'line',
@@ -35329,6 +35337,7 @@ function MetrikGrafikKarti({profHist,metrikList,hrvBand,hrvDogrulama}){
           },
           y:{grid:{color:'rgba(255,255,255,.05)'},ticks:{color:'#94a3b8',font:{size:10}},
              suggestedMin:bandVar?Math.floor(hrvBand.dusuk*0.8):undefined,
+             suggestedMax:bandVar?Math.ceil(hrvBand.hi*1.15):undefined,
              title:{display:true,text:metrik.unit,color:'#64748b',font:{size:10}}}
         }
       }
@@ -35378,7 +35387,7 @@ function MetrikGrafikKarti({profHist,metrikList,hrvBand,hrvDogrulama}){
     aktif==='hrv_7gun'&&hrvBand&&hrvBand.hi>hrvBand.lo&&grafikVerisi.length>=2&&React.createElement('div',{style:{marginTop:6,fontSize:11,color:'var(--text-secondary)',lineHeight:1.6}},
       React.createElement('div',null,
         React.createElement('span',{style:{color:'#34d399'}},'■ Dengeli '),React.createElement('strong',null,hrvBand.lo+'–'+hrvBand.hi+' ms'),
-        React.createElement('span',{style:{color:'#f59e0b',marginLeft:10}},'■ Dengesiz '),React.createElement('strong',null,hrvBand.dusuk+'–'+(hrvBand.lo-1)+' ms'),
+        React.createElement('span',{style:{color:'#f59e0b',marginLeft:10}},'■ Dengesiz '),React.createElement('strong',null,hrvBand.dusuk+'–'+(hrvBand.lo-1)+' ms ve >'+hrvBand.hi+' ms'),
         React.createElement('span',{style:{color:'#f87171',marginLeft:10}},'■ Düşük '),React.createElement('strong',null,'<'+hrvBand.dusuk+' ms')
       ),
       React.createElement('div',{style:{color:'var(--text-tertiary)'}},
@@ -35387,9 +35396,9 @@ function MetrikGrafikKarti({profHist,metrikList,hrvBand,hrvDogrulama}){
           :'Yaş/cinsiyet normu (kişisel baz için ≥4 kayıt gerekir)'
       ),
       hrvDogrulama&&hrvDogrulama.uyum==='dogrulandi'&&React.createElement('div',{style:{color:'var(--success)'}},
-        '✓ Beyan edilen durum ("'+hrvDogrulama.beyan+'") ile 7g değeri ('+hrvDogrulama.deger+' ms) aynı yönde — doğrulandı.'),
+        '✓ Beyan edilen durum ("'+hrvDogrulama.beyan+'") ile 7g değeri ('+hrvDogrulama.deger+' ms'+(hrvDogrulama.ust?', bandın üstünde':'')+') aynı yönde — doğrulandı.'),
       hrvDogrulama&&hrvDogrulama.uyum==='celisiyor'&&React.createElement('div',{style:{color:'var(--warn)'}},
-        '⚠ Beyan "'+hrvDogrulama.beyan+'" ama 7g değeri ('+hrvDogrulama.deger+' ms) "'+hrvDogrulama.bolge+'" bölgesinde — doğrulanmadı. Plan motoru daha hafif olanı ("'+hrvDogrulama.efektif+'") esas alır.')
+        '⚠ Beyan "'+hrvDogrulama.beyan+'" ama 7g değeri ('+hrvDogrulama.deger+' ms'+(hrvDogrulama.ust?', bandın üstünde':'')+') "'+hrvDogrulama.bolge+'" bölgesinde — doğrulanmadı. Plan motoru daha hafif olanı ("'+hrvDogrulama.efektif+'") esas alır.')
     ),
     // Son değer
     grafikVerisi.length>0&&React.createElement('div',{style:{
