@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.28-2327 --><!DOCTYPE html>
+<!-- Version: v2026.09.28-2340 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -319,7 +319,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.28-2327';
+const APP_VERSION='v2026.09.28-2340';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -9993,7 +9993,12 @@ function zoneDist_status(dist, dist2w){
   // sayılmıyor. Not: burada önceki hafta verisi yok, bu yüzden "2 hafta üst üste"
   // kalıcılık şartı uygulanamıyor — bu rozet tek haftalık bir anlık görüntüdür,
   // gerçek engelleme kararı (forceLow) evaluateSignals'da hâlâ 2 hafta şartı arar.
-  const siralamaBozuk=!(lowPct>highPct&&highPct>anaPct);
+  // DÜZELTME (28.09.2026): eski formül highPct===anaPct===0 iken (ör. %100 düşük
+  // aerobik — sağlıklı bir taban haftası, YOGUNLUK_MIN_DK eşiğini geçecek kadar
+  // hacimli olsa bile) YANLIŞ şekilde "sıralama bozuk" tetikliyordu. Eşitlik bir
+  // ihlal değildir; gerçek ihlal ancak "daha zor" bir bölge "daha kolay" bir
+  // bölgeyi GEÇTİĞİNDE vardır (bkz. evaluateSignals'daki AYNI düzeltme).
+  const siralamaBozuk=highPct>lowPct||anaPct>highPct;
   if(siralamaBozuk){
     issues.push({type:'siralama_bozuk',msg:'Zone sıralaması bozuk (Düşük Aerobik %'+lowPct+' > Yüksek Aerobik %'+highPct+' > Anaerobik %'+anaPct+' yapısı korunmuyor).'});
   } else {
@@ -18186,7 +18191,12 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
   const anaPct=z.anaPct??null;
   const highPct=z.highPct??null;
   const lowPct=z.lowPct??null;
-  const hasZone=zoneDist4w!=null&&lowPct!=null;
+  // 2026.09.28 — bkz. YOGUNLUK_MIN_DK (zoneDist_status ile AYNI eşik/TEK
+  // PAYLAŞILAN kaynak): zoneDist_status kartı çok az toplam dakikada (ör. uzun
+  // aradan dönüşün ilk haftası) "Veri az" gösterip yargı bastırıyor, ama bu
+  // gerçek engelleme kararı (forceLow) o zamana kadar aynı korumaya sahip
+  // DEĞİLDİ — aynı düşük-hacim yanlış pozitifi burada da tetiklenebiliyordu.
+  const hasZone=zoneDist4w!=null&&lowPct!=null&&(z.totalMin??0)>=YOGUNLUK_MIN_DK;
 
   // EKLENDİ (Temmuz 2026 — "2 hafta üst üste" kalıcılık kriteri, Göksel'in kararıyla):
   // zone-dağılımı kaynaklı forceLow tetikleyicileri artık TEK haftalık anlık görüntüyle
@@ -18208,7 +18218,7 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
   const anaPct2w=z2.anaPct??anaPct;
   const lowPct2w=z2.lowPct??lowPct;
   const highPct2w=z2.highPct??highPct;
-  const hasZone2w=zoneDist2w!=null&&z2.lowPct!=null;
+  const hasZone2w=zoneDist2w!=null&&z2.lowPct!=null&&((zoneDist2w?.totalMin)??0)>=YOGUNLUK_MIN_DK;
 
   // ── Zone-kaynaklı kısıtlamalar için veri güveni eşikleri ───────────────────
   // confidencePct: pencere dakikalarının kaçı hassas (faz-bazlı, tarihsel doğru
@@ -18313,7 +18323,13 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
     if(mechKardioDanger){ forceLow=true; zoneReasons.push('🫀 Mekanik/kardiyo dengesi zayıf — kardiyovasküler kondisyon, koşuya özgü (mekanik) kondisyonu belirgin şekilde geride bırakıyor; tempo/eşik/progressive antrenman ertelendi, aerobik öncelikli.'); }
 
     if(!forceLow&&hasZone&&zone4wPartial){
-      const siralamaBozuk=!(lowPct>highPct&&highPct>anaPct);
+      // DÜZELTME (28.09.2026): eski formül highPct===anaPct===0 durumunda (ör.
+      // %100 düşük aerobik, tamamen sağlıklı bir taban haftası) YANLIŞ şekilde
+      // "sıralama bozuk" tetikliyordu (highPct>anaPct → 0>0 → false → !(...)=true).
+      // Eşitlik bir ihlal değildir; gerçek ihlal ancak "daha zor" bir bölge
+      // "daha kolay" bir bölgeyi GEÇTİĞİNDE vardır (bkz. zoneDist_status'taki
+      // AYNI düzeltme — TEK PAYLAŞILAN mantık, iki ayrı kod yolu).
+      const siralamaBozuk=highPct>lowPct||anaPct>highPct;
       if(siralamaBozuk){
         forceLow=true;
         zoneReasons.push('Zone sıralaması bozuk (Düşük Aerobik %'+lowPct+' > Yüksek Aerobik %'+highPct+' > Anaerobik %'+anaPct+' yapısı korunmuyor) — aerobik öncelikli.');
@@ -18329,7 +18345,7 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
           // Aynı mantık burada da: 2H (akut) penceresi kendi başına GÜVENİLİR (zone2wFull)
           // ve TEMİZSE (sıralama doğru + kendi ciddi ihlal eşiklerinin altında), sporcu
           // fiilen düzelmiş demektir — 4H'nin eski verisine dayanarak bloke etmeyelim.
-          const siralama2wDuzgun=hasZone2w&&(lowPct2w>highPct2w&&highPct2w>anaPct2w);
+          const siralama2wDuzgun=hasZone2w&&!(highPct2w>lowPct2w||anaPct2w>highPct2w);
           const ciddiIhlal2w=hasZone2w&&(lowPct2w<50||highPct2w>40||anaPct2w>20);
           const duzeldi2w=hasZone2w&&zone2wFull&&siralama2wDuzgun&&!ciddiIhlal2w;
           if(duzeldi2w){
@@ -31518,6 +31534,12 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
           const gunIdeal=acwrTamDinlenmeGun(acwr,idealHigh);
           msgs.push({cls:'info',text:'🟢 Tam dinlenmeyle ideal banda dönüş (ACWR<'+idealHigh+'): ~'+Math.ceil(gunIdeal)+' gün. Not: bu bantta tam durmak genellikle şart değil — antrenman bilimine göre hacim/yoğunluğu kademeli azaltmak, kondisyonu (CTL) daha az düşürerek aynı sonuca ulaştırabilir.'});
         }
+        // 2026.09.28 — bkz. molaDurumu/molaDonusuDurumu (TEK KAYNAK) — Genel Toparlanma
+        // Değerlendirmesi kartındaki AYNI uyarı burada da tekrarlanır: bu kart tek başına
+        // görüntülenebildiği için (ör. paylaşım/ekran görüntüsü) bağlamsız kalmamalı.
+        if(molaDurumu.aktif&&(cls==='danger'||cls==='warn')){
+          msgs.push({cls:'warn',text:'🔄 Uzun aradan dönüş: '+molaDurumu.molaGunSayisi+' gün antrenmansız, dönüşten '+molaDurumu.donusGunSayisi+' gün geçti. Kronik yük (CTL) tabana çökmüşken bu oran şişer/gürültülü olur (Impellizzeri 2020, Lolli 2019). Mutlak yüke bak: bu hafta ~'+(molaDurumu.buHaftaYukOrani??'—')+'% (mola öncesi haftalık ortalama '+molaDurumu.haftalikOrt+'\'e göre) — mola öncesi ortalamanın %50–70\'inden başla, haftalık %10–15 artır.'});
+        }
         return React.createElement('div',{style:{marginTop:8,display:'flex',flexDirection:'column',gap:5}},
           msgs.map((m,i)=>React.createElement('div',{key:i,style:{
             fontSize:12,padding:'7px 11px',borderRadius:'var(--radius)',
@@ -31581,6 +31603,13 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
         } else if(atlCtlRatio>mE.warn){
           const gunWarn=mechOranTamDinlenmeGun(atlCtlRatio,mE.warn);
           msgs.push({cls:'info',text:'🟢 Tam dinlenmeyle dengeli bölgeye dönüş (ATL/CTL<'+mE.warn+'): ~'+(gunWarn==null?'60+':Math.ceil(gunWarn))+' gün. Not: bu bantta tam durmak şart değil — zemin/irtifa yükünü azaltmak genelde yeterli.'});
+        }
+        // 2026.09.28 — bkz. molaDurumu/molaDonusuDurumu (TEK KAYNAK): ACWR'deki AYNI
+        // payda-çöküşü mekanizması Mekanik ATL/CTL oranı için de (daha yavaş sönümle,
+        // τ_mkronik=60) geçerlidir — Impellizzeri/Lolli ACWR'ye özgü olduğu için
+        // burada atıf yapılmaz, sadece mekanizma belirtilir.
+        if(molaDurumu.aktif&&atlCtlRatio>mE.warn){
+          msgs.push({cls:'warn',text:'🔄 Uzun aradan dönüş: '+molaDurumu.molaGunSayisi+' gün antrenmansız, dönüşten '+molaDurumu.donusGunSayisi+' gün geçti. Mekanik kronik yük (Mech CTL) de tabana çökmüşken bu oran şişebilir — mutlak zemin/irtifa yüküne bak, mola öncesi seviyeden kademeli başla.'});
         }
         // Mech CTL vs Kardio CTL yorumu (normalize edilmiş)
         const _mechPlannedReduction=isPlannedLoadReduction(lastH.phase,lastH.atl,lastH.ctl);
