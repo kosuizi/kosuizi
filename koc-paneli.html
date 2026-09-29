@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.29-1512 --><!DOCTYPE html>
+<!-- Version: v2026.09.29-2250 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -23,7 +23,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.09.29-1512';
+    var RUNNING='v2026.09.29-2250';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -326,7 +326,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.29-1512';
+const APP_VERSION='v2026.09.29-2250';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -24588,13 +24588,12 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       return;
     }
 
-    // Dinlenme günleriyle swap ARTIK ENGELLENİR — sadece iki antrenman günü
-    // arasında yer değiştirilebilir. Gerekçe: swap'ın antrenman/dinlenme
-    // desenini değiştirmesi, sporcunun kalıcı kosu_gunleri/capraz_gunleri
-    // profiliyle (anket + sporcu kartı) tutarsızlık yaratıyordu. Bu kısıtla
-    // profile hiç dokunmaya gerek kalmıyor — swap sadece hangi antrenmanın
-    // hangi günde yapılacağını değiştirir, antrenman/dinlenme dağılımını değil.
-    // (v2026.07.04-2133)
+    // ── Dinlenme ↔ Antrenman yer değiştirme (v2026.09.29-2250) ────────────────
+    // Önceki sürüm (v2026.07.04-2133) bunu ENGELLİYORDU: swap antrenman/dinlenme desenini
+    // değiştirirken sporcu kartındaki kosu_gunleri/capraz_gunleri/uzun_gun profili aynı
+    // kalıyor, plan ile kart tutarsızlaşıyordu. Artık serbest — ama desen değiştiği için
+    // profil de AYNI işlemle güncellenir (bkz. aşağıdaki "profil uyumu" bloğu): antrenmanın
+    // bulunduğu haftanın günü karttan çıkarılır, dinlenme gününün haftanın günü eklenir.
     const curSnap=planSnapRef.current||{};
     const isEffectivelyRestDay=(day)=>{
       const rawOv=(curSnap.overrideMap||{})[day.date];
@@ -24602,10 +24601,35 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       const effectiveTip=rawHasRealData?rawOv.tip:day.tip;
       return effectiveTip==='dinlenme';
     };
-    if(isEffectivelyRestDay(sourceDay)||isEffectivelyRestDay(targetDay)){
-      setReviewMsg('Yer değiştirme sadece iki antrenman günü arasında yapılabilir. Dinlenme günü ile antrenman yer değiştirilemez.');
+    const srcRest=isEffectivelyRestDay(sourceDay);
+    const tgtRest=isEffectivelyRestDay(targetDay);
+    if(srcRest&&tgtRest){
+      setReviewMsg('İki dinlenme günü yer değiştirilemez — en az biri antrenman günü olmalı.');
       setSwapSource(null);
       return;
+    }
+    const restInvolved=srcRest||tgtRest;
+    if(restInvolved){
+      // Profil haftanın gününe göre (her hafta tekrar eden) tutulduğundan, dinlenme ile swap
+      // yalnızca AYNI hafta içinde yapılabilir — aksi halde başka haftanın günleri de kayar.
+      const _wkOf=(ds)=>(plan?.weeks||[]).findIndex(wk=>wk.days.some(d=>d.date===ds));
+      if(_wkOf(sourceDateStr)!==_wkOf(targetDateStr)){
+        setReviewMsg('Dinlenme günü ile yer değiştirme aynı hafta içinde yapılabilir.');
+        setSwapSource(null);
+        return;
+      }
+      const _isRaceD=(d)=>d.tip==='yaris'||plan?.primary?.tarih===d.date||(plan?.intermediate||[]).some(r=>r.tarih===d.date);
+      if(_isRaceD(sourceDay)||_isRaceD(targetDay)){
+        setReviewMsg('Yarış günü dinlenme günüyle yer değiştirilemez.');
+        setSwapSource(null);
+        return;
+      }
+      const _trainDay=srcRest?targetDay:sourceDay;
+      if((workouts||[]).some(w=>w.athleteId===athlete.id&&w.date===_trainDay.date)){
+        setReviewMsg('Bu günde kaydedilmiş antrenman var — dinlenme gününe taşınamaz.');
+        setSwapSource(null);
+        return;
+      }
     }
 
     // Antrenman verilerini ayıkla — overrideMap'ten ham veri öncelikli (tüm alanlar korunur)
@@ -24632,11 +24656,82 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         isKosuCapraz:rawHasRealData?(rawOv.isKosuCapraz??day.isKosuCapraz??false):(day.isKosuCapraz||false),
         yapilar:baseYapilar.map(y=>({...y})), // spread: _rows, _yaris vb. korunur
         yapi_notu:(rawHasRealData?rawOv.yapi_notu:null)??day.yapi_notu??rawOv?.yapi_notu??'',
+        // Dinlenme günü notu (restNote) dinlenme ile birlikte taşınır (gün değişince not orada kalmasın)
+        ...((!rawHasRealData&&rawOv?.restNote)?{restNote:rawOv.restNote}:{}),
         approved:false // swap sonrası onay sıfırla
       };
     };
     const srcData=extractData(sourceDay);
     const tgtData=extractData(targetDay);
+
+    // ── Profil uyumu (sporcu kartı: koşu / çapraz / uzun gün) ─────────────────
+    // Dinlenme ↔ antrenman swap'ında antrenman, dinlenme gününün haftanın gününe taşınır;
+    // sporcu kartındaki gün seçimleri de aynı şekilde kayar (kaynak gün çıkar, hedef gün eklenir).
+    // Karta yalnızca taşınan antrenmanın türünün listesi dokunulur: koşu → koşu günleri,
+    // çapraz → çapraz günleri, birleşik (koşu+çapraz) gün → ikisi de. Koşu günü kartan
+    // çıkarsa uzun_gun'dan da çıkar (toggleGun ile aynı kural); taşınan antrenman uzun koşuysa
+    // uzun gün de yeni güne geçer.
+    let profilAth=null;   // güncellenmiş sporcu kartı alanları (null = kart değişmez)
+    let profilSnap=null;  // planSnap.athleteProfile için aynı işlem
+    let profilOzet='';
+    let trainDateStr=null,restDateStr=null;
+    if(restInvolved){
+      trainDateStr=srcRest?targetDateStr:sourceDateStr;
+      restDateStr=srcRest?sourceDateStr:targetDateStr;
+      const trainData=srcRest?tgtData:srcData;
+      const fromShort=DAYS_SHORT[new Date(trainDateStr+'T12:00:00').getDay()];
+      const toShort=DAYS_SHORT[new Date(restDateStr+'T12:00:00').getDay()];
+      const asArr=(v)=>Array.isArray(v)?v:[v].filter(Boolean);
+      const gOrder=(g)=>{const i=GUNLER.indexOf(g);return i<0?99:i;};
+      const moveDay=(arr)=>{
+        const a=asArr(arr);
+        if(!a.includes(fromShort)) return {list:a,changed:false};
+        const out=a.filter(g=>g!==fromShort);
+        if(!out.includes(toShort)) out.push(toShort);
+        out.sort((x,y)=>gOrder(x)-gOrder(y));
+        return {list:out,changed:true};
+      };
+      const caprazOnly=trainData.tip==='capraz'&&!trainData.isKosuCapraz;
+      const birlesik=!!trainData.isKosuCapraz;
+      const kosuTasi=!caprazOnly;
+      const caprazTasi=caprazOnly||birlesik;
+      const uzunMu=trainData.tip==='uzun';
+      const hesapla=(prof)=>{
+        const k=kosuTasi?moveDay(prof.kosu_gunleri):{list:asArr(prof.kosu_gunleri),changed:false};
+        const c=caprazTasi?moveDay(prof.capraz_gunleri):{list:asArr(prof.capraz_gunleri),changed:false};
+        let u={list:asArr(prof.uzun_gun),changed:false};
+        if(k.changed&&u.list.includes(fromShort)){
+          const rest=u.list.filter(g=>g!==fromShort);
+          if(uzunMu&&!rest.includes(toShort)) rest.push(toShort);
+          rest.sort((x,y)=>gOrder(x)-gOrder(y));
+          u={list:rest,changed:true};
+        }
+        return {k,c,u,changed:k.changed||c.changed||u.changed};
+      };
+      const ra=hesapla(athlete);
+      if(ra.changed){
+        profilAth={
+          ...(ra.k.changed?{kosu_gunleri:ra.k.list}:{}),
+          ...(ra.c.changed?{capraz_gunleri:ra.c.list}:{}),
+          ...(ra.u.changed?{uzun_gun:ra.u.list}:{})
+        };
+        const parcalar=[];
+        if(ra.k.changed) parcalar.push('koşu günleri '+fromShort+' → '+toShort);
+        if(ra.c.changed) parcalar.push('çapraz günleri '+fromShort+' → '+toShort);
+        if(ra.u.changed&&uzunMu) parcalar.push('uzun gün '+fromShort+' → '+toShort);
+        profilOzet=parcalar.join(', ');
+      }
+      if(curSnap.athleteProfile){
+        const rs=hesapla(curSnap.athleteProfile);
+        if(rs.changed){
+          profilSnap={...curSnap.athleteProfile,
+            ...(rs.k.changed?{kosu_gunleri:rs.k.list}:{}),
+            ...(rs.c.changed?{capraz_gunleri:rs.c.list}:{}),
+            ...(rs.u.changed?{uzun_gun:rs.u.list}:{})};
+        }
+      }
+    }
+    const athleteEfektif=profilAth?{...athlete,...profilAth}:athlete;
 
     // OverrideMap güncelle: iki günün verisini çapraz ata
     const newMap={...(curSnap.overrideMap||{})};
@@ -24658,7 +24753,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     // Swap sonrası gelecek günleri yeniden hesapla (yük sıralaması değişti → TSB/ACWR etkilenir)
     const laterDate=sourceDateStr>targetDateStr?sourceDateStr:targetDateStr;
     const racesOv=dayRaces;
-    const freshPlan=generateTwoWeekPlan(athlete,history,racesOv,workouts,testPlanlar||[]);
+    // (Dinlenme swap'ında profil kaydığı için taze plan GÜNCEL profille üretilir.)
+    const freshPlan=generateTwoWeekPlan(athleteEfektif,history,racesOv,workouts,testPlanlar||[]);
 
     // Swap edilen günlerden SONRAKİ manuel atanmamış günleri taze planla güncelle
     freshPlan.weeks.forEach(wk=>wk.days.forEach(day=>{
@@ -24672,6 +24768,14 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     }));
 
     const fmtD=(ds)=>{const p=ds.split('-');return p[2]+'.'+p[1];};
+    // Dinlenme swap'ında antrenmanın satır düzenlemeleri (rowOverrides) da antrenmanla birlikte
+    // yeni güne taşınır — aksi halde artık dinlenme olan günde askıda kalırdı.
+    let newRowOverrides=null;
+    if(restInvolved&&curSnap.rowOverrides&&curSnap.rowOverrides[trainDateStr]){
+      newRowOverrides={...curSnap.rowOverrides};
+      newRowOverrides[restDateStr]=newRowOverrides[trainDateStr];
+      delete newRowOverrides[trainDateStr];
+    }
     const newSnap={
       ...curSnap,weekKey,athId:athlete.id,
       lastReviewAt:now.toISOString(),lastSavedAt:now.toISOString(),
@@ -24679,14 +24783,18 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       selectedPrimary:selectedPrimary||null,
       overrideMap:newMap,
       manualOverrides:newManualOverrides,
+      ...(newRowOverrides?{rowOverrides:newRowOverrides}:{}),
+      ...(profilSnap?{athleteProfile:profilSnap}:{}),
       reviewLog:[...(curSnap.reviewLog||[]),{
         at:now.toISOString(),
-        reason:`🔄 ${fmtD(sourceDateStr)} ↔ ${fmtD(targetDateStr)} swap (${srcData.baslik} ↔ ${tgtData.baslik})`
+        reason:`🔄 ${fmtD(sourceDateStr)} ↔ ${fmtD(targetDateStr)} swap (${srcData.baslik} ↔ ${tgtData.baslik})`+(profilOzet?` · sporcu kartı: ${profilOzet}`:'')
       }].slice(-10)
     };
     setPlanSnap(newSnap);
     setSwapSource(null);
-    setReviewMsg(`🔄 ${srcData.baslik} (${fmtD(sourceDateStr)}) ↔ ${tgtData.baslik} (${fmtD(targetDateStr)}) yer değiştirildi`);
+    // Sporcu kartı (Koşu/Çapraz/Uzun gün) — plan ile aynı anda güncellenir
+    if(profilAth&&onUpdateAthlete) onUpdateAthlete({...athlete,...profilAth});
+    setReviewMsg(`🔄 ${srcData.baslik} (${fmtD(sourceDateStr)}) ↔ ${tgtData.baslik} (${fmtD(targetDateStr)}) yer değiştirildi`+(profilOzet?` · Sporcu kartı: ${profilOzet}`:(restInvolved?' · Sporcu kartı değişmedi (taşınan gün kartta işaretli değildi)':'')));
 
     // Firebase kayıt
     if(db||initFirebase()){
@@ -26715,9 +26823,10 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     style:{display:'block',width:'100%',marginTop:3,padding:'2px 0',fontSize:9,background:'var(--info-bg)',border:'1px solid var(--info)',borderRadius:'var(--radius)',color:'var(--info)',cursor:'pointer'},
                     onClick:function(){setManuelAtaGun(day.date);}
                   },'Ata'),
-                  // Swap butonu — geçmiş, yarış ve dinlenme günleri hariç
-                  // (dinlenme günleri ile swap engellenir; bkz. handleSwapDays guard)
-                  !day.isPast&&!isRaceDay&&day.tip!=='dinlenme'&&React.createElement('button',{
+                  // Swap butonu — geçmiş ve yarış günleri hariç. Dinlenme günleri de dahildir:
+                  // dinlenme ↔ antrenman swap'ı sporcu kartı gün seçimlerini de günceller
+                  // (bkz. handleSwapDays "Profil uyumu" bloğu).
+                  !day.isPast&&!isRaceDay&&React.createElement('button',{
                     style:{display:'block',width:'100%',marginTop:3,padding:'2px 0',fontSize:9,
                       background:swapSource?.date===day.date?'var(--warn)':'transparent',
                       border:'1px solid '+(swapSource?.date===day.date?'var(--warn)':'var(--border)'),
