@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.29-1436 --><!DOCTYPE html>
+<!-- Version: v2026.09.29-1512 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -23,7 +23,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.09.29-1436';
+    var RUNNING='v2026.09.29-1512';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -326,7 +326,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.29-1436';
+const APP_VERSION='v2026.09.29-1512';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -7537,7 +7537,26 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
             // içinde çalışma sırasına göre birikimli bir dizi — bazen önceki öncelik
             // katmanlarından (plan/forceEasy) ilgisiz notlar da karışabilir, ama pratikte
             // asıl tetikleyici(ler) neredeyse her zaman en belirleyici olanlardır.
-            if(sigs.level==='forceEasy') sorunlar.push((sigs.planForceEasy?'❌ Sadece kolay öneri (planlı dinlenme haftası)':'❌ Sadece kolay öneri (ACWR/zona tehlikeli yüksek)')+(sigs.zoneReasons?.length?' — '+sigs.zoneReasons.join(' · '):''));
+            if(sigs.level==='forceEasy'){
+              // 2026.09.29 — Göksel talebi: genel "(ACWR/zona tehlikeli yüksek)" yerine gerçek
+              // tetikleyici(ler) değer/eşikle gösterilir (bkz. evaluateSignals.forceEasyNedenler).
+              const _nd=(sigs.forceEasyNedenler||[]).map(n=>n.metin);
+              if(sigs.planForceEasy)_nd.push('planlı dinlenme haftası');
+              sorunlar.push('❌ Sadece kolay öneri'+(_nd.length?' — tetikleyici: '+_nd.join(' + '):' (ACWR/zona tehlikeli yüksek)')+(sigs.zoneReasons?.length?' — '+sigs.zoneReasons.join(' · '):''));
+              // Dönüş modu (bkz. molaDonusuDurumu/molaAcwrKarari, TEK KAYNAK): tetikleyici ACWR ise
+              // koç, ACWR'nin bu dönemde güvenilmez olduğunu ve mutlak yükün ne dediğini burada da görür.
+              if((sigs.forceEasyNedenler||[]).some(n=>n.kod==='acwr')){
+                const _mD=molaDonusuDurumu(history),_mK=molaAcwrKarari(_mD);
+                if(_mK.aktif){
+                  sorunlar.push('🔄 Dönüş modu: '+_mD.molaGunSayisi+' gün antrenmansız, dönüşten '+_mD.donusGunSayisi+' gün geçti; CTL mola öncesi '+_mD.ctlOnce+'\'den '+_mD.ctlSimdi+'\'e düşmüş, bu yüzden ACWR bu dönemde güvenilmez.'
+                    +(_mK.oran!=null
+                      ?(_mK.tabanAsti
+                        ?' Bu haftanın yükü mola öncesi haftalık ortalamanın %'+_mK.oran+'\'i (tabanı aşıyor) — kolay öneri mutlak yükle de destekleniyor.'
+                        :' Bu haftanın yükü mola öncesi haftalık ortalamanın %'+_mK.oran+'\'i (tabanın altında) — kolay öneriyi yalnızca ACWR tetikliyor, mutlak yüke göre gerekmeyebilir.')
+                      :''));
+                }
+              }
+            }
             if(sigs.level==='forceLow') sorunlar.push('⚠ Aerobik zorunlu (kaliteli antrenman bloke)'+(sigs.zoneReasons?.length?' — '+sigs.zoneReasons.join(' · '):''));
             if(sigs.level==='preferLow') sorunlar.push((sigs.planPreferLow?'💡 Aerobik tercih (planlı dinlenme haftası)':'💡 Aerobik tercih (hafif zone uyarısı)')+(sigs.zoneReasons?.length?' — '+sigs.zoneReasons.join(' · '):''));
             if(planWeekReal?._isNoRace&&planWeekReal?._maxYuksekKaliteli===0) sorunlar.push('📊 Düşük hacim ('+(planWeekReal._avg4km??'?')+'km/hafta ort.) — Yüksek Kaliteli (interval/hill sprint vb.) bu hafta engellendi (<15km eşiği), Orta Kaliteli (tempo/eşik/progressive) haftada 1 kez izinli');
@@ -18586,11 +18605,15 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
 
   // ── Öncelik 2: forceEasy ────────────────────────────────────────────────────
   // Mevcut sinyaller
-  if(acwr>_esik.forceEasyEsik)          { forceEasy=true; }
-  if(ifOverloaded)                     { forceEasy=true; }
-  if(mechOverload)                     { forceEasy=true; }
-  if(mechAclOverload)                  { forceEasy=true; }
-  if(powerOverload&&wkSessions>=2)     { forceEasy=true; }
+  // 2026.09.29 — Göksel talebi: Tanı sekmesinde "Sadece kolay öneri" satırı HANGİ sinyalin
+  // (ve hangi değer/eşikle) tetiklediğini söylesin diye tetikleyiciler değerleriyle kaydedilir
+  // (forceEasyNedenler). Karar mantığı değişmedi — yalnızca açıklama üretilir.
+  const forceEasyNedenler=[];
+  if(acwr>_esik.forceEasyEsik)          { forceEasy=true; forceEasyNedenler.push({kod:'acwr',metin:'ACWR '+round2(acwr)+' > eşik '+_esik.forceEasyEsik+' ('+(phase||'Gelişme')+' fazı'+(athlete&&athlete.seviye?', '+athlete.seviye+' seviye':'')+')'}); }
+  if(ifOverloaded)                     { forceEasy=true; forceEasyNedenler.push({kod:'if',metin:'yoğunluk faktörü (IF) aşırı yüksek'}); }
+  if(mechOverload)                     { forceEasy=true; forceEasyNedenler.push({kod:'mech',metin:'mekanik yük aşırı yüksek'}); }
+  if(mechAclOverload)                  { forceEasy=true; forceEasyNedenler.push({kod:'mechAcl',metin:'mekanik akut yük, kronik ortalamanın çok üzerinde (mekanik ATL/CTL)'}); }
+  if(powerOverload&&wkSessions>=2)     { forceEasy=true; forceEasyNedenler.push({kod:'power',metin:'güç yükü aşırı yüksek (bu hafta '+wkSessions+' seans)'}); }
 
   // ── Öncelik 3: Yük Yoğunluk Dağılımı (zone dengesi) ──────────────────────────
   // YENİDEN TASARLANDI (Ağustos 2026 — Göksel'in kararıyla): önceki forceEasy/
@@ -18742,7 +18765,7 @@ function evaluateSignals({acwr,tsb,inj,ifOverloaded,mechOverload,mechAclOverload
   if(isPlanRecoveryNow) yModZone=Math.min(yModZone,0.85);
 
   const level=forceEasy?'forceEasy':forceLow?'forceLow':preferLow?'preferLow':forceQuality?'forceQuality':'normal';
-  return{level,forceEasy,forceLow,preferLow,forceQuality,planForceEasy,planPreferLow,yModZone,zoneReasons,düşükYükIstisnası,zoneAcuteOverrideMsg};
+  return{level,forceEasy,forceLow,preferLow,forceQuality,planForceEasy,planPreferLow,yModZone,zoneReasons,düşükYükIstisnası,zoneAcuteOverrideMsg,forceEasyNedenler};
 }
 
 // ── Tür son kullanım & frekans yardımcıları (global) ─────────────────────────
