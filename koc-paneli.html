@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.29-1026 --><!DOCTYPE html>
+<!-- Version: v2026.09.29-1319 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -23,7 +23,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.09.29-1026';
+    var RUNNING='v2026.09.29-1319';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -326,7 +326,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.29-1026';
+const APP_VERSION='v2026.09.29-1319';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -1314,6 +1314,92 @@ function molaDonusuDurumu(history){
     ctlOrani:ctlOnce>0?round2(ctlSimdi/ctlOnce):null,
     buHaftaYukOrani:haftalikOrt>0?Math.round(buHaftaYuk/haftalikOrt*100):null,
   };
+}
+
+// ── molaAraliklariIsaretle / molaGolgePlugin — grafiklerde mola gösterimi ──────────
+// 2026.09.29 — Göksel talebi: grafiklerde (ATL/CTL, ACWR, Mekanik) mola aralığı gölgeli
+// bölge, dönüş penceresi ACWR çizgisinde kesikli/soluk görünsün. molaDonusuDurumu ile
+// AYNI sabitleri (MOLA_ESIK_GUN / MOLA_DONUS_PENCERE_GUN) ve AYNI boşluk tanımını
+// kullanır (tek kaynak: eşik değişirse mesajlar ve grafikler birlikte değişir).
+// Fark: molaDonusuDurumu yalnızca EN SON molayı ve yalnızca aktifse döner; burada geçmişteki
+// TÜM molalar işaretlenir. Geçmişin en başındaki sıfır-yük bloğu (henüz antrenman
+// yok) mola sayılmaz; şu an süren (henüz dönülmemiş) ≥eşik boşluk gölgelenir ama dönüş
+// penceresi yoktur.
+// Dönüş: history ile aynı uzunlukta [{mola,molaGun,donus,donusGun}].
+function molaAraliklariIsaretle(history){
+  const n=history?history.length:0;
+  const out=new Array(n);
+  for(let i=0;i<n;i++)out[i]={mola:false,molaGun:0,donus:false,donusGun:0};
+  let j=0;
+  while(j<n){
+    if((history[j].load||0)>0){j++;continue;}
+    let e=j;
+    while(e<n&&(history[e].load||0)===0)e++;
+    const len=e-j;
+    if(j>0&&len>=MOLA_ESIK_GUN){
+      for(let i=j;i<e;i++){out[i].mola=true;out[i].molaGun=len;}
+      for(let i=e;i<Math.min(n,e+MOLA_DONUS_PENCERE_GUN);i++){out[i].donus=true;out[i].donusGun=i-e+1;}
+    }
+    j=e;
+  }
+  // bir sonraki molanın içine taşan dönüş günleri mola sayılır (çift işaret olmasın)
+  for(let i=0;i<n;i++){if(out[i].mola)out[i].donus=false;}
+  return out;
+}
+// Chart.js eklentisi — mola aralıklarını grafik alanında gri gölgeli bölge olarak çizer.
+// data: grafikte çizilen (mola/molaGun alanlı) günlük noktalar; x ekseni kategori ekseni.
+function molaGolgePlugin(data){
+  return {
+    id:'molaGolge',
+    beforeDatasetsDraw(chart){
+      const {ctx,chartArea,scales}=chart;const x=scales&&scales.x;
+      if(!x||!chartArea||!data||!data.length)return;
+      const step=data.length>1?(x.getPixelForValue(1)-x.getPixelForValue(0)):(chartArea.right-chartArea.left);
+      ctx.save();
+      let i=0;
+      while(i<data.length){
+        if(!data[i].mola){i++;continue;}
+        let e=i;while(e+1<data.length&&data[e+1].mola)e++;
+        const l=Math.max(chartArea.left,x.getPixelForValue(i)-step/2);
+        const r=Math.min(chartArea.right,x.getPixelForValue(e)+step/2);
+        if(r>l){
+          ctx.fillStyle='rgba(148,163,184,0.22)';
+          ctx.fillRect(l,chartArea.top,r-l,chartArea.bottom-chartArea.top);
+          if(r-l>60){
+            ctx.fillStyle='rgba(100,116,139,0.95)';ctx.font='10px sans-serif';
+            ctx.textAlign='center';ctx.textBaseline='top';
+            ctx.fillText('Mola · '+data[i].molaGun+' gün',(l+r)/2,chartArea.top+3);
+          }
+        }
+        i=e+1;
+      }
+      ctx.restore();
+    }
+  };
+}
+// Tooltip alt satırı — imleç mola/dönüş gününün üzerindeyse durumu söyler.
+function molaTooltipFooter(data){
+  return items=>{
+    const d=data[items&&items[0]?items[0].dataIndex:-1];
+    if(!d)return '';
+    if(d.mola)return 'Mola günü ('+d.molaGun+' gün antrenmansız aralık)';
+    if(d.donus)return 'Dönüşün '+d.donusGun+'. günü — ACWR güvenilmez';
+    return '';
+  };
+}
+// Grafik altı açıklama satırı — yalnızca grafikte mola/dönüş varsa görünür.
+function molaAciklamaSatiri(data,acwrMi){
+  const molaVar=data.some(d=>d.mola);
+  const donusVar=acwrMi&&data.some(d=>d.donus);
+  if(!molaVar&&!donusVar)return null;
+  const parca=[];
+  if(molaVar)parca.push(React.createElement('span',{key:'m',style:{display:'inline-flex',alignItems:'center',gap:4}},
+    React.createElement('span',{style:{display:'inline-block',width:10,height:10,background:'rgba(148,163,184,0.45)',borderRadius:2}}),
+    MOLA_ESIK_GUN+'+ gün antrenmansız mola'));
+  if(donusVar)parca.push(React.createElement('span',{key:'d',style:{display:'inline-flex',alignItems:'center',gap:4}},
+    React.createElement('span',{style:{display:'inline-block',width:16,borderTop:'2px dashed rgba(37,99,235,0.55)'}}),
+    'dönüşün ilk '+MOLA_DONUS_PENCERE_GUN+' günü (ACWR güvenilmez)'));
+  return React.createElement('div',{style:{display:'flex',flexWrap:'wrap',gap:12,fontSize:10,color:'var(--text-tertiary)',marginTop:4}},parca);
 }
 
 // ── targetCTLForDistance — TEK PAYLAŞILAN kaynak ─────────────────────────
@@ -27874,6 +27960,7 @@ function ChartATLCTL({history}){
     const atlBandTop=data.map(d=>(d.acwr!=null&&d.ctl>0)?round1(d.ctl*(acwrFazBand(d.phase).peak+0.15)):null);
     inst.current=new Chart(ref.current,{
       type:'bar',
+      plugins:[molaGolgePlugin(data)],
       data:{
         labels,
         datasets:[
@@ -27890,7 +27977,8 @@ function ChartATLCTL({history}){
           filter:item=>String(item.dataset.label).charAt(0)!=='_',
           callbacks:{
             label:ctx=>ctx.dataset.label+': '+(ctx.raw!=null?ctx.raw.toFixed(1):'—'),
-            afterLabel:ctx=>(ctx.dataset.label==='ATL'&&atlBandBot[ctx.dataIndex]!=null)?'İdeal ATL: '+atlBandBot[ctx.dataIndex]+'–'+atlBandTop[ctx.dataIndex]:''
+            afterLabel:ctx=>(ctx.dataset.label==='ATL'&&atlBandBot[ctx.dataIndex]!=null)?'İdeal ATL: '+atlBandBot[ctx.dataIndex]+'–'+atlBandTop[ctx.dataIndex]:'',
+            footer:molaTooltipFooter(data)
           }}},
         scales:{
           x:{ticks:{color:tickColor,font:{size:10},maxTicksLimit:8},grid:{color:gridColor},border:{display:false}},
@@ -27903,7 +27991,9 @@ function ChartATLCTL({history}){
     });
     return()=>{if(inst.current)inst.current.destroy();};
   },[history]);
-  return React.createElement('div',{style:{position:'relative',height:210}},React.createElement('canvas',{ref}));
+  return React.createElement(React.Fragment,null,
+    React.createElement('div',{style:{position:'relative',height:210}},React.createElement('canvas',{ref})),
+    molaAciklamaSatiri(history.slice(-90),false));
 }
 
 function ChartACWR({history}){
@@ -27927,6 +28017,7 @@ function ChartACWR({history}){
     const riskLine=data.map(d=>{const b=acwrFazBand(d.phase);return b.highZero;});
     inst.current=new Chart(ref.current,{
       type:'line',
+      plugins:[molaGolgePlugin(data)],
       data:{labels,datasets:[
         // Alt sınır (fill: +1 → bir sonraki datasete kadar doldur)
         {label:'_bandBot',data:bandBot,borderColor:'transparent',borderWidth:0,pointRadius:0,
@@ -27935,8 +28026,14 @@ function ChartACWR({history}){
         {label:'_bandTop',data:bandTop,borderColor:'rgba(22,163,74,0.35)',borderWidth:1,
          borderDash:[4,3],pointRadius:0,fill:false,tension:0,spanGaps:true},
         // ACWR çizgisi
+        // 2026.09.29 — dönüş penceresi (bkz. molaAraliklariIsaretle): çizgi kesikli + soluk;
+        // segment[i-1→i] dönüş gününe giriyorsa kesikli çizilir (undefined → dataset varsayılanı).
         {label:'ACWR',data:data.map(d=>d.acwr),borderColor:'#2563eb',borderWidth:2,
-         pointRadius:0,tension:.3,spanGaps:true,fill:false},
+         pointRadius:0,tension:.3,spanGaps:true,fill:false,
+         segment:{
+           borderDash:c=>data[c.p1DataIndex]?.donus?[4,3]:undefined,
+           borderColor:c=>data[c.p1DataIndex]?.donus?'rgba(37,99,235,0.45)':undefined
+         }},
         // Risk çizgisi — fazın kendi highZero sınırı (eskiden sabit 1.5'ti)
         {label:'_risk',data:riskLine,borderColor:'rgba(220,38,38,0.50)',
          borderWidth:1,borderDash:[4,3],pointRadius:0,fill:false,tension:0,spanGaps:true},
@@ -27949,7 +28046,8 @@ function ChartACWR({history}){
             filter:item=>item.dataset.label==='ACWR',
             callbacks:{
               label:ctx=>'ACWR: '+(ctx.raw!=null?ctx.raw.toFixed(2):'—'),
-              afterLabel:ctx=>{const d=data[ctx.dataIndex];return d?.phase?'Faz: '+d.phase+' (ideal '+bandBot[ctx.dataIndex]+'–'+bandTop[ctx.dataIndex]+')':'';}
+              afterLabel:ctx=>{const d=data[ctx.dataIndex];return d?.phase?'Faz: '+d.phase+' (ideal '+bandBot[ctx.dataIndex]+'–'+bandTop[ctx.dataIndex]+')':'';},
+              footer:molaTooltipFooter(data)
             }
           },
         },
@@ -27961,9 +28059,11 @@ function ChartACWR({history}){
     });
     return()=>{if(inst.current)inst.current.destroy();};
   },[history]);
-  return React.createElement('div',{style:{position:'relative',height:170}},
-    React.createElement('canvas',{ref})
-  );
+  return React.createElement(React.Fragment,null,
+    React.createElement('div',{style:{position:'relative',height:170}},
+      React.createElement('canvas',{ref})
+    ),
+    molaAciklamaSatiri(history.slice(-90),true));
 }
 
 function ChartMech({history}){
@@ -27976,6 +28076,7 @@ function ChartMech({history}){
     if(inst.current)inst.current.destroy();
     inst.current=new Chart(ref.current,{
       type:'bar',
+      plugins:[molaGolgePlugin(history)],
       data:{
         labels:history.map(d=>fmtShort(d.date)),
         datasets:[
@@ -27986,7 +28087,7 @@ function ChartMech({history}){
       },
       options:{
         responsive:true,maintainAspectRatio:false,
-        plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+(ctx.raw!=null?ctx.raw.toFixed(1):'—')}}},
+        plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+(ctx.raw!=null?ctx.raw.toFixed(1):'—'),footer:molaTooltipFooter(history)}}},
         scales:{
           x:{ticks:{color:tickColor,font:{size:10},maxTicksLimit:8},grid:{color:gridColor},border:{display:false}},
           y:{ticks:{color:tickColor,font:{size:10}},grid:{color:gridColor},border:{display:false}}
@@ -27995,7 +28096,9 @@ function ChartMech({history}){
     });
     return()=>{if(inst.current)inst.current.destroy();};
   },[history]);
-  return React.createElement('div',{style:{position:'relative',height:180}},React.createElement('canvas',{ref}));
+  return React.createElement(React.Fragment,null,
+    React.createElement('div',{style:{position:'relative',height:180}},React.createElement('canvas',{ref})),
+    molaAciklamaSatiri(history,false));
 }
 
 const PHASE_COLORS={Temel:'badge-gray',Gelişme:'badge-info',Zirve:'badge-warn',Taper:'badge-danger','Yarış Sonrası':'badge-gray'};
@@ -31373,7 +31476,10 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
   const zoneStatus=zoneDist?zoneDist_status(zoneDist,zoneDist2wFixed):null;
   const zoneTrend=React.useMemo(()=>calcZoneTrend(zoneDist4wFixed,zoneDist2wFixed),[zoneDist4wFixed,zoneDist2wFixed]);
 
-  const chart=history.slice(-90);
+  // 2026.09.29 — grafiklere mola/dönüş işareti (bkz. molaAraliklariIsaretle). İşaretleme TÜM
+  // geçmiş üzerinden yapılır (90 günlük dilim başında kesilen mola doğru tanınsın diye).
+  const _molaIsaret=molaAraliklariIsaretle(history);
+  const chart=history.slice(-90).map((h,i,arr)=>({...h,..._molaIsaret[history.length-arr.length+i]}));
   if(!workouts.length)return React.createElement('div',{className:'empty'},'Bu sporcu için henüz antrenman kaydı yok.');
 
   // profileHistory verisini al (son 50 snapshot)
