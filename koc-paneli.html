@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.29-0915 --><!DOCTYPE html>
+<!-- Version: v2026.09.29-0943 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -23,7 +23,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.09.29-0915';
+    var RUNNING='v2026.09.29-0943';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -326,7 +326,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.29-0915';
+const APP_VERSION='v2026.09.29-0943';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -10810,10 +10810,33 @@ function calcRowM(sec,rawPaceSec,focus,label){
 function applyVolFocusOv(row,base,ov,tip){
   try{
     if(!row||row.type==='header'||!base) return row;
-    if(ov&&(ov.mesafe!=null||ov.h!=null||ov.m!=null||ov.s!=null||ov.pm!=null||ov.ps!=null||ov._editedField!=null)) return row;
-    if(!(base._rawSec>0)||!(base._rawPaceSec>0)) return row;
     const ok=ov&&ov._volFocusOverride&&ov._volFocusOverride.key;
-    const k=(ok==='time'||ok==='dist')?ok:((tip==='yaris')?'dist':volAutoFocusKey(row.label));
+    const chosen=(ok==='time'||ok==='dist')?ok:null;
+    const manual=!!(ov&&(ov.mesafe!=null||ov.h!=null||ov.m!=null||ov.s!=null||ov.pm!=null||ov.ps!=null||ov._editedField!=null));
+    const hms=(d)=>({h:Math.floor(d/3600),m:Math.floor((d%3600)/60),s:Math.round(d%60)});
+    const rnd=(m)=>m<200?Math.round(m/5)*5:Math.round(m/100)*100;
+    if(manual){
+      // Koç süre/mesafe/pace'i ELLE girmiş VE rozetten Süre/Mesafe Odaklı SEÇMİŞSE: satırda GÖRÜNEN değer yuvarlanır,
+      // diğer alan ondan türetilir (Mesafe Odaklı: mesafe yuvarlanır, süre = mesafe × pace; Süre Odaklı: süre yuvarlanır, mesafe türetilir).
+      // Rozet seçilmemişse elle girilen değere dokunulmaz.
+      if(!chosen) return row;
+      const paceSec=((row.pm||0)*60+(row.ps||0))||base._rawPaceSec||0;
+      const curSec=(row.h||0)*3600+(row.m||0)*60+(row.s||0);
+      if(!(paceSec>0)) return row;
+      if(chosen==='dist'){
+        const rawM=row.mesafe>0?row.mesafe:(curSec>0?Math.round(curSec/paceSec*1000):0);
+        if(!(rawM>0)) return row;
+        const mesafe=rnd(rawM);
+        return {...row,mesafe,...hms(Math.round(mesafe/1000*paceSec))};
+      }
+      if(!(curSec>0)) return row;
+      const step=curSec<120?5:30;
+      const sec=Math.max(step,Math.round(curSec/step)*step);
+      const mesafe=rnd(sec/paceSec*1000);
+      return {...row,mesafe,...hms(sec)};
+    }
+    if(!(base._rawSec>0)||!(base._rawPaceSec>0)) return row;
+    const k=chosen||((tip==='yaris')?'dist':volAutoFocusKey(row.label));
     const c=calcRowM(base._rawSec,base._rawPaceSec,k);
     if(!c.mesafe) return row;
     return {...row,mesafe:c.mesafe,h:c.h,m:c.m,s:c.s};
