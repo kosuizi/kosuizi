@@ -1,4 +1,4 @@
-<!-- Version: v2026.09.29-1015 --><!DOCTYPE html>
+<!-- Version: v2026.09.29-1026 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -23,7 +23,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.09.29-1015';
+    var RUNNING='v2026.09.29-1026';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -326,7 +326,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.09.29-1015';
+const APP_VERSION='v2026.09.29-1026';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -10804,6 +10804,18 @@ function focusColCellStyle(fo,col,pos){
   } else { sh.push('inset 2px 0 0 '+c,'inset -2px 0 0 '+c); }
   return {boxShadow:sh.join(','),background:'rgba(255,255,255,0.5)',borderRadius:rad,fontWeight:800};
 }
+// Reçete metninden (etiket/açıklama) hedef nabız çıkarır — bölge tabanlı öneri yoksa YEDEK kaynak (2026.09.29).
+// "164–169 bpm" → orta nokta; "< 138 bpm" → üst sınır. Bulamazsa null.
+function bpmFromCueText(txt){
+  const t=String(txt||'');
+  let m=/(\d{2,3})\s*[–\-]\s*(\d{2,3})\s*bpm/i.exec(t);
+  if(m){const a=parseInt(m[1],10),b=parseInt(m[2],10);if(a>0&&b>=a) return Math.ceil((a+b)/2);}
+  m=/[<≤]\s*(\d{2,3})\s*bpm/i.exec(t);
+  if(m) return parseInt(m[1],10);
+  return null;
+}
+// Hissiyat Odaklı satırda reçetede RPE yoksa bölgeden önerilen RPE (ZONE_RPE2 ile AYNI tablo).
+const ZONE_RPE_SUGGEST=['1–2','3–4','5–6','7–8','8–9','9–10','10'];
 function volAutoFocusKey(label){
   return /\d+(?:[.,]\d+)?\s*(?:m|km)\b/i.test(label||'')?'dist':'time';
 }
@@ -13853,8 +13865,8 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
             React.createElement('td',{style:{...cell(),color:r.rpe||r._isSprint?'#475569':'#000',fontStyle:r.rpe||r._isSprint?'italic':'normal',...volFocusCellStyle(volFocusIndicator(r),'dist')}},editableCell(i,'mesafe',r.mesafe>0?r.mesafe:0)),
             React.createElement('td',{style:{...cell(),color:r.rpe||r._isSprint?'#475569':'#000',fontStyle:r.rpe||r._isSprint?'italic':'normal',...focusColCellStyle(focusIndicator(r),'pace',0)}},editableCell(i,'pm',r.pm!=null?r.pm:0)),
             React.createElement('td',{style:{...cell(),color:r.rpe||r._isSprint?'#475569':'#000',fontStyle:r.rpe||r._isSprint?'italic':'normal',...focusColCellStyle(focusIndicator(r),'pace',1)}},editableCell(i,'ps',r.ps!=null?String(r.ps).padStart(2,'0'):'00')),
-            React.createElement('td',{style:{...cell(),color:'#000',fontSize:12,...focusColCellStyle(focusIndicator(r),'feel')}},
-              r.rpe?r.rpe:'—'
+            React.createElement('td',{style:{...cell(),color:'#000',fontSize:12,...focusColCellStyle(focusIndicator(r),'feel'),...((!r.rpe&&focusIndicator(r)?.key==='feel'&&r._origZIdx!=null&&ZONE_RPE_SUGGEST[Math.min(r._origZIdx,6)])?{color:'#64748b',fontStyle:'italic'}:{})}},
+              r.rpe?r.rpe:((focusIndicator(r)?.key==='feel'&&r._origZIdx!=null&&ZONE_RPE_SUGGEST[Math.min(r._origZIdx,6)])||'—')
             ),
             // Ortalama Nabız — zone'dan önerilen, manuel override veya aralık ortalaması
             React.createElement('td',{style:{...cell(),
@@ -13868,9 +13880,26 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
                   const bpmS=rowOverrides[i]?.bpmStart;
                   const bpmA=rowOverrides[i]?.bpmAvg;
                   const bpmE=rowOverrides[i]?.bpmEnd;
+                  // 2026.09.29 — Nabız Odaklı soğuma satırında reçetede hedef nabız HİÇ görünmüyordu (3 alan boş).
+                  // Diğer satırlarla AYNI paylaşılan öneri (suggestedFor: bölge orta noktası) ortalama (~) alanına hedef
+                  // olarak konur; reçete metnindeki "< N bpm" yedek kaynak. Girilen gerçek değer varsa o öncelikli.
+                  const _cdDur=rowDurSec(r);
+                  const _cdSug=suggestedFor(r,_cdDur);
+                  let _cdTarget=_cdSug.value!=null?_cdSug.value:null;
+                  let _cdKind=_cdSug.kind||'ort';
+                  if(_cdTarget==null){
+                    try{_cdTarget=bpmFromCueText((r.label||'')+' '+(r._cue!=null?r._cue:getCueForRow(r.label,r._srcBaslik||r.label)));}catch(_e){}
+                    _cdKind='ort';
+                  }
+                  const _cdHint=(bpmA==null&&_cdTarget!=null)?BPM_HINT_UI[_cdKind]:null;
                   if(readOnly){
                     // Sporcu paneli: değerleri salt gösterim
-                    if(bpmS==null&&bpmA==null&&bpmE==null) return React.createElement('span',{style:{color:'#94a3b8',fontSize:9}},'—');
+                    if(bpmS==null&&bpmA==null&&bpmE==null){
+                      if(_cdTarget!=null) return React.createElement('div',{style:{display:'flex',flexDirection:'column',alignItems:'center',gap:0}},
+                        React.createElement('span',{style:{fontFamily:'monospace',fontSize:11,fontWeight:700,fontStyle:'italic',color:'#64748b'}},_cdTarget),
+                        _cdHint&&React.createElement('span',{style:{fontSize:9,fontWeight:600,color:_cdHint.color,lineHeight:1.3,marginTop:1}},_cdHint.label));
+                      return React.createElement('span',{style:{color:'#94a3b8',fontSize:9}},'—');
+                    }
                     const parts=[];
                     if(bpmS!=null) parts.push('↑'+bpmS);
                     if(bpmA!=null) parts.push('~'+bpmA);
@@ -13882,10 +13911,13 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
                     React.createElement('span',{style:{fontSize:7,color:iconColor,fontWeight:700,lineHeight:1}},icon),
                     editableCell(i,field,val!=null?val:'—')
                   );
-                  return React.createElement('div',{style:{display:'flex',gap:4,justifyContent:'center',alignItems:'flex-end'}},
-                    mkField('bpmStart',bpmS,'↑','#94a3b8'),
-                    mkField('bpmAvg',bpmA,'~','#3b82f6'),
-                    mkField('bpmEnd',bpmE,'↓','#10b981')
+                  return React.createElement('div',{style:{display:'flex',flexDirection:'column',alignItems:'center',gap:1}},
+                    React.createElement('div',{style:{display:'flex',gap:4,justifyContent:'center',alignItems:'flex-end'}},
+                      mkField('bpmStart',bpmS,'↑','#94a3b8'),
+                      mkField('bpmAvg',bpmA!=null?bpmA:_cdTarget,'~','#3b82f6'),
+                      mkField('bpmEnd',bpmE,'↓','#10b981')
+                    ),
+                    _cdHint&&React.createElement('span',{style:{fontSize:9,fontWeight:600,color:_cdHint.color,lineHeight:1.3}},_cdHint.label)
                   );
                 }
                 // ── Standart tek-değer nabız (soğuma dışı tüm satırlar) ──
@@ -13904,7 +13936,12 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
                 const sug=suggestedFor(r,durSec);
                 // run/walk satırları: LTHR tanımlı olmasa da bpm girişi aktif (placeholder '—')
                 const alwaysEditable=r.type==='run'||r.type==='walk';
-                const displayVal=effectiveBpm!=null?effectiveBpm:(sug.value!=null?sug.value:(alwaysEditable?'—':null));
+                // 2026.09.29 — Nabız Odaklı satırda bölge tabanlı öneri yoksa reçete metnindeki bpm (aralık/üst sınır) yedek hedef olur.
+                let _sugVal=sug.value;
+                if(_sugVal==null&&effectiveBpm==null&&!r._isSprint&&r.type!=='header'&&focusIndicator(r)?.key==='hr'){
+                  try{_sugVal=bpmFromCueText((r.label||'')+' '+(r._cue!=null?r._cue:getCueForRow(r.label,r._srcBaslik||r.label)));}catch(_e){}
+                }
+                const displayVal=effectiveBpm!=null?effectiveBpm:(_sugVal!=null?_sugVal:(alwaysEditable?'—':null));
                 if(r.type==='header'||r._isSprint||(displayVal==null)) return typeof displayVal==='number'?displayVal:'—';
                 // Aralık ortalaması: salt gösterim
                 if(avgBpm!=null&&manualBpm==null) return avgBpm;
