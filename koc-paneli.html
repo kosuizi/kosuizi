@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.01-1233 --><!DOCTYPE html>
+<!-- Version: v2026.10.01-1242 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -23,7 +23,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.01-1233';
+    var RUNNING='v2026.10.01-1242';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -358,7 +358,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.01-1233';
+const APP_VERSION='v2026.10.01-1242';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -1957,6 +1957,12 @@ function hrBadgeToSignal(label,real){
 // Tüm plan_snapshots verisinden reçete geribildirim sinyalleri çıkarır.
 // Yalnızca kalite fazları (ısınma/soğuma/dinlenme dışı) kullanılır.
 // athlete parametresi: hrZones recompute için kullanılır (_origZIdx → zone center)
+// 2026.10.01 — Göksel talebi: skor, satırın EKRANDA GÖRÜNEN odak rozetine göre hesaplanır — koçun elle seçtiği
+// odak da, otomatik (zon/tip kurallı) odak da. Pace Odaklı satırda nabız, Nabız Odaklı satırda pace skora girmez.
+// Otomatik odak kuralı ReceteTablosu → autoFocusIndicator ile AYNI: pace puanlanabilen satırda zi>=2 → Pace,
+// diğer her durumda (zi<=1, yürüyüş, RPE'li, Isınma/Soğuma) → Nabız. false yapılırsa yalnızca elle seçilen
+// odaklar etkili olur, otomatik satırlar eski zon tabanlı 1.0/0.5 ağırlığına döner.
+const OTOMATIK_ODAK_PUANLAMA=true;
 function extractFeedbackSignals(allSnapsObj, athlete){
   const SKIP_RE=/[iı]sınma|isinma|soğuma|soguma|dinlenme|toparlanma|blok\s*arası|strides\s*arası/i;
   const signals=[];
@@ -2396,7 +2402,10 @@ function extractFeedbackSignals(allSnapsObj, athlete){
           }
         }
         // type: 2026.09.09 — Göksel talebi, bkz. yukarıdaki SKIP_RE dalındaki AYNI not.
-        if(paceDir||hrDir||paceOk||hrOk||mesafeDir||mesafeOk) signals.push({date,label:row.label||null,_rep:_rep??null,type:row.type??null,paceDir,hrDir,paceOk,hrOk,hrWeight,zi:zi??0,zoneId:hr?.id||null,paceDiff,paceTol,mesafeDir,mesafeOk,mesafeDiffPct,mesZoneKolay,focus:(_fk==='hr'||_fk==='pace')?_fk:null});
+        // Etkin odak: koç seçtiyse o; yoksa autoFocusIndicator'ın kuralı (bkz. OTOMATIK_ODAK_PUANLAMA notu).
+        const _autoFk=(zi!=null&&zi>=2&&row.type!=='walk'&&row.type!=='rest'&&!_rpeExcludesPace&&!_isRaceRow&&!_tempoluKolayExcludesPace)?'pace':'hr';
+        const _effFocus=(_fk==='hr'||_fk==='pace')?_fk:(OTOMATIK_ODAK_PUANLAMA?_autoFk:null);
+        if(paceDir||hrDir||paceOk||hrOk||mesafeDir||mesafeOk) signals.push({date,label:row.label||null,_rep:_rep??null,type:row.type??null,paceDir,hrDir,paceOk,hrOk,hrWeight,zi:zi??0,zoneId:hr?.id||null,paceDiff,paceTol,mesafeDir,mesafeOk,mesafeDiffPct,mesZoneKolay,focus:_effFocus});
       };
 
       Object.values(rowOvs).forEach(scanRow);
@@ -2675,8 +2684,8 @@ function detectCooldownTrend(bpmStart,bpmAvg,bpmEnd,durSec,hi_bpm){
 function calcPaceComplianceScore(signals){
   // 2026.10.01 — Göksel talebi (ikinci karar, 0.25 ağırlığı KALDIRILDI): koç satırın odağını ELLE seçtiyse
   // skor SADECE o odağın bileşeniyle hesaplanır — Pace Odaklı satırdan nabız sinyali, Nabız Odaklı satırdan
-  // pace sinyali puanlamaya HİÇ girmez (ne ağırlıklı ne de yarım). Odak seçilmemiş (otomatik) satırlarda
-  // eski zon tabanlı 1.0/0.5 davranışı aynen korunur. (Hissiyat odağı zaten extractFeedbackSignals'ta
+  // pace sinyali puanlamaya HİÇ girmez (ne ağırlıklı ne de yarım). Otomatik odak da aynı şekilde işler (bkz. OTOMATIK_ODAK_PUANLAMA, extractFeedbackSignals);
+  // odak bilgisi olmayan sinyallerde (Isınma/Soğuma/Dinlenme) eski zon tabanlı 1.0/0.5 kalır. (Hissiyat odağı zaten extractFeedbackSignals'ta
   // sinyal üretmez; Süre/Mesafe odağı puanlamaya girmez.)
   const paceSignals=(signals||[]).filter(s=>(s.paceDir||s.paceOk)&&s.focus!=='hr');
   const hrSignals=(signals||[]).filter(s=>(s.hrDir||s.hrOk)&&s.focus!=='pace');
@@ -2707,7 +2716,7 @@ function calcPaceComplianceScore(signals){
   const HR_AGIRLIK_ZOR=0.5,   HR_AGIRLIK_KOLAY=1.0;
   // 2026.10.01 — Göksel talebi: koç odağı ELLE seçtiyse (Nabız/Pace Odaklı) YALNIZCA odaklanılan bileşen
   // puanlanır (odak dışı sinyaller yukarıda zaten süzüldü; ağırlığı 0). Önceki 0.25 ara kararı kaldırıldı.
-  // Odak seçilmemiş (otomatik/eski) satırlarda zon tabanlı 1.0/0.5 davranışı AYNEN korunur.
+  // Otomatik odak da aynı kuralla işler (sinyalin focus alanı etkin odağı taşır).
   const _zoneKeyFn=(s)=>s.date+'|'+(s.label||'')+'|'+(s._rep??'');
   const _faseAgirlikByKey={};
   // 2026.09.21 — Göksel talebi (manuel odak seçimi): s.focus ('hr'|'pace') koçun elle seçtiği odaktır;
@@ -28880,7 +28889,7 @@ function VerilenAntrenmaniYapabilmePuaniKarti({athlete}){
           'Mesafe yakınlık puanı: ',e('b',null,score.mesYakinlikPuani+'/100')
         ),
         e('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},
-          'Genel puan: pace, mesafe hedefi ve nabız bileşenleri (her biri uyum oranı %50 + yakınlık puanı %50) ayrı hesaplanıp ağırlıklı ortalanır — pace ve mesafe tam ağırlık, nabız yarı ağırlık (otomatik odakta). Koç odağı elle seçtiyse (Nabız/Pace Odaklı) o satırda yalnızca odaklanılan bileşen puanlanır, diğeri skora girmez. Mesafede ceza yönü antrenman bölgesine göre değişir: kolay/toparlanma bölgesinde (Isınma/Soğuma dahil) fazla koşma, ana bölüm/tempo/interval bölgesinde az koşma 3 kat daha sert cezalandırılır. Soğumanın nabız düşüş kalitesi (Yetersiz/Aksadı vb.) de Nabız bileşenine dahildir — ayrı bir bileşen değildir. Bu puan ham puandır (dürüst geri bildirim) — istenen her şey tam yapıldıysa %100 gösterir. Liderlik sekmesindeki Skor ayrıca faz sayısı adaleti ve hacim bonusuyla düzeltilir, ama bu düzeltme sadece sıralamada kullanılır, burada gösterilmez. Bir fazda sadece bazı bileşenler mevcutsa, sadece onlar kullanılır.'
+          'Genel puan: pace, mesafe hedefi ve nabız bileşenleri (her biri uyum oranı %50 + yakınlık puanı %50) ayrı hesaplanıp ağırlıklı ortalanır — pace ve mesafe tam ağırlık, nabız yarı ağırlık (Isınma/Soğuma/Dinlenme satırları). Pace Odaklı satırda yalnızca pace, Nabız Odaklı satırda yalnızca nabız puanlanır (odak elle seçilmiş de olsa otomatik de olsa); diğeri skora girmez. Mesafede ceza yönü antrenman bölgesine göre değişir: kolay/toparlanma bölgesinde (Isınma/Soğuma dahil) fazla koşma, ana bölüm/tempo/interval bölgesinde az koşma 3 kat daha sert cezalandırılır. Soğumanın nabız düşüş kalitesi (Yetersiz/Aksadı vb.) de Nabız bileşenine dahildir — ayrı bir bileşen değildir. Bu puan ham puandır (dürüst geri bildirim) — istenen her şey tam yapıldıysa %100 gösterir. Liderlik sekmesindeki Skor ayrıca faz sayısı adaleti ve hacim bonusuyla düzeltilir, ama bu düzeltme sadece sıralamada kullanılır, burada gösterilmez. Bir fazda sadece bazı bileşenler mevcutsa, sadece onlar kullanılır.'
         )
       ),
       score.detay?.length>0&&e('div',{style:{marginTop:10}},
