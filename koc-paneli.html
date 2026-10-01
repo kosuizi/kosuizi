@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.01-2100 --><!DOCTYPE html>
+<!-- Version: v2026.10.01-2110 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -23,7 +23,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.01-2100';
+    var RUNNING='v2026.10.01-2110';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -358,7 +358,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.01-2100';
+const APP_VERSION='v2026.10.01-2110';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -1875,19 +1875,30 @@ function focusOverrideKey(row){
 // bu fonksiyonun kendi otomatik dalı da zone İÇİNDEKİ her pace için aynı şekilde
 // paceDiff=0 kullanır (bkz. birkaç satır aşağı, "tam zone içinde" notu) — zone'un
 // neresinde olunduğu zaten hiçbir zaman ayrıca puanlanmıyordu.
+// 2026.10.01 — Göksel talebi: dar zonlarda (ör. Z5a 3:57–4:04 = 7 sn) zone genişliği ±15 sn'lik
+// tolerans kutusundan çok dardı → 3:46/3:52 gibi hedefe yakın pace'ler "Çok Hızlı" çıkıyordu.
+// "Hedef Bölge" bandı artık hedef pace ±PACE_MIN_TOL_SEC'i (varsa zone'dan geniş olanı) kapsar;
+// "Biraz/Çok" eşiği de en az bu kadardır. Rozet (paceValidation), puan (extractFeedbackSignals) ve
+// rozet→sinyal (paceBadgeToSignal) AYNI yardımcıyı kullanır; geniş zonlar (Z1-Z2) etkilenmez.
+const PACE_MIN_TOL_SEC=15;
+function paceBandMinTol(fastSec,slowSec,centerSec){
+  const c=centerSec>0?centerSec:(fastSec+slowSec)/2;
+  return {fast:Math.min(fastSec,Math.round(c-PACE_MIN_TOL_SEC)),slow:Math.max(slowSec,Math.round(c+PACE_MIN_TOL_SEC))};
+}
 function paceBadgeToSignal(label,real){
   const FALLBACK_TOL=20;
   const dirMap={'Hedef Bölge':'ok','Biraz Yavaş':'slow','Çok Yavaş':'slow','Biraz Hızlı':'fast','Çok Hızlı':'fast'};
   const dir=dirMap[label];
   if(!dir) return null; // tanınmayan/bağlamsal etiket (ör. 'Isınma Nabzı' pace için hiç üretilmez) — sinyal yok
   if(dir==='ok') return {paceOk:true,paceDir:null,paceDiff:0,paceTol:real?.zi!=null&&real.zones?.paceZones?.[real.zi]?.lo_ms&&real.zones?.paceZones?.[real.zi]?.hi_ms
-    ?Math.max(1,Math.round((Math.round(1000/real.zones.paceZones[real.zi].lo_ms)-Math.round(1000/real.zones.paceZones[real.zi].hi_ms))*(real.isGapRow?1.0:0.5)))
+    ?Math.max(PACE_MIN_TOL_SEC,Math.round((Math.round(1000/real.zones.paceZones[real.zi].lo_ms)-Math.round(1000/real.zones.paceZones[real.zi].hi_ms))*(real.isGapRow?1.0:0.5)))
     :FALLBACK_TOL};
   const pz=real?.zi!=null?real.zones?.paceZones?.[real.zi]:null;
   if(pz?.lo_ms&&pz?.hi_ms&&real?.cmpSec>0){
-    const fastBoundarySec=Math.round(1000/pz.hi_ms);
-    const slowBoundarySec=Math.round(1000/pz.lo_ms);
-    const tol=Math.max(1,Math.round((slowBoundarySec-fastBoundarySec)*(real.isGapRow?1.0:0.5)));
+    const _bandB=paceBandMinTol(Math.round(1000/pz.hi_ms),Math.round(1000/pz.lo_ms));
+    const fastBoundarySec=_bandB.fast;
+    const slowBoundarySec=_bandB.slow;
+    const tol=Math.max(PACE_MIN_TOL_SEC,Math.round((Math.round(1000/pz.lo_ms)-Math.round(1000/pz.hi_ms))*(real.isGapRow?1.0:0.5)));
     if(dir==='slow'){
       const realOver=real.cmpSec-slowBoundarySec;
       if(realOver>0) return {paceOk:false,paceDir:'slow',paceDiff:realOver,paceTol:tol}; // GERÇEK sapma
@@ -2299,7 +2310,9 @@ function extractFeedbackSignals(allSnapsObj, athlete){
               const _spPaceSc=(()=>{const sp=activeZoneSpan(row,zi);return sp?spanPaceBounds(zones,sp):null;})();
               if(_spPaceSc){fastBoundarySec=_spPaceSc.fast;slowBoundarySec=_spPaceSc.slow;}
               const zoneWidth=slowBoundarySec-fastBoundarySec;
-              const tol=Math.max(1,Math.round(zoneWidth*(row._isGapRow?1.0:0.5)));
+              const tol=Math.max(PACE_MIN_TOL_SEC,Math.round(zoneWidth*(row._isGapRow?1.0:0.5)));
+              // 2026.10.01: hedef ±15 sn minimum bant (bkz. paceBandMinTol) — rozetle birebir aynı
+              ({fast:fastBoundarySec,slow:slowBoundarySec}=paceBandMinTol(fastBoundarySec,slowBoundarySec,origPace));
               if(cmpSec>=fastBoundarySec&&cmpSec<=slowBoundarySec){
                 paceOk=true; paceDiff=0; paceTol=tol; // tam zone içinde — paceValidation'daki "Hedef Bölge" ile birebir
               } else if(cmpSec<fastBoundarySec){
@@ -12884,12 +12897,15 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
       // Çok-zonlu hedef (Z2–Z3 Tırmanış vb.) — bkz. rowZoneSpan: bant alt zonun yavaş ucundan üst zonun hızlı ucuna
       const _spPace=(()=>{const sp=activeZoneSpan(row,zi);return sp?spanPaceBounds(_mZones,sp):null;})();
       if(_spPace){fastBoundarySec=_spPace.fast;slowBoundarySec=_spPace.slow;}
+      // 2026.10.01: hedef ±PACE_MIN_TOL_SEC minimum bant — puan motoruyla (extractFeedbackSignals) BİREBİR aynı
+      const _origZoneWidth=slowBoundarySec-fastBoundarySec;
+      ({fast:fastBoundarySec,slow:slowBoundarySec}=paceBandMinTol(fastBoundarySec,slowBoundarySec,_plannedPace));
       if(cmpSec>=fastBoundarySec&&cmpSec<=slowBoundarySec)
         return{label:'Hedef Bölge',color:'#22c55e',bg:'#f0fdf4',icon:'✓'};
       // Tolerans: zone genişliğinin %50'si — dar zonelarda (Z3–Z4) ~10–12 sn, geniş zonelarda (Z1) ~30 sn
       // GAP satırlarında 2 kat — irtifa/zemin etkisi pace'i daha çok saptırır
-      const zoneWidth=slowBoundarySec-fastBoundarySec;
-      const tol=Math.round(zoneWidth*(row._isGapRow?1.0:0.5));
+      const zoneWidth=_origZoneWidth;
+      const tol=Math.max(PACE_MIN_TOL_SEC,Math.round(zoneWidth*(row._isGapRow?1.0:0.5)));
       if(cmpSec<fastBoundarySec){
         const over=fastBoundarySec-cmpSec;
         if(over<=tol) return{label:'Biraz Hızlı',color:'#f59e0b',bg:'#fffbeb',icon:'▲'};
