@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.01-1242 --><!DOCTYPE html>
+<!-- Version: v2026.10.01-1510 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -23,7 +23,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.01-1242';
+    var RUNNING='v2026.10.01-1510';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -358,7 +358,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.01-1242';
+const APP_VERSION='v2026.10.01-1510';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -8715,7 +8715,14 @@ function weekLabel(offset){
 // yani her sporcunun skoru diğerlerinin o haftaki girişine bağlıydı. Göksel onayı:
 // artık her sporcu SADECE KENDİ geçmişine göre normalize edilir — başka sporcunun
 // antrenman girip girmemesi bu sporcunun skorunu ASLA etkilemez.
-const BASELINE_LOOKBACK_WEEKS=6; // referans için taranan geçmiş hafta sayısı
+const BASELINE_LOOKBACK_WEEKS=6; // referansa giren EN FAZLA aktif hafta sayısı (son 6 AKTİF hafta)
+// 2026.10.01 — Göksel talebi: referans penceresi artık "son 6 TAKVİM haftası" değil "son 6 AKTİF hafta".
+// Eski kural, uzun ara veren (ör. 38 gün mola) deneyimli bir sporcunun düzenli geçmişini tamamen boşaltıp
+// onu "yeni sporcu" gibi (nötr 50 + veri tamlığı çarpanı ×0.8) skorlatıyordu. Artık geriye, 6 aktif hafta
+// toplanana kadar EN FAZLA BASELINE_MAX_SCAN_WEEKS takvim haftası taranır; gerçekten yeni (geçmişi yok)
+// sporcu için davranış aynı kalır (aktif hafta bulunamaz → nötr + çarpan). Hem calcAthleteBaseline
+// (Efor/Gerçek İş + veri tamlığı) hem fetchAthletePaceBaselines (Hedef Uyumu geçmişi) bu kuralı kullanır.
+const BASELINE_MAX_SCAN_WEEKS=16;
 const BASELINE_MIN_ACTIVE_WEEKS=2; // güvenilir referans için gereken min. aktif hafta
 
 // 2026.08.19 — Göksel talebi: Skor formülündeki (Hedef Uyumu/Efor/Gerçek İş)
@@ -8765,7 +8772,8 @@ const DEFAULT_LEADERBOARD_WEIGHTS={hedefUyumu:50,efor:15,gercekIs:35,gercekIsRef
 // döner — bu durumda finalizeLeaderboard nötr (antrenman varsa 100, yoksa 0) mantığa düşer.
 function calcAthleteBaseline(workouts,athlete,weekOffset){
   const eforVals=[],isVals=[];
-  for(let i=1;i<=BASELINE_LOOKBACK_WEEKS;i++){
+  for(let i=1;i<=BASELINE_MAX_SCAN_WEEKS;i++){
+    if(eforVals.length>=BASELINE_LOOKBACK_WEEKS)break; // 6 aktif hafta toplandı (bkz. BASELINE_MAX_SCAN_WEEKS notu)
     const {start,end}=getWeekBounds(weekOffset-i);
     const wks=workouts.filter(w=>{
       if(w.athleteId!==athlete.id)return false;
@@ -8943,7 +8951,8 @@ async function fetchAthletePaceBaselines(athletes,weekOffset){
   const out={};
   await Promise.all((athletes||[]).map(async a=>{
     const vals=[];
-    for(let i=1;i<=BASELINE_LOOKBACK_WEEKS;i++){
+    for(let i=1;i<=BASELINE_MAX_SCAN_WEEKS;i++){
+      if(vals.length>=BASELINE_LOOKBACK_WEEKS)break; // son 6 ÖLÇÜLEN hafta yeter (bkz. BASELINE_MAX_SCAN_WEEKS notu)
       const weekKey=getWeekKey(weekOffset-i);
       try{
         const snap=await fbGet('plan_snapshots/'+a.id+'/'+weekKey);
