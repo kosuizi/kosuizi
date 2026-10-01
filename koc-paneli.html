@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.01-1510 --><!DOCTYPE html>
+<!-- Version: v2026.10.01-1626 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -23,7 +23,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.01-1510';
+    var RUNNING='v2026.10.01-1626';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -358,7 +358,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.01-1510';
+const APP_VERSION='v2026.10.01-1626';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -12149,6 +12149,45 @@ function paceSecToZoneIdx(paceSec, zonesObj){
   return 0;
 }
 
+// ── Reçete tablosu ölçekleyici (2026.10.01 — Göksel talebi) ─────────────────────
+// Önceki kapsayıcı overflow:'hidden' idi → dar ekranda (telefon dikey) tablo doğal
+// genişliğinde kalıp sağ tarafı KESİLİYOR ve kaydırılamıyordu. Şimdi: tablo doğal
+// (orantılı) genişliğini korur; ekrana sığmıyorsa CSS zoom ile küçültülür (en fazla
+// RECETE_MIN_ZOOM'a kadar, okunabilirlik için); yine de sığmıyorsa YATAY KAYDIRILABİLİR.
+// Geniş ekranda (PC / PC Görünümü) doğal genişlik <= alan → zoom 1, davranış değişmez.
+// Koç paneli ve Koşu İzlerim AYNI ReceteTablosu'nu kullandığı için ikisine birden uygulanır.
+const RECETE_MIN_ZOOM=0.55;
+function ReceteOlcekKap(props){
+  const outerRef=useRef(null);
+  const innerRef=useRef(null);
+  const [z,setZ]=useState(1);
+  const fit=useCallback(()=>{
+    const o=outerRef.current,i=innerRef.current;
+    if(!o||!i) return;
+    const prev=i.style.zoom;
+    i.style.zoom='1';                       // doğal genişliği zoom 1'de ölç
+    const avail=o.clientWidth;
+    const nat=i.scrollWidth;
+    i.style.zoom=prev;
+    const nz=(avail>0&&nat>avail+1)?Math.max(RECETE_MIN_ZOOM,avail/nat):1;
+    setZ(pz=>Math.abs(pz-nz)<0.01?pz:nz);
+  },[]);
+  React.useLayoutEffect(()=>{fit();});      // içerik her değiştiğinde (setZ eşikli → döngü yok)
+  useEffect(()=>{
+    window.addEventListener('resize',fit);
+    window.addEventListener('orientationchange',fit);
+    let ro=null;
+    if(typeof ResizeObserver!=='undefined'&&outerRef.current){ro=new ResizeObserver(fit);ro.observe(outerRef.current);}
+    return ()=>{window.removeEventListener('resize',fit);window.removeEventListener('orientationchange',fit);if(ro)ro.disconnect();};
+  },[fit]);
+  return React.createElement('div',{
+      ref:outerRef,'data-recete-olcek':true,
+      style:{borderRadius:6,overflowX:'auto',overflowY:'hidden',WebkitOverflowScrolling:'touch',border:'1px solid var(--border)'}
+    },
+    React.createElement('div',{ref:innerRef,style:{zoom:z}},props.children)
+  );
+}
+
 function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverrides, onSaveOverrides, onSaveDetay, readOnly, originalCueOnly, savedCuePatches, actualOrtNabiz, isWorkoutLogged}){
   // measureZones: girilen gerçek bpm'i bölgeye (Z1-Z5c) yerleştirirken kullanılacak
   // zone sınırları — o antrenmanın TARİHİNDEKİ LTHR/MHR'ye göre hesaplanmış olmalı.
@@ -13871,7 +13910,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
       React.createElement('button',{onClick:()=>setPaceTol(t=>Math.min(120,t+5)),style:{padding:'2px 8px',borderRadius:4,border:'1px solid var(--border)',background:'var(--bg-primary)',cursor:'pointer',fontWeight:700,fontSize:13,color:'var(--text-primary)',lineHeight:1}},'+'),
       React.createElement('span',{style:{fontSize:10,color:'var(--text-tertiary)',marginLeft:4,fontStyle:'italic'}},'paylaşımda gizlenir')
     ),
-    React.createElement('div',{style:{borderRadius:6,overflow:'hidden',border:'1px solid var(--border)'}},
+    React.createElement(ReceteOlcekKap,null,
     React.createElement('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:11}},
       // Başlık
       React.createElement('thead',null,
