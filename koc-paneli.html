@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.01-1206 --><!DOCTYPE html>
+<!-- Version: v2026.10.01-1233 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -23,7 +23,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.01-1206';
+    var RUNNING='v2026.10.01-1233';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -358,7 +358,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.01-1206';
+const APP_VERSION='v2026.10.01-1233';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -1822,9 +1822,9 @@ const BPM_SIGNAL_SCORE_THRESHOLD=4;
 // AYNI şekilde çalışır — yeni bir puanlama/kalibrasyon mantığı icat edilmez, mevcut
 // odak profillerinden biri seçilir:
 //   • hr   (Nabız Odaklı)    → pace + nabız ikisi de değerlendirilir, Hedef Uyumu ağırlığı
-//                              Nabız 1.0 / Pace 0.25 (2026.10.01: 0.5'ten 0.25'e düşürüldü). Tempolu Yürüyüş'te
+//                              SADECE nabız puanlanır (2026.10.01: odak dışı pace skora girmez). Tempolu Yürüyüş'te
 //                              pace puanlama-dışı (bkz. extractFeedbackSignals → _tempoluKolayExcludesPace).
-//   • pace (Pace Odaklı)     → ikisi de değerlendirilir, ağırlık Pace 1.0 / Nabız 0.25 (2026.10.01: 0.5'ten 0.25'e düşürüldü).
+//   • pace (Pace Odaklı)     → ikisi de değerlendirilir, SADECE pace puanlanır (2026.10.01: odak dışı nabız skora girmez).
 //   • feel (Hissiyat Odaklı) → NE pace NE nabız değerlendirilir: rozetler gizlenir, puanlamaya
 //                              ve kalibrasyona HİÇ sinyal gitmez (sprint/yarış/serbest satırlarıyla aynı).
 // Kalibrasyon (vLT/Sınır) odak rozetine değil ZON kurallarına bakar (toVltDir → s.zi) — hr/pace
@@ -2673,8 +2673,13 @@ function detectCooldownTrend(bpmStart,bpmAvg,bpmEnd,durSec,hi_bpm){
   return                                              {label:'Soğuma Yavaş'+not, color:'#f59e0b',bg:'#fffbeb',icon:'↓',tier:'yavas'};
 }
 function calcPaceComplianceScore(signals){
-  const paceSignals=(signals||[]).filter(s=>s.paceDir||s.paceOk);
-  const hrSignals=(signals||[]).filter(s=>s.hrDir||s.hrOk);
+  // 2026.10.01 — Göksel talebi (ikinci karar, 0.25 ağırlığı KALDIRILDI): koç satırın odağını ELLE seçtiyse
+  // skor SADECE o odağın bileşeniyle hesaplanır — Pace Odaklı satırdan nabız sinyali, Nabız Odaklı satırdan
+  // pace sinyali puanlamaya HİÇ girmez (ne ağırlıklı ne de yarım). Odak seçilmemiş (otomatik) satırlarda
+  // eski zon tabanlı 1.0/0.5 davranışı aynen korunur. (Hissiyat odağı zaten extractFeedbackSignals'ta
+  // sinyal üretmez; Süre/Mesafe odağı puanlamaya girmez.)
+  const paceSignals=(signals||[]).filter(s=>(s.paceDir||s.paceOk)&&s.focus!=='hr');
+  const hrSignals=(signals||[]).filter(s=>(s.hrDir||s.hrOk)&&s.focus!=='pace');
   const mesafeSignals=(signals||[]).filter(s=>s.mesafeDir||s.mesafeOk);
   const total=paceSignals.length; // geriye dönük uyumluluk: "total" hep pace faz sayısıdır
   const hrTotal=hrSignals.length;
@@ -2700,11 +2705,9 @@ function calcPaceComplianceScore(signals){
   // varsayım, yanlışlıkla "zor" sayılıp Pace'e haksız ağırlık vermez.
   const PACE_AGIRLIK_ZOR=1.0, PACE_AGIRLIK_KOLAY=0.5;
   const HR_AGIRLIK_ZOR=0.5,   HR_AGIRLIK_KOLAY=1.0;
-  // 2026.10.01 — Göksel talebi: koç odağı ELLE seçtiyse (Nabız/Pace Odaklı) odaklanılan bileşen 1.0,
-  // diğeri 0.25 ağırlıkta olur (eski 0.5 yerine) — odak dışı bileşen (ör. Pace Odaklı satırda nabız)
-  // skoru fazla çekmesin ama tamamen de yok sayılmasın. Odak seçilmemiş (otomatik/eski) satırlarda
-  // yukarıdaki zon tabanlı 1.0/0.5 davranışı AYNEN korunur — geçmiş skorlar değişmez.
-  const ODAK_DISI_AGIRLIK=0.25;
+  // 2026.10.01 — Göksel talebi: koç odağı ELLE seçtiyse (Nabız/Pace Odaklı) YALNIZCA odaklanılan bileşen
+  // puanlanır (odak dışı sinyaller yukarıda zaten süzüldü; ağırlığı 0). Önceki 0.25 ara kararı kaldırıldı.
+  // Odak seçilmemiş (otomatik/eski) satırlarda zon tabanlı 1.0/0.5 davranışı AYNEN korunur.
   const _zoneKeyFn=(s)=>s.date+'|'+(s.label||'')+'|'+(s._rep??'');
   const _faseAgirlikByKey={};
   // 2026.09.21 — Göksel talebi (manuel odak seçimi): s.focus ('hr'|'pace') koçun elle seçtiği odaktır;
@@ -2712,8 +2715,8 @@ function calcPaceComplianceScore(signals){
   // aynı fazı aynı anahtarla paylaştığı için faz başına tek ağırlık çifti saklanır.
   [...paceSignals,...hrSignals].forEach(s=>{
     let pw,hw;
-    if(s.focus==='hr'){pw=ODAK_DISI_AGIRLIK;hw=1.0;}
-    else if(s.focus==='pace'){pw=1.0;hw=ODAK_DISI_AGIRLIK;}
+    if(s.focus==='hr'){pw=0;hw=1.0;}
+    else if(s.focus==='pace'){pw=1.0;hw=0;}
     else if((s.zi??0)<=1){pw=PACE_AGIRLIK_KOLAY;hw=HR_AGIRLIK_KOLAY;}
     else{pw=PACE_AGIRLIK_ZOR;hw=HR_AGIRLIK_ZOR;}
     _faseAgirlikByKey[_zoneKeyFn(s)]={pw,hw};
@@ -28877,7 +28880,7 @@ function VerilenAntrenmaniYapabilmePuaniKarti({athlete}){
           'Mesafe yakınlık puanı: ',e('b',null,score.mesYakinlikPuani+'/100')
         ),
         e('div',{style:{fontSize:11,color:'var(--text-tertiary)'}},
-          'Genel puan: pace, mesafe hedefi ve nabız bileşenleri (her biri uyum oranı %50 + yakınlık puanı %50) ayrı hesaplanıp ağırlıklı ortalanır — pace ve mesafe tam ağırlık, nabız yarı ağırlık (otomatik odakta). Koç odağı elle seçtiyse (Nabız/Pace Odaklı) odaklanılan bileşen tam, diğeri çeyrek ağırlıkta hesaplanır. Mesafede ceza yönü antrenman bölgesine göre değişir: kolay/toparlanma bölgesinde (Isınma/Soğuma dahil) fazla koşma, ana bölüm/tempo/interval bölgesinde az koşma 3 kat daha sert cezalandırılır. Soğumanın nabız düşüş kalitesi (Yetersiz/Aksadı vb.) de Nabız bileşenine dahildir — ayrı bir bileşen değildir. Bu puan ham puandır (dürüst geri bildirim) — istenen her şey tam yapıldıysa %100 gösterir. Liderlik sekmesindeki Skor ayrıca faz sayısı adaleti ve hacim bonusuyla düzeltilir, ama bu düzeltme sadece sıralamada kullanılır, burada gösterilmez. Bir fazda sadece bazı bileşenler mevcutsa, sadece onlar kullanılır.'
+          'Genel puan: pace, mesafe hedefi ve nabız bileşenleri (her biri uyum oranı %50 + yakınlık puanı %50) ayrı hesaplanıp ağırlıklı ortalanır — pace ve mesafe tam ağırlık, nabız yarı ağırlık (otomatik odakta). Koç odağı elle seçtiyse (Nabız/Pace Odaklı) o satırda yalnızca odaklanılan bileşen puanlanır, diğeri skora girmez. Mesafede ceza yönü antrenman bölgesine göre değişir: kolay/toparlanma bölgesinde (Isınma/Soğuma dahil) fazla koşma, ana bölüm/tempo/interval bölgesinde az koşma 3 kat daha sert cezalandırılır. Soğumanın nabız düşüş kalitesi (Yetersiz/Aksadı vb.) de Nabız bileşenine dahildir — ayrı bir bileşen değildir. Bu puan ham puandır (dürüst geri bildirim) — istenen her şey tam yapıldıysa %100 gösterir. Liderlik sekmesindeki Skor ayrıca faz sayısı adaleti ve hacim bonusuyla düzeltilir, ama bu düzeltme sadece sıralamada kullanılır, burada gösterilmez. Bir fazda sadece bazı bileşenler mevcutsa, sadece onlar kullanılır.'
         )
       ),
       score.detay?.length>0&&e('div',{style:{marginTop:10}},
