@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.02-0941 --><!DOCTYPE html>
+<!-- Version: v2026.10.02-0949 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.02-0941';
+    var RUNNING='v2026.10.02-0949';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.02-0941';
+const APP_VERSION='v2026.10.02-0949';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -5679,6 +5679,33 @@ function withDriftComputed(w){
     drift_toparlanma_ef_pct:ilk?ilk.toparlanmaEFPct??null:null,
     drift_surekli_pct:ilk?ilk.surekliPct??null:null};
 }
+// ── TEMP_DRIFT_RECALC (2026.10.02, GEÇİCİ — iş bitince Göksel ile birlikte KALDIRILACAK) ──
+// EF formülü pace-bazlıdan hız-bazlıya geçti; kayıtlı antrenmanlardaki SAKLI drift
+// yüzdeleri (blok içi kosuPct/toparlanmaEFPct/surekliPct + eski tekil drift_*_pct alanları)
+// eski formülle kalmıştı. Bu yardımcılar yalnızca drift_bloklar'ı DOLU kayıtları ham
+// pace/nabız alanlarından yeniden hesaplatır (withDriftComputed). Idempotent: ikinci
+// çalıştırmada 0 değişiklik bulur.
+function _driftSigTemp(w){
+  const b=(w.drift_bloklar||[]).map(x=>[x.kosuPct,x.toparlanmaNabizPct,x.toparlanmaEFPct,x.surekliPct].join('|')).join(';');
+  return b+'#'+[w.drift_kosu_pct,w.drift_toparlanma_nabiz_pct,w.drift_toparlanma_ef_pct,w.drift_surekli_pct].join('|');
+}
+function driftRecalcScanTemp(wks){
+  let withDrift=0,changed=0;
+  (wks||[]).forEach(w=>{
+    if(!w||!Array.isArray(w.drift_bloklar)||!w.drift_bloklar.length) return;
+    withDrift++;
+    if(_driftSigTemp(w)!==_driftSigTemp(withDriftComputed(w))) changed++;
+  });
+  return {withDrift,changed};
+}
+function driftRecalcApplyTemp(wks){
+  return (wks||[]).map(w=>{
+    if(!w||!Array.isArray(w.drift_bloklar)||!w.drift_bloklar.length) return w;
+    const n=withDriftComputed(w);
+    return _driftSigTemp(w)!==_driftSigTemp(n)?n:w;
+  });
+}
+// ── /TEMP_DRIFT_RECALC ──
 // Paylaşılan rozet — manuel giriş önizlemesi VE GPX Analiz sonucu AYNI görseli kullanır.
 function driftPctBadge(v,label){
   if(v==null) return null;
@@ -36898,6 +36925,16 @@ function App(){
   };
 
   const handleUpdateWorkout=(id,patch)=>setWorkouts(p=>p.map(x=>x.id===id?{...x,...patch}:x));
+  // TEMP_DRIFT_RECALC — geçici toplu düzeltme (bkz. driftRecalcScanTemp notu)
+  const handleDriftRecalcTemp=()=>{
+    const {withDrift,changed}=driftRecalcScanTemp(workouts);
+    if(withDrift===0){alert('Drift verisi olan antrenman bulunamadı.');return;}
+    if(changed===0){alert(withDrift+' antrenmanda drift verisi var, hepsi zaten güncel — değişiklik yok.');return;}
+    if(!confirm(withDrift+' antrenmanda drift verisi var; bunların '+changed+' tanesinin saklı yüzdesi güncellenecek (hız bazlı EF).\n\nÖnce "Tam Yedek Al" ile yedek aldın mı?\n\nDevam edilsin mi?'))return;
+    setWorkouts(p=>driftRecalcApplyTemp(p));
+    alert(changed+' antrenmanın drift yüzdesi güncellendi.');
+  };
+  // /TEMP_DRIFT_RECALC
   const handleExport=()=>{
     try{
       const data={
@@ -37162,6 +37199,17 @@ function App(){
             '⚠️ "Yedekten Geri Yükle" tüm mevcut verilerin üzerine yazar — yalnızca TAM yedek dosyalarını (.json) kabul eder. Normal antrenman yedeği için üst bardaki "Dışa Aktar / İçe Aktar" kullanın.'
           )
         ),
+        React.createElement('div',{className:'divider'}),
+        // TEMP_DRIFT_RECALC — geçici bölüm, iş bitince kaldırılacak
+        React.createElement('div',{className:'form-group',style:{marginBottom:8}},
+          React.createElement('label',{style:{fontWeight:600,color:'var(--warn)'}},'🛠️ Drift Yüzdelerini Yeniden Hesapla (geçici)'),
+          React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',margin:'6px 0 10px'}},
+            'Geçmiş antrenmanlarda saklı kalan kardiyak drift yüzdelerini yeni (hız bazlı EF) formülle günceller. Yalnızca drift verisi olan kayıtlara dokunur; ikinci kez basmak zararsızdır. ',
+            React.createElement('strong',null,'Önce Tam Yedek Al.')
+          ),
+          React.createElement('button',{className:'btn btn-sm',style:{border:'1px solid var(--warn)',color:'var(--warn)',background:'var(--warn-bg)'},onClick:handleDriftRecalcTemp},'Drift yüzdelerini güncelle')
+        ),
+        // /TEMP_DRIFT_RECALC
         React.createElement('div',{className:'divider'}),
         React.createElement('div',{className:'form-group',style:{marginBottom:8}},
           React.createElement('label',{style:{fontWeight:600,color:'var(--danger)'}},'Eski Antrenmanları Temizle'),
