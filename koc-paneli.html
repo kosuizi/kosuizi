@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.02-0949 --><!DOCTYPE html>
+<!-- Version: v2026.10.02-1025 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.02-0949';
+    var RUNNING='v2026.10.02-1025';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.02-0949';
+const APP_VERSION='v2026.10.02-1025';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -5679,41 +5679,237 @@ function withDriftComputed(w){
     drift_toparlanma_ef_pct:ilk?ilk.toparlanmaEFPct??null:null,
     drift_surekli_pct:ilk?ilk.surekliPct??null:null};
 }
-// ── TEMP_DRIFT_RECALC (2026.10.02, GEÇİCİ — iş bitince Göksel ile birlikte KALDIRILACAK) ──
-// EF formülü pace-bazlıdan hız-bazlıya geçti; kayıtlı antrenmanlardaki SAKLI drift
-// yüzdeleri (blok içi kosuPct/toparlanmaEFPct/surekliPct + eski tekil drift_*_pct alanları)
-// eski formülle kalmıştı. Bu yardımcılar yalnızca drift_bloklar'ı DOLU kayıtları ham
-// pace/nabız alanlarından yeniden hesaplatır (withDriftComputed). Idempotent: ikinci
-// çalıştırmada 0 değişiklik bulur.
-function _driftSigTemp(w){
-  const b=(w.drift_bloklar||[]).map(x=>[x.kosuPct,x.toparlanmaNabizPct,x.toparlanmaEFPct,x.surekliPct].join('|')).join(';');
-  return b+'#'+[w.drift_kosu_pct,w.drift_toparlanma_nabiz_pct,w.drift_toparlanma_ef_pct,w.drift_surekli_pct].join('|');
+// ══ Kardiyak Drift — YORUMLAMA, SEVİYE SİNYALİ VE KIYAS (2026.10.02, Göksel talebi) ══
+// TEK İŞARET KURALI: EF drift'inde (koşu / sürekli / toparlanma-EF) NEGATİF = verim düştü
+// (kötü), POZİTİF = verim arttı. Toparlanma NABZI drift'inde ise tersi: POZİTİF = nabız
+// yüksek kalıyor (kötü). Tüm eşik/karar/kıyas mantığı bu yüzden işareti DOĞRUDAN okumaz;
+// önce driftKotulesme() ile "kötüleşme puanı"na (+ = daha kötü) çevirir.
+// Eşikler antrenman bilimindeki aerobik decoupling (Pa:HR) pratiğine dayanan BAŞLANGIÇ
+// varsayımlarıdır, kesin kural değildir: sürekli aerobik koşuda <%5 "bağlı/iyi", %5–10
+// orta, >%10 yetersiz (Friel). Tempo/eşikte fizyolojik drift daha yüksek olduğundan 1–2
+// puan tolerans; kısa tekrarlarda ise tekrar içi nabız gecikmesi (ilk tekrarın ort. nabzı
+// düşük kalır) ilk↔son kıyasını yapay biçimde bozduğundan daha geniş tolerans.
+// Kill-switch: false → seviye motoru (calcSeviyeFromHistory) drift'i HİÇ kullanmaz.
+const DRIFT_SEVIYE_SINYALI=true;
+const DRIFT_ESIK={aerobik:[5,10],tempo:[6,12],tekrarli:[8,15]}; // [iyi üst sınırı, orta üst sınırı] — kötüleşme puanı
+const DRIFT_NABIZ_ESIK=[6,12];   // toparlanma nabzı artışı (%)
+const DRIFT_TOPEF_ESIK=[10,20];  // toparlanma EF — yürüyüş pace'i oynak; yalnızca bilgi, karara girmez
+const DRIFT_ARTIS_SUPHE=10;      // EF'te bu kadar/üzeri POZİTİF drift: yavaş başlangıç/negatif split/ölçüm şüphesi → karara katılmaz
+const DRIFT_KIYAS_BANT={aerobik:2,tempo:2.5,tekrarli:3}; // bu puan içindeki fark "aynı seviye" sayılır (günlük ölçüm gürültüsü)
+const _r1=(n)=>Math.round(n*10)/10;
+function _driftLab(s){ return String(s||'').trim().toLowerCase(); }
+function driftKotulesme(kind,pct){ if(pct==null) return null; return kind==='nabiz'?pct:-pct; }
+function driftTurGrubu(tur,blok){
+  if(blok&&blok.tip==='tekrarli') return (blok.calismaSn>=240)?'tempo':'tekrarli';
+  if(KALITELI_TIPLERI.includes(tur)) return 'tempo';
+  return 'aerobik';
 }
-function driftRecalcScanTemp(wks){
-  let withDrift=0,changed=0;
-  (wks||[]).forEach(w=>{
-    if(!w||!Array.isArray(w.drift_bloklar)||!w.drift_bloklar.length) return;
-    withDrift++;
-    if(_driftSigTemp(w)!==_driftSigTemp(withDriftComputed(w))) changed++;
-  });
-  return {withDrift,changed};
+function driftEsikFor(tur,blok,kind){
+  if(kind==='nabiz') return DRIFT_NABIZ_ESIK;
+  if(kind==='topef') return DRIFT_TOPEF_ESIK;
+  return DRIFT_ESIK[driftTurGrubu(tur,blok)];
 }
-function driftRecalcApplyTemp(wks){
-  return (wks||[]).map(w=>{
-    if(!w||!Array.isArray(w.drift_bloklar)||!w.drift_bloklar.length) return w;
-    const n=withDriftComputed(w);
-    return _driftSigTemp(w)!==_driftSigTemp(n)?n:w;
-  });
+function driftDurum(kot,esik){ if(kot==null) return null; return kot<=esik[0]?'iyi':(kot<=esik[1]?'orta':'kotu'); }
+function _sSeviyeNo(yapiNotu){ const m=/S(\d+)/.exec(yapiNotu||''); return m?parseInt(m[1],10):null; }
+function _sKey(yapiNotu){ const n=_sSeviyeNo(yapiNotu); return n==null?'-':'S'+n; }
+
+// Tek bloğun değerlendirmesi. oy: 'ust' | 'ayni' | 'alt' | null (null = karara katılmaz)
+function driftBlokDegerlendir(blok,tur){
+  const h=_driftBlokHesapla(blok)||{};
+  const tekrarli=blok.tip==='tekrarli';
+  const anaPct=tekrarli?h.kosuPct:h.surekliPct;
+  const grup=driftTurGrubu(tur,blok);
+  const anaKot=driftKotulesme('ef',anaPct);
+  let anaDurum=driftDurum(anaKot,DRIFT_ESIK[grup]);
+  if(anaPct!=null&&anaPct>=DRIFT_ARTIS_SUPHE) anaDurum='supheli';
+  const nabKot=tekrarli?driftKotulesme('nabiz',h.toparlanmaNabizPct):null;
+  const nabDurum=driftDurum(nabKot,DRIFT_NABIZ_ESIK);
+  let oy=null;
+  if(anaDurum==='iyi') oy=(nabDurum==='kotu')?'ayni':'ust'; // iyi koşu + yetersiz toparlanma → ilerleme onaylanmaz
+  else if(anaDurum==='orta') oy='ayni';
+  else if(anaDurum==='kotu') oy='alt';
+  return {grup,anaPct,anaKot,anaDurum,nabKot,nabDurum,oy,tekrarli,toparlanmaNabizPct:h.toparlanmaNabizPct,toparlanmaEFPct:h.toparlanmaEFPct};
 }
-// ── /TEMP_DRIFT_RECALC ──
+// Antrenman düzeyi drift oyu. Tek bir gürültülü blok seviyeyi oynatmasın diye süre
+// ağırlıklı pay kullanılır: blokların ≥%50'si 'alt' → alt; hiç 'alt' yok ve ≥%67'si 'ust' → ust.
+function driftSeviyeOyu(w){
+  const bl=((w&&w.drift_bloklar)||[]).filter(Boolean).map(b=>({b,d:driftBlokDegerlendir(b,w.tur)})).filter(x=>x.d.oy);
+  if(!bl.length) return null;
+  const agirlikli=bl.every(x=>x.b.sureSn>0);
+  let tot=0,alt=0,ust=0,kotSum=0;
+  bl.forEach(x=>{const g=agirlikli?x.b.sureSn:1; tot+=g; kotSum+=g*x.d.anaKot; if(x.d.oy==='alt') alt+=g; else if(x.d.oy==='ust') ust+=g;});
+  const kotuPay=alt/tot,ustPay=ust/tot;
+  const yon=kotuPay>=0.5?'alt':((kotuPay===0&&ustPay>=0.67)?'ust':'ayni');
+  return {yon,kotuPay,ustPay,ortKot:_r1(kotSum/tot),blokSayisi:bl.length};
+}
+// RPE yönü — calcSeviyeFromHistory ile UI yorumunun AYNI kaynaktan beslenmesi için ortak.
+// Kişisel RPE ortalaması: aynı türün önceki en fazla 5 kaydı; yeterli veri (≥2) yoksa popülasyon varsayımı.
+// Eşikler kesin kural değil, makul başlangıç varsayımı: ilerleme alt sınırı (-0.5) hassas,
+// gerileme üst sınırı (+1.0) temkinli (seviyeyi düşürmekte daha muhafazakâr).
+function _rpeYonuHesapla(sonRpe,oncekiRpeler,tur){
+  if(sonRpe==null) return null;
+  const oncekiler=(oncekiRpeler||[]).filter(r=>r!=null&&r>0);
+  const varsayilanRpe=YUKSEK_KALITELI_TIPLERI.includes(tur)?8:7;
+  const kisiselOrt=oncekiler.length>=2?(oncekiler.reduce((a,b)=>a+b,0)/oncekiler.length):varsayilanRpe;
+  if(sonRpe<=kisiselOrt-0.5) return 'ust';
+  if(sonRpe>=kisiselOrt+1.0) return 'alt';
+  return 'ayni';
+}
+function seviyeRpeYonu(w,athWorkouts){
+  const rpe=parseFloat(w&&w.rpe); if(!(rpe>0)) return null;
+  const onceki=(athWorkouts||[]).filter(x=>x&&x.id!==w.id&&x.tur===w.tur&&x.date&&w.date&&x.date<w.date&&x.yapi_notu&&/S(\d+)/.test(x.yapi_notu)&&(toSec(x.sure_sa,x.sure_dk,x.sure_sn)||0)>0)
+    .sort((a,b)=>b.date.localeCompare(a.date)).slice(0,5).map(x=>parseFloat(x.rpe)||null);
+  return _rpeYonuHesapla(rpe,onceki,w.tur);
+}
+// RPE + drift birleştirme tablosu (satır: RPE yönü, sütun: drift yönü). Temkinli: yükseltme için
+// iki sinyal birlikte olumlu olmalı (RPE yoksa drift tek başına yeter); DÜŞÜRME yalnızca RPE de
+// aynı yöndeyse ya da eskiden olduğu gibi RPE tek başına söylüyorsa (drift çelişirse sabit tut).
+const _SEV_TABLO={
+  ust:{ust:'ust',ayni:'ayni',alt:'ayni'},
+  ayni:{ust:'ayni',ayni:'ayni',alt:'ayni'},
+  alt:{ust:'ayni',ayni:'alt',alt:'alt'},
+  yok:{ust:'ust',ayni:'ayni',alt:'ayni'}
+};
+function seviyeKarariBirlestir(rpeYon,driftYon){ return _SEV_TABLO[rpeYon||'yok'][driftYon]; }
+
+function _kayipMetni(f){ return f>=0?('%'+f+' verim kaybı'):('%'+(-f)+' verim kazancı'); }
+function driftSeviyeMesaji(w,oy,rpeYon,degerler){
+  const k=seviyeKarariBirlestir(rpeYon,oy.yon);
+  const s=_sSeviyeNo(w.yapi_notu);
+  const ort=_kayipMetni(oy.ortKot);
+  let baslik,neden;
+  if(k==='ust'){
+    baslik='⬆️ Bir üst seviyeye geçilebilir'+(s!=null?' (S'+s+' → S'+(s+1)+', faz izin verirse)':'');
+    neden='Drift kontrol altında (ort. '+ort+')'+(rpeYon==='ust'?' ve RPE kişisel ortalamanın altında.':(rpeYon==null?' — RPE girilmediği için yalnızca drift’e dayanıyor.':'.'));
+  } else if(k==='alt'){
+    baslik='⬇️ Bir alt seviyeye dönmeyi düşün'+(s!=null&&s>1?' (S'+s+' → S'+(s-1)+')':'');
+    neden='Drift yüksek (ort. '+ort+') ve RPE kişisel ortalamanın üstünde — iki sinyal aynı yönde. Isı, uyku, hidrasyon gibi geçici nedenleri de kontrol et.';
+  } else {
+    baslik='➡️ Aynı seviyede kal'+(s!=null?' (S'+s+')':'');
+    if(oy.yon==='ust') neden=(rpeYon==='alt')?'Drift iyi (ort. '+ort+') ama RPE kişisel ortalamanın üstünde — sinyaller çelişiyor, seviyeyi sabit tut.':'Drift iyi (ort. '+ort+') ama RPE olağan düzeyde — ilerlemek için iki sinyalin birlikte olumlu olması beklenir.';
+    else if(oy.yon==='alt') neden=(rpeYon==='ust')?'Drift yüksek (ort. '+ort+') ama RPE kolay geldiğini söylüyor — çelişki var; ısı/uyku/ölçüm kaynaklı olabilir, aynı seviyede tekrarla.':'Drift yüksek (ort. '+ort+') ama seviyeyi düşürmek için RPE’nin de zorlandığını göstermesi gerekir ('+(rpeYon==null?'RPE girilmemiş':'RPE olağan')+') — aynı seviyede tekrarla ve izle.';
+    else neden='Drift orta düzeyde (ort. '+ort+') — aynı seviyeyi bir kez daha tekrarla.';
+  }
+  const notlar=[];
+  if(degerler.some(d=>d.anaDurum==='iyi'&&d.nabDurum==='kotu')) notlar.push('Toparlanma nabzı yüksek kalıyor (ilk↔son aralarda artış) — aralar yeterince toparlatmıyor, bu yüzden ilerleme onaylanmadı.');
+  if(degerler.some(d=>d.anaDurum==='supheli')) notlar.push('Bazı bloklarda %'+DRIFT_ARTIS_SUPHE+' ve üzeri pozitif drift var (verim artışı): yavaş başlangıç, ısınma etkisi veya negatif split olabilir — bu bloklar karara katılmadı.');
+  return {k,baslik,neden,notlar};
+}
+// Önceki AYNI tür + AYNI S seviyesi + AYNI blok yapısı (imza) kaydıyla kıyas.
+function _driftBlokImzaGecerli(b){ return !!(b&&b.imza&&String(b.imza).indexOf(b.tip==='tekrarli'?'rep|':'tek|')===0); }
+function _driftAnaKot(b){ const h=_driftBlokHesapla(b)||{}; return driftKotulesme('ef',b.tip==='tekrarli'?h.kosuPct:h.surekliPct); }
+function driftKiyasla(w,athWorkouts){
+  const mevcut=((w&&w.drift_bloklar)||[]).filter(b=>_driftBlokImzaGecerli(b)&&_driftAnaKot(b)!=null);
+  if(!mevcut.length) return {durum:'imzasiz'};
+  if(!w.tur||!w.date) return {durum:'yok'};
+  const sKey=_sKey(w.yapi_notu);
+  const adaylar=(athWorkouts||[]).filter(x=>x&&x.id!==w.id&&x.tur===w.tur&&x.date&&x.date<w.date&&_sKey(x.yapi_notu)===sKey&&Array.isArray(x.drift_bloklar)&&x.drift_bloklar.some(_driftBlokImzaGecerli))
+    .sort((a,b)=>b.date.localeCompare(a.date));
+  for(const x of adaylar){
+    const kullanildi=new Set(),ciftler=[];
+    mevcut.forEach(b=>{
+      const j=x.drift_bloklar.findIndex((p,i)=>!kullanildi.has(i)&&_driftBlokImzaGecerli(p)&&p.imza===b.imza&&_driftAnaKot(p)!=null);
+      if(j>=0){ kullanildi.add(j); ciftler.push({b,p:x.drift_bloklar[j]}); }
+    });
+    if(!ciftler.length) continue;
+    const agirlikli=ciftler.every(c=>c.b.sureSn>0);
+    let tot=0,dSum=0,curSum=0,prevSum=0,bandSum=0;
+    const parcalar=ciftler.map(c=>{
+      const kc=_driftAnaKot(c.b),kp=_driftAnaKot(c.p),g=agirlikli?c.b.sureSn:1;
+      tot+=g; dSum+=g*(kc-kp); curSum+=g*kc; prevSum+=g*kp; bandSum+=g*DRIFT_KIYAS_BANT[driftTurGrubu(w.tur,c.b)];
+      return {label:c.b.label||'',cur:_r1(kc),prev:_r1(kp),delta:_r1(kc-kp)};
+    });
+    const delta=dSum/tot,bant=bandSum/tot;
+    const durum=delta<=-bant?'daha_iyi':(delta>=bant?'daha_kotu':'ayni');
+    return {durum,delta:_r1(delta),bant:_r1(bant),cur:_r1(curSum/tot),prev:_r1(prevSum/tot),
+      onceki:{date:x.date,sNo:_sSeviyeNo(x.yapi_notu)},parcalar,adet:ciftler.length};
+  }
+  return {durum:'yok'};
+}
+// w: {id,date,tur,yapi_notu,rpe,drift_bloklar}; athWorkouts: o sporcunun antrenmanları
+function driftYorumUret(w,athWorkouts){
+  const bl=((w&&w.drift_bloklar)||[]).filter(Boolean);
+  if(!bl.length) return null;
+  const degerler=bl.map(b=>({label:b.label||'',...driftBlokDegerlendir(b,w.tur)}));
+  if(!degerler.some(d=>d.anaPct!=null||d.toparlanmaNabizPct!=null||d.toparlanmaEFPct!=null)) return null;
+  const oy=driftSeviyeOyu(w);
+  const rpeYon=seviyeRpeYonu(w,athWorkouts);
+  const seviye=oy?driftSeviyeMesaji(w,oy,rpeYon,degerler):null;
+  return {seviye,kiyas:driftKiyasla(w,athWorkouts),degerler};
+}
+function driftYorumUI(y){
+  if(!y) return null;
+  const ton={ust:['var(--success-bg)','var(--success)'],ayni:['var(--info-bg)','var(--info)'],alt:['var(--warn-bg)','var(--warn)']};
+  const durumMetni={iyi:'kontrol altında',orta:'orta',kotu:'yüksek',supheli:'pozitif — karara katılmadı'};
+  const tarih=(d)=>String(d).split('-').reverse().join('.');
+  const kayip=(f)=>f>=0?('%'+f+' kayıp'):('%'+(-f)+' kazanç');
+  const parts=[];
+  if(y.seviye){
+    const t=ton[y.seviye.k]||ton.ayni;
+    parts.push(React.createElement('div',{key:'sev',style:{padding:'6px 8px',borderRadius:'var(--radius)',background:t[0],border:'1px solid '+t[1],marginBottom:6}},
+      React.createElement('div',{style:{fontWeight:600}},y.seviye.baslik),
+      React.createElement('div',{style:{marginTop:2}},y.seviye.neden),
+      y.seviye.notlar.map((n,i)=>React.createElement('div',{key:i,style:{marginTop:2,color:'var(--text-secondary)'}},'• '+n))
+    ));
+  }
+  const k=y.kiyas;
+  if(k){
+    let metin;
+    if(k.durum==='imzasiz') metin='Kıyas: yalnızca GPX Analiz ile eklenen (yapı imzalı) bloklarda çalışır.';
+    else if(k.durum==='yok') metin='Kıyas: aynı tür, aynı S seviyesi ve aynı blok yapısında önceki drift kaydı yok — kayıtlar biriktikçe karşılaştırılacak.';
+    else {
+      const et={daha_iyi:'▲ Daha iyi',daha_kotu:'▼ Daha kötü',ayni:'● Aynı seviyede'}[k.durum];
+      metin=et+' — önceki aynı yapı ('+tarih(k.onceki.date)+(k.onceki.sNo!=null?', S'+k.onceki.sNo:'')+'): ort. '+kayip(k.prev)+' → '+kayip(k.cur)+' ('+(k.delta>0?'+':'')+k.delta+' puan; ±'+k.bant+' içi aynı sayılır).';
+    }
+    const kt=k.durum==='daha_iyi'?'var(--success)':(k.durum==='daha_kotu'?'var(--warn)':'var(--text-secondary)');
+    parts.push(React.createElement('div',{key:'kiyas',style:{color:kt,marginBottom:4}},metin));
+    if(k.parcalar&&k.parcalar.length>1) parts.push(React.createElement('details',{key:'kd',style:{marginBottom:4}},
+      React.createElement('summary',{style:{cursor:'pointer',color:'var(--text-tertiary)'}},'Blok bazında kıyas ('+k.parcalar.length+')'),
+      k.parcalar.map((p,i)=>React.createElement('div',{key:i,style:{color:'var(--text-secondary)'}},p.label+': '+kayip(p.prev)+' → '+kayip(p.cur)+' ('+(p.delta>0?'+':'')+p.delta+')'))
+    ));
+  }
+  if(y.degerler.length) parts.push(React.createElement('details',{key:'bd',style:{marginBottom:4}},
+    React.createElement('summary',{style:{cursor:'pointer',color:'var(--text-tertiary)'}},'Blok değerlendirmesi ('+y.degerler.length+')'),
+    y.degerler.map((d,i)=>React.createElement('div',{key:i,style:{color:'var(--text-secondary)'}},
+      (d.label||('Blok '+(i+1)))+': '+(d.anaPct!=null?((d.anaPct>0?'+':'')+d.anaPct+'% → '+(durumMetni[d.anaDurum]||'—')):'veri yok')+
+      (d.tekrarli&&d.toparlanmaNabizPct!=null?' · toparlanma nabzı '+(d.toparlanmaNabizPct>0?'+':'')+d.toparlanmaNabizPct+'% ('+(durumMetni[d.nabDurum]||'—')+')':'')))
+  ));
+  parts.push(React.createElement('div',{key:'lg',style:{fontSize:10,color:'var(--text-tertiary)'}},
+    'Okuma: EF driftinde − = verim düştü (kötü), + = verim arttı. Toparlanma nabzında + = nabız yüksek kalıyor (kötü). Eşikler tür grubuna göre değişir.'));
+  return React.createElement('div',{style:{marginTop:8,padding:'8px 10px',border:'1px solid var(--border)',borderRadius:'var(--radius)',fontSize:12,lineHeight:1.5}},parts);
+}
+// GPX Analiz modalındaki drift paneli (rozetler + yorum). ctx: {tur,yapi,rpe,date,athleteId,selfId,workouts}
+function driftGpxPanelUI(blocks,ctx){
+  const w={id:ctx.selfId,athleteId:ctx.athleteId,date:ctx.date,tur:ctx.tur,yapi_notu:ctx.yapi,rpe:ctx.rpe,drift_bloklar:blocks};
+  const athW=(ctx.workouts||[]).filter(x=>x&&x.athleteId===ctx.athleteId);
+  return React.createElement('div',{style:{marginTop:14,paddingTop:12,borderTop:'1px solid var(--border)'}},
+    React.createElement('div',{style:{fontSize:12,fontWeight:600,marginBottom:6,color:'var(--text-secondary)'}},'📉 Kardiyak Drift (otomatik — ort. nabız ile)'),
+    blocks.map((d,i)=>React.createElement('div',{key:i,style:{marginBottom:6}},
+      React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:2}},d.label),
+      d.tip==='tekrarli'
+        ?React.createElement('div',null,
+          driftPctBadge(d.kosuPct,'Koşu Drift','ef',driftEsikFor(ctx.tur,d,'ef')),
+          driftPctBadge(d.toparlanmaNabizPct,'Toparlanma Drift (nabız)','nabiz',DRIFT_NABIZ_ESIK),
+          driftPctBadge(d.toparlanmaEFPct,'Toparlanma Drift (EF)','ef',DRIFT_TOPEF_ESIK))
+        :React.createElement('div',null,driftPctBadge(d.surekliPct,'Drift','ef',driftEsikFor(ctx.tur,d,'ef')))
+    )),
+    driftYorumUI(driftYorumUret(w,athW))
+  );
+}
 // Paylaşılan rozet — manuel giriş önizlemesi VE GPX Analiz sonucu AYNI görseli kullanır.
-function driftPctBadge(v,label){
+// kind: 'ef' (− kötü, + iyi) | 'nabiz' (+ kötü, − iyi); esik: [iyi üst sınırı, orta üst sınırı] kötüleşme puanı.
+// Renk = YALNIZCA kötüleşme yönüne göre: verim artışı kırmızı/sarı OLMAZ (≥%10 pozitif EF → mavi, "doğrula").
+function driftPctBadge(v,label,kind,esik){
   if(v==null) return null;
+  const nabiz=kind==='nabiz';
+  const e=esik||DRIFT_ESIK.aerobik;
+  const kot=nabiz?v:-v;
+  const ton=(!nabiz&&v>=DRIFT_ARTIS_SUPHE)?'info':(kot>e[1]?'danger':(kot>e[0]?'warn':'success'));
+  const ek=nabiz?(v>0?' · nabız↑':(v<0?' · nabız↓':'')):(v<0?' · verim↓':(v>0?' · verim↑':''));
   return React.createElement('span',{style:{fontSize:12,padding:'3px 8px',borderRadius:'var(--radius)',
-    background:Math.abs(v)>=10?'var(--danger-bg)':(Math.abs(v)>=5?'var(--warn-bg)':'var(--success-bg)'),
-    border:'1px solid '+(Math.abs(v)>=10?'var(--danger)':(Math.abs(v)>=5?'var(--warn)':'var(--success)')),
+    background:'var(--'+ton+'-bg)',border:'1px solid var(--'+ton+')',
     display:'inline-block',marginRight:6,marginTop:4}},
-    label+': '+(v>0?'+':'')+v+'%');
+    label+': '+(v>0?'+':'')+v+'%'+ek);
 }
 // Paylaşılan UI — hem AntrenmanEkle (yeni kayıt) hem Gecmis (düzenleme) tarafından
 // aynı şekilde çağrılır (bkz. proje notu — panel/form paritesi). form: {tur,
@@ -5721,7 +5917,7 @@ function driftPctBadge(v,label){
 // form seviyesindeki 'drift_bloklar' anahtarını günceller, dış bileşenlerin set/setF'i
 // DEĞİŞMEDEN kullanılabilir. GPX'ten gelen bloklar (ilkkosu_pace_dk vb. ham alanlarla
 // ZATEN dolu) burada OLDUĞU GİBİ, doğru blok sayısı/tipiyle render edilir.
-function driftFieldsUI(form,onChange){
+function driftFieldsUI(form,onChange,ctx){
   const bloklar=(form.drift_bloklar&&form.drift_bloklar.length)?form.drift_bloklar:[{tip:driftYapiVarsayilan(form.tur||'')}];
   const setBloklar=(next)=>onChange('drift_bloklar',next);
   const updateBlok=(idx,key,val)=>setBloklar(bloklar.map((b,i)=>i===idx?{...b,[key]:val}:b));
@@ -5760,14 +5956,16 @@ function driftFieldsUI(form,onChange){
         ),
         (d.kosuPct!=null||d.toparlanmaNabizPct!=null||d.toparlanmaEFPct!=null||d.surekliPct!=null)&&
           React.createElement('div',{style:{marginTop:4}},
-            driftPctBadge(d.kosuPct,'Koşu Drift'),
-            driftPctBadge(d.toparlanmaNabizPct,'Toparlanma Drift (nabız)'),
-            driftPctBadge(d.toparlanmaEFPct,'Toparlanma Drift (EF)'),
-            driftPctBadge(d.surekliPct,'Drift')
+            driftPctBadge(d.kosuPct,'Koşu Drift','ef',driftEsikFor(form.tur,blok,'ef')),
+            driftPctBadge(d.toparlanmaNabizPct,'Toparlanma Drift (nabız)','nabiz',DRIFT_NABIZ_ESIK),
+            driftPctBadge(d.toparlanmaEFPct,'Toparlanma Drift (EF)','ef',DRIFT_TOPEF_ESIK),
+            driftPctBadge(d.surekliPct,'Drift','ef',driftEsikFor(form.tur,blok,'ef'))
           )
       );
     }),
-    React.createElement('button',{type:'button',className:'btn',style:{fontSize:11},onClick:addBlok},'+ Blok Ekle')
+    React.createElement('button',{type:'button',className:'btn',style:{fontSize:11},onClick:addBlok},'+ Blok Ekle'),
+    // Yorum + seviye önerisi + kıyas (Göksel talebi, 2026.10.02) — yalnızca ctx verilirse
+    (ctx&&ctx.workouts)?driftYorumUI(driftYorumUret({...form,drift_bloklar:bloklar},ctx.workouts)):null
   );
 }
 
@@ -15387,28 +15585,30 @@ function calcSeviyeFromHistory(tur, phaseMaxIdx, fallbackIdx, athWorkouts){
     .map(w=>{
       const m=/S(\d+)/.exec(w.yapi_notu);
       if(!m) return null;
-      return{date:w.date,sIdx:parseInt(m[1],10)-1,rpe:parseFloat(w.rpe)||null};
+      return{date:w.date,sIdx:parseInt(m[1],10)-1,rpe:parseFloat(w.rpe)||null,w};
     })
     .filter(Boolean)
     .sort((a,b)=>b.date.localeCompare(a.date));
   if(!gecmis.length) return fallbackIdx;
   const son=gecmis[0];
   const sonSeviye=Math.min(Math.max(son.sIdx,0),phaseMaxIdx);
+  // Drift sinyali (2026.10.02, Göksel talebi): son antrenmanda kardiyak drift ölçülmüşse RPE'ye
+  // İKİNCİ bir sinyal olarak eklenir — birleştirme tablosu için bkz. seviyeKarariBirlestir.
+  // Drift yoksa (veya DRIFT_SEVIYE_SINYALI=false) davranış ESKİSİYLE BİREBİR aynıdır.
+  const driftOy=(DRIFT_SEVIYE_SINYALI&&son.w)?driftSeviyeOyu(son.w):null;
   // RPE girilmemişse gelişim yönü belirsiz — rastgele zıplama yerine sporcunun
   // gerçekten yaptığı son seviyede sabit kal (veri yokken temkinli varsayılan).
-  if(son.rpe==null) return sonSeviye;
-  // Kişisel RPE ortalaması: son antrenman HARİÇ, aynı türün önceki en fazla 5
-  // kaydı — yeterli veri yoksa popülasyon varsayımı (Orta/Yüksek Kaliteli) kullanılır.
-  const oncekiRpeler=gecmis.slice(1,6).map(g=>g.rpe).filter(r=>r!=null&&r>0);
-  const varsayilanRpe=YUKSEK_KALITELI_TIPLERI.includes(tur)?8:7;
-  const kisiselOrt=oncekiRpeler.length>=2
-    ?(oncekiRpeler.reduce((a,b)=>a+b,0)/oncekiRpeler.length)
-    :varsayilanRpe;
-  // Not: eşikler kesin bir kural değil, makul bir başlangıç varsayımı — ilerleme
-  // alt sınırı (-0.5) daha hassas, gerileme üst sınırı (+1.0) daha temkinli
-  // seçildi (seviyeyi düşürmekte daha muhafazakâr davranmak için).
-  if(son.rpe<=kisiselOrt-0.5) return Math.min(sonSeviye+1,phaseMaxIdx); // İlerledi → bir üst seviye
-  if(son.rpe>=kisiselOrt+1.0) return Math.max(sonSeviye-1,0);           // Geriledi → bir alt seviye
+  // Tek istisna: drift açıkça iyiyse (tek başına) bir üst seviye; seviye DÜŞÜRME asla
+  // yalnızca drift'e dayanmaz.
+  if(son.rpe==null){
+    if(driftOy&&seviyeKarariBirlestir(null,driftOy.yon)==='ust') return Math.min(sonSeviye+1,phaseMaxIdx);
+    return sonSeviye;
+  }
+  // Kişisel RPE ortalaması: son antrenman HARİÇ, aynı türün önceki en fazla 5 kaydı (bkz. _rpeYonuHesapla).
+  const rpeYon=_rpeYonuHesapla(son.rpe,gecmis.slice(1,6).map(g=>g.rpe),tur);
+  const yon=driftOy?seviyeKarariBirlestir(rpeYon,driftOy.yon):rpeYon;
+  if(yon==='ust') return Math.min(sonSeviye+1,phaseMaxIdx); // İlerledi → bir üst seviye
+  if(yon==='alt') return Math.max(sonSeviye-1,0);           // Geriledi → bir alt seviye
   return sonSeviye; // Yerinde sayıyor → aynı seviye
 }
 
@@ -33856,6 +34056,12 @@ function gpxComputeCardiacDrift(points,blocks,phaseRows){
       const wL=phaseRows.find(p=>p.blockIdx===bi&&p.legKind==='work'&&p.repIndex===reps);
       if(!wF||!wL) return;
       const blok={tip:'tekrarli',label:(b.workLabel||'Koşu')+' — 1↔'+reps};
+      // Yapı imzası (2026.10.02): aynı tür + aynı S seviyesi + AYNI blok yapısı kıyaslanabilsin
+      // (S2 ile S3 asla kıyaslanmasın). Reçete niyetinden (blockCfgs) türetilir — ölçülen
+      // süreden değil — ki günlük süre oynamaları imzayı bozmasın.
+      blok.imza='rep|'+reps+'|'+(b.workUnit||'time')+(b.workValue??'')+'|'+(b.hasRest?((b.restUnit||'time')+(b.restValue??'')):'0')+'|'+_driftLab(b.workLabel);
+      blok.calismaSn=Math.round(((wF.durSec||0)+(wL.durSec||0))/2);
+      blok.sureSn=Math.round(((wF.durSec||0)+(wL.durSec||0))/2*reps);
       const p1=_secToPaceParts(wF.pace); blok.ilkkosu_pace_dk=p1.dk; blok.ilkkosu_pace_sn=p1.sn;
       blok.ilkkosu_nabiz=wF.hr?.avg!=null?String(Math.round(wF.hr.avg)):'';
       const p2=_secToPaceParts(wL.pace); blok.sonkosu_pace_dk=p2.dk; blok.sonkosu_pace_sn=p2.sn;
@@ -33882,6 +34088,8 @@ function gpxComputeCardiacDrift(points,blocks,phaseRows){
       const pace1=(dur1>0&&d1>0)?dur1/d1:0,pace2=(dur2>0&&d2>0)?dur2/d2:0;
       const hr1=gpxHrStatsWindow(points,row.t0,mid),hr2=gpxHrStatsWindow(points,mid,row.t1);
       const blok={tip:'surekli',label:b.label||'Ana Bölüm'};
+      blok.imza='tek|'+(b.unit||'time')+(b.value??'')+'|'+_driftLab(b.label);
+      blok.sureSn=Math.round(row.durSec||0);
       const p1=_secToPaceParts(pace1); blok.yari1_pace_dk=p1.dk; blok.yari1_pace_sn=p1.sn;
       blok.yari1_nabiz=hr1.avg!=null?String(Math.round(hr1.avg)):'';
       const p2=_secToPaceParts(pace2); blok.yari2_pace_dk=p2.dk; blok.yari2_pace_sn=p2.sn;
@@ -34621,15 +34829,12 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
             )
           )
         ),
-        driftResult.length>0&&React.createElement('div',{style:{marginTop:14,paddingTop:12,borderTop:'1px solid var(--border)'}},
-          React.createElement('div',{style:{fontSize:12,fontWeight:600,marginBottom:6,color:'var(--text-secondary)'}},'📉 Kardiyak Drift (otomatik — ort. nabız ile)'),
-          driftResult.map((d,i)=>React.createElement('div',{key:i,style:{marginBottom:6}},
-            React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:2}},d.label),
-            d.tip==='tekrarli'
-              ?React.createElement('div',null,driftPctBadge(d.kosuPct,'Koşu Drift'),driftPctBadge(d.toparlanmaNabizPct,'Toparlanma Drift (nabız)'),driftPctBadge(d.toparlanmaEFPct,'Toparlanma Drift (EF)'))
-              :React.createElement('div',null,driftPctBadge(d.surekliPct,'Drift'))
-          ))
-        ),
+        driftResult.length>0&&driftGpxPanelUI(driftResult,{
+          tur:planInfo?.existingKosuActual?.tur||formSnapshot?.tur||planInfo?.displayTip||'',
+          yapi:planInfo?.existingKosuActual?.yapi_notu||formSnapshot?.yapi_notu||planInfo?.dayLike?.yapi_notu||'',
+          rpe:planInfo?.existingKosuActual?.rpe||formSnapshot?.rpe||'',
+          date,athleteId:athlete.id,selfId:planInfo?.existingKosuActual?.id,workouts
+        }),
         React.createElement('canvas',{ref:chartRef,style:{width:'100%',height:180,display:'block',marginTop:10}}),
 
         // MAF testi → Test Geçmişi (24.09.2026): plandan algılanır; kutuyla açılıp kapanır.
@@ -34942,7 +35147,7 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,wor
         fgi('Kadans (spm)','kadans','number',{min:100,max:220})
       ),
       React.createElement('div',{className:'card-title',style:{marginTop:10}},'Kardiyak Drift (opsiyonel)'),
-      driftFieldsUI(form,set),
+      driftFieldsUI(form,set,{workouts:(workouts||[]).filter(x=>x&&x.athleteId===selId)}),
       React.createElement('div',{className:'card-title',style:{marginTop:10}},'Koşu Dinamikleri (opsiyonel)'),
       React.createElement('div',{className:'form-grid'},
         fgi('Yer Kontak (ms)','yer_kontak','number'),
@@ -35855,7 +36060,7 @@ function Gecmis({workouts,athletes,races,onDelete,onBulkDelete,onUpdate}){
           fgi('Maks. Güç (W)','maks_guc','number',{min:0})
         ),
         React.createElement('div',{className:'card-title',style:{marginTop:8}},'Kardiyak Drift (opsiyonel)'),
-        driftFieldsUI(editForm,setF),
+        driftFieldsUI(editForm,setF,{workouts:(workouts||[]).filter(x=>x&&x.athleteId===editForm.athleteId)}),
         React.createElement('div',{className:'card-title',style:{marginTop:8}},'Koşu Dinamikleri (opsiyonel)'),
         React.createElement('div',{className:'form-grid'},
           fgi('Yer Kontak (ms)','yer_kontak','number',{min:0}),
@@ -36925,16 +37130,6 @@ function App(){
   };
 
   const handleUpdateWorkout=(id,patch)=>setWorkouts(p=>p.map(x=>x.id===id?{...x,...patch}:x));
-  // TEMP_DRIFT_RECALC — geçici toplu düzeltme (bkz. driftRecalcScanTemp notu)
-  const handleDriftRecalcTemp=()=>{
-    const {withDrift,changed}=driftRecalcScanTemp(workouts);
-    if(withDrift===0){alert('Drift verisi olan antrenman bulunamadı.');return;}
-    if(changed===0){alert(withDrift+' antrenmanda drift verisi var, hepsi zaten güncel — değişiklik yok.');return;}
-    if(!confirm(withDrift+' antrenmanda drift verisi var; bunların '+changed+' tanesinin saklı yüzdesi güncellenecek (hız bazlı EF).\n\nÖnce "Tam Yedek Al" ile yedek aldın mı?\n\nDevam edilsin mi?'))return;
-    setWorkouts(p=>driftRecalcApplyTemp(p));
-    alert(changed+' antrenmanın drift yüzdesi güncellendi.');
-  };
-  // /TEMP_DRIFT_RECALC
   const handleExport=()=>{
     try{
       const data={
@@ -37199,17 +37394,6 @@ function App(){
             '⚠️ "Yedekten Geri Yükle" tüm mevcut verilerin üzerine yazar — yalnızca TAM yedek dosyalarını (.json) kabul eder. Normal antrenman yedeği için üst bardaki "Dışa Aktar / İçe Aktar" kullanın.'
           )
         ),
-        React.createElement('div',{className:'divider'}),
-        // TEMP_DRIFT_RECALC — geçici bölüm, iş bitince kaldırılacak
-        React.createElement('div',{className:'form-group',style:{marginBottom:8}},
-          React.createElement('label',{style:{fontWeight:600,color:'var(--warn)'}},'🛠️ Drift Yüzdelerini Yeniden Hesapla (geçici)'),
-          React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',margin:'6px 0 10px'}},
-            'Geçmiş antrenmanlarda saklı kalan kardiyak drift yüzdelerini yeni (hız bazlı EF) formülle günceller. Yalnızca drift verisi olan kayıtlara dokunur; ikinci kez basmak zararsızdır. ',
-            React.createElement('strong',null,'Önce Tam Yedek Al.')
-          ),
-          React.createElement('button',{className:'btn btn-sm',style:{border:'1px solid var(--warn)',color:'var(--warn)',background:'var(--warn-bg)'},onClick:handleDriftRecalcTemp},'Drift yüzdelerini güncelle')
-        ),
-        // /TEMP_DRIFT_RECALC
         React.createElement('div',{className:'divider'}),
         React.createElement('div',{className:'form-group',style:{marginBottom:8}},
           React.createElement('label',{style:{fontWeight:600,color:'var(--danger)'}},'Eski Antrenmanları Temizle'),
