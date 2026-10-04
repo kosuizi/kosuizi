@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.04-1259 --><!DOCTYPE html>
+<!-- Version: v2026.10.04-1301 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.04-1259';
+    var RUNNING='v2026.10.04-1301';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.04-1259';
+const APP_VERSION='v2026.10.04-1301';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -3329,6 +3329,7 @@ function dayAggregateSignal(combined, opts){
     totalScore:dominantScore,
     avgScore:round2(avgScore),
     confidence:round2(confidence),
+    consistency:round2(_consistency), // 2026.10.04: rozet nedeni için
     totalDays:dayDirs.length,
     totalSignals:combined.length,
     noCombined:false,
@@ -3475,9 +3476,20 @@ function calWeekStart(dateStr){
   const d=new Date(dateStr+'T12:00:00'); const wd=(d.getDay()+6)%7; d.setDate(d.getDate()-wd);
   return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
 }
-function calibApplyChecks(athlete, items){ // items: [{dir, dates:[...]}] — yalnızca eylemi olanlar
+// 3) GÜVEN ALT SINIRI (2026.10.04): güven < CAL_APPLY_MIN_CONF → 🟡. Eşik gerekçesi: eylemi tetiklemek için
+//    gereken en zayıf TUTARLI kanıt yaklaşık %33-52 güven üretir (ör. 12 gün çok zayıf ya da 2-3 gün
+//    orta) — yani %30'un altına yalnızca ZIT YÖNDE belirgin sinyal olduğunda (tutarlılık düşük) inilir.
+//    %34 gibi değerler 🟢 kalır (Göksel'le konuşulan). Düğme "Uygula" TÜM tespitleri birlikte uyguladığı için
+//    (Sınır'da tek tek seçim yok) herhangi bir sınır eşiğin altındaysa uyarı verilir ve o sınır adıyla yazılır.
+const CAL_APPLY_MIN_CONF=0.30;
+function calibApplyChecks(athlete, items){ // items: [{dir, dates:[...], confidence, consistency, label}] — yalnızca eylemi olanlar
   const reasons=[];
   if(!items||!items.length) return reasons;
+  const _low=items.filter(i=>i.confidence!=null&&i.confidence<CAL_APPLY_MIN_CONF);
+  if(_low.length){
+    const _txt=_low.map(i=>(i.label?i.label+' ':'')+'(güven %'+Math.round(i.confidence*100)+(i.consistency!=null&&i.consistency<0.6?', tutarlılık %'+Math.round(i.consistency*100):'')+')').join(', ');
+    reasons.push('Güven düşük: '+_txt+' — %'+Math.round(CAL_APPLY_MIN_CONF*100)+' altı; zıt yönde de belirgin sinyal olabilir. Bir sonraki taramayı beklemek daha güvenli.');
+  }
   const allDates=items.flatMap(i=>i.dates||[]);
   const _distinct=new Set(allDates);
   if(_distinct.size===1){
@@ -28028,8 +28040,8 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
   // ── Çapraz Rozet Hesabı (2026.08.30) — bkz. crossCalibBadge tanımı ──────────
   const fbReady=!!fbAnalysis?.vltAction;
   const bcReady=!!(bcAnalysis&&HR_BOUNDARY_KEYS.some(k=>bcAnalysis[k]?.action));
-  const fbChecks=fbReady?calibApplyChecks(athlete,[{dir:fbAnalysis.vltAction,dates:fbAnalysis.vlt?.dominantDates||[]}]):[];
-  const bcChecks=bcReady?calibApplyChecks(athlete,HR_BOUNDARY_KEYS.filter(k=>bcAnalysis[k]?.action).map(k=>({dir:bcAnalysis[k].action,dates:bcAnalysis[k].dominantDates||[]}))):[];
+  const fbChecks=fbReady?calibApplyChecks(athlete,[{dir:fbAnalysis.vltAction,dates:fbAnalysis.vlt?.dominantDates||[],confidence:fbAnalysis.vlt?.confidence,consistency:fbAnalysis.vlt?.consistency}]):[];
+  const bcChecks=bcReady?calibApplyChecks(athlete,HR_BOUNDARY_KEYS.filter(k=>bcAnalysis[k]?.action).map(k=>({dir:bcAnalysis[k].action,dates:bcAnalysis[k].dominantDates||[],confidence:bcAnalysis[k].confidence,consistency:bcAnalysis[k].consistency,label:HR_BOUNDARY_LABEL[k]}))):[];
   const fbBadge=crossCalibBadge({mechanism:'anchor',ownActionReady:fbReady,otherActionReadyNow:bcReady,extraReasons:fbChecks});
   const bcBadge=crossCalibBadge({mechanism:'boundary',ownActionReady:bcReady,otherActionReadyNow:fbReady,extraReasons:bcChecks});
   const renderCalibBadge=(badge)=>{
