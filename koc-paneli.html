@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.04-1238 --><!DOCTYPE html>
+<!-- Version: v2026.10.04-1247 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.04-1238';
+    var RUNNING='v2026.10.04-1247';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.04-1238';
+const APP_VERSION='v2026.10.04-1247';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -3313,6 +3313,7 @@ function dayAggregateSignal(combined, opts){
     action:(dominantDir&&(normalTrigger||fastTrigger))?dominantDir:null,
     pendingDir:dominantDir, // eylem eşiği henüz karşılanmasa da baskın yönü gösterir (örn. "1/2 gün" iken)
     dominantDayCount,
+    dominantDates:dominantDir?dayDirs.filter(d=>d.dir===dominantDir).map(d=>d.date).sort():[], // 2026.10.04: rozet "tek hafta" kontrolü için
     totalScore:dominantScore,
     avgScore:round2(avgScore),
     confidence:round2(confidence),
@@ -3437,14 +3438,44 @@ function applyBoundaryCalibration(athlete, boundaryAnalysis){
 //     içindeki crossCutoffStr).
 // YUMUŞAK ETKİ: buton HER ZAMAN tıklanabilir kalır — 'yellow' yalnızca UI'da ikinci
 // bir onay adımı (fbConfirmPending/bcConfirmPending) tetikler, engelleme yapmaz.
-function crossCalibBadge({mechanism, ownActionReady, otherActionReadyNow}){
+function crossCalibBadge({mechanism, ownActionReady, otherActionReadyNow, extraReasons}){
   if(!ownActionReady) return {badge:null,reason:null};
-  if(mechanism==='anchor') return {badge:'green',reason:null};
+  const reasons=[...(extraReasons||[])];
   // mechanism==='boundary'
-  if(otherActionReadyNow){
-    return {badge:'yellow',reason:'Çıpa (vLT) Kalibrasyonu da şu anda uygulanabilir görünüyor — önce onu uygulamak, sınırların doğru referans üzerinden hesaplanmasını sağlar.'};
+  if(mechanism==='boundary'&&otherActionReadyNow){
+    reasons.unshift('Çıpa (vLT) Kalibrasyonu da şu anda uygulanabilir görünüyor — önce onu uygulamak, sınırların doğru referans üzerinden hesaplanmasını sağlar.');
   }
-  return {badge:'green',reason:null};
+  return reasons.length?{badge:'yellow',reason:reasons.join(' ')}:{badge:'green',reason:null};
+}
+// ── Otomatik Uygulama Kontrolü (2026.10.04 — Göksel talebi) ─────────────────────────────
+// Rozet artık yalnızca Çıpa↔Sınır önceliğine değil, iki ek koşula da bakar (yumuşak etki: yalnızca 🟡 +
+// ikinci onay; buton engellenmez):
+//  1) KANIT DAĞILIMI: eylemi besleyen TÜM günler aynı takvim haftasındaysa (tek hafta = tek koşu bloğu/
+//     tek olay, hasta/yorgun/hava gibi geçici etkiler birbirine bağlı) → bir sonraki taramayı bekle.
+//  2) SPORCU DURUMU: yön "aşağı" (vLT↓ / bölge sınırı aşağı) VE sporcunun beyanı geçici düşüşü
+//     açıklayabiliyorsa (sakatlık puanı ≥5, ya da doğrulanmış HRV durumu dengesiz/düşük) → bekle.
+//     "Yukarı" yönde durum uyarısı verilmez (yorgunluk iyileşme sinyali üretmez).
+// ACWR bilerek dahil edilmedi: BolgeTab'a yük geçmişi iletilmiyor (yalnızca athlete/workouts).
+function calWeekStart(dateStr){
+  const d=new Date(dateStr+'T12:00:00'); const wd=(d.getDay()+6)%7; d.setDate(d.getDate()-wd);
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function calibApplyChecks(athlete, items){ // items: [{dir, dates:[...]}] — yalnızca eylemi olanlar
+  const reasons=[];
+  if(!items||!items.length) return reasons;
+  const allDates=items.flatMap(i=>i.dates||[]);
+  if(allDates.length>=2&&new Set(allDates.map(calWeekStart)).size===1){
+    reasons.push('Eylemi besleyen tüm günler aynı hafta içinde — bir sonraki taramada farklı bir haftadan veri gelmesini beklemek daha güvenli.');
+  }
+  if(items.some(i=>i.dir==='down')){
+    const inj=parseInt(athlete?.sakatlık)||1;
+    const hrv=(typeof hrvEfektifDurum==='function')?hrvEfektifDurum(athlete):(athlete?.hrv_durum||'');
+    const nedenler=[];
+    if(inj>=5) nedenler.push('sakatlık puanı '+inj+'/10');
+    if(hrv==='dengesiz'||hrv==='düşük') nedenler.push('HRV durumu '+hrv);
+    if(nedenler.length) reasons.push('Aşağı yönlü öneri, geçici bir düşüşle açıklanabilir ('+nedenler.join(', ')+') — toparlanana kadar beklemek daha güvenli.');
+  }
+  return reasons;
 }
 
 // ── Reçete Geri Bildirim — Tanı Kırılımı ──────────────────────────────────────
@@ -27978,8 +28009,10 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
   // ── Çapraz Rozet Hesabı (2026.08.30) — bkz. crossCalibBadge tanımı ──────────
   const fbReady=!!fbAnalysis?.vltAction;
   const bcReady=!!(bcAnalysis&&HR_BOUNDARY_KEYS.some(k=>bcAnalysis[k]?.action));
-  const fbBadge=crossCalibBadge({mechanism:'anchor',ownActionReady:fbReady,otherActionReadyNow:bcReady});
-  const bcBadge=crossCalibBadge({mechanism:'boundary',ownActionReady:bcReady,otherActionReadyNow:fbReady});
+  const fbChecks=fbReady?calibApplyChecks(athlete,[{dir:fbAnalysis.vltAction,dates:fbAnalysis.vlt?.dominantDates||[]}]):[];
+  const bcChecks=bcReady?calibApplyChecks(athlete,HR_BOUNDARY_KEYS.filter(k=>bcAnalysis[k]?.action).map(k=>({dir:bcAnalysis[k].action,dates:bcAnalysis[k].dominantDates||[]}))):[];
+  const fbBadge=crossCalibBadge({mechanism:'anchor',ownActionReady:fbReady,otherActionReadyNow:bcReady,extraReasons:fbChecks});
+  const bcBadge=crossCalibBadge({mechanism:'boundary',ownActionReady:bcReady,otherActionReadyNow:fbReady,extraReasons:bcChecks});
   const renderCalibBadge=(badge)=>{
     if(!badge?.badge) return null;
     const g=badge.badge==='green';
@@ -28238,7 +28271,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
               // 'green'|null döner (Çıpa hiçbir zaman Sınır'a beklemez) — ama
               // fbConfirmPending akışı ileride bir 'yellow' durumu eklenirse
               // (bkz. crossCalibBadge) hazır bulunsun diye burada da kuruldu.
-              fbBadge?.badge==='yellow'&&fbConfirmPending&&React.createElement('div',{className:'alert alert-warn',style:{fontSize:11,marginBottom:6}},fbBadge.reason+' Yine de uygulamak istiyor musunuz?'),
+              fbBadge?.badge==='yellow'&&React.createElement('div',{className:'alert alert-warn',style:{fontSize:11,marginBottom:6}},'🟡 '+fbBadge.reason+(fbConfirmPending?' Yine de uygulamak istiyor musunuz?':'')),
               React.createElement('div',{className:'flex-gap'},
                 hasVlt&&React.createElement('button',{
                   className:'btn btn-primary btn-sm',style:{flex:'1 1 auto'},
@@ -28505,7 +28538,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
               React.createElement('span',{style:{color:'var(--text-tertiary)',fontSize:11}},'  ('+c.dayCount+' gün · güven %'+Math.round((c.confidence||0)*100)+')')
             ))
           ),
-          bcBadge?.badge==='yellow'&&bcConfirmPending&&React.createElement('div',{className:'alert alert-warn',style:{fontSize:11,marginBottom:6}},bcBadge.reason+' Yine de uygulamak istiyor musunuz?'),
+          bcBadge?.badge==='yellow'&&React.createElement('div',{className:'alert alert-warn',style:{fontSize:11,marginBottom:6}},'🟡 '+bcBadge.reason+(bcConfirmPending?' Yine de uygulamak istiyor musunuz?':'')),
           React.createElement('div',{className:'flex-gap'},
             React.createElement('button',{
               className:'btn btn-primary btn-sm',style:{flex:'1 1 auto'},
