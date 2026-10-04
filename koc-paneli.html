@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.04-1247 --><!DOCTYPE html>
+<!-- Version: v2026.10.04-1256 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.04-1247';
+    var RUNNING='v2026.10.04-1256';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.04-1247';
+const APP_VERSION='v2026.10.04-1256';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -3221,6 +3221,8 @@ async function fetchWeeklyPaceComplianceScores(athlete,weeks){
 // güçlü/yoğun sinyaller (Tehlikeli ağırlıklı) daha büyük adım, zayıf/dağınık sinyaller (Biraz
 // ağırlıklı) daha küçük adım üretir. Mekanizma 1'in R²'siyle aynı [0,1] ölçeğine eşleniyor.
 const FAST_TRIGGER_SCORE=8; // tek günlük hızlı tetik eşiği (≥1 gün VE ≥8 puan)
+const CAL_CONF_REF_AVG=3;   // güven: bu ort. gün puanında 'güç' bileşeni tam (2026.10.04)
+const CAL_CONF_REF_DAYS=5;  // güven: bu gün sayısında 'gün' bileşeni tam (2026.10.04)
 // 2026.08.30 — Sınır Kalibrasyonu çerçevesi ile top-level'a taşındı (önceden
 // analyzeRecipeFeedbackSignals içinde closure'dı). Artık HEM Çıpa (vLT) HEM Sınır
 // kalibrasyonu bu AYNI iki fonksiyonu (toVltDir + dayAggregateSignal) kullanıyor —
@@ -3303,9 +3305,19 @@ function dayAggregateSignal(combined, opts){
   const dominantDir=dominant?dominant[0]:null;
   const dominantScore=dominant?dominant[1]-(sortedScores[1]?sortedScores[1][1]:0):0; // günler arası net
   const dominantDayCount=dominantDir?(dirDayCounts[dominantDir]||0):0;
-  // Ortalama gün puanı: BPM_SIGNAL_WEIGHT aralığı [1,4] → güvene [0,1] doğrusal eşleme
   const avgScore=dominantDayCount>0?dominantScore/dominantDayCount:0;
-  const confidence=Math.max(0,Math.min(1,(avgScore-1)/3));
+  // 2026.10.04 — GÜVEN yeniden tanımlandı (Göksel'in "güven %0" sorusu üzerine): eski formül yalnızca
+  // ort. gün puanına bakıyordu ((avg-1)/3) ve eski 1/2/4 kademeleri için yazılmıştı; sürekli ağırlıklarda
+  // 13 gün tutarlı ama zayıf sinyal %0, tek günlük güçlü sinyal %100 çıkıyordu. Artık üç bileşen:
+  //   güç      = ort. gün puanı / CAL_CONF_REF_AVG  (≥3 puan/gün → tam)
+  //   gün      = baskın yöndeki gün sayısı / CAL_CONF_REF_DAYS (≥5 gün → tam)
+  //   tutarlılık = (baskın − zıt) / (baskın + zıt) brüt puanlar (zıt yön yoksa 1)
+  // güven = tutarlılık × √(güç × gün). Çarpımsal: tek bileşenin düşüklüğü güveni düşürür.
+  const _grossDom=dominant?dominant[1]:0, _grossOpp=sortedScores[1]?sortedScores[1][1]:0;
+  const _consistency=(_grossDom+_grossOpp)>0?(_grossDom-_grossOpp)/(_grossDom+_grossOpp):0;
+  const _strengthF=Math.min(1,Math.max(0,avgScore/CAL_CONF_REF_AVG));
+  const _daysF=Math.min(1,dominantDayCount/CAL_CONF_REF_DAYS);
+  const confidence=Math.max(0,Math.min(1,_consistency*Math.sqrt(_strengthF*_daysF)));
   // Tetikleme: normal yol VEYA hızlı yol
   const normalTrigger=dominantDayCount>=minDays&&dominantScore>=scoreThreshold;
   const fastTrigger  =dominantDayCount>=1&&dominantScore>=fastMinScore;
@@ -3366,7 +3378,10 @@ function analyzeBoundarySignals(signals){
     const [loZi,hiZi]=HR_BOUNDARY_ZONE_PAIRS[k];
     const combined=withDir.filter(s=>(s.zi??0)===loZi||(s.zi??0)===hiZi)
       .map(s=>({date:s.date,dir:s._dir,hrWeight:s._w}));
-    result[k]=dayAggregateSignal(combined,{minDays:HR_BOUNDARY_MIN_DAYS});
+    // 2026.10.04 — Göksel'in ekran görüntüsü: hızlı yol (≥1 gün + ≥8 puan) Sınır'da 1-2 günlük kanıtla
+    // eylem üretiyordu; sürekli ağırlıklarda tek bir tekrarlı interval günü bile 8'i aşabiliyor. Sınır
+    // yapısal/kalıcı bir değişiklik olduğundan hızlı yol KAPALI — her sınır için en az HR_BOUNDARY_MIN_DAYS gün.
+    result[k]=dayAggregateSignal(combined,{minDays:HR_BOUNDARY_MIN_DAYS,fastMinScore:Infinity});
   });
   return result;
 }
@@ -28262,7 +28277,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
                     fbAnalysis.vlt.dominantDayCount+' gün · '+(fbAnalysis.vltAction==='up'?'⬆ İyileşme':'⬇ Gerileme')
                   ),
                   React.createElement('div',{style:{color:'var(--text-tertiary)',fontSize:11,marginTop:2}},
-                    'Sinyal gücü: ort. '+fbAnalysis.vlt.avgScore+' puan/gün → güven %'+Math.round((fbAnalysis.vlt.confidence||0)*100)+' → adımın %'+(vltGrad.ratio??Math.round(((fbAnalysis.vlt.confidence||0)*0.4+0.2)*100))+'\'i uygulandı'
+                    'Sinyal gücü: ort. '+fbAnalysis.vlt.avgScore+' puan/gün · '+fbAnalysis.vlt.dominantDayCount+' gün → güven %'+Math.round((fbAnalysis.vlt.confidence||0)*100)+' → adımın %'+(vltGrad.ratio??Math.round(((fbAnalysis.vlt.confidence||0)*0.4+0.2)*100))+'\'i uygulandı'
                   )
                 ),
                 !hasVlt&&fbAnalysis.vltAction&&React.createElement('div',{style:{color:'var(--text-tertiary)',fontSize:11}},'vLT: Sporcu profilinde vLT girilmemiş.')
@@ -28408,7 +28423,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       ),
       React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:8}},
         'Her sınır, altındaki ve üstündeki zonun sinyalinden BİRLİKTE beslenir — ikisi aynı yönü gösterirse sınır güvenle kayar. ',
-        'Pencere ≈10 hafta, en az 3 farklı gün gerekir (Çıpa\'dan kasıtlı olarak daha sıkı ve daha yavaş).'
+        'Pencere ≈10 hafta, her sınır için en az 3 farklı gün gerekir — tek günlük güçlü sinyal yetmez (Çıpa\'dan kasıtlı olarak daha sıkı ve daha yavaş). Güven = tutarlılık × √(sinyal gücü × gün sayısı).'
       ),
       bcClippedNote&&React.createElement('div',{className:'alert alert-info',style:{fontSize:11,marginBottom:8}},'ℹ️ '+bcClippedNote),
       bcNoNewData&&React.createElement('div',{className:'alert alert-warn',style:{fontSize:12}},
