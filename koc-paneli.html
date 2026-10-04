@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.04-1111 --><!DOCTYPE html>
+<!-- Version: v2026.10.04-1200 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.04-1111';
+    var RUNNING='v2026.10.04-1200';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.04-1111';
+const APP_VERSION='v2026.10.04-1200';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -1785,7 +1785,7 @@ function gradualVltUpdate(currentVlt, suggestedVlt, r2){
       direction:diffSec<0?'iyileşme':'gerileme',cyclesToTarget:1,reason:'Küçük fark, doğrudan uygulandı'};
   }
   // Güven oranı — R² yoksa orta varsay
-  const conf=r2!=null&&r2>0?Math.min(1,Math.max(0,r2)):0.5;
+  const conf=r2!=null&&r2>=0?Math.min(1,Math.max(0,r2)):0.5; // 2026.10.04: güven 0 artık 0.5'e dönmez (sürekli ağırlıklarla sık görülür)
   const ratio=0.2+(conf*0.4); // 0.2 (düşük güven) → 0.6 (yüksek güven)
   const TAVAN=8; // sn/km — her iki yönde
   const proposedStep=Math.abs(diffSec)*ratio;
@@ -1818,6 +1818,45 @@ function gradualVltUpdate(currentVlt, suggestedVlt, r2){
 // Böylece 1 "Tehlikeli" + 1 "Çok Yüksek" gün (4+2=6) hızlı tetikler; 2 "Biraz Yüksek" gün (1+1=2) tetiklemez.
 const BPM_SIGNAL_WEIGHT={warn:1,danger:2,critical:4};
 const BPM_SIGNAL_SCORE_THRESHOLD=4;
+
+// ── Sürekli (Şiddetli) Kalibrasyon Oyu — 2026.10.04, Göksel talebi ───────────────────────
+// Eskiden kalibrasyon yalnızca rozet kademesine bakıyordu (Tolerans içi = 0 puan; yalnızca pace+nabız
+// BİRLİKTE sapınca ya da Z3+'da pace hedefte/nabız sapınca yön üretiliyordu). Artık her faz için
+// pace ve nabzın HEDEF NOKTADAN (pace: reçete hedef pace'i · nabız: bölge orta noktası) sapması,
+// rozet toleranslarından BAĞIMSIZ olarak, yön + şiddet olarak ölçülür (5:05 hedefe karşı 5:06 /
+// 135'e karşı 136 bile zayıf bir oy üretir).
+// ŞİDDET = parçalı-doğrusal eğri: 0 → hedef noktada, 1 → rozetin YEŞİLDEN çıktığı sınırda,
+// 2 → "Çok" sınırında, 4 → "Tehlikeli" sınırında (eski BPM_SIGNAL_WEIGHT kademeleriyle BİREBİR aynı
+// uçlar; aralarda ve içeride sürekli). Tekrar kuralları (≥2 gün + eşik / hızlı yol) AYNEN korunur.
+// İŞARET (kalibrasyon yönü): + = sporcu varsayılandan DAHA İYİ (hızlı pace / düşük nabız → vLT ↑),
+//                            − = DAHA KÖTÜ (yavaş pace / yüksek nabız → vLT ↓).
+// Faz oyu = pace işareti-şiddeti + nabız işareti-şiddeti (zıt yönler birbirini götürür: ör. hızlı pace +
+// yüksek nabız Z3+'da net farkı verir). Z1-Z2 çakışma kuralı (hızlı + yüksek nabız → aşağı) KORUNDU.
+function calCurve(dist,anchors){
+  if(!(dist>0)) return 0;
+  for(let i=0;i<anchors.length-1;i++){
+    const [x0,y0]=anchors[i],[x1,y1]=anchors[i+1];
+    if(dist<=x1) return y0+(y1-y0)*((dist-x0)/(x1-x0));
+  }
+  return anchors[anchors.length-1][1];
+}
+// s: extractFeedbackSignals sinyali. relaxChannelB: Sınır Kalibrasyonu true, Çıpa (vLT) false.
+// Çıpa'da kolay zon (zi<2) kısıtı AYNEN korunur: tek bir vLT çapasını Z1/Z2 gürültüsü kaydırmasın diye
+// kolay zonda yalnızca pace VE nabzın İKİSİ de rozet dışındaysa (eski Kanal A) oy sayılır.
+// Manuel rozet düzeltmesi olan ya da tek kanalı ölçülebilen satırlar eski (kademeli) yola düşer.
+function calibrationVote(s,relaxChannelB){
+  const zi=s.zi??0;
+  if(s.calPaceW==null||s.calHrW==null){
+    const d=toVltDir(s.paceDir,s.hrDir,s.paceOk,zi,relaxChannelB);
+    return d?{dir:d,weight:s.hrWeight||1}:null;
+  }
+  if(!relaxChannelB&&zi<2&&!(s.paceDir&&s.hrDir)) return null;
+  const p=s.calPaceW,h=s.calHrW;
+  if(zi<2&&p>0&&h<0) return {dir:'down',weight:Math.abs(h)}; // kolay zonda hızlı + nabız yüksek → eşik düşük (A2)
+  const e=p+h;
+  if(Math.abs(e)<1e-9) return null;
+  return {dir:e>0?'up':'down',weight:Math.abs(e)};
+}
 
 // ── Manuel Odak Rozeti (Nabız / Pace / Hissiyat Odaklı) — 2026.09.21, Göksel talebi ──
 // Koç, bir satırın otomatik odağını (bkz. ReceteTablosu → autoFocusIndicator) elle
@@ -2197,6 +2236,7 @@ function extractFeedbackSignals(allSnapsObj, athlete){
           return;
         }
         let paceDir=null, hrDir=null, paceOk=false, hrOk=false, paceDiff=null, paceTol=null;
+        let calPaceW=null, calPaceDevSec=null, calHrW=null, calHrDevBpm=null; // sürekli kalibrasyon oyu (bkz. calibrationVote)
         const pm=row.pm, ps=row.ps;
         // 2026.08.15 — paceValidation ile BİREBİR aynı kaynak: coach elle özelleştirdiyse
         // _targetZIdx/_targetPaceSec, yoksa _origZIdx/_origPaceSec'e (fingerprint =
@@ -2317,6 +2357,12 @@ function extractFeedbackSignals(allSnapsObj, athlete){
               const tol=Math.max(PACE_MIN_TOL_SEC,Math.round(zoneWidth*(row._isGapRow?1.0:0.5)));
               // 2026.10.01: hedef ±15 sn minimum bant (bkz. paceBandMinTol) — rozetle birebir aynı
               ({fast:fastBoundarySec,slow:slowBoundarySec}=paceBandMinTol(fastBoundarySec,slowBoundarySec,origPace));
+              { // sürekli kalibrasyon oyu: hedef pace NOKTASINDAN sapma (rozet toleransından bağımsız)
+                const _dv=cmpSec-origPace;
+                const _edge=Math.max(1,_dv<0?origPace-fastBoundarySec:slowBoundarySec-origPace);
+                calPaceDevSec=_dv;
+                calPaceW=(_dv<0?1:-1)*calCurve(Math.abs(_dv),[[0,0],[_edge,1],[_edge+tol,2],[_edge+2*tol,4]]);
+              }
               if(cmpSec>=fastBoundarySec&&cmpSec<=slowBoundarySec){
                 paceOk=true; paceDiff=0; paceTol=tol; // tam zone içinde — paceValidation'daki "Hedef Bölge" ile birebir
               } else if(cmpSec<fastBoundarySec){
@@ -2328,6 +2374,7 @@ function extractFeedbackSignals(allSnapsObj, athlete){
               // Fallback: zone sınırı verisi yoksa eski nokta-tabanlı mantık
               const diff=cmpSec-origPace;
               const tol=row._isGapRow?50:25;
+              calPaceDevSec=diff; calPaceW=(diff<0?1:-1)*calCurve(Math.abs(diff),[[0,0],[tol,1],[2*tol,2],[3*tol,4]]);
               paceDiff=diff; paceTol=tol; // ham sapma + kullanılan tolerans — hassas yakınlık skoru (bkz. paceClosenessScore) için saklanır
               if(diff<-tol)      paceDir='fast';
               else if(diff>tol)  paceDir='slow';
@@ -2391,6 +2438,15 @@ function extractFeedbackSignals(allSnapsObj, athlete){
             // sayıp cezalandırıyordu; rozet ile puan aynı satır için TAMAMEN ZIT şeyler
             // söylüyordu. Çözüm: rozetle BİREBİR aynı isShortRow istisnası eklendi.
             const _isShortRow=durSec>0&&durSec<=SHORT_ROW_MAX_SEC;
+            { // sürekli kalibrasyon oyu: bölge ORTA NOKTASINDAN sapma. _paceConfirmsEffort burada
+              // UYGULANMAZ (hedef/hızlı pace'te düşük nabız = vLT ↑ kanıtıdır — Hedef Uyumu puanı için
+              // o istisna aynen sürer, bkz. aşağıdaki hrDir mantığı). Toparlanma/kısa satırlarda alt yön 0.
+              const _mid=(hr.lo_bpm+hr.hi_bpm)/2, _hw=(hr.hi_bpm-hr.lo_bpm)/2, _dv=row.bpm-_mid;
+              calHrDevBpm=_dv;
+              if(_dv>0) calHrW=-calCurve(_dv,[[0,0],[_hw+targetUp,1],[_hw+warnUp,2],[_hw+dangerUp,4]]);
+              else if(_isRecoveryPhase||_isShortRow) calHrW=0;
+              else calHrW=calCurve(-_dv,[[0,0],[_hw+targetDown,1],[_hw+warnDown,2],[_hw+dangerDown,4]]);
+            }
             if(row.bpm > hr.hi_bpm){
               const over=row.bpm-hr.hi_bpm;
               if(over>targetUp){
@@ -2422,7 +2478,7 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         // Etkin odak: koç seçtiyse o; yoksa autoFocusIndicator'ın kuralı (bkz. OTOMATIK_ODAK_PUANLAMA notu).
         const _autoFk=(zi!=null&&zi>=2&&row.type!=='walk'&&row.type!=='rest'&&!_rpeExcludesPace&&!_isRaceRow&&!_tempoluKolayExcludesPace)?'pace':'hr';
         const _effFocus=(_fk==='hr'||_fk==='pace')?_fk:(OTOMATIK_ODAK_PUANLAMA?_autoFk:null);
-        if(paceDir||hrDir||paceOk||hrOk||mesafeDir||mesafeOk) signals.push({date,label:row.label||null,_rep:_rep??null,type:row.type??null,paceDir,hrDir,paceOk,hrOk,hrWeight,zi:zi??0,zoneId:hr?.id||null,paceDiff,paceTol,mesafeDir,mesafeOk,mesafeDiffPct,mesZoneKolay,focus:_effFocus});
+        if(paceDir||hrDir||paceOk||hrOk||mesafeDir||mesafeOk) signals.push({date,label:row.label||null,_rep:_rep??null,type:row.type??null,paceDir,hrDir,paceOk,hrOk,hrWeight,zi:zi??0,zoneId:hr?.id||null,paceDiff,paceTol,mesafeDir,mesafeOk,mesafeDiffPct,mesZoneKolay,focus:_effFocus,calPaceW,calPaceDevSec,calHrW,calHrDevBpm});
       };
 
       Object.values(rowOvs).forEach(scanRow);
@@ -3226,12 +3282,18 @@ function dayAggregateSignal(combined, opts){
     if(!byDate[s.date])byDate[s.date]=[];
     byDate[s.date].push({dir:s.dir,weight:s.hrWeight||1});
   });
+  // 2026.10.04 — NET puan: sinyaller artık sürekli/zayıf olabildiği için (bkz. calibrationVote) gürültü
+  // iki yöne rastgele dağılır; yalnızca "baskın yön toplamı" almak onu birikimle sahte eyleme çevirirdi.
+  // Bu yüzden gün içinde de günler arasında da zıt yönün puanı DÜŞÜLÜR (net). Tek yönlü veride sonuç
+  // eskisiyle aynıdır; tekrar kuralları (minDays, eşik, hızlı yol) olduğu gibi kalır.
   const dayDirs=Object.entries(byDate).map(([date,items])=>{
     const sums={};
     items.forEach(it=>{sums[it.dir]=(sums[it.dir]||0)+it.weight;});
     const sorted=Object.entries(sums).sort((a,b)=>b[1]-a[1]);
-    return{date,dir:sorted[0][0],dayScore:sorted[0][1],rowCount:items.length};
-  });
+    const net=sorted[0][1]-(sorted[1]?sorted[1][1]:0);
+    if(!(net>0)) return null; // gün içinde tamamen dengelendi
+    return{date,dir:sorted[0][0],dayScore:net,rowCount:items.length};
+  }).filter(Boolean);
   const dirScores={};
   dayDirs.forEach(d=>{dirScores[d.dir]=(dirScores[d.dir]||0)+d.dayScore;});
   const dirDayCounts={};
@@ -3239,7 +3301,7 @@ function dayAggregateSignal(combined, opts){
   const sortedScores=Object.entries(dirScores).sort((a,b)=>b[1]-a[1]);
   const dominant=sortedScores[0];
   const dominantDir=dominant?dominant[0]:null;
-  const dominantScore=dominant?dominant[1]:0;
+  const dominantScore=dominant?dominant[1]-(sortedScores[1]?sortedScores[1][1]:0):0; // günler arası net
   const dominantDayCount=dominantDir?(dirDayCounts[dominantDir]||0):0;
   // Ortalama gün puanı: BPM_SIGNAL_WEIGHT aralığı [1,4] → güvene [0,1] doğrusal eşleme
   const avgScore=dominantDayCount>0?dominantScore/dominantDayCount:0;
@@ -3267,7 +3329,7 @@ function analyzeRecipeFeedbackSignals(signals){
   const hrSigs  =signals.filter(s=>s.hrDir).length;
   const conflictSigs=signals.filter(s=>s.paceDir&&s.hrDir&&!toVltDir(s.paceDir,s.hrDir,false,s.zi??0)).length;
 
-  const vltResult =dayAggregateSignal(signals.map(s=>({...s,dir:toVltDir(s.paceDir,s.hrDir,s.paceOk,s.zi??0)})).filter(s=>s.dir),{minDays:2});
+  const vltResult =dayAggregateSignal(signals.map(s=>{const v=calibrationVote(s,false);return v?{...s,dir:v.dir,hrWeight:v.weight}:null;}).filter(Boolean),{minDays:2});
 
   return{
     vltAction :vltResult.action  ==='up'?'up' :vltResult.action  ==='down'?'down':null,
@@ -3297,12 +3359,12 @@ function analyzeRecipeFeedbackSignals(signals){
 // kısıtı burada aranmıyor — Z1/Z2 sınırları da kendi Kanal B sinyalini alabilir.
 function analyzeBoundarySignals(signals){
   if(!signals||signals.length===0) return null;
-  const withDir=signals.map(s=>({...s,_dir:toVltDir(s.paceDir,s.hrDir,s.paceOk,s.zi??0,true)})).filter(s=>s._dir);
+  const withDir=signals.map(s=>{const v=calibrationVote(s,true);return v?{...s,_dir:v.dir,_w:v.weight}:null;}).filter(Boolean);
   const result={};
   HR_BOUNDARY_KEYS.forEach(k=>{
     const [loZi,hiZi]=HR_BOUNDARY_ZONE_PAIRS[k];
     const combined=withDir.filter(s=>(s.zi??0)===loZi||(s.zi??0)===hiZi)
-      .map(s=>({date:s.date,dir:s._dir,hrWeight:s.hrWeight}));
+      .map(s=>({date:s.date,dir:s._dir,hrWeight:s._w}));
     result[k]=dayAggregateSignal(combined,{minDays:HR_BOUNDARY_MIN_DAYS});
   });
   return result;
@@ -3318,7 +3380,7 @@ function analyzeBoundarySignals(signals){
 // bilmemesiyle aynı ayrım.
 function gradualBoundaryUpdate(currentDeltaPP, direction, confidence){
   const cur=parseSayi(currentDeltaPP)||0;
-  const conf=confidence!=null&&confidence>0?Math.min(1,Math.max(0,confidence)):0.5;
+  const conf=confidence!=null&&confidence>=0?Math.min(1,Math.max(0,confidence)):0.5; // 2026.10.04: aynı düzeltme
   const MIN_STEP_PP=0.3; // anlamsız mikro-adımları engelleyen taban
   const stepMag=MIN_STEP_PP+conf*(HR_BOUNDARY_STEP_MAX_PP-MIN_STEP_PP);
   const step=direction==='up'?stepMag:-stepMag;
@@ -28089,8 +28151,8 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
         },fbScanLoading?'Taranıyor…':'🔍 Sinyalleri Tara')
       ),
       React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:8}},
-        'vLT sinyali iki kanaldan gelir: (1) pace + nabız birlikte sapıyor, (2) pace hedefte ama nabız sapıyor. ',
-        '≥2 farklı günde uyumlu yön + yeterli puan → eylem önerisi; adım büyüklüğü sinyal gücüne göre değişir. Isınma, soğuma, dinlenme hariç.'
+        'Her faz için pace ve nabzın hedef noktadan sapması (yön + şiddet) rozet toleransından bağımsız ölçülür; zıt yöndeki sapmalar birbirini götürür. Kolay bölgede (Z1-Z2) pace ve nabız birlikte rozet dışındaysa sayılır. ',
+        '≥2 farklı günde uyumlu net yön + yeterli puan → eylem önerisi; adım büyüklüğü sinyal gücüne göre değişir. Isınma, soğuma, dinlenme hariç.'
       ),
       // Yeni veri yok uyarısı
       fbNoNewData&&React.createElement('div',{className:'alert alert-warn',style:{fontSize:12}},
