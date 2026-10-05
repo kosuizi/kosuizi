@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.05-0954 --><!DOCTYPE html>
+<!-- Version: v2026.10.05-1009 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.05-0954';
+    var RUNNING='v2026.10.05-1009';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.05-0954';
+const APP_VERSION='v2026.10.05-1009';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -23602,12 +23602,32 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
   // testPlanlar'a kayıt ekler. Diğer "Planla" kayıtlarıyla tam tutarlı olması
   // için koç sonrasında "Planı Güncelle"ye basmalı — bu, mevcut Test sekmesi
   // akışıyla birebir aynı beklenti, ayrı bir yeniden-üretme yolu icat edilmedi.
+  // Test önerisi = ÖNERİ, karar değil (05.10.2026, Göksel düzeltmesi): rozet artık
+  // tek dokunuşla testi PLANLAMAZ; gerekçeli bir panel açar. Koç 'Teste çevir'
+  // derse planlanır, 'Antrenmanda kal' derse o gün+test için bir daha önerilmez
+  // (localStorage'da kalıcı; reddedilen öneri yeniden getirilmez).
+  const [testOneriAcik,setTestOneriAcik]=useState(null); // açık panelin günü
+  const [,setTestOneriTick]=useState(0);
+  const _TEST_RED_KEY='kosuizi_test_oneri_red';
+  const _testRedKey=(day)=>(athlete?.id||'')+'|'+day.date+'|'+(day.testSuggestion?.testId||'');
+  const testOneriRedMi=(day)=>{try{return !!JSON.parse(localStorage.getItem(_TEST_RED_KEY)||'{}')[_testRedKey(day)];}catch(e){return false;}};
+  const handleRejectTestSuggestion=(day)=>{
+    try{const m=JSON.parse(localStorage.getItem(_TEST_RED_KEY)||'{}');m[_testRedKey(day)]=1;localStorage.setItem(_TEST_RED_KEY,JSON.stringify(m));}catch(e){}
+    setTestOneriAcik(null);setTestOneriTick(t=>t+1);
+  };
+  const handleRemoveTestPlan=(day)=>{
+    if(!onDeleteTestPlan)return;
+    (testPlanlar||[]).filter(p=>p.athId===athlete.id&&p.date===day.date).forEach(p=>onDeleteTestPlan(p.id));
+    const _dp=day.date.split('-');
+    setReviewMsg(`↩ ${_dp[2]}.${_dp[1]} — test planı kaldırıldı. Günü eski haline döndürmek için 'Planı Güncelle'ye bas.`);
+  };
   const handleApplyTestSuggestion=(day)=>{
     if(!day?.testSuggestion||!onSaveTestPlan)return;
     const {testId,ad}=day.testSuggestion;
     onSaveTestPlan({id:uid(),athId:athlete.id,testTur:testId,testAd:ad,date:day.date,olusturuldu:new Date().toISOString()});
     const _dp=day.date.split('-');
     setReviewMsg(`🧪 ${_dp[2]}.${_dp[1]} — ${ad} olarak planlandı. Uygulamak için 'Planı Güncelle'ye bas.`);
+    setTestOneriAcik(null);
   };
   // Mevcut bir GERÇEK antrenman kaydını (ör. GPX'ten eklenmiş normal koşu) test
   // olarak işaretleme (22.09.2026, Göksel bildirimi/kararı — kök neden: sistem bir
@@ -27294,17 +27314,31 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     fontSize:9,fontWeight:700,color:'var(--warn)',textAlign:'center',
                     marginBottom:3,padding:'2px 4px',background:'var(--warn-bg)',borderRadius:3
                   }},'🧪 '+testPlan.testAd.split('(')[0].trim()),
+                  testPlan&&!day.isPast&&React.createElement('div',{
+                    style:{fontSize:9,textAlign:'center',color:'var(--text-tertiary)',cursor:'pointer',textDecoration:'underline',marginBottom:3},
+                    onClick:function(e){e.stopPropagation();handleRemoveTestPlan(day);}
+                  },'↩ Testi kaldır'),
                   // Test-antrenman öneri rozeti — sadece OTOMATİK üretilmiş öneri
                   // için (testPlan yoksa, geçmiş/iptal değilse). Tıklanınca günü
                   // DEĞİŞTİRMEZ, sadece testPlanlar'a ekler (bkz. handleApplyTestSuggestion).
-                  !testPlan&&!isCancelled&&!day.isPast&&day.testSuggestion&&React.createElement('div',{
-                    title:`Sistem bu gün için "${day.testSuggestion.ad}" önerir (planlı antrenman yerine).${day.testSuggestion.nedenler&&day.testSuggestion.nedenler.length?' Nedenler: '+day.testSuggestion.nedenler.join(' · ')+'.':''} Onaylarsan bu gün için test planlanır — uygulamak için ayrıca "Planı Güncelle" gerekir.`,
-                    style:{fontSize:9,fontWeight:700,color:'var(--info)',textAlign:'center',
-                      marginBottom:3,padding:'2px 4px',background:'var(--info-bg)',borderRadius:3,cursor:'pointer'},
-                    onClick:function(e){e.stopPropagation();handleApplyTestSuggestion(day);}
-                  },
-                    '🧪 Test öner: '+day.testSuggestion.ad.split('(')[0].trim(),
-                    day.testSuggestion.nedenler&&day.testSuggestion.nedenler.length>0&&React.createElement('div',{style:{fontSize:8,fontWeight:400,marginTop:1,lineHeight:1.25}},day.testSuggestion.nedenler.join(' · '))
+                  !testPlan&&!isCancelled&&!day.isPast&&day.testSuggestion&&!testOneriRedMi(day)&&React.createElement('div',{style:{marginBottom:3}},
+                    React.createElement('div',{
+                      style:{fontSize:9,fontWeight:700,color:'var(--info)',textAlign:'center',
+                        padding:'2px 4px',background:'var(--info-bg)',borderRadius:3,cursor:'pointer',border:'1px dashed var(--info)'},
+                      onClick:function(e){e.stopPropagation();setTestOneriAcik(testOneriAcik===day.date?null:day.date);}
+                    },'💡 Test önerisi · '+(testOneriAcik===day.date?'▲':'▼')),
+                    testOneriAcik===day.date&&React.createElement('div',{
+                      onClick:function(e){e.stopPropagation();},
+                      style:{fontSize:10,lineHeight:1.35,padding:'6px',marginTop:2,borderRadius:4,background:'var(--bg-secondary)',border:'1px solid var(--info)',textAlign:'left'}
+                    },
+                      React.createElement('div',{style:{fontWeight:700,marginBottom:3}},'Sistem bu gün '+day.testSuggestion.ad.split('(')[0].trim()+' önerir'),
+                      React.createElement('div',{style:{color:'var(--text-secondary)',marginBottom:3}},'Planlı antrenman: '+(day.baslik||day.tip)+' — test onun yerine geçer.'),
+                      (day.testSuggestion.nedenler||[]).map((n,ni)=>React.createElement('div',{key:ni,style:{color:'var(--text-secondary)'}},'• '+n)),
+                      React.createElement('div',{style:{display:'flex',gap:4,marginTop:6}},
+                        React.createElement('button',{className:'btn btn-sm',style:{flex:1,fontSize:10},onClick:function(e){e.stopPropagation();handleApplyTestSuggestion(day);}},'Teste çevir'),
+                        React.createElement('button',{className:'btn btn-sm',style:{flex:1,fontSize:10},onClick:function(e){e.stopPropagation();handleRejectTestSuggestion(day);}},'Antrenmanda kal')
+                      )
+                    )
                   ),
                   React.createElement('div',{style:{fontSize:18,textAlign:'center'}},
                     dayEmoji(day)
