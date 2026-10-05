@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.05-1009 --><!DOCTYPE html>
+<!-- Version: v2026.10.05-1022 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.05-1009';
+    var RUNNING='v2026.10.05-1022';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.05-1009';
+const APP_VERSION='v2026.10.05-1022';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -27334,6 +27334,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                       React.createElement('div',{style:{fontWeight:700,marginBottom:3}},'Sistem bu gün '+day.testSuggestion.ad.split('(')[0].trim()+' önerir'),
                       React.createElement('div',{style:{color:'var(--text-secondary)',marginBottom:3}},'Planlı antrenman: '+(day.baslik||day.tip)+' — test onun yerine geçer.'),
                       (day.testSuggestion.nedenler||[]).map((n,ni)=>React.createElement('div',{key:ni,style:{color:'var(--text-secondary)'}},'• '+n)),
+                      (day.testSuggestion.notlar||[]).map((n,ni)=>React.createElement('div',{key:'n'+ni,style:{color:'var(--warn)',marginTop:2}},'⚠ '+n)),
                       React.createElement('div',{style:{display:'flex',gap:4,marginTop:6}},
                         React.createElement('button',{className:'btn btn-sm',style:{flex:1,fontSize:10},onClick:function(e){e.stopPropagation();handleApplyTestSuggestion(day);}},'Teste çevir'),
                         React.createElement('button',{className:'btn btn-sm',style:{flex:1,fontSize:10},onClick:function(e){e.stopPropagation();handleRejectTestSuggestion(day);}},'Antrenmanda kal')
@@ -30585,11 +30586,19 @@ const TEST_ONCEKI_GUN_YOGUN_TIPLERI=['interval','esik','esik_sureli','tempo','te
 //   ANTRENMANDA kalınır: blok ortası + veri güncel | yorgun | önceki 2 gün yoğun |
 //                        uzun yarış hedefi (>=42 km) + 5K/Cooper + veri bayat değil
 const TEST_KARAR_KONFIG={
-  zaman_5k:{bayatHafta:6,maksimal:true,uzunYarisCezali:true},
-  cooper:{bayatHafta:8,maksimal:true,uzunYarisCezali:true},
-  lthr_test:{bayatHafta:8,maksimal:true,uzunYarisCezali:false},
-  maf:{bayatHafta:6,maksimal:false,uzunYarisCezali:false}
+  zaman_5k:{bayatHafta:6,uzunYarisCezali:true,kalibrasyonBekle:true,yeniBaslayanEngel:true,
+    notlar:['Düz parkur veya pist, GPS ile ölç']},
+  cooper:{bayatHafta:8,uzunYarisCezali:true,kalibrasyonBekle:false,yeniBaslayanEngel:true,
+    notlar:['Düz ve ölçülü parkur gerekir (mesafe doğru ölçülmezse VO₂max sapar)']},
+  lthr_test:{bayatHafta:8,uzunYarisCezali:false,kalibrasyonBekle:true,yeniBaslayanEngel:false,
+    notlar:[]},
+  maf:{bayatHafta:6,uzunYarisCezali:false,kalibrasyonBekle:false,yeniBaslayanEngel:false,
+    notlar:['Sıcak, uykusuz veya kafeinli günde nabız şişer — serin ve dinlenik koş']}
 };
+// Yeni kalibrasyondan sonra test beklemesi (gün) — Çıpa (vLT) ve Sınır kalibrasyonları için.
+// 5K (vLT) ve Laktat Eşiği (LTHR) sonucu bölgeleri/vLT'yi zaten değiştirdiği için, yeni bir
+// kalibrasyonun oturması beklenir (ayarlanabilir tahmin; Sınır beklemesi 7 gün, burada 14).
+const TEST_KALIB_BEKLE_GUN=14;
 const TEST_UZUN_YARIS_KM=42;
 function calcTestKarar(testId,day,ctx){
   const k=TEST_KARAR_KONFIG[testId];
@@ -30618,13 +30627,20 @@ function calcTestKarar(testId,day,ctx){
   }
   // 3) Dinlenik mi? Önceki 2 gün (kayıtlı veya planlı) yoğun antrenman olmamalı.
   if(ctx.oncekiYogun)engeller.push('Önceki 2 günde yoğun antrenman var');
-  // 4) Yorgunluk — yalnızca maksimal-efor testleri (MAF submaksimal, muaf)
-  if(k.maksimal){
+  // 4) Yorgunluk — TÜM testler (MAF dahil: yorgunken nabız şişer, baseline bozulur)
+  {
     const ts=tsbStatus(tsb,athlete);
     if(ts.cls==='warn'||ts.cls==='danger')engeller.push('Yorgun (TSB '+tsb.toFixed(0)+') — sonuç güvenilmez olur');
     const ac=acwrStatus(acwr,last?.phase,athlete);
     if(ac.cls==='warn'||ac.cls==='danger')engeller.push('Yük birikimi yüksek (ACWR '+acwr.toFixed(2)+')');
   }
+  // 4b) Yeni kalibrasyon oturmadan 5K / Laktat önerilmez
+  if(k.kalibrasyonBekle&&ctx.sonKalib){
+    const kg=gunFarki(day.date,String(ctx.sonKalib).substring(0,10));
+    if(kg>=0&&kg<TEST_KALIB_BEKLE_GUN)engeller.push('Son kalibrasyondan '+kg+' gün geçti — en az '+TEST_KALIB_BEKLE_GUN+' gün beklenmeli');
+  }
+  // 4c) Yeni başlayan / Yürü-Koş aşamasındaki sporcuya maksimal-efor testi (5K, Cooper) önerilmez
+  if(k.yeniBaslayanEngel&&ctx.yeniBaslayan)engeller.push('Başlangıç / Yürü-Koş aşamasında — maksimal efor testi için erken');
   // 5) Uzun yarış hedefi: 5K/Cooper yerine eşik/uzun yük daha değerli — veri bayat değilse
   const kmH=ctx.primaryKm||0;
   if(k.uzunYarisCezali&&kmH>=TEST_UZUN_YARIS_KM&&!bayat)engeller.push('Hedef yarış '+kmH+' km — eşik yüklemesi bu testten daha değerli');
@@ -30632,7 +30648,8 @@ function calcTestKarar(testId,day,ctx){
   return{
     karar:test?'test':'antrenman',testId,ad,
     nedenler:test?[...tetik,'Önceki 2 gün hafif']:[],
-    engeller:test?[]:engeller,tetik,bayat,blokSonu
+    engeller:test?[]:engeller,tetik,bayat,blokSonu,
+    notlar:test?(k.notlar||[]):[]
   };
 }
 
@@ -30652,6 +30669,9 @@ function attachTestSuggestions(weeks,athlete,history,races,actualWorkouts,weekTa
   let primaryKm=0;
   try{ const {primary}=selectRaces(athlete,races); primaryKm=primary?(parseFloat(primary.mesafe)||0):0; }catch(e){}
   const athWks=(actualWorkouts||[]).filter(w=>w.athleteId===athlete.id);
+  // Son kalibrasyon (Çıpa/vLT veya Sınır) — tek doğru kaynak calibStampISO (bkz. ~satır 3512)
+  let sonKalib=null;
+  try{ sonKalib=[calibStampISO(athlete,'fb'),calibStampISO(athlete,'bc')].filter(Boolean).map(x=>String(x).substring(0,10)).sort().pop()||null; }catch(e){}
   const _tkAddGun=(ds,n)=>{const d=new Date(ds+'T12:00:00');d.setDate(d.getDate()+n);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');};
 
   const allDays=[];const dayWeek=[];
@@ -30664,6 +30684,13 @@ function attachTestSuggestions(weeks,athlete,history,races,actualWorkouts,weekTa
     if(pd&&!pd.isPast&&!(pd.actual&&pd.actual.length>0))return TEST_ONCEKI_GUN_YOGUN_TIPLERI.includes(pd.tip);
     return athWks.some(w=>w.date===ds&&(TEST_ONCEKI_GUN_YOGUN_TIPLERI.includes(w.tur)||w.tur==='yaris'));
   };
+
+  // Yeni başlayan / Yürü-Koş aşaması: seviye 'baslangic' (program bitmiş ama seviye
+  // güncellenmemiş kenar durum dahil) VEYA plandaki/son 28 gündeki Yürü-Koş antrenmanı.
+  const _tkSon28=_tkAddGun(new Date().toISOString().slice(0,10),-28);
+  const yeniBaslayan=athlete.seviye==='baslangic'
+    ||allDays.some(d=>d&&(d.tip==='yuru_kos'||d._isYuruKos))
+    ||athWks.some(w=>w.tur==='yuru_kos'&&w.date>=_tkSon28);
 
   allDays.forEach((day,idx)=>{
     try{
@@ -30692,9 +30719,9 @@ function attachTestSuggestions(weeks,athlete,history,races,actualWorkouts,weekTa
         if(gunUygunluk&&gunUygunluk.uygun===false)continue; // sert engel (yarış yakın, ACWR/TSB, HRV/sakatlık, dinlenme şartı vb.)
         const testDef=TEST_TURLERI[testId];
         if(!testDef)continue;
-        const karar=calcTestKarar(testId,day,{athlete,history,sonTest:onerilir[testId].sonTest||null,wt,wtNext,oncekiYogun,primaryKm});
+        const karar=calcTestKarar(testId,day,{athlete,history,sonTest:onerilir[testId].sonTest||null,wt,wtNext,oncekiYogun,primaryKm,sonKalib,yeniBaslayan});
         if(!karar||karar.karar!=='test')continue;
-        day.testSuggestion={testId,ad:testDef.ad,icon:testDef.icon,neden:onerilir[testId].neden||null,nedenler:karar.nedenler};
+        day.testSuggestion={testId,ad:testDef.ad,icon:testDef.icon,neden:onerilir[testId].neden||null,nedenler:karar.nedenler,notlar:karar.notlar};
         break;
       }
     }catch(e){ /* bir günde hata olursa sadece o günü atla */ }
