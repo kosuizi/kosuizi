@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.05-0921 --><!DOCTYPE html>
+<!-- Version: v2026.10.05-0954 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.05-0921';
+    var RUNNING='v2026.10.05-0954';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.05-0921';
+const APP_VERSION='v2026.10.05-0954';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -22224,7 +22224,7 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
   }
   // Test-antrenman eşleşme önerileri — günleri değiştirmez, sadece rozet ekler
   // (bkz. attachTestSuggestions tanımı, TEST_TURLERI motorunun yanında).
-  try{ attachTestSuggestions(weeks,athlete,history,races,actualWorkouts); }catch(e){}
+  try{ attachTestSuggestions(weeks,athlete,history,races,actualWorkouts,weekTargets); }catch(e){}
   return{weeks,primary,intermediate};
 }
 
@@ -27298,11 +27298,14 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   // için (testPlan yoksa, geçmiş/iptal değilse). Tıklanınca günü
                   // DEĞİŞTİRMEZ, sadece testPlanlar'a ekler (bkz. handleApplyTestSuggestion).
                   !testPlan&&!isCancelled&&!day.isPast&&day.testSuggestion&&React.createElement('div',{
-                    title:`Bu günün antrenman etkisi "${day.testSuggestion.ad}" testine yakın${day.testSuggestion.neden?' ('+day.testSuggestion.neden+')':''}. Onaylarsan bu gün için test planlanır — uygulamak için ayrıca "Planı Güncelle" gerekir.`,
+                    title:`Sistem bu gün için "${day.testSuggestion.ad}" önerir (planlı antrenman yerine).${day.testSuggestion.nedenler&&day.testSuggestion.nedenler.length?' Nedenler: '+day.testSuggestion.nedenler.join(' · ')+'.':''} Onaylarsan bu gün için test planlanır — uygulamak için ayrıca "Planı Güncelle" gerekir.`,
                     style:{fontSize:9,fontWeight:700,color:'var(--info)',textAlign:'center',
                       marginBottom:3,padding:'2px 4px',background:'var(--info-bg)',borderRadius:3,cursor:'pointer'},
                     onClick:function(e){e.stopPropagation();handleApplyTestSuggestion(day);}
-                  },'🧪❓ '+day.testSuggestion.ad.split('(')[0].trim()),
+                  },
+                    '🧪 Test öner: '+day.testSuggestion.ad.split('(')[0].trim(),
+                    day.testSuggestion.nedenler&&day.testSuggestion.nedenler.length>0&&React.createElement('div',{style:{fontSize:8,fontWeight:400,marginTop:1,lineHeight:1.25}},day.testSuggestion.nedenler.join(' · '))
+                  ),
                   React.createElement('div',{style:{fontSize:18,textAlign:'center'}},
                     dayEmoji(day)
                   ),
@@ -30537,10 +30540,74 @@ const TEST_TUR_ESLESME={
 // (calcTestDayUygunluk ile aynı liste mantığı — panel paritesi).
 const TEST_ONCEKI_GUN_YOGUN_TIPLERI=['interval','esik','esik_sureli','tempo','tempo_sureli','yokus_kisa','yokus_uzun','tirmanis','cruise','piramit','kesintisiz_piramit','on_off','progressive'];
 
+// ── Test mi, antrenman mı? — OTOMATİK KARAR (05.10.2026, Göksel isteği) ─────
+// Bir günün antrenman etkisine yakın bir testin ZAMANI GELMİŞ olsa bile
+// (calcTestTiming → 'onerilir'), o gün testin mi yoksa planlı antrenmanın mı
+// tercih edileceği burada kurallarla karar verilir; öneri rozeti YALNIZCA karar
+// 'test' ise çıkar. TÜM test türleri (5K, Cooper, Laktat Eşiği, MAF) aynı
+// fonksiyondan geçer. Eşikler Göksel'in coaching deneyimine göre ayarlanabilir
+// TAHMİNLERDİR, klinik/kesin değer değildir.
+//   TEST tercih edilir : (verisi bayat/hiç yok VEYA blok bitiyor) VE dinlenik girilmiş
+//   ANTRENMANDA kalınır: blok ortası + veri güncel | yorgun | önceki 2 gün yoğun |
+//                        uzun yarış hedefi (>=42 km) + 5K/Cooper + veri bayat değil
+const TEST_KARAR_KONFIG={
+  zaman_5k:{bayatHafta:6,maksimal:true,uzunYarisCezali:true},
+  cooper:{bayatHafta:8,maksimal:true,uzunYarisCezali:true},
+  lthr_test:{bayatHafta:8,maksimal:true,uzunYarisCezali:false},
+  maf:{bayatHafta:6,maksimal:false,uzunYarisCezali:false}
+};
+const TEST_UZUN_YARIS_KM=42;
+function calcTestKarar(testId,day,ctx){
+  const k=TEST_KARAR_KONFIG[testId];
+  if(!k||!day||!ctx)return null;
+  const testDef=TEST_TURLERI[testId];
+  const ad=(testDef?.ad||testId).split('(')[0].trim();
+  const athlete=ctx.athlete;
+  const last=ctx.history&&ctx.history.length?ctx.history[ctx.history.length-1]:null;
+  // calcTestDayUygunluk ile AYNI kaynak (son geçmiş girdisi) — gelecek günler için yaklaşıktır.
+  const tsb=last?.tsb||0, acwr=last?.acwr||1;
+  const tetik=[], engeller=[];
+  // 1) Veri bayatlığı
+  let bayat=false;
+  if(!ctx.sonTest){bayat=true;tetik.push('Hiç test yok');}
+  else{
+    const hf=Math.floor(gunFarki(day.date,ctx.sonTest.date)/7);
+    if(hf>=k.bayatHafta){bayat=true;tetik.push('Son test '+hf+' hf önce');}
+  }
+  // 2) Blok bitişi (toparlanma haftası / sonraki hafta toparlanma / faz geçişi)
+  let blokSonu=false;
+  const wt=ctx.wt, wtNext=ctx.wtNext;
+  if(wt&&!wt.isRaceWeek&&wt.phase!=='Taper'){
+    if(wt.isRecovery){blokSonu=true;tetik.push('Toparlanma haftası');}
+    else if(wtNext&&wtNext.isRecovery){blokSonu=true;tetik.push('Blok sonu');}
+    else if(wtNext&&wtNext.phase&&wtNext.phase!==wt.phase){blokSonu=true;tetik.push('Faz geçişi');}
+  }
+  // 3) Dinlenik mi? Önceki 2 gün (kayıtlı veya planlı) yoğun antrenman olmamalı.
+  if(ctx.oncekiYogun)engeller.push('Önceki 2 günde yoğun antrenman var');
+  // 4) Yorgunluk — yalnızca maksimal-efor testleri (MAF submaksimal, muaf)
+  if(k.maksimal){
+    const ts=tsbStatus(tsb,athlete);
+    if(ts.cls==='warn'||ts.cls==='danger')engeller.push('Yorgun (TSB '+tsb.toFixed(0)+') — sonuç güvenilmez olur');
+    const ac=acwrStatus(acwr,last?.phase,athlete);
+    if(ac.cls==='warn'||ac.cls==='danger')engeller.push('Yük birikimi yüksek (ACWR '+acwr.toFixed(2)+')');
+  }
+  // 5) Uzun yarış hedefi: 5K/Cooper yerine eşik/uzun yük daha değerli — veri bayat değilse
+  const kmH=ctx.primaryKm||0;
+  if(k.uzunYarisCezali&&kmH>=TEST_UZUN_YARIS_KM&&!bayat)engeller.push('Hedef yarış '+kmH+' km — eşik yüklemesi bu testten daha değerli');
+  const test=(bayat||blokSonu)&&engeller.length===0;
+  return{
+    karar:test?'test':'antrenman',testId,ad,
+    nedenler:test?[...tetik,'Önceki 2 gün hafif']:[],
+    engeller:test?[]:engeller,tetik,bayat,blokSonu
+  };
+}
+
 // weeks (generateTwoWeekPlan'ın ürettiği hafta dizisi) üzerinde, henüz
 // yapılmamış/test olmayan günlere day.testSuggestion ekler. Hata olursa
 // sessizce hiçbir şey eklemez — plan üretimini asla bozmaz.
-function attachTestSuggestions(weeks,athlete,history,races,actualWorkouts){
+// 05.10.2026: artık her aday test için calcTestKarar() de çalışır; rozet sadece
+// karar 'test' ise eklenir (weekTargets: blok/toparlanma/faz bilgisi için).
+function attachTestSuggestions(weeks,athlete,history,races,actualWorkouts,weekTargets){
   if(!athlete||!Array.isArray(weeks)||!weeks.length)return weeks;
   let timing;
   try{ timing=calcTestTiming(athlete,history,races,actualWorkouts); }catch(e){ return weeks; }
@@ -30548,8 +30615,21 @@ function attachTestSuggestions(weeks,athlete,history,races,actualWorkouts){
   (timing||[]).forEach(t=>{ if(t&&t.durum==='onerilir'&&t.id) onerilir[t.id]=t; });
   if(!Object.keys(onerilir).length)return weeks;
 
-  const allDays=[];
-  weeks.forEach(w=>(w?.days||[]).forEach(d=>allDays.push(d)));
+  let primaryKm=0;
+  try{ const {primary}=selectRaces(athlete,races); primaryKm=primary?(parseFloat(primary.mesafe)||0):0; }catch(e){}
+  const athWks=(actualWorkouts||[]).filter(w=>w.athleteId===athlete.id);
+  const _tkAddGun=(ds,n)=>{const d=new Date(ds+'T12:00:00');d.setDate(d.getDate()+n);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');};
+
+  const allDays=[];const dayWeek=[];
+  weeks.forEach(w=>(w?.days||[]).forEach(d=>{allDays.push(d);dayWeek.push(w);}));
+
+  // Önceki günün (offset=1,2) yoğun olup olmadığı: planlı gün varsa planın tipi,
+  // yoksa/geçmişse kayıtlı antrenmanın türü (calcTestDayUygunluk ile aynı liste mantığı).
+  const gunYogunMu=(ds)=>{
+    const pd=allDays.find(x=>x&&x.date===ds);
+    if(pd&&!pd.isPast&&!(pd.actual&&pd.actual.length>0))return TEST_ONCEKI_GUN_YOGUN_TIPLERI.includes(pd.tip);
+    return athWks.some(w=>w.date===ds&&(TEST_ONCEKI_GUN_YOGUN_TIPLERI.includes(w.tur)||w.tur==='yaris'));
+  };
 
   allDays.forEach((day,idx)=>{
     try{
@@ -30557,19 +30637,32 @@ function attachTestSuggestions(weeks,athlete,history,races,actualWorkouts){
       if(day.actual&&day.actual.length>0)return; // zaten yapılmış/kayıtlı
       const adaylar=TEST_TUR_ESLESME[day.tip];
       if(!adaylar||!adaylar.length)return;
-      const testId=adaylar.find(id=>onerilir[id]);
-      if(!testId)return;
       const oncekiGun=allDays[idx-1];
       const dunkuYogunPlanlanan=!!(oncekiGun&&TEST_ONCEKI_GUN_YOGUN_TIPLERI.includes(oncekiGun.tip));
       // Gelecek gün için planlanmış önceki günün GERÇEKTEN dinlenme olup olmadığı
       // (14.09.2026, Göksel onayı) — Cooper/5K/LTHR gibi maksimal-efor testleri
       // öncesi tam dinlenme şartı için (bkz. testGunSertEngeller/TEST_TAM_DINLENME_GEREKTIREN).
       const oncekiGunDinlenmePlanli=oncekiGun?(oncekiGun.tip==='dinlenme'):null;
-      const gunUygunluk=calcTestDayUygunluk(day.date,athlete,history,races,actualWorkouts,dunkuYogunPlanlanan,testId,oncekiGunDinlenmePlanli);
-      if(gunUygunluk&&gunUygunluk.uygun===false)return; // bu gün için özel bir engel var (yarış yakın, ACWR/TSB, HRV/sakatlık, dinlenme şartı vb.)
-      const testDef=TEST_TURLERI[testId];
-      if(!testDef)return;
-      day.testSuggestion={testId,ad:testDef.ad,icon:testDef.icon,neden:onerilir[testId].neden||null};
+      const oncekiYogun=gunYogunMu(_tkAddGun(day.date,-1))||gunYogunMu(_tkAddGun(day.date,-2));
+      // Bu günün haftası + sonraki hafta (blok/toparlanma/faz bilgisi)
+      let wt=null,wtNext=null;
+      try{
+        const wk=dayWeek[idx];
+        const wi=(weekTargets||[]).findIndex(t=>t&&t.weekStart&&new Date(t.weekStart).toDateString()===new Date(wk.start).toDateString());
+        if(wi>=0){wt=weekTargets[wi];wtNext=weekTargets[wi+1]||null;}
+      }catch(e){}
+      // Aday testlerin her biri için: zamanı gelmiş + gün uygun + KARAR 'test' → rozet
+      for(const testId of adaylar){
+        if(!onerilir[testId])continue;
+        const gunUygunluk=calcTestDayUygunluk(day.date,athlete,history,races,actualWorkouts,dunkuYogunPlanlanan,testId,oncekiGunDinlenmePlanli);
+        if(gunUygunluk&&gunUygunluk.uygun===false)continue; // sert engel (yarış yakın, ACWR/TSB, HRV/sakatlık, dinlenme şartı vb.)
+        const testDef=TEST_TURLERI[testId];
+        if(!testDef)continue;
+        const karar=calcTestKarar(testId,day,{athlete,history,sonTest:onerilir[testId].sonTest||null,wt,wtNext,oncekiYogun,primaryKm});
+        if(!karar||karar.karar!=='test')continue;
+        day.testSuggestion={testId,ad:testDef.ad,icon:testDef.icon,neden:onerilir[testId].neden||null,nedenler:karar.nedenler};
+        break;
+      }
     }catch(e){ /* bir günde hata olursa sadece o günü atla */ }
   });
   return weeks;
