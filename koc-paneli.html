@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.05-1540 --><!DOCTYPE html>
+<!-- Version: v2026.10.05-1555 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.05-1540';
+    var RUNNING='v2026.10.05-1555';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.05-1540';
+const APP_VERSION='v2026.10.05-1555';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -24465,6 +24465,33 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       prev=next;
     }
   };
+  // ── Bu Haftanın Hedefini Yeniden Hesapla (05.10.2026 — Göksel isteği) ──────
+  // Hedef (weekEff) hafta boyunca DONDURULUR (bkz. weekEff useEffect'i). Hedef hesaplama
+  // mantığı hafta ORTASINDA değiştirildiğinde (ya da hedef yanlış donmuşsa) koçun,
+  // dondurulmuş değeri BİLEREK yenilemesi için tek yol: bu fonksiyon. Otomatik DEĞİL —
+  // yalnızca koç butona basıp onaylarsa çalışır, dondurma kuralı bozulmaz.
+  // Sadece weekEff alanı yazılır (rowOverrides/overrideMap vb. kardeş alanlara dokunulmaz —
+  // bkz. weekEff useEffect'indeki 18.07.2026 notu). Gün reçeteleri otomatik yenilenmez:
+  // gerekirse ardından "Planı Güncelle" kullanılmalı.
+  // NOT: origKm/origDp hafta başı verisinden (önceki haftalar) hesaplandığı için hafta
+  // ortasında basıldığında da aynı çıkar; effKm/effDp ise bu haftanın gün planına ve girilmiş
+  // antrenmanlara bağlı olduğundan değişebilir — bu yüzden eski/yeni değerler onayda gösterilir.
+  const handleHedefiYenidenHesapla=()=>{
+    const snap=planSnapRef.current;
+    if(!athlete||!weekKey||!snap){alert('Plan henüz yüklenmedi, birkaç saniye sonra tekrar deneyin.');return;}
+    if(!curWeekEffective){alert('Bu hafta için hedef hesaplanamadı (plan/hedef verisi yok).');return;}
+    const old=snap.weekEff&&snap.weekEff._weekKey===weekKey?snap.weekEff:null;
+    const fmt=(w)=>w?(w.origKm+' km / D+'+(w.origDp||0)+'m'+(w.isRevised?'  (revize: '+w.effKm+' km / D+'+(w.effDp||0)+'m)':'')):'kayıt yok';
+    const nw=curWeekEffective;
+    if(old&&old.origKm===nw.origKm&&old.origDp===nw.origDp&&old.effKm===nw.effKm&&old.effDp===nw.effDp&&!!old.isRevised===!!nw.isRevised){
+      alert('Yeniden hesaplanan hedef mevcut hedefle aynı: '+fmt(nw)+'\nDeğişiklik yapılmadı.');
+      return;
+    }
+    if(!window.confirm('Bu haftanın hedefi yeniden hesaplansın mı?\n\nŞimdiki: '+fmt(old)+'\nYeni: '+fmt(nw)+'\n\nGün reçeteleri otomatik değişmez; gerekirse sonra "Planı Güncelle"ye basın.'))return;
+    const newWeekEff={...nw,_v:WEEK_EFF_VERSION,_weekKey:weekKey};
+    setPlanSnap({...snap,weekEff:newWeekEff});
+    fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,{weekEff:stripUndefined(newWeekEff)}).catch(()=>{alert('Hedef kaydedilemedi, bağlantıyı kontrol edip tekrar deneyin.');});
+  };
   const handlePlanGuncelle=async()=>{
     // Önce Firebase'den en taze athlete verisini çek — anket güncellemesi sonrası
     // state henüz yenilenmemiş olabilir, eski kosu_gunleri ile plan üretilmemeli
@@ -26838,7 +26865,13 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
             className:'btn btn-sm',
             style:{background:'var(--info)',color:'#fff',border:'none',fontSize:11},
             onClick:shareHaftalikRecete
-          },'📤 Haftalık Reçete')
+          },'📤 Haftalık Reçete'),
+          week.weekOff===0&&React.createElement('button',{
+            className:'btn btn-sm',
+            style:{fontSize:11},
+            title:'Bu haftanın dondurulmuş hedefini güncel hesaplama mantığıyla yeniden hesaplar (onay ister)',
+            onClick:handleHedefiYenidenHesapla
+          },'🔄 Hedefi Yeniden Hesapla')
         )
       ),
       // ── Revize hedef → orijinal hedefe kaç hafta ─────────────────────────
