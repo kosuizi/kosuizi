@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.05-1519 --><!DOCTYPE html>
+<!-- Version: v2026.10.05-1540 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.05-1519';
+    var RUNNING='v2026.10.05-1540';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.05-1519';
+const APP_VERSION='v2026.10.05-1540';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -17499,7 +17499,8 @@ function applyWellnessAndCollectReasons(weeks, athlete){
 // ── Yarışsız Dönem Haftalık Hacim Hesabı (ACWR Tabanlı) ──────────────────────
 // Antrenman bilimi: Gabbett 2016 (ACWR), Hulin 2015 (10% rule)
 // Metodoloji:
-//   Baz = son 4 haftanın GERÇEK km ortalaması (sıfır haftalar dahil)
+//   Baz = max(geçen hafta, son 4 haftanın km ortalaması) — geçen hafta tabana en fazla
+//         ortalamanın %30 üstüne kadar girer (05.10.2026); ortalama sadece km>0 haftalardan
 //   Artış = amaca göre max +%10/hafta (10% rule)
 //   Emniyet kilidi 1 = son 6 haftanın en yüksek haftasının %110'u
 //   Emniyet kilidi 2 = geçen hafta 0 km → artış uygulanmaz (sıfırdan başla)
@@ -17539,9 +17540,10 @@ function computeRecentWeeklyStats(athlete, workouts){
   const avg4km=round1(last4Active.length?last4Active.reduce((s,w)=>s+w.km,0)/last4Active.length:0);
   const avg4dp=last4Active.length?Math.round(last4Active.reduce((s,w)=>s+w.dp,0)/last4Active.length):0;
   const lastWeekKm=last4[3]?.km??0; // en yakın geçmiş hafta (-1) — sıfır cezası kasıtlı olarak ham (filtresiz) veriye bakar
+  const lastWeekDp=Math.round(last4[3]?.dp??0);
   const peak6=Math.max(...weeklyData.map(w=>w.km),0);
   const peak6dp=Math.max(...weeklyData.map(w=>w.dp),0);
-  return {weeklyData,last4,last4Active,avg4km,avg4dp,lastWeekKm,peak6,peak6dp};
+  return {weeklyData,last4,last4Active,avg4km,avg4dp,lastWeekKm,lastWeekDp,peak6,peak6dp};
 }
 
 function calcWeeklyTargetsNoRace(athlete, workouts, history=[]){
@@ -17555,7 +17557,21 @@ function calcWeeklyTargetsNoRace(athlete, workouts, history=[]){
   // antrenman eden yarışsız sporcularda hedef, tek bir antrenmanla trivial
   // şekilde geçilebilecek kadar düşük çıkıyordu. Artık computeRecentWeeklyStats
   // SADECE antrenman yapılan (km>0) haftalar üzerinden ortalama alıyor.
-  const {weeklyData,avg4km,avg4dp,lastWeekKm,peak6,peak6dp}=computeRecentWeeklyStats(athlete,workouts);
+  const {weeklyData,avg4km,avg4dp,lastWeekKm,lastWeekDp,peak6,peak6dp}=computeRecentWeeklyStats(athlete,workouts);
+
+  // DÜZELTME (05.10.2026 — Göksel): Taban artık SADECE 4 haftalık ortalama değil,
+  // max(geçen hafta, 4 hf ortalaması). Sebep: düşük bir hafta (örn. 5.5 km) ortalamayı
+  // aşağı çekiyor, sporcu hemen ardından 12–13 km'ye döndüğünde hedef geçen haftanın
+  // ALTINA düşüyordu (örn. "Hacim Artır" sporcusunda geçen hafta 13.2 → hedef 10.4).
+  // Geçen hafta ortalamanın altındaysa (dinlenme/kesinti haftası) taban ortalama kalır —
+  // düşük hafta hedefi aşağı çekmez. Tek haftalık sıçrama tabanı şişirmesin diye geçen
+  // hafta tabana en fazla ortalamanın %30 üstüne kadar girer (NORACE_SON_HAFTA_TABAN_MAX).
+  // D+ aynı mantıkla hesaplanır — aksi halde km büyürken D+ eski ortalamada kalır ve
+  // m/km yoğunluğu yapay düşerdi.
+  const NORACE_SON_HAFTA_TABAN_MAX=1.30;
+  const _noRaceTaban=(avg,last)=>Math.max(avg,Math.min(last,avg*NORACE_SON_HAFTA_TABAN_MAX));
+  const baseKm=round1(_noRaceTaban(avg4km,lastWeekKm));
+  const baseDp=Math.round(_noRaceTaban(avg4dp,lastWeekDp));
 
   // Amaca göre artış oranı (10% rule — Daniels/Pfitzinger)
   const amaci=athlete.antrenman_amaci||'hacim_koru';
@@ -17582,7 +17598,7 @@ function calcWeeklyTargetsNoRace(athlete, workouts, history=[]){
   else if(currentAcwr>1.15)artisOrani=Math.min(artisOrani,0.95);
 
   // Hedef km
-  let targetKm=round1(avg4km*artisOrani);
+  let targetKm=round1(baseKm*artisOrani);
 
   // Emniyet kilidi: son 6 haftanın zirvesinin %110'unu geçme
   if(peak6>0){
@@ -17603,7 +17619,7 @@ function calcWeeklyTargetsNoRace(athlete, workouts, history=[]){
   // sporcuya yapay bir D+ hedefi dayatılmaz, gerçek ortalaması 0 ise hedef de 0 kalır.
   const DP_ARTIS_DAMP=0.40;
   const dpArtisOrani=1+(artisOrani-1)*DP_ARTIS_DAMP;
-  let targetDp=Math.round(avg4dp*dpArtisOrani);
+  let targetDp=Math.round(baseDp*dpArtisOrani);
 
   // Emniyet kilidi: km'dekiyle aynı mantık — son 6 haftanın D+ zirvesinin %110'unu geçme
   if(peak6dp>0){
@@ -17652,7 +17668,7 @@ function calcWeeklyTargetsNoRace(athlete, workouts, history=[]){
       isPast:we<today,isCurrent:isCurr,
       actualKm:actKm,actualDp:actDp,kmRatio:kRatio,
       weekStatus:'normal',
-      _kmPct:artisOrani,_baseKm:avg4km,_baseDp:avg4dp,
+      _kmPct:artisOrani,_baseKm:baseKm,_baseDp:baseDp,
       _isNoRace:true,
       _avg4km:avg4km,_lastWeekKm:lastWeekKm,_peak6km:peak6,
       _avg4dp:avg4dp,_peak6dp:peak6dp,_dpArtisOrani:round2(dpArtisOrani),
