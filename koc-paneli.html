@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.04-1301 --><!DOCTYPE html>
+<!-- Version: v2026.10.04-2135 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.04-1301';
+    var RUNNING='v2026.10.04-2135';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.04-1301';
+const APP_VERSION='v2026.10.04-2135';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -3416,30 +3416,65 @@ function gradualBoundaryUpdate(currentDeltaPP, direction, confidence){
 // en sonda uygulanır.
 function applyBoundaryCalibration(athlete, boundaryAnalysis){
   if(!boundaryAnalysis) return null;
-  const newDeltas={};
-  const changeLog=[];
-  HR_BOUNDARY_KEYS.forEach(k=>{
-    const cur=parseSayi(athlete[HR_BOUNDARY_FIELD[k]])||0;
+  const lthr=parseSayi(athlete?.lthr)||0;
+  const keys=HR_BOUNDARY_KEYS;
+  const cur={}, req={}, act={};
+  keys.forEach(k=>{
+    cur[k]=parseSayi(athlete[HR_BOUNDARY_FIELD[k]])||0;
     const a=boundaryAnalysis[k];
-    if(!a||!a.action){ newDeltas[k]=cur; return; }
-    const grad=gradualBoundaryUpdate(cur,a.action,a.confidence);
-    let capped=grad.newDeltaPP;
-    if(capped>HR_BOUNDARY_CUM_CAP_PP) capped=HR_BOUNDARY_CUM_CAP_PP;
-    if(capped<-HR_BOUNDARY_CUM_CAP_PP) capped=-HR_BOUNDARY_CUM_CAP_PP;
-    newDeltas[k]=capped;
-    if(round2(capped)!==round2(cur)) changeLog.push({key:k,from:cur,to:capped,dir:a.action,confidence:a.confidence,dayCount:a.dominantDayCount});
+    if(!a||!a.action){ req[k]=cur[k]; return; }
+    act[k]=a;
+    const grad=gradualBoundaryUpdate(cur[k],a.action,a.confidence);
+    req[k]=Math.max(-HR_BOUNDARY_CUM_CAP_PP,Math.min(HR_BOUNDARY_CUM_CAP_PP,grad.newDeltaPP)); // kümülatif tavan
   });
-  // Min-gap koruması: sıralama ASLA bozulamaz. Sınırları sırayla gez, her birini
-  // bir öncekinden en az HR_BOUNDARY_MIN_GAP_PP kadar uzak tut (gerekirse kırp).
+  // ── Asgari bölge genişliği (2026.10.04) ────────────────────────────────────────────────
+  // 1) Önce komşu çiftlerde birbirine doğru HAREKET ETTİRİLEN sınırların adımı orantılı olarak geri
+  //    çekilir (öneriyle uygulanan değer ARASINDAKİ fark yalnızca kalibrasyonun kendi adımından gelir;
+  //    hareket etmeyen sınırlar asla itilmez). 2) Hâlâ ihlal varsa (mevcut yapı zaten dar) eski
+  //    ileri-itme yedeği çalışır. Böylece ekranda gösterilen = uygulanan.
+  const minGap=keys.map((k,j)=>hrZoneMinGapPP(j,lthr));
+  const pct=(k,d)=>HR_BOUNDARY_BASE_PCT[k]*100+d;
+  const val={...req};
+  for(let pass=0;pass<12;pass++){
+    let changed=false;
+    for(let j=0;j<keys.length;j++){
+      const kj=keys[j];
+      const lowP=j===0?HR_ZONES_LTHR[0].lo*100:pct(keys[j-1],val[keys[j-1]]);
+      const deficit=lowP+minGap[j]-pct(kj,val[kj]);
+      if(deficit<=1e-9) continue;
+      const movers=[];
+      if(j>0){ const kl=keys[j-1]; const m=val[kl]-cur[kl]; if(m>1e-9) movers.push({k:kl,room:m,sign:-1}); }
+      { const m=cur[kj]-val[kj]; if(m>1e-9) movers.push({k:kj,room:m,sign:+1}); }
+      if(!movers.length) continue;
+      const totalRoom=movers.reduce((t,m)=>t+m.room,0);
+      const take=Math.min(deficit,totalRoom);
+      movers.forEach(m=>{ val[m.k]+=m.sign*take*(m.room/totalRoom); });
+      changed=true;
+    }
+    if(!changed) break;
+  }
+  const newDeltas={};
   let prevPct=HR_ZONES_LTHR[0].lo*100; // 65 — sabit dış sınır
-  HR_BOUNDARY_KEYS.forEach(k=>{
+  keys.forEach((k,j)=>{ // yedek: ileri-itme (yalnızca hareketle çözülemeyen mevcut darlıklar için)
     const basePct=HR_BOUNDARY_BASE_PCT[k]*100;
-    let effectivePct=basePct+newDeltas[k];
-    if(effectivePct<prevPct+HR_BOUNDARY_MIN_GAP_PP) effectivePct=prevPct+HR_BOUNDARY_MIN_GAP_PP;
+    let effectivePct=basePct+val[k];
+    if(effectivePct<prevPct+minGap[j]) effectivePct=prevPct+minGap[j];
     newDeltas[k]=round2(effectivePct-basePct);
     prevPct=effectivePct;
   });
-  return {deltas:newDeltas, changeLog};
+  const changeLog=[], deferred=[];
+  keys.forEach(k=>{
+    const a=act[k];
+    const changedNow=round2(newDeltas[k])!==round2(cur[k]);
+    if(changedNow){
+      changeLog.push({key:k,from:cur[k],to:newDeltas[k],requested:a?req[k]:null,dir:newDeltas[k]>cur[k]?'up':'down', // gerçek değişimin yönü (mevcut dar yapı onarılırken istenenle ters olabilir)
+        confidence:a?a.confidence:null,dayCount:a?a.dominantDayCount:null,
+        limited:!!a&&round2(newDeltas[k])!==round2(req[k]),pushed:!a});
+    } else if(a&&round2(req[k])!==round2(cur[k])){
+      deferred.push({key:k,requested:req[k],dir:a.action}); // adım tamamen geri çekildi — bu kalibrasyonda değişmiyor
+    }
+  });
+  return {deltas:newDeltas, changeLog, deferred};
 }
 
 // ── Çıpa ↔ Sınır Kalibrasyonu Çapraz Farkındalık (2026.08.30 — Göksel'in "bir
@@ -3683,6 +3718,22 @@ const HR_BOUNDARY_STEP_MAX_PP=2;    // tek kalibrasyon uygulamasında azami kaym
 const HR_BOUNDARY_CUM_CAP_PP=6;     // jenerik şablondan azami TOPLAM (kümülatif) sapma
 const HR_BOUNDARY_MIN_GAP_PP=1.5;   // iki komşu sınır arası azami yakınlaşma — sıra bozulmasını YAPISAL olarak engeller
 const HR_BOUNDARY_MIN_DAYS=3;       // Çıpa'nın 2 gününden kasıtlı olarak daha sıkı (bkz. analyzeBoundarySignals)
+// ── Asgari bölge genişliği (2026.10.04 — Göksel talebi: "sporcunun sahada uygulayabileceği" bölgeler) ──
+// Eskiden yalnızca sabit 1,5 yüzde puanı (≈2,5 bpm) vardı: bölge neredeyse yok olabiliyor, üstelik kırpma
+// sessizce ÜST sınırı itiyor ve ekranda gösterilen öneriyle uygulanan değer farklı çıkıyordu. Artık asgari
+// genişlik BPM olarak tanımlı (sporcu bpm görür), LTHR'a göre yüzde puanına çevrilir ve hiçbir zaman
+// jenerik şablon genişliğini AŞMAZ (düşük LTHR'da varsayılan bölgeler bozulmasın). Sayılar bir MÜHENDİSLİK
+// tahminidir (bilimsel bir standart yok) ve Göksel'e göre KÜÇÜK — saha deneyimine göre tartışılıp
+// yükseltilecek; tek yerden değişir. Anahtar = bölgenin id'si; Z1 (çok geniş) ve Z5c (üst sınırı sabit
+// %115) için kısıt yok.
+const HR_ZONE_MIN_BPM={Z2:5,Z3:5,Z4:5,Z5a:3,Z5b:3};
+// j: HR_BOUNDARY_KEYS indeksi = o sınırın ALTINDA kalan bölgenin indeksi (z1z2 → Z1 … z5az5b → Z5b)
+function hrZoneMinGapPP(j,lthr){
+  const minBpm=HR_ZONE_MIN_BPM[HR_ZONES_LTHR[j]?.id];
+  if(!minBpm||!(lthr>0)||j<1) return HR_BOUNDARY_MIN_GAP_PP;
+  const generic=(HR_BOUNDARY_BASE_PCT[HR_BOUNDARY_KEYS[j]]-HR_BOUNDARY_BASE_PCT[HR_BOUNDARY_KEYS[j-1]])*100;
+  return Math.min(Math.max(HR_BOUNDARY_MIN_GAP_PP,minBpm/lthr*100),generic);
+}
 const HR_BOUNDARY_SCAN_WINDOW_DAYS=70; // ≈10 hafta — bölge başına yeterli veri yoğunluğu için Çıpa'nın 21 gününden çok daha geniş
 
 // Sporcunun kişisel sınır deltalarını (yüzde puanı → orana çevrilmiş) döndürür.
@@ -3701,10 +3752,12 @@ function personalizedHrZoneTable(ath){
   const deltas=getHrBoundaryDeltas(ath);
   const n=HR_ZONES_LTHR.length;
   const boundaryVal={};
+  const _lthr=parseSayi(ath?.lthr)||0;
   let prev=HR_ZONES_LTHR[0].lo; // %65 — sabit dış sınır
-  HR_BOUNDARY_KEYS.forEach(k=>{
+  HR_BOUNDARY_KEYS.forEach((k,j)=>{
     let v=HR_BOUNDARY_BASE_PCT[k]+deltas[k];
-    if(v<prev+HR_BOUNDARY_MIN_GAP_PP/100) v=prev+HR_BOUNDARY_MIN_GAP_PP/100;
+    const _g=hrZoneMinGapPP(j,_lthr)/100;
+    if(v<prev+_g) v=prev+_g;
     boundaryVal[k]=v;
     prev=v;
   });
@@ -3713,6 +3766,19 @@ function personalizedHrZoneTable(ath){
     lo:i===0?z.lo:boundaryVal[HR_BOUNDARY_KEYS[i-1]],
     hi:i===n-1?z.hi:boundaryVal[HR_BOUNDARY_KEYS[i]],
   }));
+}
+
+// Kalibrasyon önizlemesi için: mevcut ve önerilen delta'larla bölge bpm aralıkları — yalnızca DEĞİŞENLER.
+function hrZoneBpmDiff(ath,newDeltas){
+  const lthr=parseSayi(ath?.lthr)||0;
+  if(!(lthr>0)||!newDeltas) return [];
+  const upd={}; HR_BOUNDARY_KEYS.forEach(k=>{ upd[HR_BOUNDARY_FIELD[k]]=String(newDeltas[k]); });
+  const before=personalizedHrZoneTable(ath), after=personalizedHrZoneTable({...ath,...upd});
+  return before.map((z,i)=>({
+    id:z.id,label:z.label,
+    bLo:Math.round(lthr*z.lo),bHi:Math.round(lthr*z.hi),
+    aLo:Math.round(lthr*after[i].lo),aHi:Math.round(lthr*after[i].hi)
+  })).filter(r=>r.bLo!==r.aLo||r.bHi!==r.aHi);
 }
 
 const HR_ZONES_HRR = [
@@ -27983,15 +28049,23 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       // geçersiz) vLT referansına göre değerlendirilmiş sayılır — Sınır taramasına
       // karışmasın diye pencere kırpılır ve durum bilgilendirici bir notla gösterilir.
       const fbLastCalibStr=athlete.fbLastCalib?athlete.fbLastCalib.substring(0,10):null;
+      const boundaryLastCalibStr=athlete.boundaryLastCalib?athlete.boundaryLastCalib.substring(0,10):null;
       if(fbLastCalibStr&&fbLastCalibStr>cutoffStr){
         cutoffStr=fbLastCalibStr;
         setBcClippedNote('Pencere '+localDateStr(new Date(fbLastCalibStr+'T12:00:00'))+' itibarıyla kırpıldı — Çıpa (vLT) o tarihte güncellendi, öncesi karışık sinyal üretebilir.');
+      }
+      // 2026.10.04 — Göksel kararı: Sınır taraması KENDİ son kalibrasyonuna da kırpılır (Çıpa'daki düzeltmeyle
+      // aynı gerekçe): önceden yalnızca "sonrasında yeni sinyal var mı" bakılıyordu; tek yeni sinyal gelince
+      // önceki 10 hafta (eski sınır şekline göre okunmuş) yeniden sayılabiliyordu. Not: tek ortak tarih
+      // kullanıldığı için bu kalibrasyonda uygulanmayan sınırların birikmiş kanıtı da pencereden düşer.
+      if(boundaryLastCalibStr&&boundaryLastCalibStr>cutoffStr){
+        cutoffStr=boundaryLastCalibStr;
+        setBcClippedNote('Pencere '+localDateStr(new Date(boundaryLastCalibStr+'T12:00:00'))+' itibarıyla kırpıldı — Sınır Kalibrasyonu o tarihte uygulandı, öncesi eski sınır şekline göre okunmuştu.');
       }
 
       const sigsAll=extractFeedbackSignals(allSnaps,athlete);
       const sigs=sigsAll.filter(s=>s.date>=cutoffStr);
 
-      const boundaryLastCalibStr=athlete.boundaryLastCalib?athlete.boundaryLastCalib.substring(0,10):null;
       if(boundaryLastCalibStr){
         const hasNewData=sigs.some(s=>s.date>boundaryLastCalibStr);
         if(!hasNewData){
@@ -28562,12 +28636,30 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
         return React.createElement('div',null,
           React.createElement('div',{style:{background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:6,padding:10,marginBottom:8,fontSize:12}},
             React.createElement('div',{style:{fontWeight:600,marginBottom:6,color:'var(--info)'}},'📋 Kalibrasyon Önerisi'),
-            preview.changeLog.map(c=>React.createElement('div',{key:c.key,style:{marginBottom:2}},
-              React.createElement('span',{style:{color:'var(--text-secondary)'}},HR_BOUNDARY_LABEL[c.key]+': '),
-              React.createElement('span',{style:{fontFamily:'monospace'}},'%'+round1(HR_BOUNDARY_BASE_PCT[c.key]*100+c.from)+' → '),
-              React.createElement('strong',{style:{color:'var(--success)',fontFamily:'monospace'}},'%'+round1(HR_BOUNDARY_BASE_PCT[c.key]*100+c.to)),
-              React.createElement('span',{style:{color:'var(--text-tertiary)',fontSize:11}},'  ('+c.dayCount+' gün · güven %'+Math.round((c.confidence||0)*100)+')')
-            ))
+            (()=>{
+              const _lthr=parseSayi(athlete.lthr)||0;
+              const _fmt=pc=>'%'+round1(pc)+(_lthr>0?' ('+Math.round(_lthr*pc/100)+' bpm)':'');
+              return preview.changeLog.map(c=>React.createElement('div',{key:c.key,style:{marginBottom:3}},
+                React.createElement('span',{style:{color:'var(--text-secondary)'}},HR_BOUNDARY_LABEL[c.key]+': '),
+                React.createElement('span',{style:{fontFamily:'monospace'}},_fmt(HR_BOUNDARY_BASE_PCT[c.key]*100+c.from)+' → '),
+                React.createElement('strong',{style:{color:'var(--success)',fontFamily:'monospace'}},_fmt(HR_BOUNDARY_BASE_PCT[c.key]*100+c.to)),
+                c.dayCount!=null&&React.createElement('span',{style:{color:'var(--text-tertiary)',fontSize:11}},'  ('+c.dayCount+' gün · güven %'+Math.round((c.confidence||0)*100)+')'),
+                c.limited&&React.createElement('div',{style:{fontSize:11,color:'var(--warn)'}},'↳ önerilen %'+round1(HR_BOUNDARY_BASE_PCT[c.key]*100+c.requested)+' yerine bu değer: komşu bölge çok daralmasın diye adım küçültüldü'),
+                c.pushed&&React.createElement('div',{style:{fontSize:11,color:'var(--warn)'}},'↳ bu sınırın kalibrasyonu yok; komşu bölge çok daralmasın diye ayarlandı')
+              ));
+            })(),
+            (preview.deferred||[]).map(d=>React.createElement('div',{key:'def'+d.key,style:{marginBottom:3,fontSize:11,color:'var(--warn)'}},
+              HR_BOUNDARY_LABEL[d.key]+': ertelendi — uygulanırsa komşu bölge çok daralacağı için bu kalibrasyonda değişmiyor')),
+            (()=>{
+              const rows=hrZoneBpmDiff(athlete,preview.deltas);
+              if(!rows.length) return null;
+              return React.createElement('div',{style:{marginTop:6,paddingTop:6,borderTop:'1px solid var(--border)'}},
+                React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:2}},'Sahada bölgeler (bpm)'),
+                rows.map(r=>React.createElement('div',{key:'zr'+r.id,style:{fontFamily:'monospace',fontSize:11}},
+                  r.id+': '+r.bLo+'–'+r.bHi+' → ',
+                  React.createElement('strong',null,r.aLo+'–'+r.aHi),
+                  '  ('+(r.bHi-r.bLo)+' → '+(r.aHi-r.aLo)+' bpm geniş)')));
+            })()
           ),
           bcBadge?.badge==='yellow'&&React.createElement('div',{className:'alert alert-warn',style:{fontSize:11,marginBottom:6}},'🟡 '+bcBadge.reason+(bcConfirmPending?' Yine de uygulamak istiyor musunuz?':'')),
           React.createElement('div',{className:'flex-gap'},
