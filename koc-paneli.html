@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.05-0816 --><!DOCTYPE html>
+<!-- Version: v2026.10.05-0823 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.05-0816';
+    var RUNNING='v2026.10.05-0823';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.05-0816';
+const APP_VERSION='v2026.10.05-0823';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -3497,6 +3497,31 @@ function crossCalibBadge({mechanism, ownActionReady, otherActionReadyNow, extraR
     reasons.unshift('Çıpa (vLT) Kalibrasyonu da şu anda uygulanabilir görünüyor — önce onu uygulamak, sınırların doğru referans üzerinden hesaplanmasını sağlar.');
   }
   return reasons.length?{badge:'yellow',reason:reasons.join(' ')}:{badge:'green',reason:null};
+}
+// ── Kalibrasyon tarihleri — TEK DOĞRU KAYNAK (2026.10.05 — Göksel kararı) ─────────────────────────────
+// "Kalibrasyon yapıldı mı?" sorusunun cevabı YALNIZCA "Uygula" düğmelerinden gelir:
+//   • fbLastCalib (+ fbLastCalibSrc:'kalibrasyon') ← applyFbCalib   (Reçete Geri Bildirim / Çıpa)
+//   • boundaryLastCalib                            ← applyBoundaryCalib (Sınır; resetBoundaries siler)
+// Elle vLT değişikliği (sporcu formu, vLT ± çubuğu) ARTIK tarih atmaz, tarih silme düğmesi de yoktur.
+// Elle değişiklikten sonra eski sinyallerin tekrar sayılmaması için tarama penceresi, vLT'nin profil
+// geçmişindeki GERÇEK (sayısal) değişim tarihine kırpılır — bkz. lastVltChangeDate.
+// Geçiş koruması: 2026-10-04..05 sürümleri elle değişikliklerde de fbLastCalib yazıyordu (kaynak alanı yok
+// ya da 'manuel'). Bu tarihlerde, 'kalibrasyon' kaynağı olmayan Çıpa damgaları YOK SAYILIR; böylece verideki
+// hayalet damgalar için elle temizlik gerekmez. (Bu tarihten önceki damgalar gerçek kalibrasyondu.)
+const CAL_STAMP_RELIABLE_FROM='2026-10-04';
+function calibStampISO(ath,kind){
+  if(!ath) return null;
+  if(kind==='bc') return ath.boundaryLastCalib||null;
+  const iso=ath.fbLastCalib; if(!iso) return null;
+  if(ath.fbLastCalibSrc==='kalibrasyon') return iso;
+  if(ath.fbLastCalibSrc==='manuel') return null;
+  return iso.substring(0,10)<CAL_STAMP_RELIABLE_FROM?iso:null;
+}
+function lastVltChangeDate(ath){
+  const h=[...((ath&&ath.profileHistory)||[])].filter(x=>x&&x.date).sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
+  let prev=null,last=null;
+  h.forEach(x=>{const v=parseSayi(x.vlt); if(prev!==null&&Math.abs(v-prev)>1e-9) last=x.date; prev=v;});
+  return last;
 }
 // ── Otomatik Uygulama Kontrolü (2026.10.04 — Göksel talebi) ─────────────────────────────
 // Rozet artık yalnızca Çıpa↔Sınır önceliğine değil, iki ek koşula da bakar (yumuşak etki: yalnızca 🟡 +
@@ -6871,28 +6896,9 @@ function SporcuModal({onClose,onSave,initial,races}){
           const _sosyal={};const _sosyalHata=[];
           ['instagram','blog'].forEach(k=>{const r=normalizeSosyalUrl(k,f[k]);if(r.ok)_sosyal[k]=r.url;else _sosyalHata.push(r.err);});
           if(_sosyalHata.length)return alert('⚠️ Kaydedilmedi:\n\n'+_sosyalHata.join('\n'));
-          // KALİBRASYON DAMGASI (Temmuz 2026; 2026.10.04'te değiştirildi — Göksel kararı): vLT manuel
-          // olarak (bu formdan) değiştirildiğinde bu da bir KALİBRASYON OLAYIDIR — damga silinmez,
-          // değişiklik anına eşitlenir. Böylece (a) hatırlatıcı doğru çalışır, (b) Çıpa taraması
-          // değişiklikten ÖNCEKİ (eski vLT'ye göre okunmuş) sinyalleri yeniden saymaz — pencere bu
-          // tarihe kırpılır (bkz. runFbScan), (c) yeni veri gelene kadar tekrar tarama beklenir.
-          // Aynı mantık: yeni vLT ayar çubuğu (adjust) ve applyFbCalib.
-          // 2026.10.05: sayısal karşılaştırma — '3.4' / '3.40' / '3,4' gibi yalnızca biçim farkı "değişiklik" sayılmasın
-          const _vltChanged=Math.abs(parseSayi(f.vlt)-parseSayi(initial?.vlt))>1e-9;
-          // 2026.10.04 — Göksel kararı: LTHR değişince boundaryLastCalib ARTIK SİLİNMEZ (eskiden 2026.08.30'da
-          // siliniyordu). Gerekçe: sınırlar LTHR'ın yüzde puanı olarak tutulur (yeni LTHR'da bpm karşılığı
-          // kendiliğinden ölçeklenir), geçmiş sinyaller athleteAtDate ile o günün LTHR'ına göre okunur ve
-          // anket→onay yolu (approvePending) zaten bu damgaya hiç dokunmuyordu — iki yol tutarlı olsun.
+          // 2026.10.05 — Göksel kararı: sporcu formundaki vLT değişikliği ARTIK kalibrasyon damgası atmaz
+          // (ve eski "formda vLT değişirse damgayı sil" kuralı da kaldırıldı) — bkz. calibStampISO.
           const _payload={...f,..._sosyal,id:f.id||uid()};
-          // 2026.10.05 — Göksel: vLT'ye dokunmadığı hâlde "Son kalibrasyon" damgası oluştu. Neden çıktığı görülsün
-          // ve istenmeyen damga atılmasın diye değişiklik açıkça gösterilir; damga yalnızca onayla atılır
-          // (İptal = vLT değeri yine kaydedilir, yalnızca kalibrasyon damgası atılmaz).
-          if(_vltChanged&&initial){
-            const _eski=(initial?.vlt||'')===''?'(boş)':String(initial.vlt), _yeni=(f.vlt||'')===''?'(boş)':String(f.vlt);
-            if(confirm('vLT değeri değişti: '+_eski+' → '+_yeni+'\n\nBu bir kalibrasyon olarak kaydedilsin mi?\nTamam: evet — Çıpa taraması bugünden önceki antrenmanları saymaz.\nİptal: hayır — yalnızca değer kaydedilir, tarama penceresi değişmez.')){
-              _payload.fbLastCalib=new Date().toISOString();_payload.fbLastCalibSrc='manuel';
-            }
-          } else if(_vltChanged){_payload.fbLastCalib=new Date().toISOString();_payload.fbLastCalibSrc='manuel';}
           onSave(_payload);
         }},(initial?'Güncelle':'Sporcu Ekle')),
         React.createElement('button',{className:'btn',onClick:onClose},'İptal')
@@ -23378,7 +23384,7 @@ function VltAyarCubugu({athlete,onUpdateAthlete}){
     if(newVlt<VLT_BAR_MIN) newVlt=VLT_BAR_MIN;
     if(newVlt>VLT_BAR_MAX) newVlt=VLT_BAR_MAX;
     if(newVlt===curVlt) return;
-    onUpdateAthlete({...athlete,vlt:String(newVlt),fbLastCalib:new Date().toISOString(),fbLastCalibSrc:'manuel'}); // 2026.10.04: silinmez, değişiklik anına eşitlenir
+    onUpdateAthlete({...athlete,vlt:String(newVlt)}); // 2026.10.05: kalibrasyon damgası atmaz (bkz. calibStampISO)
   };
   return React.createElement('div',{
     className:'flex-gap',
@@ -27979,14 +27985,15 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       // Sınır Kalibrasyonu yakın zamanda uygulandıysa, o tarihten ÖNCEKİ sinyaller
       // artık farklı bir zon şekline göre değerlendirilmiş sayılır — Çıpa taramasına
       // karışmasın diye pencere (doğal cutoff'tan daha yeniyse) o tarihe kırpılır.
-      const boundaryLastCalibStr=athlete.boundaryLastCalib?athlete.boundaryLastCalib.substring(0,10):null;
+      const boundaryLastCalibStr=(calibStampISO(athlete,'bc')||'').substring(0,10)||null;
       if(boundaryLastCalibStr&&boundaryLastCalibStr>cutoffStr) cutoffStr=boundaryLastCalibStr;
-      // 2026.10.04 — Göksel kararı: pencere Çıpa'nın KENDİ son kalibrasyonuna (otomatik ya da elle vLT
-      // değişikliği) da kırpılır — Sınır taramasındaki mantıkla aynı. Önceden yalnızca "sonrasında yeni
-      // sinyal var mı" bakılıyordu; tek bir yeni sinyal gelince önceki 21 gün (eski vLT'ye göre
-      // okunmuş) yeniden sayılıp art arda aynı yönde adım önerilebiliyordu.
-      const fbCalibClipStr=athlete.fbLastCalib?athlete.fbLastCalib.substring(0,10):null;
+      // 2026.10.04/05 — pencere Çıpa'nın KENDİ son kalibrasyonuna VE vLT'nin profil geçmişindeki son gerçek
+      // değişim tarihine (elle güncelleme dahil) kırpılır: eski vLT'ye göre okunmuş sinyaller yeniden sayılıp
+      // art arda aynı yönde adım önerilmesin.
+      const fbCalibClipStr=(calibStampISO(athlete,'fb')||'').substring(0,10)||null;
       if(fbCalibClipStr&&fbCalibClipStr>cutoffStr) cutoffStr=fbCalibClipStr;
+      const _vltChgStr=lastVltChangeDate(athlete);
+      if(_vltChgStr&&_vltChgStr>cutoffStr) cutoffStr=_vltChgStr;
       const sigsAll=extractFeedbackSignals(allSnaps,athlete);
       const sigs=sigsAll.filter(s=>s.date>=cutoffStr);
 
@@ -27994,7 +28001,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       // fbLastCalib: Reçete kalibrasyonunun en son uygulandığı ISO tarih-saati.
       // Son kalibrasyondan sonra yeni antrenman verisi girdiyse → taramaya devam.
       // Girmediyse → aynı sinyal tekrar üretilip art arda uygulama yapılmasını engelle.
-      const fbLastCalibStr=athlete.fbLastCalib?athlete.fbLastCalib.substring(0,10):null;
+      const fbLastCalibStr=(calibStampISO(athlete,'fb')||'').substring(0,10)||null;
       if(fbLastCalibStr){
         const hasNewData=sigs.some(s=>s.date>fbLastCalibStr);
         if(!hasNewData){
@@ -28057,11 +28064,13 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       // Çıpa yakın zamanda uygulandıysa, o tarihten ÖNCEKİ sinyaller eski (artık
       // geçersiz) vLT referansına göre değerlendirilmiş sayılır — Sınır taramasına
       // karışmasın diye pencere kırpılır ve durum bilgilendirici bir notla gösterilir.
-      const fbLastCalibStr=athlete.fbLastCalib?athlete.fbLastCalib.substring(0,10):null;
-      const boundaryLastCalibStr=athlete.boundaryLastCalib?athlete.boundaryLastCalib.substring(0,10):null;
+      const fbStampStr=(calibStampISO(athlete,'fb')||'').substring(0,10)||null;
+      const vltChgStr=lastVltChangeDate(athlete);
+      const fbLastCalibStr=[fbStampStr,vltChgStr].filter(Boolean).sort().pop()||null; // Çıpa kalibrasyonu ya da vLT'nin gerçek değişimi — hangisi yeniyse
+      const boundaryLastCalibStr=(calibStampISO(athlete,'bc')||'').substring(0,10)||null;
       if(fbLastCalibStr&&fbLastCalibStr>cutoffStr){
         cutoffStr=fbLastCalibStr;
-        setBcClippedNote('Pencere '+localDateStr(new Date(fbLastCalibStr+'T12:00:00'))+' itibarıyla kırpıldı — Çıpa (vLT) kalibrasyon tarihi bu (Reçete Geri Bildirim kartında görünür, oradan silinebilir); öncesi karışık sinyal üretebilir.');
+        setBcClippedNote('Pencere '+localDateStr(new Date(fbLastCalibStr+'T12:00:00'))+' itibarıyla kırpıldı — vLT o tarihte değişti ('+(fbLastCalibStr===fbStampStr?'Çıpa kalibrasyonu':'elle güncelleme')+'); öncesi eski vLT\'ye göre okunmuş, karışık sinyal üretebilir.');
       }
       // 2026.10.04 — Göksel kararı: Sınır taraması KENDİ son kalibrasyonuna da kırpılır (Çıpa'daki düzeltmeyle
       // aynı gerekçe): önceden yalnızca "sonrasında yeni sinyal var mı" bakılıyordu; tek yeni sinyal gelince
@@ -28300,19 +28309,11 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
             renderCalibBadge(fbBadge)
           ),
           React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:2}},
-            athlete.fbLastCalib
-              ?(athlete.fbLastCalibSrc==='manuel'?'Son vLT güncellemesi (elle): ':'Son kalibrasyon: ')+calibDayTxt(athlete.fbLastCalib)
-              :'Tamamlanan antrenman fazlarındaki gerçek pace ve nabız verilerinden sinyal üretir.',
-            // 2026.10.05: yanlış/istenmeyen damga her zaman silinebilsin (yalnızca "yeni veri yok" bandında değil)
-            athlete.fbLastCalib&&React.createElement('button',{
-              className:'btn btn-sm',style:{marginLeft:8,fontSize:10,padding:'0 6px'},
-              onClick:()=>{
-                if(!confirm('Çıpa kalibrasyon tarihi silinsin mi? Sonraki taramalarda (Çıpa ve Sınır) bu tarihten ÖNCEKİ antrenmanlar da sayılır — vLT\'yi gerçekten güncellediyseniz eski sinyaller aynı değişikliği tekrar önerebilir.')) return;
-                onUpdateAthlete({...athlete,fbLastCalib:null,fbLastCalibSrc:null});
-                setFbNoNewData(false);
-              }},'↺ sil')
+            calibStampISO(athlete,'fb')
+              ?'Son kalibrasyon: '+calibDayTxt(calibStampISO(athlete,'fb'))
+              :'Tamamlanan antrenman fazlarındaki gerçek pace ve nabız verilerinden sinyal üretir.'
           ),
-          React.createElement('div',{style:{marginTop:2}},renderScanReminder(athlete.fbLastCalib,FB_SCAN_REMIND_DAYS,athlete.fbLastScan))
+          React.createElement('div',{style:{marginTop:2}},renderScanReminder(calibStampISO(athlete,'fb'),FB_SCAN_REMIND_DAYS,athlete.fbLastScan))
         ),
         React.createElement('button',{
           className:'btn btn-sm btn-primary',
@@ -28326,15 +28327,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       ),
       // Yeni veri yok uyarısı
       fbNoNewData&&React.createElement('div',{className:'alert alert-warn',style:{fontSize:12}},
-        '🔁 '+(athlete.fbLastCalibSrc==='manuel'?'Son vLT güncellemesinden (elle)':'Son kalibrasyondan')+' bu yana yeni antrenman verisi girilmemiş — bir sonraki antrenmanın ardından tekrar tarayın.',
-        // 2026.10.05 — Göksel: kalibrasyon uygulamadığı hâlde damga görünüyordu (vLT ± çubuğu / formda vLT değişimi
-        // de damga atar). Yanlış damgayı silip taramaya devam edebilsin.
-        React.createElement('div',{style:{marginTop:6}},
-          React.createElement('button',{className:'btn btn-sm',onClick:()=>{
-            if(!confirm('Bu tarih silinsin mi? Sonraki taramada bu tarihten ÖNCEKİ antrenmanlar da sayılır — vLT\'yi gerçekten güncellediyseniz eski sinyaller aynı değişikliği tekrar önerebilir.')) return;
-            onUpdateAthlete({...athlete,fbLastCalib:null,fbLastCalibSrc:null});
-            setFbNoNewData(false);
-          }},'↺ Bu tarihi sil (kalibrasyon yapmadım)'))
+        '🔁 Son kalibrasyondan bu yana yeni antrenman verisi girilmemiş — bir sonraki antrenmanın ardından tekrar tarayın.'
       ),
       fbError&&React.createElement('div',{className:'alert alert-warn',style:{fontSize:12}},fbError),
       fbRawCount&&React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:10}},
@@ -28527,11 +28520,11 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
             renderCalibBadge(bcBadge)
           ),
           React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:2}},
-            athlete.boundaryLastCalib
-              ?'Son kalibrasyon: '+calibDayTxt(athlete.boundaryLastCalib)
+            calibStampISO(athlete,'bc')
+              ?'Son kalibrasyon: '+calibDayTxt(calibStampISO(athlete,'bc'))
               :'Her nabız bölgesi sınırını (Z1/Z2…Z5b/Z5c) sporcuya özel ince ayarlar — Çıpa\'dan bağımsız, çok daha geniş bir pencerede çalışır.'
           ),
-          React.createElement('div',{style:{marginTop:2}},renderScanReminder(athlete.boundaryLastCalib,BC_SCAN_REMIND_DAYS,athlete.boundaryLastScan))
+          React.createElement('div',{style:{marginTop:2}},renderScanReminder(calibStampISO(athlete,'bc'),BC_SCAN_REMIND_DAYS,athlete.boundaryLastScan))
         ),
         React.createElement('button',{
           className:'btn btn-sm btn-primary',
@@ -28702,7 +28695,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
           )
         );
       })(),
-      athlete.boundaryLastCalib&&React.createElement('div',{style:{marginTop:8}},
+      calibStampISO(athlete,'bc')&&React.createElement('div',{style:{marginTop:8}},
         React.createElement('button',{className:'btn btn-sm',onClick:resetBoundaries},'↺ Standart şablona sıfırla')
       ),
       !bcRawCount&&!bcScanLoading&&React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',fontStyle:'italic'}},
