@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.05-1555 --><!DOCTYPE html>
+<!-- Version: v2026.10.05-2057 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.05-1555';
+    var RUNNING='v2026.10.05-2057';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.05-1555';
+const APP_VERSION='v2026.10.05-2057';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -8691,8 +8691,7 @@ function SporcularTab({athletes,races,athHistory,allHistory,workouts,onAdd,onUpd
                 acwr!=null&&React.createElement('span',{className:'badge '+(acwr<0.8?'badge-info':acwr<=1.3?'badge-good':acwr<=1.5?'badge-warn':'badge-danger'),style:{fontSize:11}},'ACWR '+acwr.toFixed(2)),
                 (()=>{
                   const todayStrX=(()=>{const t=new Date();return`${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;})();
-                  const hasRaceX=(a.yarıslar||[]).some(x=>{const r=rMap[typeof x==='string'?x:x.id];return r&&r.tarih&&r.tarih>=todayStrX;});
-                  const am=!hasRaceX&&ANTRENMAN_AMACLARI.find(x=>x.v===a.antrenman_amaci);
+                  const am=amacDurumu(a,races).aktif&&ANTRENMAN_AMACLARI.find(x=>x.v===a.antrenman_amaci);
                   return am?React.createElement('span',{style:{fontSize:11,padding:'2px 8px',borderRadius:99,background:am.bg,color:am.renk,border:'1px solid '+am.renk,fontWeight:600}},am.emoji+' '+am.l):null;
                 })()
               )
@@ -8750,8 +8749,11 @@ function SporcularTab({athletes,races,athHistory,allHistory,workouts,onAdd,onUpd
             // Yakın yarış kontrolü: sporcunun gelecekte bir yarışı var mı?
             const todayStr2=(()=>{const t=new Date();return`${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`;})();
             const athRaceIds2=(a.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
-            const hasYakınYarış=athRaceIds2.some(rid=>{const r=rMap[rid];return r&&r.tarih&&r.tarih>=todayStr2;});
-            if(hasYakınYarış) return null;
+            // 05.10.2026 — Göksel kararı: amaç seçici yalnızca yarış YOKKEN değil, yarışın
+            // hazırlık dönemi HENÜZ BAŞLAMADIYSA da görünür (bkz. amacDurumu). Hazırlık
+            // başlayınca yarış planı devralır, seçici gizlenir.
+            const _amacD=amacDurumu(a,races);
+            if(!_amacD.aktif) return null;
             const secilenAmac=ANTRENMAN_AMACLARI.find(x=>x.v===a.antrenman_amaci);
             return React.createElement('div',{style:{marginTop:6}},
               React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',fontWeight:600,marginBottom:5,display:'flex',alignItems:'center',gap:6}},
@@ -8778,6 +8780,18 @@ function SporcularTab({athletes,races,athHistory,allHistory,workouts,onAdd,onUpd
                 },am.emoji+' '+am.l))
               ),
               secilenAmac&&React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:4,fontStyle:'italic'}},secilenAmac.desc),
+              // Yarışı olan ama hazırlığı henüz başlamamış sporcu (05.10.2026): amacın ne zamana
+              // kadar geçerli olduğunu ve süre önerisiyle çakışmayı göster.
+              _amacD.race&&React.createElement('div',{style:{fontSize:11,marginTop:6,padding:'6px 9px',background:'var(--bg-primary)',borderRadius:6,border:'1px solid var(--border)',color:'var(--text-secondary)'}},
+                _amacD.prepYok
+                  ?'🏁 '+_amacD.race.ad+' için hazırlık süresi tanımlı değil — yarış planı henüz devrede değil, seçilen amaç geçerli.'
+                  :'🏁 '+_amacD.race.ad+' için hazırlık '+fmtDate(localDateStr(_amacD.hazirlikBaslangic))+' tarihinde başlıyor (~'+_amacD.haftaKaldi+' hafta). O tarihe kadar bu amaç geçerli; sonrasında yarış planı devralır.',
+                (()=>{
+                  const so=secilenAmac&&PROGRAM_SURE_ONERISI[secilenAmac.v];
+                  if(_amacD.prepYok||!so||!(so.max>_amacD.haftaKaldi))return null;
+                  return React.createElement('div',{style:{marginTop:3,color:'var(--warn)'}},'⚠️ Bu amacın önerilen süresi '+so.min+'–'+so.max+' hafta; hazırlığa ~'+_amacD.haftaKaldi+' hafta kaldığı için program yarış planıyla kesilecek.');
+                })()
+              ),
               React.createElement(GecisSemasiInfo,{key:'gsi-'+a.id}),
               // Program süresi & sonraki program önerisi (03.08.2026, Göksel'in isteği) ─────
               secilenAmac&&(()=>{
@@ -17512,6 +17526,30 @@ function applyWellnessAndCollectReasons(weeks, athlete){
 // yarışlı sporcular dahil) uzun koşu günü kavramı anlamsızlaşır.
 const UZUN_GUN_MIN_HAFTALIK_KM=15;
 
+// ── UZUN KOŞU TANIMI — Tek Kaynak (05.10.2026 — Göksel onayı) ───────────────
+// Bir koşunun "Uzun" sayılması için HEM mesafe HEM süre eşiğini geçmesi gerekir:
+//   • en az UZUN_KOSU_MIN_KM km  VE  • en az UZUN_KOSU_MIN_DK dakika (sporcunun Z2 pace'inde).
+// Yavaş koşucuda süre eşiği, hızlı koşucuda mesafe eşiği belirleyici olur:
+// etkin min km = max(8, 60 dk ÷ Z2 pace). Haftalık hedeften hesaplanan "uzun" pay bu
+// eşiğin altında kalıyorsa o hafta uzun koşu VERİLMEZ: "Uzun" rozeti gösterilmez,
+// uzun gün seçili olsa bile plan o günü normal aerobik koşu olarak üretir.
+// (Eskiden pay hesabı alt sınırsızdı → 12.6 km'lik haftada "Uzun: 3.1km" çıkabiliyordu.)
+const UZUN_KOSU_MIN_KM=8;
+const UZUN_KOSU_MIN_DK=60;
+// Uzun koşu payının kademe eşiği (eski UZUN_GUN_MIN_HAFTALIK_KM değeri) — uzunKosuPayOrani kullanır.
+const UZUN_PAY_TIER_ESIK_KM=15;
+function uzunKosuMinKm(zones){
+  const paceSec=(zones&&typeof getPaceSec==='function')?(getPaceSec(zones,1)||360):360;
+  return Math.max(UZUN_KOSU_MIN_KM,round1(UZUN_KOSU_MIN_DK*60/paceSec));
+}
+// {km,dp,...} biçimli uzun hedef nesnesine tanımı uygular: eşiğin altındaysa km/dp = 0.
+function uzunKosuTanimUygula(obj,zones){
+  if(!obj||!(obj.km>0))return obj;
+  const minKm=uzunKosuMinKm(zones);
+  if(obj.km>=minKm)return obj;
+  return{...obj,km:0,dp:0,yetersiz:true,hamKm:obj.km,minKm};
+}
+
 // ── Son 6 Haftalık Gerçek Hacim İstatistiği — Tek Kaynak (09.09.2026) ───────
 // calcWeeklyTargetsNoRace VE SporcuAnketi'nin uzun-gün engeli AYNI ham veriyi
 // kullanır — sporcunun GERÇEKTE koştuğu son haftalar, yarış/faz durumundan
@@ -17546,7 +17584,7 @@ function computeRecentWeeklyStats(athlete, workouts){
   return {weeklyData,last4,last4Active,avg4km,avg4dp,lastWeekKm,lastWeekDp,peak6,peak6dp};
 }
 
-function calcWeeklyTargetsNoRace(athlete, workouts, history=[]){
+function calcWeeklyTargetsNoRace(athlete, workouts, history=[], opts={}){
   const athWks=(workouts||[]).filter(w=>
     w.athleteId===athlete.id&&(w.spor==='kosu'||!w.spor)
   );
@@ -17574,7 +17612,9 @@ function calcWeeklyTargetsNoRace(athlete, workouts, history=[]){
   const baseDp=Math.round(_noRaceTaban(avg4dp,lastWeekDp));
 
   // Amaca göre artış oranı (10% rule — Daniels/Pfitzinger)
-  const amaci=athlete.antrenman_amaci||'hacim_koru';
+  // opts.amacOverride: (opsiyonel) amacı dışarıdan sabitlemek için — şu an kullanılmıyor;
+  // hazırlık öncesi yarışlı sporcu da kendi seçtiği amacı kullanır (bkz. amacAktifGun).
+  const amaci=opts.amacOverride||athlete.antrenman_amaci||'hacim_koru';
   const artisMap={
     hacim_artir:   1.10, // +%10 — maksimum güvenli artış
     aerobik_taban: 1.05, // +%5 — kalite değil hacim odaklı
@@ -17662,14 +17702,16 @@ function calcWeeklyTargetsNoRace(athlete, workouts, history=[]){
     const actDp=Math.round(wksThisWeek.reduce((s,wk)=>s+(parseFloat(wk.irtifa)||0),0));
     const kRatio=targetKm>0?(actKm/targetKm):null;
     return{
-      weekIdx:offset+2,weekStart:ws,weekEnd:we,
+      // coreStart verilmişse (hazırlık öncesi haftalar): yarış planının ilk haftasından (H1) geriye
+      // doğru 0, -1, ... — Core haftalarının weekIdx'iyle (1..N) ÇAKIŞMAZ, sıralama korunur.
+      weekIdx:opts.coreStart?(1-Math.round((opts.coreStart-ws)/(7*864e5))):offset+2,weekStart:ws,weekEnd:we,
       phase:'Temel',isRecovery:false,isRaceWeek:false,
       targetKm,targetDp,daysToRace:null,
       isPast:we<today,isCurrent:isCurr,
       actualKm:actKm,actualDp:actDp,kmRatio:kRatio,
       weekStatus:'normal',
       _kmPct:artisOrani,_baseKm:baseKm,_baseDp:baseDp,
-      _isNoRace:true,
+      _isNoRace:true,_prePrep:!!opts.prePrep,_amac:amaci,
       _avg4km:avg4km,_lastWeekKm:lastWeekKm,_peak6km:peak6,
       _avg4dp:avg4dp,_peak6dp:peak6dp,_dpArtisOrani:round2(dpArtisOrani),
       _artisOrani:artisOrani,_acwr:round2(currentAcwr),
@@ -17681,7 +17723,54 @@ function calcWeeklyTargetsNoRace(athlete, workouts, history=[]){
   return[mkNoRaceWeek(0,true), mkNoRaceWeek(1,false)];
 }
 
+// ── Hazırlığı henüz BAŞLAMAMIŞ yarışlı sporcu (05.10.2026 — Göksel kararı) ─────────────
+// Yarış planı (calcWeeklyTargetsCore) yalnızca prep_weeks penceresindeki haftaları üretir.
+// Hazırlık başlamadan önceki haftalarda eşleşen hafta bulunamıyor, hedef 0 km / D+0
+// görünüyordu (örn. Mitja Marató 14.02.2027, 14 hafta hazırlık → pencere ~02.11.2026'da
+// başlıyor; bu sporcu 5 Ekim haftasında "Hedef: 0 km" gösteriyordu). Artık pencere
+// başlayana kadarki haftalar YARIŞSIZ hesapla (son 4 hafta tabanı) üretilir ve yarış
+// planının önüne eklenir; hazırlık başlayınca otomatik olarak yarış planına geçilir.
+// Hazırlık öncesi dönemde sporcunun seçtiği "Antrenman Amacı" geçerlidir (bkz. amacAktifGun /
+// amacDurumu — TEK KAYNAK); seçilmemişse yarışsız hesabın varsayılanı 'hacim_koru' kullanılır.
+// ── ANTRENMAN AMACI GEÇERLİLİĞİ — Tek Kaynak (05.10.2026 — Göksel kararı) ───────────────
+// Amaç: yarış YOKKEN VEYA birincil yarışın hazırlık penceresi (prep_weeks) HENÜZ BAŞLAMADIYSA
+// geçerli. Hazırlık başlayınca yarış planı devralır, amaç etkisiz kalır (saklı değer silinmez).
+// prep_weeks tanımsız yarış zaten yarışsız hedef hesabına düşüyor (bkz. calcWeeklyTargets) →
+// orada da amaç geçerli. Kullanım yerleri: planDay + recommendWorkout (gün planı), hedef
+// hesabı (calcWeeklyTargets), Sporcular kartı seçicisi/rozeti, koç plan başlığı.
+function amacAktifGun(race,daysToRace){
+  if(!race||daysToRace===null||daysToRace===undefined)return true;
+  const pw=parseInt(race.prep_weeks)||0;
+  if(!pw)return true;
+  return daysToRace>pw*7;
+}
+// Sporcu bazlı durum (UI için): {aktif, race, hazirlikBaslangic, gunKaldi, haftaKaldi}
+function amacDurumu(athlete,races){
+  const today=new Date();
+  const {primary}=selectRaces(athlete,races||[]);
+  if(!primary)return{aktif:true,race:null,hazirlikBaslangic:null,gunKaldi:null,haftaKaldi:null};
+  const daysToRace=Math.ceil((new Date(primary.tarih+'T12:00:00')-today)/864e5);
+  const pw=parseInt(primary.prep_weeks)||0;
+  const aktif=amacAktifGun(primary,daysToRace);
+  if(!pw)return{aktif,race:primary,hazirlikBaslangic:null,gunKaldi:null,haftaKaldi:null,prepYok:true};
+  const hb=new Date(new Date(primary.tarih+'T12:00:00').getTime()-pw*7*864e5);
+  const gunKaldi=aktif?Math.max(0,Math.ceil((hb-today)/864e5)):0;
+  return{aktif,race:primary,hazirlikBaslangic:hb,gunKaldi,haftaKaldi:Math.round(gunKaldi/7*10)/10};
+}
 function calcWeeklyTargets(athlete, races, workouts, optimizeMode=false, history=[], frozenTargets={}){
+  const plan=calcWeeklyTargetsRaceAware(athlete,races,workouts,optimizeMode,history,frozenTargets);
+  try{
+    if(!athlete||!plan||!plan.length)return plan;
+    if(plan.some(w=>w._isNoRace))return plan; // yarışsız sporcu — zaten yarışsız hesap
+    const core0=plan[0].weekStart;
+    const today=new Date();
+    if(!(core0&&core0>today))return plan; // hazırlık başlamış (mevcut/geçmiş hafta plan içinde)
+    const pre=calcWeeklyTargetsNoRace(athlete,workouts,history,{coreStart:core0,prePrep:true})
+      .filter(w=>w.weekStart<core0);
+    return pre.length?[...pre,...plan]:plan;
+  }catch(e){return plan;}
+}
+function calcWeeklyTargetsRaceAware(athlete, races, workouts, optimizeMode=false, history=[], frozenTargets={}){
   if(!athlete)return[];
   const {primary}=selectRaces(athlete,races);
   if(!primary||!primary.prep_weeks){
@@ -18022,7 +18111,7 @@ function uzunKosuPayOrani(phase, disiplin, noRaceCtx=null){
   if(noRaceCtx){
     const avg4km=noRaceCtx.avg4km||0;
     const artisOrani=noRaceCtx.artisOrani??1.0;
-    const tierBase=avg4km<UZUN_GUN_MIN_HAFTALIK_KM?0.25:avg4km<25?0.28:0.30;
+    const tierBase=avg4km<UZUN_PAY_TIER_ESIK_KM?0.25:avg4km<25?0.28:0.30;
     pay=tierBase+(artisOrani-1)*UZUN_PAY_AMAC_DAMP;
   } else {
     const tablo={'Temel':0.25,'Gelişme':0.28,'Zirve':0.32,'Taper':0.22,'Yarış Sonrası':0};
@@ -18373,7 +18462,9 @@ function estimateUzunKosuHedefi(targetKm, targetDp, phase, disiplin, zones, band
     km=bandCapKm;
     capped=true;
   }
-  return {km, dp, pay, capped, bandCapKm};
+  // Uzun koşu tanımı (05.10.2026): mesafe/süre eşiğinin altı "uzun" değildir → 0.
+  const _tanim=uzunKosuTanimUygula({km,dp},zones);
+  return {km:_tanim.km, dp:_tanim.dp, pay, capped, bandCapKm, yetersiz:!!_tanim.yetersiz, hamKm:km, minKm:uzunKosuMinKm(zones)};
 }
 
 function calcWeeklyTargetsCore(athlete, races, workouts, primary, history=[], frozenTargets={}){
@@ -19733,7 +19824,7 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   // ── yMod: tüm toparlanma sinyalleri birleşik ─────────────────────────────
   let yMod=hrvMod(hrv);
   // ── Yarışsız dönem: amaca göre bilgi mesajı + ACWR hacim hedefi ──────────
-  if(daysToRace===null){
+  if(amacAktifGun(nextRace,daysToRace)){
     const amRec=ANTRENMAN_AMACLARI.find(x=>x.v===(athlete.antrenman_amaci||''));
     if(amRec){
       const amacMesajlar={
@@ -19747,7 +19838,7 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
         hacim_koru:'Yük koruma dönemi — mevcut aerobik taban korunuyor.',
       };
       warnings.push({icon:amRec.emoji,text:amacMesajlar[amRec.v]||amRec.l});
-    } else {
+    } else if(daysToRace===null){
       warnings.push({icon:'💡',text:'Hedef yarış yok — aerobik taban ve genel kondisyon odaklı plan. Sporcular sekmesinden amaç seçebilirsiniz.'});
     }
     // (no-race hacim/kalite uyarıları kaldırıldı — koç kartında gösterilmiyor)
@@ -20221,7 +20312,9 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
   const isKosu=kosuGunleri.includes(dayShort);
   const isCapraz=caprazGunleri.includes(dayShort);
   const uzunGunArr=(Array.isArray(athlete.uzun_gun)?athlete.uzun_gun:[athlete.uzun_gun].filter(Boolean));
-  const isUzunGun=uzunGunArr.includes(dayShort);
+  // Uzun koşu tanımı (05.10.2026): haftalık hedeften çıkan uzun pay ≥8 km/≥60 dk değilse
+  // (wkStats.uzunYetersiz, bkz. generateTwoWeekPlan) seçili uzun gün normal koşu günü olur.
+  const isUzunGun=uzunGunArr.includes(dayShort)&&!(wkStats&&wkStats.uzunYetersiz);
   // Ardışık 2 uzun koşu günü seçilmişse → back-to-back modu
   const b2bAktif=(()=>{
     if(uzunGunArr.length!==2)return null;
@@ -20319,7 +20412,7 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
 
   // ── Yarışsız dönem antrenman amacı ───────────────────────────────────────
   // Sporcunun seçili amacı — yalnızca aktif yarış yokken antrenman seçimine etki eder
-  const antrenmanAmaci=(daysToRace===null)?(athlete.antrenman_amaci||''):'';
+  const antrenmanAmaci=amacAktifGun(race,daysToRace)?(athlete.antrenman_amaci||''):'';
   // Amaca göre kaliteli gün şablon sıralaması (Temel faz fallback olarak kullanılır)
   const amacKaliteliSeq=antrenmanAmaci?(()=>{
     // Hill/yokuş antrenmanları: trail sporcu, trail yarış veya D+>500 olan yarış için
@@ -21773,6 +21866,32 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
       const _uzunBandCap=uzunKosuBandMaxKm(band,_uzunDisiplin,_uzunZonesCap,primary?.mesafe);
       let uzunGunKm=uzunKalanSayi>0?round1(kalanTargetKm*uzunKosuPayOrani(fazPhase,_uzunDisiplin,wt?._isNoRace?{avg4km:wt._avg4km,artisOrani:wt._artisOrani}:null)):0;
       if(_uzunBandCap>0&&uzunGunKm>_uzunBandCap) uzunGunKm=_uzunBandCap;
+      // ── Uzun koşu tanımı (05.10.2026 — Göksel onayı: ≥8 km VE ≥60 dk) ──────────
+      // Uygunluk, haftanın TAM hedefinden hesaplanan uzun paya göre ölçülür (kalan km'ye
+      // göre DEĞİL) — aksi halde hafta ilerledikçe kalan km küçüldüğünde planlı uzun gün
+      // haftanın ortasında aniden "uzun değil" olurdu. Yetersizse: bugünden itibaren
+      // (geçmiş/yapılmış günlere dokunulmaz) 'uzun' günler aerobik olur, planDay seçili
+      // uzun günü de normal koşu üretir (bkz. wkStats.uzunYetersiz → planDay isUzunGun).
+      let _uzunYetersiz=false;
+      if(uzunKalanSayi>0){
+        const _uzunTamHaftaKm=(()=>{
+          let k=round1((wt?.targetKm||0)*uzunKosuPayOrani(fazPhase,_uzunDisiplin,wt?._isNoRace?{avg4km:wt._avg4km,artisOrani:wt._artisOrani}:null));
+          if(_uzunBandCap>0&&k>_uzunBandCap)k=_uzunBandCap;
+          return k;
+        })();
+        if(_uzunTamHaftaKm<uzunKosuMinKm(_uzunZonesCap)){
+          _uzunYetersiz=true;
+          Object.keys(haftaIskeleti).forEach(ds=>{
+            if(haftaIskeleti[ds]!=='uzun')return;
+            if(weekOff===0&&ds<todayStrCount)return; // yapılmış/geçmiş gün — dokunma
+            haftaIskeleti[ds]='aerobik';
+            kolayAerobikKalanSayi++;
+          });
+          uzunKalanSayi=0;
+          uzunGunKm=0;
+        }
+      }
+      wkStats.uzunYetersiz=_uzunYetersiz;
       // Kolay/aerobik günlere kalan km'yi eşit dağıt
       const kolayKalanToplam=Math.max(0,kalanTargetKm-uzunGunKm-tahminiKaliteliKm);
       const gunlukKolayKm=kolayAerobikKalanSayi>0?kolayKalanToplam/kolayAerobikKalanSayi:0;
@@ -26205,7 +26324,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     return _pwWks.length?Math.max(..._pwWks.map(w=>parseFloat(w.mesafe)||0)):0;
                   })()
                 :0;
-              const _uzunHedef=(_uzunHedefRaw&&_prevWeekLongestKm>_uzunHedefRaw.km)
+              const _uzunHedefFloor=(_uzunHedefRaw&&_prevWeekLongestKm>_uzunHedefRaw.km)
                 ?{
                     ..._uzunHedefRaw,
                     km:round1(_uzunHedefRaw.bandCapKm>0?Math.min(_prevWeekLongestKm,_uzunHedefRaw.bandCapKm):_prevWeekLongestKm),
@@ -26213,6 +26332,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     flooredByPrevWeek:true
                   }
                 :_uzunHedefRaw;
+              // (05.10.2026) önceki hafta tabanı sonrası da uzun koşu tanımı (8 km / 60 dk) uygulanır
+              const _uzunHedef=uzunKosuTanimUygula(_uzunHedefFloor,_uzunZones);
               // Orijinal (revize mekanizmalarından bağımsız) uzun koşu hedefi —
               // tablo haftalık km için "üstü çizili orijinal → revize" gösterdiği gibi
               // uzun koşu için de farkı göstermek için kullanılır.
@@ -26782,7 +26903,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     return _pwWks.length?Math.max(..._pwWks.map(w=>parseFloat(w.mesafe)||0)):0;
                   })()
                 :0;
-              const _uzunHedefHafta=(_uzunHedefHaftaRaw&&_prevWeekLongestKmHafta>_uzunHedefHaftaRaw.km)
+              const _uzunHedefHaftaFloor=(_uzunHedefHaftaRaw&&_prevWeekLongestKmHafta>_uzunHedefHaftaRaw.km)
                 ?{
                     ..._uzunHedefHaftaRaw,
                     km:round1(_uzunHedefHaftaRaw.bandCapKm>0?Math.min(_prevWeekLongestKmHafta,_uzunHedefHaftaRaw.bandCapKm):_prevWeekLongestKmHafta),
@@ -26790,6 +26911,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     flooredByPrevWeek:true
                   }
                 :_uzunHedefHaftaRaw;
+              const _uzunHedefHafta=uzunKosuTanimUygula(_uzunHedefHaftaFloor,_uzunZonesHafta);
               const _uzunHedefHaftaOrijinal=estimateUzunKosuHedefi(weekOrigKm,weekOrigDp,week.wt.phase,effectiveDisiplin(athlete,plan.primary),_uzunZonesHafta,null,plan.primary?.mesafe,week.wt?._isNoRace?{avg4km:week.wt._avg4km,artisOrani:week.wt._artisOrani}:null,plan.primary);
               const _haftalikDegisti=_uzunHedefHaftaOrijinal.km!==_uzunHedefHafta.km;
               const _haftalikDpDegisti=_uzunHedefHaftaOrijinal.dp>0&&_uzunHedefHaftaOrijinal.dp!==_uzunHedefHafta.dp;
@@ -32709,7 +32831,7 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
             React.createElement('span',{style:{fontWeight:600,fontSize:13}},nextRace.ad),
             React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)',marginLeft:8}},daysToRace+' gün kaldı · '+fmtDate(nextRace.tarih))
           ),
-          !nextRace&&athlete?.antrenman_amaci&&(()=>{
+          amacAktifGun(nextRace,daysToRace)&&athlete?.antrenman_amaci&&(()=>{
             const am=ANTRENMAN_AMACLARI.find(x=>x.v===athlete.antrenman_amaci);
             return am?React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8}},
               React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)'}},'Antrenman Amacı:'),
