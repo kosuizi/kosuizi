@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.05-1022 --><!DOCTYPE html>
+<!-- Version: v2026.10.05-1039 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.05-1022';
+    var RUNNING='v2026.10.05-1039';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.05-1022';
+const APP_VERSION='v2026.10.05-1039';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -12666,6 +12666,117 @@ function ReceteOlcekKap(props){
   );
 }
 
+// ── Satır-bazlı açıklama ayrıştırıcı (2026.10.05 — Göksel talebi) ─────────────────────────
+// SORUN: Bir aşama (yapilar[i]) tek `detay` metniyle birden çok tablo satırına açılabilir
+// (ör. 5K Zaman Denemesi ısınması → "Isınma Koşusu" + "Strides" + "Strides Arası Dinlenme").
+// Satırın kendi `_cue`'su yoksa HER satır aynı tam metni gösteriyordu ("15 dk — hafif koşu Z1 ·
+// < 147 bpm · > 5:47 /km + 2×200m hızlı (tam dinlenme)" üç satırda da). KURAL: her satırda
+// YALNIZCA o satırla ilgili açıklama bulunur. Bu fonksiyon, görüntüleme anında (kayıtlı eski
+// planlar dahil) satırın rolüne göre metni böler. Hiçbir kalıp eşleşmezse metin DEĞİŞMEZ.
+//   text  : satırın çözümlenmiş açıklaması (kendi _cue'su ya da aşama detay'ı)
+//   r     : satır, sibs: aynı aşamadan (_srcBaslik) gelen tüm başlık-dışı satırlar
+//   isOwn : metin satırın KENDİ _cue'su mu (true) yoksa paylaşılan aşama detay'ı mı (false)
+function splitCueForRow(text, r, sibs, isOwn){
+  if(typeof text!=='string'||!text||!r||r.type==='header') return text;
+  const label=String(r.label||'');
+  const all=(sibs||[]).filter(x=>x&&x.type!=='header');
+  const multi=all.length>=2;
+  const isRest=r.type==='rest';
+  const isWalk=r.type==='walk';
+  let t=text;
+  let done=false;
+  // (a) Grup satırları — "5×4 dk + 5×3 dk Z5a …": satır yalnız KENDİ grubunu gösterir
+  const gm=label.match(/—\s*Grup\s+(\d+)\s*$/i);
+  if(gm&&!isRest){
+    const m=t.match(/^((?:\d+\s*[×x]\s*[\d.,]+\s*(?:dk|sn|m)\b\s*\+\s*)+\d+\s*[×x]\s*[\d.,]+\s*(?:dk|sn|m)\b)(.*)$/i);
+    if(m){const gs=m[1].split(/\s*\+\s*/);const g=gs[parseInt(gm[1],10)-1];if(g) t=g.trim()+m[2];}
+  }
+  // (b) Z5a/Z5b interval — "5×4 dk + 5×3 dk — Z5a · … /km/Z5b · … /km · 2 dk dinlenme"
+  if(!isRest){
+    const m7=t.match(/^(.+?)\s*\+\s*(.+?)\s*—\s*(Z5a.*?)\s*\/\s*(Z5b.*)$/i);
+    if(m7){
+      if(/Z5b/i.test(label)) t=m7[2].trim()+' — '+m7[4].trim();
+      else if(/Z5a/i.test(label)) t=m7[1].trim()+' — '+m7[3].trim();
+    }
+  }
+  // (c) Piramit — "1–2–3–4–4–3–2–1 dk — …" her blok yalnız KENDİ süresini gösterir
+  const lm=label.match(/(\d+)\/(\d+)\s*$/);
+  if(lm&&!isRest){
+    const sm=t.match(/^\s*(\d+(?:\s*[–-]\s*\d+)+)\s*dk\b/i);
+    if(sm){
+      const seq=sm[1].split(/\s*[–-]\s*/);
+      if(seq.length===parseInt(lm[2],10)&&seq[parseInt(lm[1],10)-1]) t=t.replace(sm[0],seq[parseInt(lm[1],10)-1]+' dk');
+    }
+  }
+  if(multi){
+    // (d) Isınma + strides — "15 dk — hafif koşu Z1 · … + 2×200m hızlı (tam dinlenme)"
+    if(all.some(x=>x.label==='Strides')){
+      const m1=t.match(/^(.*?)\s*\+\s*(\d+\s*[×x]\s*\d+(?:[.,]\d+)?\s*(?:sn|dk|m)\b[^()]*?)\s*(?:\(([^)]*)\))?\s*$/i);
+      if(m1){
+        if(label==='Strides') t=m1[2].trim();
+        else if(isRest) t=(m1[3]||'arası dinlenme').trim();
+        else t=m1[1].trim();
+        done=true;
+      }
+    }
+    // (e) ON/OFF — "ON: … · OFF: … · Form bozulmamalı"
+    if(!done){
+      const m2=t.match(/^\s*ON:\s*(.*?)\s*·\s*OFF:\s*(.*)$/i);
+      if(m2){
+        const offSegs=m2[2].split(/\s*·\s*/);
+        const notes=offSegs.filter(x=>/^form\b/i.test(x));
+        const off=offSegs.filter(x=>!/^form\b/i.test(x)).join(' · ');
+        if(isRest) t=off;
+        else t=[m2[1].trim()].concat(notes).join(' · ');
+        done=true;
+      }
+    }
+    // (f) Teknik iniş — "4×(3 dk kontrollü teknik iniş → 3 dk kolay çıkış) — Z2 … tırmanışta, Z3 … inişte"
+    if(!done){
+      const m4=t.match(/^\s*\d+\s*[×x]\s*\(\s*([^→)]+?)\s*→\s*([^)]+?)\s*\)\s*—\s*(.*)$/);
+      if(m4){
+        const parts=m4[3].split(/,\s*(?=Z\d)/);
+        const up=parts.find(x=>/tırmanışta\s*$/i.test(x));
+        const down=parts.find(x=>/inişte\s*$/i.test(x));
+        const cl=(x,w)=>x?x.replace(new RegExp('\\s*'+w+'\\s*$','i'),'').trim():'';
+        const runIsDown=/iniş/i.test(m4[1]);
+        const runZ=runIsDown?cl(down,'inişte'):cl(up,'tırmanışta');
+        const restZ=runIsDown?cl(up,'tırmanışta'):cl(down,'inişte');
+        t=isRest?(m4[2].trim()+(restZ?' — '+restZ:'')):(m4[1].trim()+(runZ?' — '+runZ:''));
+        done=true;
+      }
+    }
+    // (g) Yürü-Koş — "6 tekrar: [2 dk 30 sn koşu → 90 sn yürüyüş] · Koşu: Z2 · …"
+    if(!done){
+      const m5=t.match(/^\s*\d+\s*tekrar:\s*\[([^\]]*)\]\s*·?\s*(.*)$/i);
+      if(m5){
+        const ab=m5[1].split('→');
+        if(isWalk) t=(ab[1]||'').trim()||t;
+        else if(!isRest) t=ab[0].trim()+(m5[2]?' · '+m5[2].replace(/^Koşu:\s*/i,''):'');
+        done=true;
+      }
+    }
+    // (h) Aynı metinde dinlenme parçası varsa: dinlenme satırı onu alır, çalışma satırından çıkarılır
+    if(!done&&all.some(x=>x.type==='rest')){
+      const segs=t.split(/\s+·\s+/);
+      // NOT: \b Türkçe harflerde (ş, ı, ö…) sınır sayılmaz — bu yüzden açık bir harf-değil kontrolü kullanılır.
+      const restRe=/^(?:tam\s+)?(?:[\d.,]+\s*(?:dk|sn)\s+)?(?:tam\s+)?(?:yürüyüş|dinlenme|aktif\s+toparlanma|toparlanma)(?![A-Za-zÇĞİÖŞÜçğıöşü])/i;
+      const idx=[];
+      segs.forEach((x,k)=>{if(restRe.test(x.trim())) idx.push(k);});
+      if(idx.length){
+        if(isRest&&!isOwn) t=segs[idx[idx.length-1]].trim();
+        else if(!isRest&&!isWalk&&idx.length<segs.length) t=segs.filter((_,k)=>!idx.includes(k)).join(' · ');
+      }
+    }
+    // (i) Dinlenme satırı için metinde hiçbir dinlenme bilgisi yoksa: kendi süresinden üret
+    if(!done&&!isOwn&&isRest&&t===text){
+      const sec=(r.h||0)*3600+(r.m||0)*60+(r.s||0);
+      if(sec>0) t=(sec>=120&&sec%60===0?(sec/60)+' dk':sec+' sn')+' dinlenme';
+    }
+  }
+  return t;
+}
+
 function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverrides, onSaveOverrides, onSaveDetay, readOnly, originalCueOnly, savedCuePatches, actualOrtNabiz, isWorkoutLogged, driftYorumNode}){
   // measureZones: girilen gerçek bpm'i bölgeye (Z1-Z5c) yerleştirirken kullanılacak
   // zone sınırları — o antrenmanın TARİHİNDEKİ LTHR/MHR'ye göre hesaplanmış olmalı.
@@ -12839,6 +12950,17 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     return customCues[label] !== undefined ? customCues[label] : coachingCue(label, tip);
   };
   const getCue = (label) => getCueForRow(label, label);
+  // 2026.10.05 — Satırın EKRANDA görünen açıklaması: kendi _cue'su ya da aşama detay'ı, ardından
+  // splitCueForRow ile "yalnız bu satırla ilgili" parçaya indirgenir. Açıklama metnini okuyan
+  // TÜM yerler (satır altı metin + NABIZ hedefi yedekleri) bu tek fonksiyonu kullanır.
+  const rowCueFor = (r) => {
+    const own = r._cue !== undefined && r._cue !== null;
+    const base = own ? r._cue : getCueForRow(r.label, r._srcBaslik || r.label);
+    if (base === null || base === undefined) return base;
+    const src = r._srcBaslik || r.label;
+    const sibs = rows.filter(x => x.type !== 'header' && (x._srcBaslik || x.label) === src);
+    return splitCueForRow(base, r, sibs, own);
+  };
   // _caprazNot olanlar tablo dışında yazılı gösterilir
   const caprazNotlar=(yapilar||[]).filter(y=>y._caprazNot);
   // Çapraz antrenman adımlarını filtrele
@@ -14527,7 +14649,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
                 // Öncelik sırası: 1) _cuePatch (row-label bazlı kullanıcı düzenlemesi)
                 // 2) r._cue (şablondan gelen _rows._cue) 3) getCueForRow (yapilar.detay / otomatik)
                 const _patchedCue=savedCuePatches?.[r.label];
-                const cue=fixPace60(enrichBareZones(_patchedCue!==undefined?_patchedCue:(r._cue!==undefined&&r._cue!==null?r._cue:getCueForRow(r.label,src)),_mZones));
+                const cue=fixPace60(enrichBareZones(_patchedCue!==undefined?_patchedCue:rowCueFor(r),_mZones));
                 const isEditing=editingLabel===r.label;
                 if(isEditing) return React.createElement('div',{style:{marginTop:4,display:'flex',gap:4,alignItems:'center'}},
                   React.createElement('input',{
@@ -14627,7 +14749,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
                   let _cdTarget=_cdSug.value!=null?_cdSug.value:null;
                   let _cdKind=_cdSug.kind||'ort';
                   if(_cdTarget==null){
-                    try{_cdTarget=bpmFromCueText((r.label||'')+' '+(r._cue!=null?r._cue:getCueForRow(r.label,r._srcBaslik||r.label)));}catch(_e){}
+                    try{_cdTarget=bpmFromCueText((r.label||'')+' '+rowCueFor(r));}catch(_e){}
                     _cdKind='ort';
                   }
                   const _cdHint=(bpmA==null&&_cdTarget!=null)?BPM_HINT_UI[_cdKind]:null;
@@ -14678,7 +14800,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
                 // 2026.09.29 — Nabız Odaklı satırda bölge tabanlı öneri yoksa reçete metnindeki bpm (aralık/üst sınır) yedek hedef olur.
                 let _sugVal=sug.value;
                 if(_sugVal==null&&effectiveBpm==null&&!r._isSprint&&r.type!=='header'&&focusIndicator(r)?.key==='hr'){
-                  try{_sugVal=bpmFromCueText((r.label||'')+' '+(r._cue!=null?r._cue:getCueForRow(r.label,r._srcBaslik||r.label)));}catch(_e){}
+                  try{_sugVal=bpmFromCueText((r.label||'')+' '+rowCueFor(r));}catch(_e){}
                 }
                 const displayVal=effectiveBpm!=null?effectiveBpm:(_sugVal!=null?_sugVal:(alwaysEditable?'—':null));
                 if(r.type==='header'||r._isSprint||(displayVal==null)) return typeof displayVal==='number'?displayVal:'—';
@@ -16559,7 +16681,7 @@ function tplHillSprint(band, zones, phase='Gelişme', phaseStep=0, race=null, at
     yapi_notu:yapiNotuHS,
     yapilar:[
       {baslik:'Isınma',detay:`15 dk Z1 kolay koşu`,_rows:_R.isinma(15)},
-      {baslik:'Maks. Yokuş Sprintleri',detay:`${hs.t}×${hs.s}sn maksimal çıkış (%8–12 eğim) · RPE 10 · ${extraHS}`,_rows:[{label:'Hill Sprint',sure_sn:hs.s,zIdx:5,tekrar:hs.t,din_sn:parseDinStr(hs.din),isSprint:true,rpe:'10'}]},
+      {baslik:'Maks. Yokuş Sprintleri',detay:`${hs.t}×${hs.s}sn maksimal çıkış (%8–12 eğim) · RPE 10 · ${extraHS}`,_rows:[{label:'Hill Sprint',sure_sn:hs.s,zIdx:5,tekrar:hs.t,din_sn:parseDinStr(hs.din),isSprint:true,rpe:'10',_dinCue:hs.din}]},
       {baslik:'Soğuma',detay:`10 dk düz zeminde Z1 hafif koşu + esneme`,_rows:_R.soguma(10)},
     ]
   };
