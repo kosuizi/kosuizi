@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.05-1500 --><!DOCTYPE html>
+<!-- Version: v2026.10.05-1519 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.05-1500';
+    var RUNNING='v2026.10.05-1519';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.05-1500';
+const APP_VERSION='v2026.10.05-1519';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -1898,6 +1898,14 @@ function focusOverrideKey(row){
   const k=row&&row._focusOverride&&row._focusOverride.key;
   return (k==='hr'||k==='pace'||k==='feel')?k:null;
 }
+// 2026.10.05 — Göksel talebi: odak seçicisi HER satırda (Isınma/Soğuma/Dinlenme/Yürüyüş/RPE'li/Sprint/Yarış/Uzun Yokuş...)
+// üç seçeneği de (Nabız/Pace/Hissiyat) sunar; OTOMATİK odaklar değişmez. Koç Nabız ya da Pace'i elle seçtiyse, o satırın
+// tasarım gereği kilitli olan nabız değerlendirmesi açılır (manualFocusOn); pace değerlendirmesi ise yalnızca Pace seçildiyse
+// açılır (focusOverrideKey(row)==='pace'). Serbest Koşu bunun dışında: hedef bölge/pace hiç yok, değerlendirilecek bir şey yok.
+function manualFocusOn(row){
+  const k=focusOverrideKey(row);
+  return k==='hr'||k==='pace';
+}
 
 // ── Manuel rozet → puanlama sinyali (2026.09.05 — Göksel talebi) ─────────────────
 // ReceteTablosu'nda coach bir rozeti elle düzelttiğinde (_paceBadgeOverride/
@@ -2059,11 +2067,12 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         // de TAMAMEN dışlanıyordu — rozet ekranda doğru gösterilirken (HR rozeti çıkıyordu) puanlama
         // motoru o veriyi hiç görmüyordu. Aşağıya (pace bloğu, "_rpeExcludesPace") taşındı — artık
         // sadece pace sinyalini etkiliyor, tıpkı paceValidation/bpmValidation'daki gibi.
-        if(row.type==='header'||row._isSprint) return;
+        // 2026.10.05 — Göksel talebi: koç Nabız/Pace'i elle seçtiyse sprint satırı da değerlendirilir (bpmValidation/paceValidation ile AYNI)
+        const _fk=focusOverrideKey(row);
+        if(row.type==='header'||(row._isSprint&&_fk!=='hr'&&_fk!=='pace')) return;
         // 2026.09.21 — Göksel talebi (manuel odak seçimi, bkz. FOCUS_OPTIONS): koç satırın odağını
         // Hissiyat yaptıysa bu satırdan NE pace NE nabız sinyali üretilir (sprint satırıyla aynı) —
         // Hedef Uyumu/Liderlik ve kalibrasyon bu satırı hiç görmez. Rozetler de gizli (bkz. ReceteTablosu).
-        const _fk=focusOverrideKey(row);
         if(_fk==='feel') return;
         // 2026.09.01 — Göksel talebi: Uzun Yokuş ve Power Hiking tamamen RPE/
         // hissiyat odaklı koşulmalı, skor hesabına HİÇ girmemeli. Diğer dallardaki
@@ -2232,7 +2241,37 @@ function extractFeedbackSignals(allSnapsObj, athlete){
           // tutarsızlığı teşhisi). Skora hiçbir etkisi yok — sadece Liderlik'teki "Ham Faz
           // Verisi" panelinin, bu satırın Firebase'de HANGİ ham `type` değeriyle kayıtlı
           // olduğunu (ve hangi tekrar no'sunda) gösterebilmesi için eklendi.
-          if(mesafeDir||mesafeOk||hrDir||hrOk) signals.push({date,label:row.label||null,_rep:_rep??null,type:row.type??null,mesafeDir,mesafeOk,mesafeDiffPct,mesZoneKolay,hrDir,hrOk,hrWeight,zi:row._origZIdx??0,zoneId:null});
+          // 2026.10.05 — Göksel talebi: Isınma/Soğuma/Dinlenme satırında koç elle Pace Odaklı seçtiyse pace de değerlendirilir
+          // (paceValidation ile AYNI bant/tolerans: zon bandı + hedef ±PACE_MIN_TOL_SEC; yürüyüş/dinlenme'de planlanan pace'e nokta-bazlı ±25 sn).
+          // Kalibrasyon oyu (calPaceW) ÜRETİLMEZ — geçiş fazı pace'i vLT kalibrasyonunu kaydırmasın.
+          let _skPaceOk=false,_skPaceDir=null,_skPaceDiff=null,_skPaceTol=null;
+          if(_fk==='pace'){
+            const _skEnt=(row.pm||0)*60+(row.ps||0);
+            const _skOrig=row._targetPaceSec!=null?row._targetPaceSec:row._origPaceSec;
+            if(_skEnt>0&&_skOrig>0){
+              let _skCmp=_skEnt, _skGapApplied=false;
+              const _skDistM=row.mesafe>0?row.mesafe:row._origMesafe;
+              if(row.dp>0&&_skDistM>0){const _g=calcGAP(row.dp,_skDistM/1000,0); if(_g){_skCmp=Math.round(_skEnt/_g.factor);_skGapApplied=true;}}
+              const _skZi=row._targetZIdx!=null?row._targetZIdx:row._origZIdx;
+              const _skPz=(_skZi!=null&&row.type!=='walk'&&row.type!=='rest')?zones?.paceZones?.[_skZi]:null;
+              if(!(row._isGapRow&&!_skGapApplied)&&_skPz?.lo_ms&&_skPz?.hi_ms){
+                let _f=Math.round(1000/_skPz.hi_ms), _sl=Math.round(1000/_skPz.lo_ms);
+                const _spP=(()=>{const sp=activeZoneSpan(row,_skZi);return sp?spanPaceBounds(zones,sp):null;})();
+                if(_spP){_f=_spP.fast;_sl=_spP.slow;}
+                const _zw=_sl-_f;
+                const _tol=Math.max(PACE_MIN_TOL_SEC,Math.round(_zw*(row._isGapRow?1.0:0.5)));
+                ({fast:_f,slow:_sl}=paceBandMinTol(_f,_sl,_skOrig));
+                if(_skCmp>=_f&&_skCmp<=_sl){_skPaceOk=true;_skPaceDiff=0;_skPaceTol=_tol;}
+                else if(_skCmp<_f){_skPaceDiff=-(_f-_skCmp);_skPaceTol=_tol;_skPaceDir='fast';}
+                else{_skPaceDiff=_skCmp-_sl;_skPaceTol=_tol;_skPaceDir='slow';}
+              } else {
+                const _d=_skCmp-_skOrig, _tol=row._isGapRow?50:25;
+                _skPaceDiff=_d;_skPaceTol=_tol;
+                if(_d<-_tol)_skPaceDir='fast'; else if(_d>_tol)_skPaceDir='slow'; else _skPaceOk=true;
+              }
+            }
+          }
+          if(mesafeDir||mesafeOk||hrDir||hrOk||_skPaceDir||_skPaceOk) signals.push({date,label:row.label||null,_rep:_rep??null,type:row.type??null,mesafeDir,mesafeOk,mesafeDiffPct,mesZoneKolay,hrDir,hrOk,hrWeight,zi:row._origZIdx??0,zoneId:null,...(_fk==='pace'?{paceDir:_skPaceDir,paceOk:_skPaceOk,paceDiff:_skPaceDiff,paceTol:_skPaceTol,focus:'pace'}:{})});
           return;
         }
         let paceDir=null, hrDir=null, paceOk=false, hrOk=false, paceDiff=null, paceTol=null;
@@ -2320,7 +2359,7 @@ function extractFeedbackSignals(allSnapsObj, athlete){
           :null;
         if(_paceOverrideSig&&!_tempoluKolayExcludesPace){
           ({paceOk,paceDir,paceDiff,paceTol}=_paceOverrideSig);
-        } else if(!_tempoluKolayExcludesPace&&(pm>0||ps>0)&&row.type!=='rest'&&(row.type!=='walk'||_fk==='pace')&&!_rpeExcludesPace&&!_isRaceRow){
+        } else if(!_tempoluKolayExcludesPace&&(pm>0||ps>0)&&((row.type!=='rest'&&row.type!=='walk')||_fk==='pace')&&!_rpeExcludesPace&&(!_isRaceRow||_fk==='pace')){ // 2026.10.05: Pace Odaklı elle seçildiyse rest/yarış satırı da pace puanlanır
           const origPace=row._targetPaceSec!=null?row._targetPaceSec:row._origPaceSec;
           if(enteredSec>0&&origPace>0){
             // ── Panel Parite Düzeltmesi (2026.08.11 — Göksel talebi): ReceteTablosu'ndaki
@@ -2344,7 +2383,7 @@ function extractFeedbackSignals(allSnapsObj, athlete){
             // (bkz. aşağıdaki `hr` değişkeni, _origLoBpm/_origHiBpm donmuşsa onu tercih eder;
             // donmamışsa artık CANLI değil, o GÜNÜN zone'una düşer — HR için de aynı iyileşme).
             // 2026.09.23: yürüyüş + Pace Odaklı → zon bandı kullanılmaz (koşu bandıdır), nokta-bazlı fallback (paceValidation ile aynı)
-            const pz=(zi!=null&&row.type!=='walk')?zones?.paceZones?.[zi]:null;
+            const pz=(zi!=null&&row.type!=='walk'&&row.type!=='rest')?zones?.paceZones?.[zi]:null;
             // 2026.09.19: _isGapRow satırında gerçek D+ yoksa (GAP hesaplanamaz) düz zon bandı
             // yerine planlanan (yavaşlatılmış) hedef pace'e düşülür — paceValidation ile aynı kural.
             if(!(row._isGapRow&&!_gapApplied)&&pz?.lo_ms&&pz?.hi_ms){
@@ -2410,7 +2449,7 @@ function extractFeedbackSignals(allSnapsObj, athlete){
           :null;
         if(_hrOverrideSig){
           ({hrOk,hrDir,hrWeight}=_hrOverrideSig);
-        } else if(row.bpm!=null&&zi!=null&&hr&&!_isRaceRow){
+        } else if(row.bpm!=null&&zi!=null&&hr&&(!_isRaceRow||_fk==='hr'||_fk==='pace')){ // 2026.10.05: koç Nabız/Pace seçtiyse yarış satırı nabzı da değerlendirilir
           if(hr.lo_bpm&&hr.hi_bpm){
             // Rozet sistemiyle (bpmValidation/bpmValidationAralik) BİREBİR aynı kademe:
             // tolerans payı (target) içindeki sapmalar sinyal üretmez — gürültü filtrelenir.
@@ -11945,13 +11984,14 @@ function AralikEditor({headerIdx, repCount, runRow, restRow, overrides, onChange
     // istisnasıyla BİREBİR aynı şekilde ele alınıyor (Strides/Sprint/Hill/Depar/Açıcı/
     // Yokuş "... Arası" satırları hâlâ hariç, On-Off'un düz "Dinlenme" etiketi hariç
     // DEĞİL).
+    const _manualAralik=manualFocusOn(rowData); // 2026.10.05: koç Nabız/Pace seçtiyse sprint/sprint-arası bacak da değerlendirilir
     if(type==='run'){
-      if(rowData?._isSprint||runRow?._isSprint) return null;
+      if((rowData?._isSprint||runRow?._isSprint)&&!_manualAralik) return null;
     } else {
-      if(rowData?._isSprint) return null;
+      if(rowData?._isSprint&&!_manualAralik) return null;
       const _rowLabelAralik=rowData?.label||'';
       const _isSprintRestRowAralik=/strides|sprint|hill|depar|açıcı|yokuş/i.test(_rowLabelAralik)&&/arası/i.test(_rowLabelAralik);
-      if(_isSprintRestRowAralik) return null;
+      if(_isSprintRestRowAralik&&!_manualAralik) return null;
     }
     const ovBpm=overrides[rep]?.[type]?.bpm;
     if(ovBpm==null) return null;
@@ -13137,14 +13177,14 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
   
   // Soğuma/ısınma: zone sapması beklenen fizyolojik durum → tarafsız gri rozet
   const bpmValidation=(row)=>{
-    if(!row||row.type==='header'||row._isSprint) return null; // sprint hariç tüm satırlar bpm validasyonuna açık
+    if(!row||row.type==='header'||(row._isSprint&&!manualFocusOn(row))) return null; // sprint hariç tüm satırlar bpm validasyonuna açık (2026.10.05: koç Nabız/Pace seçtiyse sprint de açık)
     if(focusOverrideKey(row)==='feel') return null; // 2026.09.21: koç odağı Hissiyat yaptıysa nabız değerlendirilmez (sprint satırıyla aynı)
     if(tip==='serbest') return null; // Serbest Koşu: hedef yok — nabız validasyonu yapma
     // 2026.08.23 — Göksel talebi: "Yarışlar için herhangi bir değerlendirme yapılmasını
     // istemiyorum." paceValidation'daki tip==='yaris' istisnasıyla BİREBİR aynı —
     // yarışta yüksek nabız beklenen/istenen bir şeydir, "sapma" rozetine dönüşmemeli.
     // extractFeedbackSignals'daki karşılığı için bkz. ~satır 1498 (_isRaceRow).
-    if(tip==='yaris') return null;
+    if(tip==='yaris'&&!manualFocusOn(row)) return null; // 2026.10.05: koç Nabız/Pace'i elle seçtiyse yarış satırı da değerlendirilir
     // 2026.09.01 — Göksel talebi: Uzun Yokuş ve Power Hiking tamamen RPE/hissiyat
     // odaklı koşulmalı — pace zaten RPE istisnasıyla dışlanıyordu (eğim antrenman
     // boyunca değişken, pace hedefi anlamsız); AYNI gerekçe nabza da uygulanıyor
@@ -13157,7 +13197,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     // Sprint/strides dinlenme satırlarında nabız tam inemez → gösterge atlanır
     const rowLabel=row.label||'';
     const isSprintRestRow=/strides|sprint|hill|depar|açıcı|yokuş/i.test(rowLabel)&&/arası/i.test(rowLabel);
-    if(isSprintRestRow) return null;
+    if(isSprintRestRow&&!manualFocusOn(row)) return null; // 2026.10.05: koç Nabız/Pace seçtiyse sprint-arası dinlenme de değerlendirilir
     if(row.bpm==null) return null;
     const zi=row._origZIdx;
     if(zi==null) return null;
@@ -13362,9 +13402,9 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     // anlamlı bir uyum sinyali değildir). Asıl ihtiyaç rozet görünürlüğünü değiştirmek
     // değil, rozet+puanlama arasındaki TUTARLILIĞI garantilemekti (bkz. aşağıdaki geniş
     // tutarlılık denetimi notu).
-    if(!row||row.type==='header'||(row.rpe&&tip!=='yuru_kos'&&row.type!=='walk'&&focusOverrideKey(row)!=='pace')||row._isSprint) return null; // 2026.10.05: elle seçilmiş Pace Odaklı, RPE'li satırda da pace'i açar
+    if(!row||row.type==='header'||(row.rpe&&tip!=='yuru_kos'&&row.type!=='walk'&&focusOverrideKey(row)!=='pace')||(row._isSprint&&focusOverrideKey(row)!=='pace')) return null; // 2026.10.05: elle seçilmiş Pace Odaklı, RPE'li ve sprint satırda da pace'i açar
     if(focusOverrideKey(row)==='feel') return null; // 2026.09.21: koç odağı Hissiyat yaptıysa pace değerlendirilmez (sprint satırıyla aynı)
-    if(tip==='yaris') return null; // Yarışlarda pace kontrolü yapma
+    if(tip==='yaris'&&focusOverrideKey(row)!=='pace') return null; // Yarışlarda pace kontrolü yapma (2026.10.05: koç elle Pace Odaklı seçtiyse yapılır)
     if(tip==='serbest') return null; // Serbest Koşu: hedef yok — fallback _origPaceSec'e göre de validasyon yapma
     // 2026.09.01 — Göksel talebi: Uzun Yokuş/Power Hiking zaten satırlardaki RPE
     // alanı yüzünden yukarıdaki genel kuralla dolaylı olarak dışlanıyordu — ama
@@ -13373,7 +13413,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     // netlikte, tip bazında AÇIKÇA dışlanıyor — bkz. bpmValidation/focusIndicator'daki
     // birebir aynı kontrol.
     if((tip==='yokus_uzun'||tip==='power_hiking')&&!focusOverrideKey(row)) return null; // 2026.10.05: koç odağı elle Nabız/Pace seçtiyse kilit kalkar
-    if(/[iı]sınma|isinma|soğuma|soguma/i.test(row.label||'')) return null; // Isınma/soğuma geçiş fazı — valide etme
+    if(/[iı]sınma|isinma|soğuma|soguma/i.test(row.label||'')&&focusOverrideKey(row)!=='pace') return null; // Isınma/soğuma geçiş fazı — valide etme (2026.10.05: koç elle Pace Odaklı seçtiyse edilir)
     // ── OP-YK3 (29.07.2026 — koç geri bildirimi): Dinlenme/toparlanma fazları (On-Off,
     // İnterval, Piramit vb. "rest" satırları VE Yürü-Koş "walk" yürüyüş satırları) artık
     // PACE değil NABIZ BÖLGESİ hedefli değerlendirilir. Bu fazlarda amaç bir sonraki
@@ -13389,7 +13429,7 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     // fazlarda pace'e dayalı bir rozet artık ÜRETİLMEZ.
     // 2026.09.23 — Göksel talebi: koç yürüyüş satırında elle "Pace Odaklı" seçtiyse pace rozeti üretilir
     // (yürüyüş pace'i koşu zon bandıyla DEĞİL, planlanan yürüyüş pace'iyle nokta-bazlı kıyaslanır — aşağıda).
-    const _walkPaceFocus=row.type==='walk'&&focusOverrideKey(row)==='pace';
+    const _walkPaceFocus=(row.type==='walk'||row.type==='rest')&&focusOverrideKey(row)==='pace'; // 2026.10.05: Dinlenme (rest) satırı da Pace seçilebilir — yürüyüşle aynı nokta-bazlı kıyas
     if((row.type==='rest'||row.type==='walk')&&!_walkPaceFocus) return null;
     const pm=row.pm; const ps=row.ps;
     // Hem pm hem ps boş/sıfır → henüz giriş yok, validasyon yapma
@@ -13548,6 +13588,9 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
     return autoFocusIndicator(row);
   };
   // Koçun bir satır için seçebileceği odaklar — "en baştan o odakla tasarlanmış olsaydı" ilkesi:
+  //  2026.10.05 — Göksel talebi: AŞAĞIDAKİ KISITLAR SEÇİCİ İÇİN KALKTI — her satırda Nabız/Pace/Hissiyat seçilebilir
+  //  (aşağıdaki maddeler yalnızca OTOMATİK odağı anlatır). Elle Nabız/Pace seçilen satırda kilitli değerlendirme açılır
+  //  (bpmValidation/paceValidation/extractFeedbackSignals aynı kapıları manualFocusOn/focusOverrideKey ile gevşetir).
   //  • Sistemde zaten Hissiyat olan satırlar (sprint/yarış/serbest/uzun yokuş/power hiking/sprint
   //    arası dinlenme) → seçici YOK (hedef pace/nabız bölgesi hiç yok, anlamlı bir odak değişimi olamaz).
   //  • Pace hiç değerlendirilmeyen satırlar (Isınma/Soğuma/Dinlenme/Yürüyüş/RPE'li) → Nabız ↔ Hissiyat
@@ -13562,12 +13605,10 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
   //    pace değerlendirilmeyen bacaklarda Nabız ↔ Hissiyat) bacaklar için de aynen geçerli.
   const focusOverrideOptions=(row)=>{
     if(!row||row.type==='header') return null;
-    const g=_focusGates(row);
-    if(!g.hrActive&&!g.manualOnly) return null;
-    const opts=[FOCUS_OPTIONS.hr];
-    if(g.paceActive||g.walkPaceSelectable||g.manualPaceOk) opts.push(FOCUS_OPTIONS.pace);
-    opts.push(FOCUS_OPTIONS.feel);
-    return opts;
+    // 2026.10.05 — Göksel talebi: HER satırda HER seçenek seçilebilir (eski kapılar — hrActive/manualOnly/
+    // walkPaceSelectable/manualPaceOk — artık seçiciyi kısıtlamaz). OTOMATİK odak (autoFocusIndicator) bu
+    // kapılarla AYNEN çalışmaya devam eder: koç seçmedikçe hiçbir satırın odağı/davranışı değişmez.
+    return [FOCUS_OPTIONS.hr,FOCUS_OPTIONS.pace,FOCUS_OPTIONS.feel];
   };
 
   // ── Süre / Mesafe Odaklı (2026.09.28 — Göksel talebi) — standart rozet + koç seçimi ──────────
@@ -14770,11 +14811,11 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
                 const alwaysEditable=r.type==='run'||r.type==='walk';
                 // 2026.09.29 — Nabız Odaklı satırda bölge tabanlı öneri yoksa reçete metnindeki bpm (aralık/üst sınır) yedek hedef olur.
                 let _sugVal=sug.value;
-                if(_sugVal==null&&effectiveBpm==null&&!r._isSprint&&r.type!=='header'&&focusIndicator(r)?.key==='hr'){
+                if(_sugVal==null&&effectiveBpm==null&&(!r._isSprint||manualFocusOn(r))&&r.type!=='header'&&focusIndicator(r)?.key==='hr'){
                   try{_sugVal=bpmFromCueText((r.label||'')+' '+rowCueFor(r));}catch(_e){}
                 }
                 const displayVal=effectiveBpm!=null?effectiveBpm:(_sugVal!=null?_sugVal:(alwaysEditable?'—':null));
-                if(r.type==='header'||r._isSprint||(displayVal==null)) return typeof displayVal==='number'?displayVal:'—';
+                if(r.type==='header'||(r._isSprint&&!manualFocusOn(r))||(displayVal==null)) return typeof displayVal==='number'?displayVal:'—'; // 2026.10.05: koç Nabız/Pace seçtiyse sprint satırında da nabız girilebilir
                 // Aralık ortalaması: salt gösterim
                 if(avgBpm!=null&&manualBpm==null) return avgBpm;
                 const hintUI=sug.kind?BPM_HINT_UI[sug.kind]:null;
