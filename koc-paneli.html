@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.05-0823 --><!DOCTYPE html>
+<!-- Version: v2026.10.05-0838 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.05-0823';
+    var RUNNING='v2026.10.05-0838';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.05-0823';
+const APP_VERSION='v2026.10.05-0838';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -3522,6 +3522,25 @@ function lastVltChangeDate(ath){
   let prev=null,last=null;
   h.forEach(x=>{const v=parseSayi(x.vlt); if(prev!==null&&Math.abs(v-prev)>1e-9) last=x.date; prev=v;});
   return last;
+}
+// ── Sınır beklemesi: vLT yakın zamanda değiştiyse (2026.10.05 — Göksel talebi) ─────────────────────────
+// Çıpa uygulanınca vLT değişir ve Sınır penceresi o tarihe kırpılır; Sınır önerisi vLT değişiminden sonraki
+// kısa veriye dayanır. Önerilen rutin: Çıpa uygulandıysa Sınır'ı en az CAL_BC_WAIT_AFTER_VLT_DAYS gün beklet.
+// "vLT değişimi" = Çıpa kalibrasyonu (kesin tarih) ya da profil geçmişindeki gerçek elle değişim — Sınır
+// taramasının pencere kırpmasıyla AYNI tarih kaynağı.
+const CAL_BC_WAIT_AFTER_VLT_DAYS=7;
+function boundaryWaitAfterVltReason(ath,nowMs){
+  const stamp=(calibStampISO(ath,'fb')||'').substring(0,10)||null;
+  const chg=lastVltChangeDate(ath);
+  const latest=[stamp,chg].filter(Boolean).sort().pop();
+  if(!latest) return null;
+  // Gün farkı TAKVİM günü olarak (saat farkından değil): öğleden önce bakınca "bugün" −1 çıkmasın
+  const _n=new Date(nowMs||Date.now());
+  const _u=Date.UTC(_n.getFullYear(),_n.getMonth(),_n.getDate());
+  const [_y,_m,_d]=latest.split('-').map(Number);
+  const days=Math.round((_u-Date.UTC(_y,_m-1,_d))/864e5);
+  if(days<0||days>=CAL_BC_WAIT_AFTER_VLT_DAYS) return null;
+  return 'vLT '+(days<=0?'bugün':days+' gün önce')+' değişti ('+(latest===stamp?'Çıpa kalibrasyonu':'elle güncelleme')+') — Sınır önerisi bu değişimden sonraki kısa veriye dayanıyor; en az '+CAL_BC_WAIT_AFTER_VLT_DAYS+' gün beklemek ve Çıpa\'nın yeni vLT\'de oturmasını görmek daha güvenli.';
 }
 // ── Otomatik Uygulama Kontrolü (2026.10.04 — Göksel talebi) ─────────────────────────────
 // Rozet artık yalnızca Çıpa↔Sınır önceliğine değil, iki ek koşula da bakar (yumuşak etki: yalnızca 🟡 +
@@ -28133,7 +28152,8 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
   const fbReady=!!fbAnalysis?.vltAction;
   const bcReady=!!(bcAnalysis&&HR_BOUNDARY_KEYS.some(k=>bcAnalysis[k]?.action));
   const fbChecks=fbReady?calibApplyChecks(athlete,[{dir:fbAnalysis.vltAction,dates:fbAnalysis.vlt?.dominantDates||[],confidence:fbAnalysis.vlt?.confidence,consistency:fbAnalysis.vlt?.consistency}]):[];
-  const bcChecks=bcReady?calibApplyChecks(athlete,HR_BOUNDARY_KEYS.filter(k=>bcAnalysis[k]?.action).map(k=>({dir:bcAnalysis[k].action,dates:bcAnalysis[k].dominantDates||[],confidence:bcAnalysis[k].confidence,consistency:bcAnalysis[k].consistency,label:HR_BOUNDARY_LABEL[k]}))):[];
+  const _bcWait=bcReady?boundaryWaitAfterVltReason(athlete):null;
+  const bcChecks=bcReady?[...(_bcWait?[_bcWait]:[]),...calibApplyChecks(athlete,HR_BOUNDARY_KEYS.filter(k=>bcAnalysis[k]?.action).map(k=>({dir:bcAnalysis[k].action,dates:bcAnalysis[k].dominantDates||[],confidence:bcAnalysis[k].confidence,consistency:bcAnalysis[k].consistency,label:HR_BOUNDARY_LABEL[k]})))]:[];
   const fbBadge=crossCalibBadge({mechanism:'anchor',ownActionReady:fbReady,otherActionReadyNow:bcReady,extraReasons:fbChecks});
   const bcBadge=crossCalibBadge({mechanism:'boundary',ownActionReady:bcReady,otherActionReadyNow:fbReady,extraReasons:bcChecks});
   const renderCalibBadge=(badge)=>{
@@ -28325,6 +28345,14 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
         'Her faz için pace ve nabzın hedef noktadan sapması (yön + şiddet) rozet toleransından bağımsız ölçülür; zıt yöndeki sapmalar birbirini götürür. Kolay bölgede (Z1-Z2) pace ve nabız birlikte rozet dışındaysa sayılır. ',
         '≥2 farklı günde uyumlu net yön + yeterli puan → eylem önerisi; adım büyüklüğü sinyal gücüne göre değişir. Isınma, soğuma, dinlenme hariç.'
       ),
+      // 2026.10.05 — Göksel talebi: önerilen haftalık kalibrasyon rutini
+      React.createElement('details',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:8}},
+        React.createElement('summary',{style:{cursor:'pointer',color:'var(--info)'}},'📌 Haftalık kalibrasyon rutini (hangi sırayla?)'),
+        React.createElement('ol',{style:{margin:'6px 0 0',paddingLeft:18,lineHeight:1.5}},
+          React.createElement('li',null,'Hafta sonu / yeni hafta başlamadan ÖNCE iki mekanizmayı da tarayın — tarama tarih atmaz, yalnızca okur.'),
+          React.createElement('li',null,'Çıpa (bu kart) 🟢 ve eylem varsa yalnızca Çıpa\'yı uygulayın. Sınır\'ı o hafta bekletin: Çıpa uygulanınca vLT değişir ve Sınır penceresi o tarihe kırpılır; Sınır, vLT değişiminden sonra '+CAL_BC_WAIT_AFTER_VLT_DAYS+' gün 🟡 uyarısı verir.'),
+          React.createElement('li',null,'Çıpa\'da eylem yoksa ve Sınır 🟢 ise Sınır\'ı uygulayın. Sınır taramasını yaklaşık 4 haftada bir, vLT\'nin sakin olduğu (Çıpa\'da eylem çıkmayan) bir haftada yapın.'),
+          React.createElement('li',null,'Uygulamadan önce 🟡 uyarısının nedenini okuyun; hasta/yorgun dönemde "aşağı" öneriyi uygulamayın.'))),
       // Yeni veri yok uyarısı
       fbNoNewData&&React.createElement('div',{className:'alert alert-warn',style:{fontSize:12}},
         '🔁 Son kalibrasyondan bu yana yeni antrenman verisi girilmemiş — bir sonraki antrenmanın ardından tekrar tarayın.'
