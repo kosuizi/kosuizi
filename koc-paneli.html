@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.05-1404 --><!DOCTYPE html>
+<!-- Version: v2026.10.05-1420 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.05-1404';
+    var RUNNING='v2026.10.05-1420';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.05-1404';
+const APP_VERSION='v2026.10.05-1420';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -15873,6 +15873,24 @@ function calcProgressionSIdx(baseIdx, phaseStep, phaseMaxIdx){
   return Math.min(baseIdx+(phaseStep||0), phaseMaxIdx);
 }
 
+// ── Seviye adımı (mesosikl) — "Planı Güncelle" basış sayısından BAĞIMSIZ ───────
+// KÖK NEDEN DÜZELTMESİ (05.10.2026 — Göksel talebi: "Kısa Yokuş S1 → tekrar bastım S2"):
+// Bir türde sporcunun geçmiş kaydı yoksa (veya kayıtta S-seviyesi yoksa)
+// calcSeviyeFromHistory fallback'e (calcProgressionSIdx) düşer; o da phaseStep'e bağlıydı
+// ve phaseStep her basışta +1 artan athlete._planRotOffset'i içeren rotIdx'ten geliyordu.
+// Üstüne rotIdx'teki takvim haftası epoch'a göre (Perşembe 00:00 UTC'de) değişiyordu —
+// yani seviye hafta ortasında da kayabiliyordu. Artık seviye adımı yalnızca
+//   sporcu hash'i + planlanan haftanın (Pazartesi başlangıçlı) sırası
+// ile hesaplanır: aynı hafta içinde ne kadar basılırsa basılsın AYNI kalır, hafta
+// değişince mesosikl (0→1→2→0) ilerler. Tür ÇEŞİTLİLİĞİ (pickSeq) hâlâ eski
+// rotasyonu (_planRotOffset dahil) kullanır — yalnızca SEVİYE sabitlendi.
+function seviyeAdimiHesapla(athlete, weekStart){
+  const athHash=((athlete&&athlete.id)||'').split('').reduce((h,c)=>((h<<5)-h+c.charCodeAt(0))|0,0);
+  const wkIdx=Math.floor(new Date(weekStart).getTime()/(7*24*3600*1000));
+  const r=Math.abs(athHash%97)+wkIdx;
+  return r%4===3?0:r%4;
+}
+
 // ── Geçmiş Performansa Dayalı S-Seviye Motoru ────────────────────────────────
 // KÖK NEDEN DÜZELTMESİ (31.08.2026 — Göksel talebi): S-seviyesi (S1/S2/S3...)
 // yukarıdaki calcProgressionSIdx ile SADECE faz+band+phaseStep formülünden
@@ -19773,7 +19791,8 @@ function recommendWorkout(athlete, history, races, workoutsThisWeek, allWorkouts
   const _athHashRec=(athlete.id||'').split('').reduce((h,c)=>((h<<5)-h+c.charCodeAt(0))|0,0);
   const _rotIdxRec=Math.abs(_athHashRec%97)+Math.floor(Date.now()/(7*24*3600*1000))+(athlete._planRotOffset||0);
   // phaseStep: recommendWorkout için rotIdx'ten hesapla
-  const _phaseStepRec=(phase==='Taper'||phase==='Yarış Sonrası')?0:(_rotIdxRec%4===3?0:_rotIdxRec%4);
+  // 05.10.2026 — seviye adımı basış sayısından bağımsız (bkz. seviyeAdimiHesapla)
+  const _phaseStepRec=(phase==='Taper'||phase==='Yarış Sonrası')?0:seviyeAdimiHesapla(athlete,getWeekBounds(0).start);
 
   const wkStatsForPlan={
     count:wkSessions,
@@ -20234,7 +20253,11 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
   const sonYogunGun=wkStats.sonYogunGun||false;
   const haftaGunTipi=wkStats.haftaGunTipi||null;
   // phaseStep: Taper/Yarış Sonrası fazlarında sıfıra düşürülür (yük azaltma dönemi)
-  const phaseStep=(phase==='Taper'||phase==='Yarış Sonrası')?0:(wkStats.phaseStep||0);
+  // phaseStep → şablonlara (S-seviyesi) giden SABİT adım; phaseStepRot → yalnızca pickSeq'in
+  // TÜR çeşitliliği için (her "Planı Güncelle"de değişmesi istenen eski rotasyon).
+  const _faz0=(phase==='Taper'||phase==='Yarış Sonrası');
+  const phaseStepRot=_faz0?0:(wkStats.phaseStep||0);
+  const phaseStep=_faz0?0:(wkStats.phaseStepSeviye??wkStats.phaseStep??0);
 
   // ── Yarışsız dönem antrenman amacı ───────────────────────────────────────
   // Sporcunun seçili amacı — yalnızca aktif yarış yokken antrenman seçimine etki eder
@@ -20806,7 +20829,7 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
       const haftaIciSira=wkStats.kaliteliSayisi||0; // Bu haftanın kaçıncı kaliteli antrenmanı
       // Aynı haftada tekrar vermeme: recent + buHaftaKaliteli birleştir
       const pickSeq=(seq)=>{
-        const startIdx=(wk+haftaIciSira+phaseStep)%seq.length;
+        const startIdx=(wk+haftaIciSira+phaseStepRot)%seq.length;
         const yasak=[...recent.slice(0,2),...buHaftaKaliteli];
         const turFreq=wkStats.turFrekans||{};
         const turSon=wkStats.turSonKullanim||{};
@@ -21478,7 +21501,7 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
     const turFrekans=calcTurFrekans(athWorkouts,_planTodayStr,42);
     // phaseStep: 3+1 mesosikl adımı (0→1→2→0 toparlanma); Taper/Yarış Sonrası planDay'de 0'a çekilir
     const phaseStepFromRot=rotIdx%4===3?0:rotIdx%4;
-    let wkStats={count:0,kaliteliYok:true,uzunYapildi:false,wkLoad:0,dpHedefHafta:(_effDpOverride??wt?.targetDp)??0,targetKmHafta:(_effKmOverride??wt?.targetKm)??0,_noRaceMaxGunlukKm:wt?._noRaceMaxGunlukKm||0,weekOff:rotIdx,isFutureWeek:weekOff>0,recentKaliteli,recentLongRuns,sonYogunGun:sonYogunGunGlobal,testPlanlar:testPlanlar||[],sonAntrenmanDate:sonAntrenman?.date||null,sonRecoveryHedef,sonRecoverySaatler,athWorkouts,buHaftaKaliteli:[],kaliteliSayisi:0,yuksekKaliteliSayisi:0,aerobikSayisi:0,turSonKullanim,turFrekans,phaseStep:phaseStepFromRot};
+    let wkStats={count:0,kaliteliYok:true,uzunYapildi:false,wkLoad:0,dpHedefHafta:(_effDpOverride??wt?.targetDp)??0,targetKmHafta:(_effKmOverride??wt?.targetKm)??0,_noRaceMaxGunlukKm:wt?._noRaceMaxGunlukKm||0,weekOff:rotIdx,isFutureWeek:weekOff>0,recentKaliteli,recentLongRuns,sonYogunGun:sonYogunGunGlobal,testPlanlar:testPlanlar||[],sonAntrenmanDate:sonAntrenman?.date||null,sonRecoveryHedef,sonRecoverySaatler,athWorkouts,buHaftaKaliteli:[],kaliteliSayisi:0,yuksekKaliteliSayisi:0,aerobikSayisi:0,turSonKullanim,turFrekans,phaseStep:phaseStepFromRot,phaseStepSeviye:seviyeAdimiHesapla(athlete,start)};
 
     // ── Hafta İskeleti — Antrenman Bilimi Prensipleri ─────────────────────────
     // Temel prensipler:
@@ -21841,8 +21864,8 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
           const yuksekDolu=(wkStats.yuksekKaliteliSayisi||0)>=(wkStats.maxYuksekKaliteli??Infinity);
           const kaliteTip=(simState.ctl>40&&!yuksekDolu)?'interval':'esik';
           const kaliteTpl=kaliteTip==='interval'
-            ?tplInterval(planBand,phase,planZones,phaseStepFromRot)
-            :tplEsik(planBand,Math.round(55*planYMod),planZones,phase,phaseStepFromRot);
+            ?tplInterval(planBand,phase,planZones,wkStats.phaseStepSeviye)
+            :tplEsik(planBand,Math.round(55*planYMod),planZones,phase,wkStats.phaseStepSeviye);
           const sureDk=kaliteTpl.sure_dk||Math.round(50*planYMod);
           planned={...kaliteTpl,sure_dk:sureDk,
             yukHedef:Math.round(sureDk*1.6),_upgraded:true,_originalTip:planned.tip,..._meta};
