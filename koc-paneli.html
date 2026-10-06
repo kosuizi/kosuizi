@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.05-2241 --><!DOCTYPE html>
+<!-- Version: v2026.10.06-0742 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.05-2241';
+    var RUNNING='v2026.10.06-0742';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.05-2241';
+const APP_VERSION='v2026.10.06-0742';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -622,7 +622,8 @@ function calcRecovery(w, ath, yukObj){
   // Öncelik 3: nötr (1.0) — hiç nabız verisi yok
   let yogunlukMod=1.0;
   const rzd=w._rowZoneDist;
-  const avgHR=parseFloat(w.ort_nabiz)||0;
+  const _tahminNabiz=sporNabizTahmini(w,ath); // kickboks: nabız yoksa RPE'den tahmin
+  const avgHR=parseFloat(w.ort_nabiz)||(_tahminNabiz?_tahminNabiz.avg:0);
   const lthr=parseSayi(ath?.lthr)||0;
 
   if(rzd&&rzd.totalMin>0){
@@ -4952,6 +4953,28 @@ const SPOR_OFSET_GUVEN={
 // izometrik/darbe içeren bir spor; nabız eforu güvenilir yansıtmaz, nabız ofseti için de
 // dayanak yok. RPE girilmezse varsayılan 6 (tahmini, 'rpe_varsayilan' olarak işaretlenir).
 const RPE_VARSAYILAN={kuvvet:5, pilates:4, yoga:3, diger:5, kickboks:6};
+
+// 2026.10.06 — Kickboks nabız yaklaşımı (Göksel: bu sporda saat/nabız bandı kullanılmıyor).
+// YÜK hâlâ RPE×süre (bkz. yukarısı). Ama nabıza bakan iki hesap — yoğunluk dağılımı
+// (calcWorkoutZoneDist) ve toparlanma yoğunluk çarpanı (calcRecovery) — nabız yokken
+// kickboksu sessizce dışarıda bırakıyordu / nötr sayıyordu. Artık:
+//   • nabız GİRİLMİŞSE (ofsetsiz, olduğu gibi) o kullanılır,
+//   • girilmemişse RPE'den (girilmemişse varsayılan RPE'den) estimateHR ile tahmin edilir
+//     (Foster %HRR yaklaşımı, sporcunun RHR/MHR'si ile).
+// Güven ağırlığı SPOR_OFSET_GUVEN'de tanımsız → en düşük varsayılan (0.25): bu dakikalar
+// dağılımda sayılır ama zone-kaynaklı kısıtları güçlü biçimde tetikleyemez.
+const HR_RPE_TAHMIN_SPORLAR=['kickboks'];
+function sporNabizTahmini(w,ath){
+  const spor=w.spor||'kosu';
+  if(!HR_RPE_TAHMIN_SPORLAR.includes(spor)) return null;
+  const avg=parseFloat(w.ort_nabiz)||0;
+  const max=parseFloat(w.maks_nabiz)||0;
+  if(avg>0) return {avg,max,estimated:false};
+  const rpe=parseFloat(w.rpe)||RPE_VARSAYILAN[spor]||0;
+  const est=estimateHR(rpe,parseSayi(ath?.rhr)||0,parseSayi(ath?.mhr)||0);
+  if(!est.avgHR) return null;
+  return {avg:est.avgHR,max:est.maxHR||0,estimated:true};
+}
 
 const EMPTY_A={ad:'',soyad:'',foto:'',strava:'',instagram:'',blog:'',cinsiyet:'Erkek',dogum:'',kilo:'',boy:'',rhr:'',mhr:'',lthr:'',ftp:'',vo2max:'',vlt:'',disiplin:'karma',uzun_gun:[],kosu_gunleri:[],capraz_gunleri:[],hrv_durum:'',hrv_7gun:'',sakatlık:'1',motivasyon:'3',dinlenme_siklik:'3x1',pb_5k:'',pb_10k:'',pb_hm:'',pb_m:'',pb_5k_tarih:'',pb_10k_tarih:'',pb_hm_tarih:'',pb_m_tarih:'',yarıslar:[],anket_pin:'',kuvvet_link:'',kuvvet_link2:'',kuvvet_link3:'',kuvvet_aciklama:'',seviye:'baslangic',antrenman_amaci:'',antrenman_amaci_tarih:'',pasif:false,giris_anketi:null,giris_anketi_tarih:'',ulke:'TR'};
 
@@ -10589,19 +10612,26 @@ function calcWorkoutZoneDist(w,athlete){
   // kasıtlı olarak tanımsız — bkz. sabitin üzerindeki gerekçe). Ofset, ölçülen nabza
   // zone'a sokmadan ÖNCE eklenir (modaliteler arası nabız-efor farkını telafi eder).
   const nabizOfset=SPOR_NABIZ_OFFSET[spor];
-  if(nabizOfset===undefined) return null;
-
-  const avgHR=(parseFloat(w.ort_nabiz)||0)+(parseFloat(w.ort_nabiz)>0?nabizOfset:0);
-  const maxHR=(parseFloat(w.maks_nabiz)||0)+(parseFloat(w.maks_nabiz)>0?nabizOfset:0);
-
-  // Ort. nabız yoksa dağılıma dahil etme — tahmin yerine gerçek veri zorunlu
-  if(avgHR<=0) return null;
+  const tahminSpor=HR_RPE_TAHMIN_SPORLAR.includes(spor); // kickboks: nabız yoksa RPE'den tahmin
+  if(nabizOfset===undefined&&!tahminSpor) return null;
 
   // profileHistory'den o tarihe ait metrikleri al — tarihsel doğruluk
   const athSnap=athleteAtDate(athlete,w.date||'');
   const lthr=parseSayi(athSnap?.lthr)||0;
   const mhr_ath=parseSayi(athSnap?.mhr)||0;
   const rhr=parseSayi(athSnap?.rhr)||0;
+
+  let avgHR,maxHR;
+  if(tahminSpor){
+    const t=sporNabizTahmini(w,athSnap);
+    if(!t) return null;
+    avgHR=t.avg; maxHR=t.max;
+  } else {
+    avgHR=(parseFloat(w.ort_nabiz)||0)+(parseFloat(w.ort_nabiz)>0?nabizOfset:0);
+    maxHR=(parseFloat(w.maks_nabiz)||0)+(parseFloat(w.maks_nabiz)>0?nabizOfset:0);
+    // Ort. nabız yoksa dağılıma dahil etme — tahmin yerine gerçek veri zorunlu
+    if(avgHR<=0) return null;
+  }
 
   // LTHR olmadan nabzı bölgeye yerleştiremeyiz
   if(lthr<=0) return null;
