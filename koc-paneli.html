@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.06-1152 --><!DOCTYPE html>
+<!-- Version: v2026.10.06-1238 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.06-1152';
+    var RUNNING='v2026.10.06-1238';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.06-1152';
+const APP_VERSION='v2026.10.06-1238';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -6053,24 +6053,34 @@ function driftSeviyeOyu(w){
   return {yon,kotuPay,ustPay,ortKot:_r1(kotSum/tot),blokSayisi:bl.length};
 }
 // RPE yönü — calcSeviyeFromHistory ile UI yorumunun AYNI kaynaktan beslenmesi için ortak.
-// Kişisel RPE ortalaması: aynı türün önceki en fazla 5 kaydı; yeterli veri (≥2) yoksa popülasyon varsayımı.
-// Eşikler kesin kural değil, makul başlangıç varsayımı: ilerleme alt sınırı (-0.5) hassas,
-// gerileme üst sınırı (+1.0) temkinli (seviyeyi düşürmekte daha muhafazakâr).
-function _rpeYonuHesapla(sonRpe,oncekiRpeler,tur){
-  if(sonRpe==null) return null;
+// 2026.10.06 (Göksel talebi): kişisel RPE ortalaması artık AYNI TÜR + AYNI S SEVİYESİNDEKİ önceki
+// en fazla 5 kayıttan alınır (eskiden aynı türün TÜM seviyeleri tek ortalamaya giriyordu: S2→S3
+// geçişinde RPE'nin doğal yükselişi "ortalamanın üstünde" görünüp seviye düşürmeye itebiliyordu —
+// drift kıyasındaki (driftKiyasla) "aynı tür + aynı S" kuralıyla aynı ilke). Aynı seviyede
+// RPE'li ≥2 kayıt yoksa SABİT VARSAYIM (eski 7/8) KULLANILMAZ: yon=null döner — seviye kararı
+// yalnızca drift'e bırakılır (seviyeKarariBirlestir 'yok' satırı: drift iyiyse yükselt, RPE'siz
+// asla düşürme). Eşikler aynı: ≤ ort−0.5 → 'ust' (kolay geldi), ≥ ort+1.0 → 'alt' (zorlandı).
+// Döner: {yon:'ust'|'ayni'|'alt'|null, n, ort, neden:'ok'|'rpe_yok'|'referans_yetersiz'|'seviye_yok'}
+function _rpeReferansDegerlendir(sonRpe,oncekiRpeler){
+  if(!(sonRpe>0)) return {yon:null,n:0,ort:null,neden:'rpe_yok'};
   const oncekiler=(oncekiRpeler||[]).filter(r=>r!=null&&r>0);
-  const varsayilanRpe=YUKSEK_KALITELI_TIPLERI.includes(tur)?8:7;
-  const kisiselOrt=oncekiler.length>=2?(oncekiler.reduce((a,b)=>a+b,0)/oncekiler.length):varsayilanRpe;
-  if(sonRpe<=kisiselOrt-0.5) return 'ust';
-  if(sonRpe>=kisiselOrt+1.0) return 'alt';
-  return 'ayni';
+  if(oncekiler.length<2) return {yon:null,n:oncekiler.length,ort:null,neden:'referans_yetersiz'};
+  const ort=oncekiler.reduce((a,b)=>a+b,0)/oncekiler.length;
+  let yon='ayni';
+  if(sonRpe<=ort-0.5) yon='ust';
+  else if(sonRpe>=ort+1.0) yon='alt';
+  return {yon,n:oncekiler.length,ort,neden:'ok'};
 }
-function seviyeRpeYonu(w,athWorkouts){
-  const rpe=parseFloat(w&&w.rpe); if(!(rpe>0)) return null;
-  const onceki=(athWorkouts||[]).filter(x=>x&&x.id!==w.id&&x.tur===w.tur&&x.date&&w.date&&x.date<w.date&&x.yapi_notu&&/S(\d+)/.test(x.yapi_notu)&&(toSec(x.sure_sa,x.sure_dk,x.sure_sn)||0)>0)
+function seviyeRpeBilgi(w,athWorkouts){
+  const rpe=parseFloat(w&&w.rpe);
+  if(!(rpe>0)) return {yon:null,n:0,ort:null,neden:'rpe_yok'};
+  const sKey=_sKey(w.yapi_notu);
+  if(sKey==='-') return {yon:null,n:0,ort:null,neden:'seviye_yok'};
+  const onceki=(athWorkouts||[]).filter(x=>x&&x.id!==w.id&&x.tur===w.tur&&x.date&&w.date&&x.date<w.date&&_sKey(x.yapi_notu)===sKey&&(toSec(x.sure_sa,x.sure_dk,x.sure_sn)||0)>0)
     .sort((a,b)=>b.date.localeCompare(a.date)).slice(0,5).map(x=>parseFloat(x.rpe)||null);
-  return _rpeYonuHesapla(rpe,onceki,w.tur);
+  return _rpeReferansDegerlendir(rpe,onceki);
 }
+function seviyeRpeYonu(w,athWorkouts){ return seviyeRpeBilgi(w,athWorkouts).yon; }
 // RPE + drift birleştirme tablosu (satır: RPE yönü, sütun: drift yönü). Temkinli: yükseltme için
 // iki sinyal birlikte olumlu olmalı (RPE yoksa drift tek başına yeter); DÜŞÜRME yalnızca RPE de
 // aynı yöndeyse ya da eskiden olduğu gibi RPE tek başına söylüyorsa (drift çelişirse sabit tut).
@@ -6083,21 +6093,30 @@ const _SEV_TABLO={
 function seviyeKarariBirlestir(rpeYon,driftYon){ return _SEV_TABLO[rpeYon||'yok'][driftYon]; }
 
 function _kayipMetni(f){ return f>=0?('%'+f+' verim kaybı'):('%'+(-f)+' verim kazancı'); }
-function driftSeviyeMesaji(w,oy,rpeYon,degerler){
+function driftSeviyeMesaji(w,oy,rpeYon,degerler,rpeBilgi){
   const k=seviyeKarariBirlestir(rpeYon,oy.yon);
+  // 2026.10.06 — RPE kıyas referansı artık aynı tür + aynı seviye (bkz. _rpeReferansDegerlendir);
+  // mesajlar neyle kıyaslandığını açıkça söyler, referans yoksa "kişisel ortalama" denmez.
+  const rb=rpeBilgi||{};
+  const _refTam=rb.n?('aynı seviyedeki son '+rb.n+' antrenmanın ortalamasının (RPE '+_r1(rb.ort)+')'):'aynı seviyedeki önceki antrenmanların ortalamasının';
+  const _yalnizDrift=rb.neden==='referans_yetersiz'?'aynı seviyede karşılaştıracak yeterli RPE kaydı olmadığı için (en az 2 gerekir) RPE değerlendirilmedi, yalnızca drift’e dayanıyor.'
+    :rb.neden==='seviye_yok'?'antrenmanın seviyesi (S) belli olmadığı için RPE kıyaslanamadı, yalnızca drift’e dayanıyor.'
+    :'RPE girilmediği için yalnızca drift’e dayanıyor.';
+  const _rpeYokKisa=rb.neden==='referans_yetersiz'?'aynı seviyede RPE karşılaştırması yapılamadı'
+    :rb.neden==='seviye_yok'?'seviye belli değil, RPE kıyaslanamadı':'RPE girilmemiş';
   const s=_sSeviyeNo(w.yapi_notu);
   const ort=_kayipMetni(oy.ortKot);
   let baslik,neden;
   if(k==='ust'){
     baslik='⬆️ Bir üst seviyeye geçilebilir'+(s!=null?' (S'+s+' → S'+(s+1)+', faz izin verirse)':'');
-    neden='Drift kontrol altında (ort. '+ort+')'+(rpeYon==='ust'?' ve RPE kişisel ortalamanın altında.':(rpeYon==null?' — RPE girilmediği için yalnızca drift’e dayanıyor.':'.'));
+    neden='Drift kontrol altında (ort. '+ort+')'+(rpeYon==='ust'?' ve RPE, '+_refTam+' altında.':(rpeYon==null?' — '+_yalnizDrift:'.'));
   } else if(k==='alt'){
     baslik='⬇️ Bir alt seviyeye dönmeyi düşün'+(s!=null&&s>1?' (S'+s+' → S'+(s-1)+')':'');
-    neden='Drift yüksek (ort. '+ort+') ve RPE kişisel ortalamanın üstünde — iki sinyal aynı yönde. Isı, uyku, hidrasyon gibi geçici nedenleri de kontrol et.';
+    neden='Drift yüksek (ort. '+ort+') ve RPE, '+_refTam+' üstünde — iki sinyal aynı yönde. Isı, uyku, hidrasyon gibi geçici nedenleri de kontrol et.';
   } else {
     baslik='➡️ Aynı seviyede kal'+(s!=null?' (S'+s+')':'');
-    if(oy.yon==='ust') neden=(rpeYon==='alt')?'Drift iyi (ort. '+ort+') ama RPE kişisel ortalamanın üstünde — sinyaller çelişiyor, seviyeyi sabit tut.':'Drift iyi (ort. '+ort+') ama RPE olağan düzeyde — ilerlemek için iki sinyalin birlikte olumlu olması beklenir.';
-    else if(oy.yon==='alt') neden=(rpeYon==='ust')?'Drift yüksek (ort. '+ort+') ama RPE kolay geldiğini söylüyor — çelişki var; ısı/uyku/ölçüm kaynaklı olabilir, aynı seviyede tekrarla.':'Drift yüksek (ort. '+ort+') ama seviyeyi düşürmek için RPE’nin de zorlandığını göstermesi gerekir ('+(rpeYon==null?'RPE girilmemiş':'RPE olağan')+') — aynı seviyede tekrarla ve izle.';
+    if(oy.yon==='ust') neden=(rpeYon==='alt')?'Drift iyi (ort. '+ort+') ama RPE, '+_refTam+' üstünde — sinyaller çelişiyor, seviyeyi sabit tut.':'Drift iyi (ort. '+ort+') ama RPE olağan düzeyde ('+_refTam+' yakınında) — ilerlemek için iki sinyalin birlikte olumlu olması beklenir.';
+    else if(oy.yon==='alt') neden=(rpeYon==='ust')?'Drift yüksek (ort. '+ort+') ama RPE, '+_refTam+' altında (kolay geldi) — çelişki var; ısı/uyku/ölçüm kaynaklı olabilir, aynı seviyede tekrarla.':'Drift yüksek (ort. '+ort+') ama seviyeyi düşürmek için RPE’nin de zorlandığını göstermesi gerekir ('+(rpeYon==null?_rpeYokKisa:'RPE olağan')+') — aynı seviyede tekrarla ve izle.';
     else neden='Drift orta düzeyde (ort. '+ort+') — aynı seviyeyi bir kez daha tekrarla.';
   }
   const notlar=[];
@@ -6143,8 +6162,9 @@ function driftYorumUret(w,athWorkouts){
   const degerler=bl.map(b=>({label:b.label||'',...driftBlokDegerlendir(b,w.tur)}));
   if(!degerler.some(d=>d.anaPct!=null||d.toparlanmaNabizPct!=null||d.toparlanmaEFPct!=null)) return null;
   const oy=driftSeviyeOyu(w);
-  const rpeYon=seviyeRpeYonu(w,athWorkouts);
-  const seviye=oy?driftSeviyeMesaji(w,oy,rpeYon,degerler):null;
+  const rpeBilgi=seviyeRpeBilgi(w,athWorkouts);
+  const rpeYon=rpeBilgi.yon;
+  const seviye=oy?driftSeviyeMesaji(w,oy,rpeYon,degerler,rpeBilgi):null;
   return {seviye,kiyas:driftKiyasla(w,athWorkouts),degerler};
 }
 function driftYorumUI(y){
@@ -16038,12 +16058,16 @@ function calcSeviyeFromHistory(tur, phaseMaxIdx, fallbackIdx, athWorkouts){
   // gerçekten yaptığı son seviyede sabit kal (veri yokken temkinli varsayılan).
   // Tek istisna: drift açıkça iyiyse (tek başına) bir üst seviye; seviye DÜŞÜRME asla
   // yalnızca drift'e dayanmaz.
-  if(son.rpe==null){
+  // 2026.10.06 — Kişisel RPE ortalaması: son antrenman HARİÇ, aynı türün AYNI SEVİYEDEKİ (sIdx) önceki
+  // en fazla 5 kaydı (bkz. _rpeReferansDegerlendir; GPX Analiz mesajıyla AYNI kural). RPE girilmemişse
+  // YA DA aynı seviyede RPE'li <2 kayıt varsa RPE yönü yok → yalnızca drift sinyali (drift açıkça
+  // iyiyse üst seviye; RPE'siz asla düşürme), aksi halde sabit.
+  const _rpeRef=_rpeReferansDegerlendir(son.rpe,gecmis.slice(1).filter(g=>g.sIdx===son.sIdx).slice(0,5).map(g=>g.rpe));
+  const rpeYon=_rpeRef.yon;
+  if(rpeYon==null){
     if(driftOy&&seviyeKarariBirlestir(null,driftOy.yon)==='ust') return Math.min(sonSeviye+1,phaseMaxIdx);
     return sonSeviye;
   }
-  // Kişisel RPE ortalaması: son antrenman HARİÇ, aynı türün önceki en fazla 5 kaydı (bkz. _rpeYonuHesapla).
-  const rpeYon=_rpeYonuHesapla(son.rpe,gecmis.slice(1,6).map(g=>g.rpe),tur);
   const yon=driftOy?seviyeKarariBirlestir(rpeYon,driftOy.yon):rpeYon;
   if(yon==='ust') return Math.min(sonSeviye+1,phaseMaxIdx); // İlerledi → bir üst seviye
   if(yon==='alt') return Math.max(sonSeviye-1,0);           // Geriledi → bir alt seviye
@@ -23796,10 +23820,22 @@ function anketGuncellemeBekleniyor({athlete,workouts,races,planSnap,todayStr}){
   return !anketGuncel;
 }
 
-function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapInit,onPlanSnapChange,onAthletesRefresh,onWorkoutsRefresh,onSaveWorkout,onUpdateWorkout,onUpdateAthlete,onSaveTestPlan,onDeleteTestPlan}){  const [showLoading,setShowLoading]=useState(false);
+function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapInit,onPlanSnapChange,onAthletesRefresh,onWorkoutsRefresh,onSaveWorkout,onSaveWorkoutGpx,onUpdateWorkout,onUpdateAthlete,onSaveTestPlan,onDeleteTestPlan}){  const [showLoading,setShowLoading]=useState(false);
   const [selectedPrimary,setSelectedPrimary]=useState(null);
   const [planMode,setPlanModeLocal]=useState('optimize');
   const [expandDay,setExpandDay]=useState(null);
+  // 2026.10.06 — Göksel talebi: gün kartlarındaki "📤 GPX Yükle" (Koşu İzlerim ile aynı buton/konum,
+  // panel paritesi). Koçta buton GPX Analiz modalını o günün tarihiyle açar; modalın içindeki
+  // "📥 Sporcudan Gelenler" listesi sporcunun Koşu İzlerim'den gönderdiklerini gösterir.
+  const [gpxModalDate,setGpxModalDate]=useState(null);
+  const [gpxGelenAth,setGpxGelenAth]=useState([]);
+  const gpxGelenTokRef=useRef(0);
+  const gpxGelenYenileHp=()=>{
+    const tok=++gpxGelenTokRef.current;
+    if(!athlete?.id){setGpxGelenAth([]);return;}
+    gpxGelenListe(athlete.id).then(l=>{if(gpxGelenTokRef.current===tok)setGpxGelenAth(l||[]);}).catch(()=>{});
+  };
+  useEffect(()=>{gpxGelenYenileHp();},[athlete?.id]);
   const [manuelAtaGun,setManuelAtaGun]=useState(null);
   const [showNextWeek,setShowNextWeek]=useState(false);
   // 2026.09.27 — Göksel talebi: 🎯/⚖️/✔ rozetlerinin ne anlama geldiğini
@@ -27532,7 +27568,31 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                 ):null;
                 // Sıralama: tamamlanan üste (w.time'a göre); birleşik değilse sıralama önemsiz
                 const bolumler=split.kosuFirst?[kosuBolum,caprazBolum]:[caprazBolum,kosuBolum];
-                return [...bolumler.filter(Boolean),revizeKutusu].filter(Boolean);
+                // 2026.10.06 — Koşu İzlerim'deki "📤 GPX Yükle" ile AYNI buton ve konum (kartın altı).
+                // Geçmiş + bugün günlerinde. data-no-export: paylaşılan Haftalık Reçete görselinde çıkmaz.
+                const gpxYukleKutusu=(()=>{
+                  if(!(day.isPast||day.isToday)) return null;
+                  const gelen=(gpxGelenAth||[]).filter(g=>g.tarih===day.date);
+                  const bekleyen=gelen.filter(g=>g.durum!=='islendi').length;
+                  return React.createElement('div',{key:'gpx','data-no-export':true,onClick:e=>e.stopPropagation(),
+                    style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginTop:8}},
+                    React.createElement('button',{type:'button',className:'btn btn-sm',onClick:()=>setGpxModalDate(day.date)},'📤 GPX Yükle'),
+                    gelen.length>0&&React.createElement('span',{style:{fontSize:11,fontWeight:600,color:bekleyen>0?'var(--info)':'var(--success)'}},
+                      bekleyen>0?('📥 '+bekleyen+' dosya sporcudan geldi'):('✓ '+gelen.length+' dosya işlendi')),
+                    gpxModalDate===day.date&&React.createElement(GpxAnalizModal,{
+                      athlete,initialDate:day.date,formSnapshot:null,workouts,allHistory:{[athlete.id]:history},races,testPlanlar,
+                      onUpdateWorkout,onSaveWorkout:onSaveWorkoutGpx||onSaveWorkout,onUpdateAthlete,
+                      onClose:()=>{
+                        setGpxModalDate(null);
+                        gpxGelenYenileHp();
+                        // Modal reçeteye yazmış olabilir (rowOverrides) — rozetler/skor taze görünsün diye planı yeniden oku.
+                        const _aid=athlete.id;
+                        fbGet(`plan_snapshots/${_aid}/${weekKey}`).then(sn=>{if(sn&&athlete.id===_aid)setPlanSnap(sn);}).catch(()=>{});
+                      }
+                    })
+                  );
+                })();
+                return [...bolumler.filter(Boolean),revizeKutusu,gpxYukleKutusu].filter(Boolean);
               })()
             );
           })
@@ -33984,7 +34044,7 @@ function buildEkleSeedFromDayPlan(dayPlan,dateStr){
 // analize alır (dosya seçme adımı yok). Dosya BURADA ayrıştırılır (aynı gpxParse*
 // fonksiyonları) ve ham XML yerine sıkıştırılmış nokta dizisi saklanır.
 // İki yol: gpx_gelen_ozet/{athId}/{id} (küçük özet — listeler bunu okur) ve
-// gpx_gelen_veri/{id} (ağır nokta verisi — yalnızca analize alınırken okunur).
+// gpx_gelen_veri/{id} (ağır nokta verisi — yalnızca analize alınırken okunur; analiz tamamlanınca SİLİNİR).
 // Nokta verisi localStorage'a YAZILMAZ (kota) — bu yüzden fbSet/fbUpdate yerine doğrudan db.ref.
 const GPX_GELEN_OZET_YOL='gpx_gelen_ozet';
 const GPX_GELEN_VERI_YOL='gpx_gelen_veri';
@@ -35525,10 +35585,24 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
         ?'Antrenman kaydı oluşturuldu ve reçeteye eklendi. Rozetler ve skor için Koşu İzlerim / Plan sekmesine bakabilirsin.'
         :'Reçeteye eklendi. Rozetler ve skor için Plan sekmesine bakabilirsin.')+_mafMsg});
       // Sporcunun gönderdiği dosyadan geldiyse gelen kutusunda "işlendi" olarak işaretle.
+      // 2026.10.06 — Göksel talebi: analiz tamamlanınca dosyanın ağır nokta verisi HEMEN silinir
+      // (gpx_gelen_veri/{id}); yalnızca küçük özet (birkaç yüz bayt) "işlendi" durumu için kalır
+      // ve 60 gün sonra o da silinir. Analizin ihtiyaç duyduğu sonuçlar zaten antrenman kaydına/
+      // reçeteye yazıldı (grafik için kompakt _gpxChartData dahil). Önce özet "işlendi" yazılır,
+      // veri ancak bu başarılıysa silinir — özet hiçbir zaman "bekliyor" iken verisi olmayan
+      // bir kayıt olarak kalmaz. Silme başarısız olursa 60 günlük temizlik kalıntıyı da süpürür.
       if(aktifInboxId){
         const _inbId=aktifInboxId;
-        fbUpdate(GPX_GELEN_OZET_YOL+'/'+athlete.id+'/'+_inbId,{durum:'islendi',islendiTs:Date.now()})
-          .then(()=>inboxYenile()).catch(()=>{});
+        (async()=>{
+          try{
+            const r=await fbUpdate(GPX_GELEN_OZET_YOL+'/'+athlete.id+'/'+_inbId,{durum:'islendi',islendiTs:Date.now(),veriSilindi:true});
+            if(r&&!r.blocked&&!r.error&&!r.offline){
+              await gpxGelenFbHazir();
+              await db.ref(GPX_GELEN_VERI_YOL+'/'+_inbId).remove();
+            }
+          }catch(e){console.warn('GPX gelen dosya verisi silinemedi (60 gün sonra temizlenecek):',e);}
+          inboxYenile();
+        })();
       }
 
       // EK GÜVENLİK (arka planda, bekletmeden): yeni antrenman kaydı durumunda
@@ -35580,7 +35654,9 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
             it.dosyaTarih&&it.dosyaTarih!==it.tarih&&React.createElement('div',{style:{fontSize:10.5,color:'var(--warn)'}},'⚠ Dosya tarihi '+fmtDate(it.dosyaTarih)+' — sporcu '+fmtDate(it.tarih)+' gününe yükledi')
           ),
           it.durum==='islendi'&&React.createElement('span',{className:'badge badge-good'},'işlendi'),
-          React.createElement('button',{type:'button',className:'btn btn-sm btn-primary',onClick:()=>loadFromInbox(it)},aktifInboxId===it.id?'✓ Yüklü':'Analize Al'),
+          it.veriSilindi
+            ?React.createElement('span',{style:{fontSize:10.5,color:'var(--text-tertiary)'}},'dosya silindi')
+            :React.createElement('button',{type:'button',className:'btn btn-sm btn-primary',onClick:()=>loadFromInbox(it)},aktifInboxId===it.id?'✓ Yüklü':'Analize Al'),
           React.createElement('button',{type:'button',className:'btn btn-sm',title:'Gönderiyi sil',onClick:()=>silInbox(it)},'🗑')
         ))
       ),
@@ -38043,6 +38119,51 @@ function App(){
   };
 
   const handleUpdateWorkout=(id,patch)=>setWorkouts(p=>p.map(x=>x.id===id?{...x,...patch}:x));
+  // 2026.10.06 — Ekle sekmesinin antrenman kaydı akışı (CTL/ATL/TSB/ACWR anında yazılır, iptal
+  // edilmiş gün temizlenir, sporcular arası sızıntı koruması). Eskiden AntrenmanEkle'ye satır içi
+  // verilen bu fonksiyon, Haftalık Plan'daki "📤 GPX Yükle" → GPX Analiz akışı da yeni antrenman
+  // kaydı oluşturabildiği için ORTAK hâle getirildi (iki yol AYNI kaydetme mantığını kullanır).
+  const handleEkleSave=w=>{
+        const ath=athletes.find(a=>a.id===w.athleteId);
+        const m=calcMetrics(w,ath);
+        const rec=calcRecovery(w,ath,m.yukObj);
+        const mergedHedef=mergeRecoveryHedef(rec.hedefISO,rec.saatler,workouts,w.athleteId);
+        const updatedWorkouts=[...workouts,{...w,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:mergedHedef}];
+        setWorkouts(updatedWorkouts);
+        // KÖK NEDEN DÜZELTMESİ (24.07.2026 — sporcular arası veri sızıntısı, "Ekle" paneli):
+        // App-seviyesi planSnap yalnızca "Plan" sekmesi EN SON HANGİ sporcu için açıldıysa
+        // ona aittir; Ekle panelinin kendi sporcu seçicisinden (selId) başka bir sporcu
+        // seçilince selId değişir ama Plan sekmesi mount olmadığı için planSnap YENİLENMEZ.
+        // Eski kontrol yalnızca "selId===w.athleteId" bakıyordu — bu, planSnap'in GERÇEKTEN
+        // bu sporcuya ait olduğunu KANITLAMIYOR. Sonuç: koç önce başka bir sporcunun (ör.
+        // Hilal) Plan sekmesini açık bırakıp buraya geldiğinde ve burada farklı bir sporcu
+        // (ör. Arzu) seçip antrenman kaydettiğinde, Hilal'e ait TÜM plan içeriği (overrideMap/
+        // rowOverrides/manualOverrides/athleteProfile/vb.) persistFreshFormSnap üzerinden
+        // Arzu'nun Firebase yoluna yazılıyordu (gözlemlenen "başka sporcunun antrenmanı
+        // bende görünüyor" hatasının kökü). Düzeltme: planSnap'in içindeki athId alanı
+        // (handleManuelAta/handlePlanGuncelle tarafından snapshot'a gömülür) ile w.athleteId
+        // eşleşmiyorsa planSnap GÜVENİLMEZ sayılır — bu durumda persistFreshFormSnap kendi
+        // güvenli fbGet yedeğine düşer ve hedef sporcunun GERÇEK kendi kaydını kullanır.
+        const planSnapBelongsToThisAth=!!(planSnap&&planSnap.athId===w.athleteId);
+        let baseSnapForForm=(selId===w.athleteId&&planSnapBelongsToThisAth)?planSnap:null;
+        // O gün otomatik iptal edildiyse cancelledDays'ten çıkar — plan kilidine dokunma
+        // (aynı sızıntı riski burada da geçerli — sahiplik doğrulanmadan yazılmaz)
+        if(planSnapBelongsToThisAth&&planSnap?.cancelledDays?.[w.date]){
+          const newCancelled={...planSnap.cancelledDays};delete newCancelled[w.date];
+          const newOverride={...planSnap.overrideMap};delete newOverride[w.date];
+          const updSnap={...planSnap,cancelledDays:newCancelled,overrideMap:newOverride};
+          setPlanSnapApp(updSnap);
+          fbUpdate(`plan_snapshots/${ath?.id}/${planSnap.weekKey}`,updSnap).catch(()=>{});
+          baseSnapForForm=updSnap;
+        }
+        // ── Antrenman kaydedilir kaydedilmez CTL/ATL/TSB/ACWR'ı anında hesapla ve
+        //    Firebase'e yaz — Pano ve Koşu İzlerim aynı anda güncel olsun.
+        if(ath){
+          const athWksNew=updatedWorkouts.filter(x=>x.athleteId===ath.id);
+          persistFreshFormSnap(ath,athWksNew,races,baseSnapForForm)
+            .then(merged=>{if(merged&&selId===ath.id)setPlanSnapApp(merged);});
+        }
+      };
   const handleExport=()=>{
     try{
       const data={
@@ -38512,53 +38633,13 @@ function App(){
       tab==='anketler'&&React.createElement(AnketlerTab,{athletes,onUpdateAthlete:handleUpdateAthlete}),
       tab==='dashboard'&&React.createElement(Dashboard,{workouts:athWks,athlete,history,races,teamLogo,teamName,planSnap}),
       tab==='motivasyon'&&React.createElement(ErrorBoundary,null,React.createElement(MotivasyonTab,{athlete,workouts:athWks,history})),
-      tab==='plan'&&React.createElement(ErrorBoundary,null,React.createElement(HaftalikPlanTab,{athlete,history,races,workouts,testPlanlar,planSnapInit:planSnap,onPlanSnapChange:setPlanSnapApp,onAthletesRefresh:freshList=>setAthletes(freshList),onWorkoutsRefresh:freshWks=>setWorkouts(freshWks),onUpdateAthlete:handleUpdateAthlete,onUpdateWorkout:handleUpdateWorkout,onSaveWorkout:w=>{const ath=athletes.find(a=>a.id===w.athleteId);const m=calcMetrics(w,ath);const rec=calcRecovery(w,ath,m.yukObj);const mergedHedef=mergeRecoveryHedef(rec.hedefISO,rec.saatler,workouts,w.athleteId);setWorkouts(p=>[...p,{...w,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:mergedHedef}]);},onSaveTestPlan:p=>setTestPlanlar(prev=>[...prev.filter(x=>!(x.athId===p.athId&&x.testTur===p.testTur)),p]),onDeleteTestPlan:id=>setTestPlanlar(p=>p.filter(x=>x.id!==id))})),
+      tab==='plan'&&React.createElement(ErrorBoundary,null,React.createElement(HaftalikPlanTab,{athlete,history,races,workouts,testPlanlar,planSnapInit:planSnap,onPlanSnapChange:setPlanSnapApp,onAthletesRefresh:freshList=>setAthletes(freshList),onWorkoutsRefresh:freshWks=>setWorkouts(freshWks),onUpdateAthlete:handleUpdateAthlete,onUpdateWorkout:handleUpdateWorkout,onSaveWorkoutGpx:handleEkleSave,onSaveWorkout:w=>{const ath=athletes.find(a=>a.id===w.athleteId);const m=calcMetrics(w,ath);const rec=calcRecovery(w,ath,m.yukObj);const mergedHedef=mergeRecoveryHedef(rec.hedefISO,rec.saatler,workouts,w.athleteId);setWorkouts(p=>[...p,{...w,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:mergedHedef}]);},onSaveTestPlan:p=>setTestPlanlar(prev=>[...prev.filter(x=>!(x.athId===p.athId&&x.testTur===p.testTur)),p]),onDeleteTestPlan:id=>setTestPlanlar(p=>p.filter(x=>x.id!==id))})),
       tab==='lider'&&React.createElement(LiderlikTab,{athletes,workouts,teamName,teamLogo,races,leaderboardWeights,setLeaderboardWeights,leaderboardVisible,setLeaderboardVisible}),
       tab==='bolge'&&React.createElement(BolgeTab,{athlete,workouts:athWks,onUpdateAthlete:handleUpdateAthlete}),
       tab==="test"&&React.createElement(TestTab,{athlete,history,races,workouts,onUpdateAthlete:handleUpdateAthlete,onSaveWorkout:w=>setWorkouts(p=>[...p,w]),onUpdateWorkout:handleUpdateWorkout,onDeleteWorkout:id=>setWorkouts(p=>p.filter(x=>x.id!==id)),testPlanlar,onSaveTestPlan:p=>setTestPlanlar(prev=>[...prev.filter(x=>!(x.athId===p.athId&&x.testTur===p.testTur)),p]),onDeleteTestPlan:id=>setTestPlanlar(p=>p.filter(x=>x.id!==id))}),
       tab==='yarislar'&&React.createElement(ErrorBoundary,null,React.createElement(YarislarTab,{athlete,races,history,workouts:athWks,raceResults,onAddResult:r=>setRaceResults(p=>[...p,r]),onDeleteResult:id=>setRaceResults(p=>p.filter(x=>x.id!==id))})),
       tab==='karsilastir'&&React.createElement(KarsilastirTab,{athletes,races,workouts,allHistory,raceResults}),
-      tab==='ekle'&&React.createElement(AntrenmanEkle,{onSave:w=>{
-        const ath=athletes.find(a=>a.id===w.athleteId);
-        const m=calcMetrics(w,ath);
-        const rec=calcRecovery(w,ath,m.yukObj);
-        const mergedHedef=mergeRecoveryHedef(rec.hedefISO,rec.saatler,workouts,w.athleteId);
-        const updatedWorkouts=[...workouts,{...w,recovery_saatler:rec.saatler,recovery_kategori:rec.kategori,recovery_hedef:mergedHedef}];
-        setWorkouts(updatedWorkouts);
-        // KÖK NEDEN DÜZELTMESİ (24.07.2026 — sporcular arası veri sızıntısı, "Ekle" paneli):
-        // App-seviyesi planSnap yalnızca "Plan" sekmesi EN SON HANGİ sporcu için açıldıysa
-        // ona aittir; Ekle panelinin kendi sporcu seçicisinden (selId) başka bir sporcu
-        // seçilince selId değişir ama Plan sekmesi mount olmadığı için planSnap YENİLENMEZ.
-        // Eski kontrol yalnızca "selId===w.athleteId" bakıyordu — bu, planSnap'in GERÇEKTEN
-        // bu sporcuya ait olduğunu KANITLAMIYOR. Sonuç: koç önce başka bir sporcunun (ör.
-        // Hilal) Plan sekmesini açık bırakıp buraya geldiğinde ve burada farklı bir sporcu
-        // (ör. Arzu) seçip antrenman kaydettiğinde, Hilal'e ait TÜM plan içeriği (overrideMap/
-        // rowOverrides/manualOverrides/athleteProfile/vb.) persistFreshFormSnap üzerinden
-        // Arzu'nun Firebase yoluna yazılıyordu (gözlemlenen "başka sporcunun antrenmanı
-        // bende görünüyor" hatasının kökü). Düzeltme: planSnap'in içindeki athId alanı
-        // (handleManuelAta/handlePlanGuncelle tarafından snapshot'a gömülür) ile w.athleteId
-        // eşleşmiyorsa planSnap GÜVENİLMEZ sayılır — bu durumda persistFreshFormSnap kendi
-        // güvenli fbGet yedeğine düşer ve hedef sporcunun GERÇEK kendi kaydını kullanır.
-        const planSnapBelongsToThisAth=!!(planSnap&&planSnap.athId===w.athleteId);
-        let baseSnapForForm=(selId===w.athleteId&&planSnapBelongsToThisAth)?planSnap:null;
-        // O gün otomatik iptal edildiyse cancelledDays'ten çıkar — plan kilidine dokunma
-        // (aynı sızıntı riski burada da geçerli — sahiplik doğrulanmadan yazılmaz)
-        if(planSnapBelongsToThisAth&&planSnap?.cancelledDays?.[w.date]){
-          const newCancelled={...planSnap.cancelledDays};delete newCancelled[w.date];
-          const newOverride={...planSnap.overrideMap};delete newOverride[w.date];
-          const updSnap={...planSnap,cancelledDays:newCancelled,overrideMap:newOverride};
-          setPlanSnapApp(updSnap);
-          fbUpdate(`plan_snapshots/${ath?.id}/${planSnap.weekKey}`,updSnap).catch(()=>{});
-          baseSnapForForm=updSnap;
-        }
-        // ── Antrenman kaydedilir kaydedilmez CTL/ATL/TSB/ACWR'ı anında hesapla ve
-        //    Firebase'e yaz — Pano ve Koşu İzlerim aynı anda güncel olsun.
-        if(ath){
-          const athWksNew=updatedWorkouts.filter(x=>x.athleteId===ath.id);
-          persistFreshFormSnap(ath,athWksNew,races,baseSnapForForm)
-            .then(merged=>{if(merged&&selId===ath.id)setPlanSnapApp(merged);});
-        }
-      },athlete,athletes,selId,onSelChange:setSelId,allHistory,workouts,races,testPlanlar,onUpdateWorkout:handleUpdateWorkout,onUpdateAthlete:handleUpdateAthlete,seed:ekleSeed}),
+      tab==='ekle'&&React.createElement(AntrenmanEkle,{onSave:handleEkleSave,athlete,athletes,selId,onSelChange:setSelId,allHistory,workouts,races,testPlanlar,onUpdateWorkout:handleUpdateWorkout,onUpdateAthlete:handleUpdateAthlete,seed:ekleSeed}),
       tab==='antrenmanlar'&&React.createElement(AntrenmanlarTab,{athlete,workouts}),
       tab==='gecmis'&&React.createElement(ErrorBoundary,null,React.createElement(Gecmis,{workouts,athletes,races,onDelete:id=>setWorkouts(p=>p.filter(x=>x.id!==id)),onBulkDelete:ids=>setWorkouts(p=>p.filter(x=>!ids.includes(x.id))),onUpdate:handleUpdateWorkout})),
       tab==='analiz'&&React.createElement(AntrenmanAnalizTab,{workouts,athletes,races,raceResults,ctlCalibration,onUpdateCtlAnchors:handleUpdateCtlAnchors}),
