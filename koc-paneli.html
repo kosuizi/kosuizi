@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.06-0742 --><!DOCTYPE html>
+<!-- Version: v2026.10.06-1152 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.06-0742';
+    var RUNNING='v2026.10.06-1152';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.06-0742';
+const APP_VERSION='v2026.10.06-1152';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -33978,6 +33978,95 @@ function buildEkleSeedFromDayPlan(dayPlan,dateStr){
 // veriyi okuduğu için, rozet/skor otomatik oluşur; ayrı bir badge/skor kodu YOK.
 // ══════════════════════════════════════════════════════════════════════════
 
+// ── GPX GELEN KUTUSU (2026.10.06 — Göksel talebi) ───────────────────────────
+// Sporcu, Koşu İzlerim'deki gün kartından "📤 GPX Yükle" ile kendi GPX/TCX dosyasını
+// gönderir; koç GPX Analiz modalında "📥 Sporcudan Gelenler" listesinden tek tıkla
+// analize alır (dosya seçme adımı yok). Dosya BURADA ayrıştırılır (aynı gpxParse*
+// fonksiyonları) ve ham XML yerine sıkıştırılmış nokta dizisi saklanır.
+// İki yol: gpx_gelen_ozet/{athId}/{id} (küçük özet — listeler bunu okur) ve
+// gpx_gelen_veri/{id} (ağır nokta verisi — yalnızca analize alınırken okunur).
+// Nokta verisi localStorage'a YAZILMAZ (kota) — bu yüzden fbSet/fbUpdate yerine doğrudan db.ref.
+const GPX_GELEN_OZET_YOL='gpx_gelen_ozet';
+const GPX_GELEN_VERI_YOL='gpx_gelen_veri';
+const GPX_GELEN_MAX_DOSYA_BYTE=30*1024*1024;
+const GPX_GELEN_SAKLAMA_GUN=60; // "işlendi" kayıtlar bu süre sonra otomatik silinir
+function gpxPackPoints(norm){
+  const r1=v=>String(Math.round(v*10)/10);
+  return norm.map(p=>r1(p.t)+','+r1(p.d)+','+(p.hr!=null?Math.round(p.hr):'')+','+(p.ele!=null?r1(p.ele):'')).join(';');
+}
+function gpxUnpackPoints(str){
+  if(!str||typeof str!=='string') return [];
+  const out=[];
+  const parts=str.split(';');
+  for(let i=0;i<parts.length;i++){
+    const a=parts[i].split(',');
+    const t=parseFloat(a[0]),d=parseFloat(a[1]);
+    if(isNaN(t)||isNaN(d)) continue;
+    const hr=(a[2]!==undefined&&a[2]!=='')?parseFloat(a[2]):null;
+    const ele=(a[3]!==undefined&&a[3]!=='')?parseFloat(a[3]):null;
+    out.push({t,d,hr:(hr!=null&&!isNaN(hr))?hr:null,ele:(ele!=null&&!isNaN(ele))?ele:null});
+  }
+  return out;
+}
+// Ayrıştırılmış dosyadan küçük özet (liste/önizleme için). Saat/tarih GÖNDEREN cihazın yerel saati.
+function gpxGelenOzetUret(parsed,norm){
+  const withTime=(parsed||[]).filter(p=>p.time instanceof Date&&!isNaN(p.time));
+  const t0=withTime[0].time;
+  const hrVals=norm.filter(p=>p.hr!=null).map(p=>p.hr);
+  const last=norm[norm.length-1];
+  return {
+    baslangic:t0.toISOString(),
+    dosyaTarih:localDateStr(t0),
+    saat:String(t0.getHours()).padStart(2,'0')+':'+String(t0.getMinutes()).padStart(2,'0'),
+    km:Math.round(last.d/10)/100,
+    sn:Math.round(last.t),
+    hrOrt:hrVals.length?Math.round(hrVals.reduce((a,b)=>a+b,0)/hrVals.length):null,
+    hrVar:hrVals.length>0,
+    nokta:norm.length
+  };
+}
+function gpxGelenSureStr(sn){
+  sn=Math.max(0,Math.round(sn||0));
+  const h=Math.floor(sn/3600),m=Math.floor((sn%3600)/60),s=sn%60;
+  return (h>0?h+':'+String(m).padStart(2,'0'):String(m))+':'+String(s).padStart(2,'0');
+}
+async function gpxGelenFbHazir(){
+  if(!db&&!initFirebase()) throw new Error('Veritabanına bağlanılamadı');
+  if(_authReady) await _authReady;
+}
+// Önce nokta verisi, sonra özet yazılır — özet hiçbir zaman olmayan bir veriyi göstermez.
+async function gpxGelenGonder(meta,packed){
+  await gpxGelenFbHazir();
+  await db.ref(GPX_GELEN_VERI_YOL+'/'+meta.id).set({pts:packed});
+  await db.ref(GPX_GELEN_OZET_YOL+'/'+meta.athId+'/'+meta.id).set(stripUndefined(meta));
+}
+function _gpxGelenDizi(obj){
+  return Object.values(obj||{}).filter(x=>x&&x.id).sort((a,b)=>String(b.gonderim||'').localeCompare(String(a.gonderim||'')));
+}
+// athId verilirse o sporcunun listesi; verilmezse {athId:[...]} (tüm sporcular, yalnızca özet)
+async function gpxGelenListe(athId){
+  try{
+    const v=await fbGet(athId?GPX_GELEN_OZET_YOL+'/'+athId:GPX_GELEN_OZET_YOL);
+    if(athId) return _gpxGelenDizi(v);
+    const out={};
+    Object.keys(v||{}).forEach(k=>{out[k]=_gpxGelenDizi(v[k]);});
+    return out;
+  }catch(e){console.warn('GPX gelen kutusu okunamadı:',e);return athId?[]:{};}
+}
+async function gpxGelenSil(athId,id){
+  await gpxGelenFbHazir();
+  await db.ref(GPX_GELEN_VERI_YOL+'/'+id).remove();
+  await db.ref(GPX_GELEN_OZET_YOL+'/'+athId+'/'+id).remove();
+}
+async function gpxGelenTemizle(items){
+  const eski=Date.now()-GPX_GELEN_SAKLAMA_GUN*86400000;
+  for(const it of (items||[])){
+    if(it.durum==='islendi'&&it.islendiTs&&it.islendiTs<eski){
+      try{await gpxGelenSil(it.athId,it.id);}catch(e){console.warn('GPX eski kayıt silinemedi:',e);}
+    }
+  }
+}
+
 // ── GPX/TCX ayrıştırma (antrenman-analiz.html ile birebir aynı algoritma,
 //    isim çakışmasını önlemek için gpx* önekiyle, global mutable state OLMADAN —
 //    tüm veri React state'inde tutulur, bu fonksiyonlar saf/stateless kalır) ──
@@ -35087,6 +35176,15 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
   const [repFixDraft,setRepFixDraft]=useState({});
   const chartRef=useRef(null);
   const fileInputRef=useRef(null);
+  // 2026.10.06 — Göksel talebi: sporcunun Koşu İzlerim'den gönderdiği dosyalar (gelen kutusu).
+  const [inbox,setInbox]=useState([]);
+  const [inboxMsg,setInboxMsg]=useState(null);
+  const [aktifInboxId,setAktifInboxId]=useState(null);
+  const inboxYenile=()=>{
+    if(!athlete?.id) return Promise.resolve();
+    return gpxGelenListe(athlete.id).then(l=>{setInbox(l||[]);gpxGelenTemizle(l||[]);}).catch(()=>{});
+  };
+  useEffect(()=>{setInboxMsg(null);setAktifInboxId(null);inboxYenile();},[athlete?.id]);
 
   useEffect(()=>{
     let cancelled=false;
@@ -35142,7 +35240,51 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
     },lbl))
   );
 
+  // Sporcunun gönderdiği dosyayı analize al — handleFile'ın dosya-sonrası akışıyla AYNI
+  // (nokta yükle → Ekle formunu otomatik doldur), tek fark: tarih/saat sporcunun
+  // seçtiği gün kartından ve gönderen cihazın yerel saatinden gelir.
+  const loadFromInbox=async(item)=>{
+    setInboxMsg(null);
+    setStatus({msg:'Sporcudan gelen dosya yükleniyor…',type:''});
+    setPhaseResult(null);setDriftResult([]);setApplyMsg(null);
+    setRepAnomalies({});setRepOverrides({});setRepFixDraft({});
+    try{
+      const v=await fbGet(GPX_GELEN_VERI_YOL+'/'+item.id);
+      const norm=gpxUnpackPoints(v&&v.pts);
+      if(norm.length<5) throw new Error('Dosya verisi bulunamadı (silinmiş olabilir).');
+      const t0=new Date(item.baslangic).getTime();
+      const raw=norm.map(p=>({time:new Date(t0+p.t*1000),dist:p.d,hr:p.hr,ele:p.ele}));
+      setFileName(item.dosya||'sporcudan-gelen.gpx');
+      setPoints(norm);
+      setAktifInboxId(item.id);
+      const hrCount=norm.filter(p=>p.hr!=null).length;
+      const totalMin=(norm[norm.length-1].t/60).toFixed(1);
+      const totalKm=(norm[norm.length-1].d/1000).toFixed(2);
+      const autoPatch=gpxAutoFillPatch(raw,norm);
+      if(item.tarih) autoPatch.date=item.tarih;
+      if(item.saat) autoPatch.time=item.saat;
+      if(Object.keys(autoPatch).length){
+        if(autoPatch.date) setDate(autoPatch.date);
+        if(onAutoFillFromGpx) onAutoFillFromGpx(autoPatch);
+      }
+      setStatus({msg:`✓ Sporcudan gelen dosya yüklendi — ${norm.length} nokta, toplam ${totalMin} dk, ${totalKm} km, ${hrCount} nabız örneği. Ekle formundaki alanlar otomatik dolduruldu.`,type:'ok'});
+    }catch(err){
+      console.error(err);
+      setAktifInboxId(null);
+      setStatus({msg:'Gelen dosya yüklenemedi: '+err.message,type:'err'});
+    }
+  };
+  const silInbox=async(item)=>{
+    if(!window.confirm('Bu gönderi silinsin mi? ('+(item.dosya||'dosya')+')')) return;
+    try{
+      await gpxGelenSil(item.athId,item.id);
+      if(aktifInboxId===item.id) setAktifInboxId(null);
+      await inboxYenile();
+    }catch(e){setInboxMsg('Silinemedi: '+(e.message||e));}
+  };
+
   const handleFile=(file)=>{
+    setAktifInboxId(null);
     setFileName(file.name);
     setStatus({msg:'Okunuyor…',type:''});
     setPhaseResult(null);
@@ -35382,6 +35524,12 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
       setApplyMsg({type:'ok',text:(isNewWorkout
         ?'Antrenman kaydı oluşturuldu ve reçeteye eklendi. Rozetler ve skor için Koşu İzlerim / Plan sekmesine bakabilirsin.'
         :'Reçeteye eklendi. Rozetler ve skor için Plan sekmesine bakabilirsin.')+_mafMsg});
+      // Sporcunun gönderdiği dosyadan geldiyse gelen kutusunda "işlendi" olarak işaretle.
+      if(aktifInboxId){
+        const _inbId=aktifInboxId;
+        fbUpdate(GPX_GELEN_OZET_YOL+'/'+athlete.id+'/'+_inbId,{durum:'islendi',islendiTs:Date.now()})
+          .then(()=>inboxYenile()).catch(()=>{});
+      }
 
       // EK GÜVENLİK (arka planda, bekletmeden): yeni antrenman kaydı durumunda
       // persistFreshFormSnap'in gecikmeli tamamlanma ihtimaline karşı aynı
@@ -35420,6 +35568,22 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
       loadingPlan&&React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',marginBottom:10}},'Reçete kontrol ediliyor…'),
       !loadingPlan&&hint&&React.createElement('div',{style:{fontSize:12,color:'var(--warn)',background:'var(--warn-bg)',padding:'8px 10px',borderRadius:'var(--radius)',marginBottom:12}},'⚠ '+hint),
       !loadingPlan&&!hint&&planInfo?.baseRows?.length>0&&React.createElement('div',{style:{fontSize:12,color:'var(--success)',marginBottom:12}},'✓ Reçete bulundu: '+(planInfo.dayLike?.baslik||planInfo.displayTip||'')+' — alanlar otomatik dolduruldu, gerekirse düzenle.'),
+
+      inbox.length>0&&React.createElement('div',{className:'card',style:{borderColor:'var(--info)'}},
+        React.createElement('div',{className:'card-title'},'📥 Sporcudan Gelenler ('+inbox.filter(x=>x.durum!=='islendi').length+' bekliyor)'),
+        inboxMsg&&React.createElement('div',{style:{fontSize:12,color:'var(--danger)',marginBottom:6}},inboxMsg),
+        inbox.map(it=>React.createElement('div',{key:it.id,style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',padding:'6px 0',borderTop:'1px solid var(--border)',opacity:it.durum==='islendi'?0.65:1}},
+          React.createElement('div',{style:{flex:'1 1 200px',minWidth:0,fontSize:12}},
+            React.createElement('div',{style:{fontWeight:600}},fmtDate(it.tarih)+' · '+(it.km!=null?Number(it.km).toFixed(2)+' km':'')+' · '+gpxGelenSureStr(it.sn)+(it.hrVar?' · ❤️ '+it.hrOrt:' · nabız yok')),
+            React.createElement('div',{style:{fontSize:10.5,color:'var(--text-tertiary)',wordBreak:'break-all'}},(it.dosya||'')+(it.gonderim?' · gönderildi '+new Date(it.gonderim).toLocaleString('tr-TR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'')),
+            it.not&&React.createElement('div',{style:{fontSize:11,fontStyle:'italic',color:'var(--text-secondary)',marginTop:2}},'💬 '+it.not),
+            it.dosyaTarih&&it.dosyaTarih!==it.tarih&&React.createElement('div',{style:{fontSize:10.5,color:'var(--warn)'}},'⚠ Dosya tarihi '+fmtDate(it.dosyaTarih)+' — sporcu '+fmtDate(it.tarih)+' gününe yükledi')
+          ),
+          it.durum==='islendi'&&React.createElement('span',{className:'badge badge-good'},'işlendi'),
+          React.createElement('button',{type:'button',className:'btn btn-sm btn-primary',onClick:()=>loadFromInbox(it)},aktifInboxId===it.id?'✓ Yüklü':'Analize Al'),
+          React.createElement('button',{type:'button',className:'btn btn-sm',title:'Gönderiyi sil',onClick:()=>silInbox(it)},'🗑')
+        ))
+      ),
 
       React.createElement('div',{className:'card'},
         React.createElement('div',{className:'card-title'},'1 — Antrenman Dosyası'),
@@ -35616,6 +35780,18 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,wor
   const [selectedRaceForYaris,setSelectedRaceForYaris]=useState(null);
   const [showNabizOfsetInfo,setShowNabizOfsetInfo]=useState(false);
   const [showGpxModal,setShowGpxModal]=useState(false);
+  // 2026.10.06 — sporcuların Koşu İzlerim'den gönderdiği, henüz işlenmemiş GPX sayısı ({athId:n}).
+  const [gpxBekleyen,setGpxBekleyen]=useState({});
+  useEffect(()=>{
+    let iptal=false;
+    gpxGelenListe(null).then(m=>{
+      if(iptal) return;
+      const out={};
+      Object.keys(m||{}).forEach(k=>{const n=(m[k]||[]).filter(x=>x.durum!=='islendi').length;if(n>0)out[k]=n;});
+      setGpxBekleyen(out);
+    });
+    return()=>{iptal=true;};
+  },[showGpxModal]);
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
   const durSec=toSec(form.sure_sa,form.sure_dk,form.sure_sn);
   const selectedAth=athletes.find(a=>a.id===selId)||null;
@@ -35731,13 +35907,13 @@ function AntrenmanEkle({onSave,athlete,athletes,selId,onSelChange,allHistory,wor
           // NOT (Ağustos 2026): Diğer tüm sporcu seçim listelerinin aksine, burada
           // pasif sporcular BİLEREK filtrelenmiyor — kendi kendine kayıt olan (henüz
           // koç tarafından aktif edilmemiş) sporculara da antrenman girilebilmesi için.
-          [...athletes].sort((a,b)=>{const cA=(allHistory&&allHistory[a.id]&&allHistory[a.id].length)?allHistory[a.id][allHistory[a.id].length-1].ctl||0:0;const cB=(allHistory&&allHistory[b.id]&&allHistory[b.id].length)?allHistory[b.id][allHistory[b.id].length-1].ctl||0:0;return cB-cA;}).map(a=>{const h=allHistory&&allHistory[a.id]||[];const ctl=h.length&&h[h.length-1].ctl!=null?' (CTL '+h[h.length-1].ctl.toFixed(1)+')':'';return React.createElement('option',{key:a.id,value:a.id},(a.ad||'')+' '+(a.soyad||'')+ctl+(a.pasif?' — Aktif Değil':''));})
+          [...athletes].sort((a,b)=>{const cA=(allHistory&&allHistory[a.id]&&allHistory[a.id].length)?allHistory[a.id][allHistory[a.id].length-1].ctl||0:0;const cB=(allHistory&&allHistory[b.id]&&allHistory[b.id].length)?allHistory[b.id][allHistory[b.id].length-1].ctl||0:0;return cB-cA;}).map(a=>{const h=allHistory&&allHistory[a.id]||[];const ctl=h.length&&h[h.length-1].ctl!=null?' (CTL '+h[h.length-1].ctl.toFixed(1)+')':'';return React.createElement('option',{key:a.id,value:a.id},(a.ad||'')+' '+(a.soyad||'')+ctl+(a.pasif?' — Aktif Değil':'')+(gpxBekleyen[a.id]?' · 📥'+gpxBekleyen[a.id]:''));})
         ),
         selId&&React.createElement('button',{
           type:'button',className:'btn btn-sm',
           style:{marginLeft:'auto',background:'var(--info-bg)',color:'var(--info)',borderColor:'var(--info)'},
           onClick:()=>setShowGpxModal(true)
-        },'📈 GPX Analiz')
+        },'📈 GPX Analiz'+(gpxBekleyen[selId]?' · 📥 '+gpxBekleyen[selId]:''))
       ),
 
       showGpxModal&&selId&&React.createElement(GpxAnalizModal,{
@@ -39641,6 +39817,100 @@ function SporcuKayit(){
 }
 
 // ── Sporcu Haftalık Plan Görünümü (public link) ───────────────────────────────
+// ── GPX YÜKLE MODALI — Koşu İzlerim (sporcu tarafı) ──────────────────────────
+// Sporcu kendi GPX/TCX dosyasını seçer, dosyadan okunan özeti (tarih, mesafe, süre,
+// nabız) görür, isterse not yazar ve gönderir. Koç tarafı: GpxAnalizModal → "📥 Sporcudan Gelenler".
+function GpxYukleModal({athlete,date,baslik,onClose,onGonderildi}){
+  const [dosyaAd,setDosyaAd]=useState('');
+  const [okunuyor,setOkunuyor]=useState(false);
+  const [onizleme,setOnizleme]=useState(null);
+  const [hata,setHata]=useState('');
+  const [not,setNot]=useState('');
+  const [gonderiliyor,setGonderiliyor]=useState(false);
+  const [bitti,setBitti]=useState(false);
+  const inputRef=useRef(null);
+  const handleFile=(file)=>{
+    setHata('');setOnizleme(null);setBitti(false);
+    if(!file) return;
+    if(file.size>GPX_GELEN_MAX_DOSYA_BYTE){setHata('Dosya çok büyük (en fazla 30 MB).');return;}
+    setDosyaAd(file.name);setOkunuyor(true);
+    const reader=new FileReader();
+    reader.onload=ev=>{
+      try{
+        const text=String(ev.target.result||'');
+        const isTcx=file.name.toLowerCase().endsWith('.tcx')||/<TrainingCenterDatabase/i.test(text.slice(0,3000));
+        const parsed=isTcx?gpxParseTCXText(text):gpxParseGPXText(text);
+        if(!parsed||parsed.length<5) throw new Error('Dosyada yeterli veri bulunamadı.');
+        const norm=gpxNormalizePoints(parsed);
+        setOnizleme({oz:gpxGelenOzetUret(parsed,norm),norm});
+      }catch(err){
+        setHata('Dosya okunamadı: '+(err&&err.message?err.message:err));
+      }finally{setOkunuyor(false);}
+    };
+    reader.onerror=()=>{setHata('Dosya okunamadı.');setOkunuyor(false);};
+    reader.readAsText(file);
+  };
+  const gonder=async()=>{
+    if(!onizleme||gonderiliyor) return;
+    setGonderiliyor(true);setHata('');
+    try{
+      const id=date+'_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+      const packed=gpxPackPoints(onizleme.norm);
+      const meta={
+        id,athId:athlete.id,tarih:date,dosya:dosyaAd,gonderim:new Date().toISOString(),
+        ...onizleme.oz,not:(not||'').trim().slice(0,300),durum:'bekliyor',boyut:packed.length
+      };
+      await gpxGelenGonder(meta,packed);
+      setBitti(true);
+      if(onGonderildi) onGonderildi(meta);
+    }catch(e){
+      setHata('Gönderilemedi: '+(e&&e.message?e.message:e)+' — internet bağlantını kontrol edip tekrar dene.');
+    }finally{setGonderiliyor(false);}
+  };
+  const oz=onizleme?onizleme.oz:null;
+  const tarihUyumsuz=!!(oz&&oz.dosyaTarih!==date);
+  return React.createElement('div',{className:'modal-bg',onClick:e=>{if(e.target.className==='modal-bg')onClose();}},
+    React.createElement('div',{className:'modal',style:{maxWidth:460}},
+      React.createElement('div',{className:'modal-title'},
+        React.createElement('span',null,'📤 GPX Yükle — '+fmtDate(date)),
+        React.createElement('button',{className:'modal-close',onClick:onClose},'×')
+      ),
+      baslik&&React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:10}},baslik),
+      bitti
+        ?React.createElement('div',null,
+            React.createElement('div',{style:{fontSize:14,fontWeight:700,color:'var(--success)',marginBottom:6}},'✓ Dosyan koçuna gönderildi'),
+            React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:12}},'Koçun dosyayı inceleyip antrenmanına işleyecek. Başka bir dosya göndermen gerekmiyor.'),
+            React.createElement('button',{className:'btn btn-primary',onClick:onClose},'Tamam')
+          )
+        :React.createElement(React.Fragment,null,
+            React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:10,lineHeight:1.5}},
+              'Telefonundaki Dosyalar / İndirilenler klasöründen bu antrenmanın .gpx (veya .tcx) dosyasını seç.'),
+            React.createElement('button',{type:'button',className:'btn',style:{width:'100%',marginBottom:8},onClick:()=>inputRef.current&&inputRef.current.click(),disabled:okunuyor||gonderiliyor},
+              okunuyor?'⏳ Okunuyor…':(dosyaAd?'📁 Başka dosya seç':'📁 Dosya seç')),
+            React.createElement('input',{type:'file',accept:'.gpx,.tcx,.xml,application/gpx+xml,application/xml,text/xml',ref:inputRef,style:{display:'none'},
+              onChange:e=>{const f=e.target.files&&e.target.files[0];handleFile(f);e.target.value='';}}),
+            dosyaAd&&React.createElement('div',{style:{fontSize:11,fontFamily:'monospace',color:'var(--text-tertiary)',marginBottom:8,wordBreak:'break-all'}},dosyaAd),
+            oz&&React.createElement('div',{style:{background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:'var(--radius)',padding:'10px 12px',marginBottom:10,fontSize:12,lineHeight:1.7}},
+              React.createElement('div',null,'📅 '+fmtDate(oz.dosyaTarih)+' · '+oz.saat),
+              React.createElement('div',null,'📏 '+oz.km.toFixed(2)+' km · ⏱ '+gpxGelenSureStr(oz.sn)),
+              React.createElement('div',null,oz.hrVar?('❤️ Ort. nabız '+oz.hrOrt+' bpm'):'❤️ Dosyada nabız verisi yok')
+            ),
+            tarihUyumsuz&&React.createElement('div',{style:{fontSize:12,color:'var(--danger)',background:'var(--danger-bg)',padding:'8px 10px',borderRadius:'var(--radius)',marginBottom:10}},
+              '⚠ Dosyadaki tarih ('+fmtDate(oz.dosyaTarih)+') bu antrenman gününden ('+fmtDate(date)+') farklı. Doğru dosyayı seçtiğinden emin ol.'),
+            oz&&!oz.hrVar&&React.createElement('div',{style:{fontSize:12,color:'var(--warn)',background:'var(--warn-bg)',padding:'8px 10px',borderRadius:'var(--radius)',marginBottom:10}},
+              'Bu dosyada nabız yok — pace ve mesafe analizi yapılır, nabız analizi yapılamaz.'),
+            oz&&React.createElement('div',{style:{marginBottom:10}},
+              React.createElement('label',{style:{fontSize:12,display:'block',marginBottom:4}},'Koçuna not (isteğe bağlı)'),
+              React.createElement('textarea',{value:not,onChange:e=>setNot(e.target.value.slice(0,300)),rows:2,placeholder:'ör. 3. tekrarda ayağım takıldı, saat durdu…',style:{width:'100%',boxSizing:'border-box'}})
+            ),
+            hata&&React.createElement('div',{style:{fontSize:12,color:'var(--danger)',marginBottom:10}},'⚠ '+hata),
+            React.createElement('button',{className:'btn btn-primary',style:{width:'100%'},onClick:gonder,disabled:!oz||gonderiliyor||okunuyor},
+              gonderiliyor?'⏳ Gönderiliyor…':'📤 Koça Gönder')
+          )
+    )
+  );
+}
+
 function SporcuPlanView(){
   const [athlete,setAthlete]=useState(null);
   const [planSnap,setPlanSnap]=useState(null);
@@ -39715,6 +39985,12 @@ function SporcuPlanView(){
   // kontrol edilir, bkz. DEFAULT_LEADERBOARD_VISIBLE notu
   const [lbVisible,setLbVisible]=useState(DEFAULT_LEADERBOARD_VISIBLE);
   const athId=new URLSearchParams(window.location.search).get('id');
+  // 2026.10.06 — Göksel talebi: gün kartlarındaki "📤 GPX Yükle" (bkz. GpxYukleModal).
+  // gpxGonderilenler: bu sporcunun gönderdiği dosyaların KÜÇÜK özetleri (kartta "✓ gönderildi" için).
+  const [gpxYukleDate,setGpxYukleDate]=useState(null);
+  const [gpxGonderilenler,setGpxGonderilenler]=useState([]);
+  const gpxListeYenile=()=>{if(!athId)return;gpxGelenListe(athId).then(l=>setGpxGonderilenler(l||[])).catch(()=>{});};
+  useEffect(()=>{gpxListeYenile();},[athId]);
   const {pcView,zoom:pcZoom,toggle:togglePcView}=usePcView();
   const [kiDark,toggleKiDark]=useKiTheme();
   // Bu haftanın Pace Disiplin (Hedef Uyumu) puanları — "Bu Hafta Liderlik"
@@ -39923,6 +40199,19 @@ function SporcuPlanView(){
       dayInfos.push({date,status:st,ov,actuals:[],nextWeek:true});
     }
   }
+
+  // 2026.10.06 — Göksel talebi: gün kartının altında "📤 GPX Yükle" (geçmiş/bugün/kaçırılan günler).
+  // Gelecek, dinlenme ve yarış-yaklaşıyor kartlarında gösterilmez.
+  const gpxYukleSatiri=(info)=>{
+    if(!['completed','today_done','today','missed'].includes(info.status)) return null;
+    const gonderilen=(gpxGonderilenler||[]).filter(g=>g.tarih===info.date);
+    const hepsiIslendi=gonderilen.length>0&&gonderilen.every(g=>g.durum==='islendi');
+    return React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginTop:8}},
+      React.createElement('button',{type:'button',className:'btn btn-sm',onClick:()=>setGpxYukleDate(info.date)},'📤 GPX Yükle'),
+      gonderilen.length>0&&React.createElement('span',{style:{fontSize:11,color:'var(--success)'}},
+        '✓ '+gonderilen.length+' dosya gönderildi'+(hepsiIslendi?' · işlendi':' · koçun inceleyecek'))
+    );
+  };
 
   // Tek bir günü Haftalık Plan stilinde render et
   const renderDayCard=(info,idx)=>{
@@ -40281,7 +40570,8 @@ function SporcuPlanView(){
             // Yarış günleri için eski davranış: ReceteTablosu varsa onu göster
             return buildKosuIcerik();
           })()
-        :bloklar.filter(Boolean)
+        :bloklar.filter(Boolean),
+      gpxYukleSatiri(info)
     );
   };
 
@@ -40323,6 +40613,12 @@ function SporcuPlanView(){
     React.createElement('style',null,
       '@media (max-width: 900px){.plan-3col{grid-template-columns:1fr !important;}}'
     ),
+    gpxYukleDate&&React.createElement(GpxYukleModal,{
+      athlete,date:gpxYukleDate,
+      baslik:(()=>{const _o=planSnap?.overrideMap?.[gpxYukleDate];return _o?(fixBaslik(_o.baslik)||TIP_NAMES[_o.tip]||''):'';})(),
+      onClose:()=>setGpxYukleDate(null),
+      onGonderildi:()=>gpxListeYenile()
+    }),
     React.createElement('button',{
       title:(kiDark?'Açık':'Koyu')+' temaya geç — sadece bu cihazda, sadece Koşu İzlerim',
       onClick:toggleKiDark,
