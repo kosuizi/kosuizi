@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.08-0932 --><!DOCTYPE html>
+<!-- Version: v2026.10.08-1011 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.08-0932';
+    var RUNNING='v2026.10.08-1011';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.08-0932';
+const APP_VERSION='v2026.10.08-1011';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -32662,9 +32662,49 @@ function MotivasyonTab({athlete,workouts,history}){
   );
 }
 
+// ── canliFormOzeti — CTL/ATL/TSB/ACWR + mola/dönüş özetinin CBS CANLI TEK KAYNAĞI ──
+// 2026.10.08 — Göksel talebi ("mümkün olduğunca canlı"): Dinlenme Uyarı Bandı (Pano +
+// Koşu İzlerim) ve Koşu İzlerim "Durumum" kartı, sporcunun planSnap.formSnap'inde SAKLI
+// değerleri okuyordu; formSnap yalnızca antrenman kaydında / Plan sekmesi açıkken /
+// "Planı Güncelle"de yenilendiği için zaman geçtikçe (EWMA'nın sıfır-yük günlerinde
+// sönmesi) bayat kalıyor, "Planı Güncelle" sonrası uyarı yumuşuyordu.
+// Artık değerler, Pano grafikleriyle AYNI buildHistory'den, ANLIK hesaplanır:
+// persistFreshFormSnap ile birebir aynı alanlar (ctl/atl/tsb/acwr/phase/date +
+// molaAktif/molaHaftalikOrt/molaYukOrani). workouts = SADECE ilgili sporcunun antrenmanları.
+// Girdi verilmezse/boşsa (ör. hiç antrenman yok) fallbackSnap (formSnap) aynen döner.
+// preHist: çağıranın zaten hesapladığı history (Dashboard) — tekrar hesaplanmaz.
+// Önbellek: aynı (workouts, athlete, races, gün) için sonuç yeniden kullanılır; çağıranlar
+// her render'da fonksiyonu çağırdığı için buildHistory'nin tekrar tekrar koşmasını önler.
+const _canliFormCache={};
+function canliFormOzeti(workouts,athlete,races,fallbackSnap,preHist){
+  const fb=fallbackSnap||null;
+  const dflt={ctl:fb?.ctl??null,atl:fb?.atl??null,tsb:fb?.tsb??null,acwr:fb?.acwr??null,phase:fb?.phase??null,date:fb?.date||null,
+    molaAktif:fb?.molaAktif||false,molaHaftalikOrt:fb?.molaHaftalikOrt??null,molaYukOrani:fb?.molaYukOrani??null,canli:false};
+  try{
+    if(!athlete?.id) return dflt;
+    const gun=localDateStr(new Date());
+    const key=athlete.id;
+    const c=_canliFormCache[key];
+    if(c&&c.wks===workouts&&c.ath===athlete&&c.races===races&&c.gun===gun&&c.preHist===(preHist||null)) return c.val;
+    const hist=(preHist&&preHist.length)?preHist:((workouts&&workouts.length)?buildHistory(workouts,athlete,races):[]);
+    const last=hist[hist.length-1];
+    let val=dflt;
+    if(last){
+      const _mola=molaDonusuDurumu(hist);
+      val={ctl:last.ctl??null,atl:last.atl??null,tsb:last.tsb??null,acwr:last.acwr??null,phase:last.phase??null,date:last.date||null,
+        molaAktif:_mola.aktif||false,molaHaftalikOrt:_mola.aktif?_mola.haftalikOrt:null,
+        molaYukOrani:_mola.aktif?(_mola.buHaftaYukOrani??null):null,canli:true};
+    }
+    _canliFormCache[key]={wks:workouts,ath:athlete,races,gun,preHist:preHist||null,val};
+    return val;
+  }catch(e){console.warn('canliFormOzeti hatası, formSnap yedeği kullanılıyor:',e);return dflt;}
+}
+
 // ── Dinlenme Uyarı Bandı — Koç Paneli (Pano) ve Koşu İzlerim'in ORTAK tek kaynağı ──
 // Girdi: workouts = seçili sporcunun antrenmanları, athlete = sporcu objesi,
 // races = tüm yarışlar, planSnap = ilgili haftanın plan_snapshots kaydı (formSnap içerir).
+// 2026.10.08 — CTL/ATL/TSB/ACWR/mola artık formSnap'ten DEĞİL canliFormOzeti'nden (canlı);
+// formSnap yalnızca hiç antrenman yoksa yedek. preHist: Pano'nun hazır history'si (isteğe bağlı).
 // Bu fonksiyon değiştirilirse iki panel de otomatik aynı kalır — kopyalamayın.
 // ── Antrenman kaydedilir kaydedilmez formSnap'i (CTL/ATL/TSB/ACWR) hesaplayıp
 //    Firebase'e yazar — Pano ve Koşu İzlerim'in aynı anda güncel olmasını sağlar.
@@ -32703,10 +32743,10 @@ async function persistFreshFormSnap(athlete,athleteWorkouts,races,localSnap){
   }catch(e){console.warn('formSnap anında güncelleme hatası:',e);return null;}
 }
 
-function RestWarningBanner({workouts,athlete,races,planSnap}){
+function RestWarningBanner({workouts,athlete,races,planSnap,history:preHist}){
   if(!athlete) return null;
-  // Veri hazırlığı — CTL/ATL/TSB/ACWR planSnap.formSnap'ten (Koç paneli yazar, buildHistory çalıştırılmaz)
-  const _formSnap=planSnap?.formSnap||null;
+  // Veri hazırlığı — CTL/ATL/TSB/ACWR/mola CANLI (buildHistory son satırı); formSnap yalnızca yedek
+  const _formSnap=canliFormOzeti(workouts,athlete,races,planSnap?.formSnap||null,preHist);
   const _tsb=_formSnap?.tsb??null;
   const _acwr=_formSnap?.acwr??null;
 
@@ -32959,10 +32999,13 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
 
   // Bölge dağılımı — seçili periyot (görsel çubuk için)
   const [zonePeriod,setZonePeriod]=React.useState(4);
-  const zoneDist=React.useMemo(()=>calcPeriodZoneDist(workouts,athlete,zonePeriod),[workouts,athlete,zonePeriod]);
+  // 2026.10.08 — _gunKey: pencere "bugün"e göre kayar (calcPeriodZoneDist new Date()'e çıpalı);
+  // App'teki gün-değişimi tik'i Dashboard'u yeniden render edince _gunKey değişir → memolar tazelenir.
+  const _gunKey=localDateStr(new Date());
+  const zoneDist=React.useMemo(()=>calcPeriodZoneDist(workouts,athlete,zonePeriod),[workouts,athlete,zonePeriod,_gunKey]);
   // Sabit pencereler — trend hesabı ve ana_eksik flag için (periyot seçiminden bağımsız)
-  const zoneDist4wFixed=React.useMemo(()=>calcPeriodZoneDist(workouts,athlete,4),[workouts,athlete]);
-  const zoneDist2wFixed=React.useMemo(()=>calcPeriodZoneDist(workouts,athlete,2),[workouts,athlete]);
+  const zoneDist4wFixed=React.useMemo(()=>calcPeriodZoneDist(workouts,athlete,4),[workouts,athlete,_gunKey]);
+  const zoneDist2wFixed=React.useMemo(()=>calcPeriodZoneDist(workouts,athlete,2),[workouts,athlete,_gunKey]);
   const zoneStatus=zoneDist?zoneDist_status(zoneDist,zoneDist2wFixed):null;
   const zoneTrend=React.useMemo(()=>calcZoneTrend(zoneDist4wFixed,zoneDist2wFixed),[zoneDist4wFixed,zoneDist2wFixed]);
 
@@ -33084,7 +33127,7 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
     })(),
 
     // ── Dinlenme Uyarı Bandı — Koşu İzlerim ile birebir aynı ──────────────
-    RestWarningBanner({workouts,athlete,races,planSnap:restBandSnap}),
+    RestWarningBanner({workouts,athlete,races,planSnap:restBandSnap,history}),
 
     // Faz + yarış + hazırlık skoru
     (last?.phase||nextRace||athlete?.antrenman_amaci)&&React.createElement('div',{className:'card',style:{marginBottom:12,padding:'12px 16px'}},
@@ -38490,7 +38533,38 @@ function App(){
   // Seçili sporcunun doğum günü yaklaşıyor mu — üst çubukta 🎁 rozeti için (Doğum Günü Postu kartıyla aynı pencere/mantık)
   const selAthDogumYaklasti=useMemo(()=>dogumGunuYaklasiyorMu(athlete),[athlete]);
   const athWks=useMemo(()=>workouts.filter(w=>w.athleteId===selId).sort((a,b)=>new Date(a.date)-new Date(b.date)),[workouts,selId]);
-  const history=useMemo(()=>athlete?buildHistory(athWks,athlete,races):[],[athWks,athlete,races]);
+  // 2026.10.08 — Göksel talebi ("mümkün olduğunca canlı"): GÜN-DEĞİŞİMİ TİK'İ.
+  // buildHistory "bugün"e kadar günlük seri üretir (sıfır-yük günlerinde ATL/CTL/ACWR söner)
+  // ama yalnızca YENİDEN hesaplandığında; useMemo bağımlılıkları yalnızca veri olduğu için
+  // sayfa gece yarısını geçerek açık kalırsa (ya da sekme/telefon uykudan dönerse) Pano
+  // grafikleri/değerleri dünün haline takılı kalıyordu. dayKey, yerel tarih değişince
+  // (gece yarısı zamanlayıcısı + sekme görünür olunca + bfcache dönüşü + odak) güncellenir ve
+  // history/allHistory memolarının bağımlılığıdır → tarih değişince otomatik yeniden hesap.
+  // Aynı gün içinde değer değişmez → gereksiz yeniden hesap yok.
+  const [dayKey,setDayKey]=useState(()=>localDateStr(new Date()));
+  useEffect(()=>{
+    let tmr=null;
+    const tick=()=>setDayKey(prev=>{const n=localDateStr(new Date());return n===prev?prev:n;});
+    const planlaGeceYarisi=()=>{
+      if(tmr) clearTimeout(tmr);
+      const now=new Date();
+      const nextMid=new Date(now.getFullYear(),now.getMonth(),now.getDate()+1,0,0,5); // 00:00:05
+      tmr=setTimeout(()=>{tick();planlaGeceYarisi();},Math.max(1000,nextMid-now));
+    };
+    const onVis=()=>{if(document.visibilityState==='visible'){tick();planlaGeceYarisi();}};
+    const onShow=()=>{tick();planlaGeceYarisi();};
+    planlaGeceYarisi();
+    document.addEventListener('visibilitychange',onVis);
+    window.addEventListener('pageshow',onShow);
+    window.addEventListener('focus',onShow);
+    return()=>{
+      if(tmr) clearTimeout(tmr);
+      document.removeEventListener('visibilitychange',onVis);
+      window.removeEventListener('pageshow',onShow);
+      window.removeEventListener('focus',onShow);
+    };
+  },[]);
+  const history=useMemo(()=>athlete?buildHistory(athWks,athlete,races):[],[athWks,athlete,races,dayKey]);
 
   // Tüm sporcuların geçmişi — karşılaştırma için
   const allHistory=useMemo(()=>{
@@ -38500,7 +38574,7 @@ function App(){
       h[a.id]=wks.length?buildHistory(wks,a,races):[];
     });
     return h;
-  },[athletes,workouts,races]);
+  },[athletes,workouts,races,dayKey]);
 
 
   if(!loaded) return React.createElement('div',{style:{
@@ -40970,8 +41044,9 @@ function SporcuPlanView(){
 
       // 3-sütun: [Durumum] [Antrenmanlarım] [Liderlik]
       (()=>{
-        // CTL/ATL/TSB/ACWR/phase — planSnap.formSnap'ten direkt oku (Koç paneli yazar, buildHistory çalıştırılmaz)
-        const _formSnapMain=planSnap?.formSnap||null;
+        // CTL/ATL/TSB/ACWR/phase/mola — 2026.10.08: CANLI (buildHistory, canliFormOzeti TEK KAYNAK —
+        // Koç Paneli Pano ile aynı hesap); planSnap.formSnap yalnızca hiç antrenman yoksa yedek.
+        const _formSnapMain=canliFormOzeti(workouts,athlete,races,planSnap?.formSnap||null);
         const last={
           ctl:_formSnapMain?.ctl??null,
           atl:_formSnapMain?.atl??null,
@@ -40993,7 +41068,7 @@ function SporcuPlanView(){
           if(_merged) recoveryInfo=_merged;
         }catch(e){console.warn('recovery err:',e);}
 
-        // 2) Form — CTL/ATL/TSB (planSnap.formSnap'ten)
+        // 2) Form — CTL/ATL/TSB (canlı: canliFormOzeti)
         const ctl=last.ctl;const atl=last.atl;const tsb=last.tsb;const acwr=last.acwr;
         const tsbS=tsbStatus(tsb,athlete);
         const acwrS=acwrStatus(acwr,last.phase,athlete);
