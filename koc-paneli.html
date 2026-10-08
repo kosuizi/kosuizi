@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.08-2023 --><!DOCTYPE html>
+<!-- Version: v2026.10.08-2038 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.08-2023';
+    var RUNNING='v2026.10.08-2038';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.08-2023';
+const APP_VERSION='v2026.10.08-2038';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -596,6 +596,42 @@ function calcMetrics(w,ath){
 // ── Toparlanma Süresi Hesabı ──────────────────────────────────────────────────
 // Bilimsel referans: Kenttä & Hassmén (1998), Mujika & Padilla (2000)
 // Döner: { saatler, kategori, renk, detay }
+// 2026.10.08 — Toparlanma hesabı yeniden kalibre edildi (Göksel talebi: "60 dk interval için 52 saat fazla";
+// "RPE nabızla kombin + tüm türlerde etkili olsun"; "süre etkisi doğrusal olmayan bir fonksiyon olsun").
+// Kök neden: yük (hrTSS ≈ süre × IF²) YOĞUNLUĞU ZATEN içeriyor; üstüne bir de 1,45–1,60'lık yoğunluk çarpanı
+// binince yoğunluk iki kez sayılıyordu (60 dk interval: yük 104 → taban 36 sa × 1,45 = 52 sa).
+// Düzeltmeler: (1) taban süre yüke göre basamaklı değil SÜREKLİ (doğrusal ara değerleme); (2) yoğunluk çarpanının
+// ÜST ucu 1,60 → 1,30'a sıkıştırıldı (alt uç aynı); (3) RPE nabızla birleşir (aşağıda); (4) süre çarpanı doğrusal değil.
+// Sabitler ayarlanabilir TAHMİNLERDİR (klinik/kesin değer değil).
+const RECOVERY_BAZ_NOKTALARI=[[0,8],[15,12],[45,18],[80,24],[125,36],[175,48]];   // [yük, taban saat] — eski basamakların orta noktaları
+function recoveryBazSaat(yuk){
+  const N=RECOVERY_BAZ_NOKTALARI;
+  if(!(yuk>0)) return N[0][1];
+  for(let i=1;i<N.length;i++){
+    if(yuk<=N[i][0]){
+      const a=N[i-1],b=N[i];
+      return a[1]+(b[1]-a[1])*(yuk-a[0])/(b[0]-a[0]);
+    }
+  }
+  return N[N.length-1][1]+Math.min(yuk-175,225)*0.05;   // 175 üstü yavaş artar (400'de ~59 sa)
+}
+// RPE (1–10) → yoğunluk çarpanı. Nabız tablosuyla aynı ölçek: 1–2 → 0,65 (toparlanma koşusu) … 10 → 1,30.
+const RECOVERY_RPE_CARPAN=[null,0.65,0.65,0.72,0.80,0.90,1.00,1.10,1.18,1.25,1.30];
+function recoveryRpeCarpan(rpe){
+  const v=parseFloat(rpe);
+  if(!(v>0)) return null;
+  const r=Math.max(1,Math.min(10,v));
+  const lo=Math.floor(r),hi=Math.ceil(r);
+  return RECOVERY_RPE_CARPAN[lo]+(RECOVERY_RPE_CARPAN[hi]-RECOVERY_RPE_CARPAN[lo])*(r-lo);
+}
+// Süre çarpanı (dk): 60 dk'ya kadar 1,0; sonrası DOĞRUSAL OLMAYAN (üstel 1,5) artış — yük süreyle doğrusal artar ama
+// uzun efor kas hasarını (eksantrik yük), glikojen tükenmesini ve sinir-kas yorgunluğunu orantısızdan fazla artırır.
+// 90 dk ×1,04 · 120 dk ×1,09 · 150 dk ×1,16 · 180 dk ×1,25 · 240 dk ×1,46 · tavan ×1,60.
+function recoverySureCarpan(durMin){
+  if(!(durMin>60)) return 1;
+  return Math.min(1.6,1+0.25*Math.pow((durMin-60)/120,1.5));
+}
+
 function calcRecovery(w, ath, yukObj){
   const yuk=yukObj||0;
   const tur=w.tur||'aerobik';
@@ -606,7 +642,7 @@ function calcRecovery(w, ath, yukObj){
 
   // 1. Temel toparlanma: yük bazlı (TSS/yük)
   // <30 → 12s, 30-60 → 18s, 60-100 → 24s, 100-150 → 36s, >150 → 48s
-  let bazSaat=yuk<30?12:yuk<60?18:yuk<100?24:yuk<150?36:48;
+  let bazSaat=recoveryBazSaat(yuk);
 
   // 2. Yoğunluk modifikatörü — 3 kademeli öncelik (gerçeklik artar)
   // tur etiketi tamamen kaldırıldı: etiket "vücudun ne kadar yorulduğunu" değil
@@ -621,6 +657,7 @@ function calcRecovery(w, ath, yukObj){
   //
   // Öncelik 3: nötr (1.0) — hiç nabız verisi yok
   let yogunlukMod=1.0;
+  let hrMod=null;           // nabız/aşama bazlı yoğunluk çarpanı (varsa)
   const rzd=w._rowZoneDist;
   const _tahminNabiz=sporNabizTahmini(w,ath); // kickboks: nabız yoksa RPE'den tahmin
   const avgHR=parseFloat(w.ort_nabiz)||(_tahminNabiz?_tahminNabiz.avg:0);
@@ -628,17 +665,23 @@ function calcRecovery(w, ath, yukObj){
 
   if(rzd&&rzd.totalMin>0){
     // Ağırlıklı bant skoru: low=0.65, high=1.10, ana=1.55
-    yogunlukMod=(rzd.lowMin*0.65+rzd.highMin*1.10+rzd.anaMin*1.55)/rzd.totalMin;
+    hrMod=(rzd.lowMin*0.65+rzd.highMin*1.10+rzd.anaMin*1.30)/rzd.totalMin;
   } else if(avgHR>0&&lthr>0){
     const pct=avgHR/lthr;
-    if(pct<0.82)       yogunlukMod=0.65; // Tam Z1 — toparlanma koşusu
-    else if(pct<0.87)  yogunlukMod=0.80; // Z1/Z2 sınırı
-    else if(pct<0.92)  yogunlukMod=0.95; // Z2 aerobik taban
-    else if(pct<0.97)  yogunlukMod=1.10; // Z3 tempo alt
-    else if(pct<1.00)  yogunlukMod=1.25; // Z4 eşik altı
-    else if(pct<1.05)  yogunlukMod=1.45; // Z5a VO₂max
-    else               yogunlukMod=1.60; // Z5b/c anaerobik
+    if(pct<0.82)       hrMod=0.65; // Tam Z1 — toparlanma koşusu
+    else if(pct<0.87)  hrMod=0.80; // Z1/Z2 sınırı
+    else if(pct<0.92)  hrMod=0.95; // Z2 aerobik taban
+    else if(pct<0.97)  hrMod=1.10; // Z3 tempo alt
+    else if(pct<1.00)  hrMod=1.18; // Z4 eşik altı
+    else if(pct<1.05)  hrMod=1.25; // Z5a VO₂max
+    else               hrMod=1.30; // Z5b/c anaerobik
   }
+  // RPE ile birleşim: ikisi de varsa nabız %60 + RPE %40 (nabız adım/aralık antrenmanında gecikir ve kassal/mekanik
+  // zorlanmayı yansıtmaz; RPE bütün-vücut zorlanmasını yakalar). Yalnız biri varsa o kullanılır; ikisi de yoksa 1,0.
+  const rpeMod=recoveryRpeCarpan(rpe);
+  if(hrMod!=null&&rpeMod!=null) yogunlukMod=0.6*hrMod+0.4*rpeMod;
+  else if(hrMod!=null)          yogunlukMod=hrMod;
+  else if(rpeMod!=null)         yogunlukMod=rpeMod;
 
   // 3. İrtifa modifikatörü (D+ > 500m → ekstra nöromüsküler stres)
   const irtifaMod=irtifa>2000?1.3:irtifa>1000?1.15:irtifa>500?1.08:1.0;
@@ -646,7 +689,8 @@ function calcRecovery(w, ath, yukObj){
   // 4. Sporcu CTL bandı — daha deneyimli sporcu daha hızlı toparlar
   const bandMod=[1.3,1.15,1.0,0.9,0.85][Math.min(4,Math.max(0,(band||1)-1))];
 
-  let saatler=Math.round(bazSaat*yogunlukMod*irtifaMod*bandMod);
+  const sureMod=recoverySureCarpan(durMin);
+  let saatler=Math.round(bazSaat*yogunlukMod*sureMod*irtifaMod*bandMod);
 
   // 5. Min/max sınırlar
   saatler=Math.max(8,Math.min(72,saatler));
@@ -21879,7 +21923,13 @@ function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanla
 
     // Son antrenmanın toparlanma bilgisini hesapla
     const sonAntrenman=athWorkouts.filter(w=>w.date).sort((a,b)=>b.date.localeCompare(a.date))[0];
-    const sonRecoveryHedef=sonAntrenman?.recovery_hedef?new Date(sonAntrenman.recovery_hedef):null;
+    // 2026.10.08 — CANLI hesap (uyarı bandı/gösterge ile AYNI kaynak: calcMergedRecovery). Kayıtlı recovery_hedef antrenman
+    // eklendiği andaki formülle hesaplanmıştı; formül değişince eski kayıtlar bayatlıyordu → yalnızca canlı hesap yoksa yedek.
+    const _canliRec=(()=>{try{
+      const sw=[...athWorkouts].filter(x=>x.date).sort((a,b)=>(b.date+(b.time||'')).localeCompare(a.date+(a.time||'')));
+      const m=calcMergedRecovery(sw,athlete);return m&&m.hedefISO?new Date(m.hedefISO):null;
+    }catch(e){return null;}})();
+    const sonRecoveryHedef=_canliRec||(sonAntrenman?.recovery_hedef?new Date(sonAntrenman.recovery_hedef):null);
     const sonRecoverySaatler=sonAntrenman?.recovery_saatler||0;
     // weekEffOverride: handlePlanGuncelle'den gelen kilitli weekEff — isRevised=true ise
     // calcWeeklyTargets'in targetKm/Dp'si yerine effKm/effDp kullan.
@@ -33138,7 +33188,7 @@ function RestWarningBanner({workouts,athlete,races,planSnap,history:preHist}){
       React.createElement('div',{style:{fontSize:13,fontWeight:700,color:titleClr,marginBottom:3}},title),
       React.createElement('div',{style:{fontSize:12,color:'var(--text-primary)',lineHeight:1.6}},text),
       React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',marginTop:6,fontStyle:'italic'}},
-        '⏱ Tahmini süre — Yük, tür, D+ ve CTL bandınıza göre hesaplanır. Uyku kalitesi, beslenme ve HRV bu süreyi değiştirebilir.'
+        '⏱ Tahmini süre — Yük, nabız/RPE, süre, D+ ve CTL bandınıza göre hesaplanır. Uyku kalitesi, beslenme ve HRV bu süreyi değiştirebilir.'
       )
     )
   );
@@ -34038,7 +34088,7 @@ function ToparlanmaKutusu({workouts,athlete,variant}){
             React.createElement('div',{style:{fontSize:13,fontWeight:700,color:'var(--'+kalanRenk+')'}},m.kalanSaat+' saat kaldı'),
             React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',marginTop:1}},m.kategori+' yorgunluk · Toplam '+m.saatler+' sa'),
             React.createElement('div',{style:{fontSize:9,color:'var(--text-tertiary)',marginTop:4,fontStyle:'italic',lineHeight:1.4}},
-              '⏱ Tahmini süre — Yük, tür, D+ ve CTL bandınıza göre hesaplanır. Uyku kalitesi, beslenme ve HRV bu süreyi değiştirebilir.'))
+              '⏱ Tahmini süre — Yük, nabız/RPE, süre, D+ ve CTL bandınıza göre hesaplanır. Uyku kalitesi, beslenme ve HRV bu süreyi değiştirebilir.'))
     );
   }
   return React.createElement('div',{className:'metric',style:{borderLeft:'3px solid var(--'+(m.tamamlandi?'success':'warn')+')'}},
