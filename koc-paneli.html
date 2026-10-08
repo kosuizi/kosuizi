@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.08-1409 --><!DOCTYPE html>
+<!-- Version: v2026.10.08-1421 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.08-1409';
+    var RUNNING='v2026.10.08-1421';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.08-1409';
+const APP_VERSION='v2026.10.08-1421';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -33465,7 +33465,7 @@ function saatKullanimIstatistigi(workouts,athlete,gun){
   const sd=new Date(bugun+'T12:00:00Z');sd.setUTCDate(sd.getUTCDate()-gun);
   const sinir=sd.toISOString().slice(0,10);
   const sayim={ideal:0,verimli:0,kabul:0,gri:0};
-  let toplam=0,saatsiz=0;
+  let toplam=0,saatsiz=0,uykuSay=0,varsSay=0;const griSaatler=[];
   (workouts||[]).forEach(w=>{
     if(!w||!w.date||w.date<sinir||w.date>bugun) return;
     if(!KOSU.includes(w.spor||'kosu')) return;
@@ -33474,14 +33474,104 @@ function saatKullanimIstatistigi(workouts,athlete,gun){
     const c=zamanUygulamaSinifi(w,athlete);
     if(!c){saatsiz++;return;}
     sayim[c.sinif]++;
+    if(c.sinif==='gri') griSaatler.push(c.hs);
+    if(c.uyku) uykuSay++;
+    if(c.varsayilan) varsSay++;
   });
   const saatli=toplam-saatsiz;
-  return{gun,toplam,saatli,saatsiz,sayim,
+  return{gun,toplam,saatli,saatsiz,sayim,griSaatler,uykuSay,varsSay,
     iyiOran:saatli>0?Math.round((sayim.ideal+sayim.verimli)/saatli*100):null,
     rutinler:uykuRutiniGecmisi(athlete)};
 }
+// ── 📈 Saat Düzeni Yorumu (2026.10.08 — Göksel talebi) ─────────────────────────────────────────────────
+// Sporcunun son 8 haftada EN ÇOK kullandığı saat dönemine (Zirve saat / Uygun saat / Orta saat / Düşük dinçlik) göre
+// "bu düzen sürerse ne olur?" + öneriler. CANLI (saklanmaz), saatKullanimIstatistigi sayımlarından türer. Dil bilinçli olarak
+// yargılamaz: Düşük dinçlik/Orta saat "kötü" değil — alışılmış saat + iyi gelişim varsa düzen işe yarıyordur (bkz. kronotip/alışkanlık).
+// Yorum koça yöneliktir; iş/okul gibi nedenlerle saat seçilemiyorsa karar koça aittir.
+const SAAT_YORUM_MIN_KOSU=6;       // yorum için saati kayıtlı en az koşu
+function saatKullanimYorumu(workouts,athlete){
+  const st=saatKullanimIstatistigi(workouts,athlete,56);
+  if(st.saatli<SAAT_YORUM_MIN_KOSU) return {yeterli:false,st};
+  const ORD=['ideal','verimli','kabul','gri'];
+  const mx=Math.max(...ORD.map(k=>st.sayim[k]));
+  const enler=ORD.filter(k=>st.sayim[k]===mx);
+  const pay=mx/st.saatli;
+  const dagin=enler.length>1||pay<0.4;
+  const en=dagin?null:enler[0];
+  let gidis,oneriler;
+  const zorYarisSaat='Hedef yarışın başlangıç saati bu saatlerden farklıysa (ör. sabah erken), yarışa yaklaşırken haftada 1 antrenmanı o saate kaydırmak vücudu o saate alıştırır.';
+  if(dagin){
+    gidis='Antrenman saatleri dağınık — belirgin bir alışkanlık oluşmuyor. Bu böyle sürerse vücut belirli bir saate uyum sağlamaz; saatlerin sık değişmesi uyku ve toparlanma düzenini de oynatabilir.';
+    oneriler=['Haftanın çoğunda aynı 1–2 saat bandını seçmeyi dene; özellikle zor seansları (interval, tempo, uzun) sabitle.',
+      'Zor seansları zirve/uygun saatlere, kolay koşuları esnek saatlere koy.',
+      'Saatler iş/vardiya nedeniyle değişiyorsa bu normaldir; o durumda saati sabitlemekten çok uyku süresini sabit tutmak önemlidir.'];
+  }else if(en==='ideal'){
+    gidis='Antrenmanların çoğu biyolojik saatin zirvesinde yapılıyor. Bu düzen sürerse özellikle kaliteli seanslar (interval, tempo, uzun koşu) en verimli saatte yapılmış olur; fark küçük ama haftalar içinde birikir. Zamanlama açısından bir risk görünmüyor.';
+    oneriler=['Düzeni koru; zor seansları bu saatlerde tutmaya devam et.',zorYarisSaat,'Saat tek başına belirleyici değil — uyku ve toparlanma düzeni de iyi kalmalı.'];
+  }else if(en==='verimli'){
+    gidis='Antrenmanlar çoğunlukla uygun saatlerde (zirveye yakın) yapılıyor. Bu düzen sürerse zamanlamadan kaynaklı bir kayıp beklenmez; zirve saate kaydırmanın ek kazancı küçüktür.';
+    oneriler=['Düzeni koru.','En zor seansı mümkünse zirve saat aralığına yerleştir; kolay koşular uygun saatte kalabilir.',zorYarisSaat];
+  }else if(en==='kabul'){
+    gidis='Antrenmanlar çoğunlukla orta saatlerde yapılıyor — zirvenin biraz dışında. Fark küçüktür (bu hesapta saat etkisi bilinçli olarak sınırlı tutulur) ve düzenli antrenman her zaman daha belirleyicidir. Düzen sürerse bir sorun beklenmez; yalnızca zor seanslarda küçük bir verim kaybı olabilir.';
+    oneriler=['Zor seansları (interval, tempo, uzun) mümkünse zirve/uygun saatlere kaydır; kolay koşular orta saatte kalabilir.',
+      'Saat iş/okul gibi nedenlerle seçilemiyorsa bu bir eksiklik değildir — sabit bir saatte düzenli koşmak, her seferinde değişen "ideal" saatten iyidir.',
+      'Gelişim iyi gidiyorsa düzeni bozmak şart değil.'];
+  }else{
+    const med=st.griSaatler.slice().sort((a,b)=>a-b)[Math.floor(st.griSaatler.length/2)];
+    const erken=med<9, gec=med>=20||med<3;
+    const donem=erken?'sabahın erken saatlerinde':gec?'gecenin geç saatlerinde':'vücudun daha az dinç olduğu saatlerde';
+    gidis='Antrenmanlar çoğunlukla düşük dinçlik saatlerinde ('+donem+') yapılıyor. Bu "yanlış" demek değil: düzenli yapılan saate vücut alışır ve gelişim iyiyse bu düzen işe yarıyor demektir. Ancak sürerse zor seanslarda algılanan efor yüksek kalabilir'
+      +(erken?'; erken saatlerde ayrıca kas-eklem sertliği ve uyku süresinin kısalması dikkat edilecek noktalardır.':gec?'; geç saatlerde ise uykuya dalma ve uyku kalitesi dikkat edilecek noktadır.':'.');
+    oneriler=erken
+      ?['Isınmayı uzat (10–15 dk kolay tempo) ve ilk kilometrelere rahat başla.',
+        'Zor seansları (interval, tempo) mümkünse haftada en az 1–2 kez daha geç saatlere (uygun/zirve) kaydır; kolay koşular erken saatte kalabilir.',
+        'Erken kalkılıyorsa yatış saatini de erkene çek — uyku süresi kısalırsa toparlanma bozulur.']
+      :gec
+      ?['Zor seansları yatıştan en az 1 saat önce bitir; yüksek şiddetli geç koşular uykuya dalmayı geciktirebilir.',
+        'Zor seansı gündüze/akşamın erken saatlerine kaydır; geç saat kolay koşuya kalsın.',
+        'Uyku süresini ve kalitesini takip et.']
+      :['Isınmayı uzat ve zor seanslarda ilk bölümü rahat tut.',
+        'Zor seansları mümkünse zirve/uygun saatlere kaydır.',
+        'Uyku rutini kayıtlarının güncel olduğundan emin ol — bu saatlerin düşük çıkması rutin hatalı girildiyse yanıltıcı olabilir.'];
+  }
+  const notlar=[];
+  // Eğilim: son 4 hafta ↔ önceki 4 hafta (her birinde en az 3 saatli koşu)
+  const s28=saatKullanimIstatistigi(workouts,athlete,28);
+  const onceSaatli=st.saatli-s28.saatli;
+  const onceIyi=(st.sayim.ideal+st.sayim.verimli)-(s28.sayim.ideal+s28.sayim.verimli);
+  if(s28.saatli>=3&&onceSaatli>=3){
+    const a=Math.round((s28.sayim.ideal+s28.sayim.verimli)/s28.saatli*100), b=Math.round(onceIyi/onceSaatli*100);
+    notlar.push('📊 Eğilim: zirve/uygun saat oranı son 4 haftada %'+a+', önceki 4 haftada %'+b+(a-b>=15?' — yükseliyor.':b-a>=15?' — düşüyor.':' — benzer.'));
+  }
+  if(st.varsSay>0) notlar.push('⚠ '+st.varsSay+' antrenman, sporcunun uyku rutini girilmediği için varsayılan 23:00–07:00 ile değerlendirildi; sınıflar kesin olmayabilir — rutin girişini iste.');
+  if(st.uykuSay>0) notlar.push('⚠ '+st.uykuSay+' koşu uyku saatine denk geliyor — saat bilgisinin ve uyku rutininin doğru girildiğini kontrol et.');
+  return {yeterli:true,st,en,enler,pay,dagin,gidis,oneriler,notlar};
+}
+function SaatKullanimYorumKutusu({workouts,athlete}){
+  const e=React.createElement;
+  const y=React.useMemo(()=>saatKullanimYorumu(workouts,athlete),[workouts,athlete]);
+  const B=t=>e('b',{style:{color:'var(--text-primary)'}},t);
+  const kutu={background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:10,padding:'10px 12px',margin:'0 0 10px',fontSize:11,color:'var(--text-secondary)',lineHeight:1.6};
+  const baslik=e('div',{style:{fontWeight:700,color:'var(--text-primary)',marginBottom:6,fontSize:12}},'🧭 Saat Düzeni Yorumu — Bu Gidişle Ne Olur?');
+  if(!y.yeterli) return e('div',{style:kutu},baslik,
+    'Yorum için son 8 haftada başlangıç saati kayıtlı en az '+SAAT_YORUM_MIN_KOSU+' koşu gerekir (şu an '+y.st.saatli+').');
+  const ORD=['ideal','verimli','kabul','gri'];
+  const dagilim=ORD.filter(k=>y.st.sayim[k]>0).map(k=>ZAMAN_ETIKET[k]+' '+y.st.sayim[k]).join(' · ');
+  return e('div',{style:kutu},baslik,
+    e('div',{style:{marginBottom:4}},B('📌 En çok kullanılan dönem: '),
+      y.dagin?'belirgin biri yok (dağınık)':ZAMAN_ETIKET[y.en]+' — '+y.st.sayim[y.en]+' / '+y.st.saatli+' koşu (%'+Math.round(y.pay*100)+')',
+      e('span',{style:{color:'var(--text-tertiary)'}},'  ·  '+dagilim)),
+    e('div',{style:{marginBottom:4}},B('🔮 Bu gidişle: '),y.gidis),
+    e('div',{style:{marginBottom:4}},B('💡 Öneriler:'),
+      e('ul',{style:{margin:'2px 0 0',paddingLeft:18}},y.oneriler.map((t,i)=>e('li',{key:i},t)))),
+    y.notlar.map((t,i)=>e('div',{key:'n'+i,style:{marginBottom:4}},t)),
+    e('div',{style:{fontSize:10,fontWeight:400,fontStyle:'italic',color:'var(--text-tertiary)',lineHeight:1.5}},
+      'Not: Genel bir yorumdur — iş/okul gibi nedenlerle saati seçemeyen sporcular için karar koça aittir; gelişim iyi gidiyorsa alışılmış düzeni bozmak şart değildir. Yük/toparlanma uyarıları ayrıca Genel Toparlanma Değerlendirmesi\'nde izlenir. Saat etkisi mütevazıdır; antrenmanın düzenliliği daha belirleyicidir.')
+  );
+}
 function SaatKullanimKarti({workouts,athlete}){
   const kartRef=React.useRef();
+  const [yorumAcik,setYorumAcik]=React.useState(false);
   if(!athlete) return null;
   const st=saatKullanimIstatistigi(athleteWorkoutsOf(workouts,athlete.id),athlete,56);
   const rn=st.rutinler.length?st.rutinler[st.rutinler.length-1]:null;
@@ -33494,8 +33584,11 @@ function SaatKullanimKarti({workouts,athlete}){
   return React.createElement('div',{ref:kartRef,className:'card',style:{marginBottom:16}},
     React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,marginBottom:8}},
       React.createElement('div',{className:'card-title',style:{margin:0}},'📈 Antrenman Saati Kullanımı — Son 8 hafta'),
-      React.createElement(ShareBtn,{elRef:kartRef,filename:'antrenman_saati_kullanimi.png',title:'Antrenman Saati Kullanımı',
-        text:athlete.ad+' · son 8 haftada antrenmanların '+(st.iyiOran!=null?'%'+st.iyiOran:'—')+'\'i zirve/uygun saatlerde'})),
+      React.createElement('div',{style:{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',justifyContent:'flex-end'}},
+        React.createElement('span',{'data-no-export':true},saatUnvaniBilgiButonu(yorumAcik,setYorumAcik,'ⓘ Saat düzeni yorumu','Bu saat düzeni sürerse ne olur? Öneriler')),
+        React.createElement(ShareBtn,{elRef:kartRef,filename:'antrenman_saati_kullanimi.png',title:'Antrenman Saati Kullanımı',
+          text:athlete.ad+' · son 8 haftada antrenmanların '+(st.iyiOran!=null?'%'+st.iyiOran:'—')+'\'i zirve/uygun saatlerde'}))),
+    yorumAcik&&React.createElement('div',{'data-no-export':true},React.createElement(SaatKullanimYorumKutusu,{workouts:athleteWorkoutsOf(workouts,athlete.id),athlete})),
     st.saatli===0
       ?React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',lineHeight:1.6}},
           st.toplam===0?'Son 8 haftada koşu antrenmanı kaydı yok.':'Son 8 haftada '+st.toplam+' koşu antrenmanı var ama hiçbirinde başlangıç saati girilmemiş — istatistik için antrenman saatinin kaydedilmesi gerekir.')
@@ -33610,14 +33703,14 @@ function saatUnvaniKucuk(u){
 // "ⓘ Unvan nasıl kazanılır?" — 🏆 Liderlik'teki "ⓘ Skor nasıl hesaplanıyor?" ile AYNI görsel dil. Kural değerleri sabitlerden
 // (SAAT_UNVAN_MIN_KOSU / SAAT_UNVAN_ESIK / SAAT_UNVANLARI / SAAT_YAN_PULLAR) okunur → kural değişirse metin otomatik güncel kalır.
 // Koç Paneli (Zamanlama Göstergesi + Karşılaştır sıralaması) ve Koşu İzlerim aynı bileşenleri kullanır. u verilirse "Şu anki durum" satırı eklenir.
-function saatUnvaniBilgiButonu(show,setShow){
+function saatUnvaniBilgiButonu(show,setShow,etiket,baslik){
   return React.createElement('button',{
     onClick:function(e){e.stopPropagation();setShow(function(v){return !v;});},
-    title:'Koşucu unvanı nasıl kazanılır?',
+    title:baslik||'Koşucu unvanı nasıl kazanılır?',
     style:{display:'flex',alignItems:'center',gap:4,flexShrink:0,cursor:'pointer',
       background:show?'var(--info-bg)':'transparent',border:'1px solid var(--info)',borderRadius:99,
       color:'var(--info)',fontSize:10,fontWeight:700,padding:'3px 8px',lineHeight:1.3}
-  },'ⓘ Unvan nasıl kazanılır?');
+  },etiket||'ⓘ Unvan nasıl kazanılır?');
 }
 function SaatUnvaniBilgiKutusu({u}){
   const e=React.createElement;
