@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.08-1153 --><!DOCTYPE html>
+<!-- Version: v2026.10.08-1215 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.08-1153';
+    var RUNNING='v2026.10.08-1215';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.08-1153';
+const APP_VERSION='v2026.10.08-1215';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -27457,7 +27457,12 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                       onSave:v=>handleYapiNotuDegistir(day.date,v)
                     }),
                     (planSnap?.overrideMap?.[day.date]?._revizeOnaylandi)&&React.createElement('span',{'data-no-export':true,style:{color:'var(--warn)',fontWeight:700,marginLeft:3,fontSize:10}},'(revize)')
-                  )
+                  ),
+                  // 2026.10.08 — 🕐 İdeal saat bilgisi (Koşu İzlerim kartıyla AYNI bileşen/hesap) — yapılmamış, iptal olmamış,
+                  // geçmemiş koşu günlerinde (onaylı ya da onay bekleyen).
+                  (!isDone&&!isCancelledDay&&!day.isPast&&day.tip!=='yaris'&&day.tip!=='dinlenme')
+                    ?React.createElement('div',{'data-no-export':true},React.createElement(ZamanGunBilgisi,{athlete,workouts,races,dateStr:day.date,ov:day}))
+                    :null
                 ),
                 // 2026.09.21 — Göksel talebi: ✔'in yanında günün Hedef Uyumu (liderlik skoruna giren
                 // değer) + puana göre renk. Koşu İzlerim'deki ✔ ile AYNI ortak fonksiyon (panel paritesi).
@@ -32691,7 +32696,7 @@ function canliFormOzeti(workouts,athlete,races,fallbackSnap,preHist){
     const gun=localDateStr(new Date());
     const key=athlete.id;
     const c=_canliFormCache[key];
-    if(c&&c.wks===workouts&&c.ath===athlete&&c.races===races&&c.gun===gun&&c.preHist===(preHist||null)) return c.val;
+    if(c&&c.wks===workouts&&c.ath===athlete&&c.races===races&&c.gun===gun) return c.val;
     const hist=(preHist&&preHist.length)?preHist:((workouts&&workouts.length)?buildHistory(workouts,athlete,races):[]);
     const last=hist[hist.length-1];
     let val=dflt;
@@ -32943,38 +32948,114 @@ function zamanSaatParse(v,def){
   const h=(+m[1])+(+m[2])/60;
   return (h>=0&&h<24)?h:def;
 }
-// Saf hesap (DOM/React'siz) — test edilebilir. Dönüş: {slots:[{hs,sinif,skor,yarin,t}], bed, wake, varsayilan}
-function zamanlamaHesapla({athlete,siddet,sureDk,hedefMs,restLvl,nowMs}){
-  const g=(athlete&&athlete.giris_anketi)||{};
+// ── Dakikalık yenileme kancası (2026.10.08 — Göksel talebi: "mümkün olduğunca canlı") ──────────
+// Yalnızca SAATE duyarlı küçük bileşenler kullanır (uyarı bandı, kalan toparlanma, 7 günlük
+// toplamlar, zamanlama göstergesi) — tüm Pano'yu değil, yalnızca o bileşeni dakikada bir yeniden
+// çizer. Sekme arka plandayken tarayıcı zamanlayıcıyı yavaşlattığı için sekme tekrar görünür
+// olunca / sayfa geri yüklenince / odak dönünce de hemen tazelenir.
+function useDakikaTik(){
+  const [,setT]=React.useState(0);
+  React.useEffect(()=>{
+    const bump=()=>setT(x=>x+1);
+    const id=setInterval(bump,60000);
+    const onVis=()=>{if(document.visibilityState==='visible') bump();};
+    document.addEventListener('visibilitychange',onVis);
+    window.addEventListener('pageshow',bump);
+    window.addEventListener('focus',bump);
+    return()=>{clearInterval(id);document.removeEventListener('visibilitychange',onVis);window.removeEventListener('pageshow',bump);window.removeEventListener('focus',bump);};
+  },[]);
+}
+// Seçili sporcunun antrenmanları (tüm antrenman listesinden) — WeakMap ile önbelleklenir ki aynı
+// kaynak dizi için HER ZAMAN aynı dizi referansı dönsün (canliFormOzeti önbelleği referansa bakar).
+const _athWksCache=new WeakMap();
+function athleteWorkoutsOf(workouts,athId){
+  if(!workouts||!athId) return [];
+  let m=_athWksCache.get(workouts);
+  if(!m){m={};_athWksCache.set(workouts,m);}
+  return m[athId]||(m[athId]=workouts.filter(w=>w.athleteId===athId));
+}
+
+// ── Uyku rutini (yatış/uyanış/kronotip) — TARİHLİ GEÇMİŞ ────────────────────────────────────
+// Giriş Anketi'nde bu üç alan değiştiğinde athlete.uyku_rutini_gecmisi'ne {from:'YYYY-MM-DD',
+// yatis_saati,uyanis_saati,kronotip} eklenir (bkz. SporcuAnketi handleGirisSave). Bir antrenman
+// değerlendirilirken KENDİ TARİHİNDE geçerli rutin kullanılır → yeni rutin yalnızca değişiklik
+// tarihinden SONRAKİ istatistikleri etkiler, geçmiş istatistikler değişmez (Göksel talebi).
+// Hiç kayıt yoksa (ya da antrenman ilk kayıttan önceyse) varsayılan 23:00–07:00 / ara tip kullanılır.
+function zamanRutinOlustur(g){
+  g=g||{};
   const bed=zamanSaatParse(g.yatis_saati,23), wake=zamanSaatParse(g.uyanis_saati,7);
-  const varsayilan=!(g.yatis_saati&&g.uyanis_saati);
   const kt=g.kronotip||'';
   const kron=/^Sabah/.test(kt)?-1:/^Ak/.test(kt)?1:0;
   const acro=17+Math.max(-2,Math.min(2,wake-7))*0.5+kron;           // sirkadiyen zirve saati
+  return{bed,wake,kron,acro,varsayilan:!(g.yatis_saati&&g.uyanis_saati)};
+}
+function uykuRutiniGecmisi(athlete){
+  const liste=Array.isArray(athlete&&athlete.uyku_rutini_gecmisi)?athlete.uyku_rutini_gecmisi.filter(e=>e&&e.from):[];
+  if(!liste.length){
+    // Geriye dönük uyum: geçmiş dizisi yok ama anket alanları doluysa, anketin doldurulduğu günden itibaren geçerli say
+    const g=athlete&&athlete.giris_anketi;
+    if(g&&(g.yatis_saati||g.uyanis_saati||g.kronotip)){
+      return[{from:String(athlete.giris_anketi_tarih||'').slice(0,10)||'1970-01-01',yatis_saati:g.yatis_saati||'',uyanis_saati:g.uyanis_saati||'',kronotip:g.kronotip||''}];
+    }
+  }
+  return liste.slice().sort((a,b)=>a.from<b.from?-1:a.from>b.from?1:0);
+}
+function uykuRutiniTarihte(athlete,dateStr){
+  let sec=null;
+  uykuRutiniGecmisi(athlete).forEach(e=>{if(e.from<=dateStr) sec=e;});
+  return sec?Object.assign(zamanRutinOlustur(sec),{from:sec.from,kayitli:true}):Object.assign(zamanRutinOlustur({}),{from:null,kayitli:false});
+}
+
+// ── Çekirdek skor: bir antrenmanın (başlangıç saati, süre, şiddet) uyku rutinine ve biyolojik saate göre skoru ──
+// Toparlanma/banner çarpanları BURADA YOK (yalnızca "şimdi/gelecek" için uygulanır — geçmişte o günkü
+// toparlanma durumu yeniden kurulamaz). Dönüş: {uyku:true} ya da {skor:0..1}.
+function zamanTemelSkor(hStart,dur,siddet,rutin){
+  const awakeLen=((rutin.bed-rutin.wake)%24+24)%24||24;             // uyanıklık süresi (sa)
+  const dw=((hStart-rutin.wake)%24+24)%24;                          // uyanıştan beri geçen saat
+  if(dw>=awakeLen) return{uyku:true,skor:0};
+  const db=awakeLen-dw-dur;                                         // antrenman bittiğinde yatışa kalan saat
+  const hm=hStart+dur/2;
+  const B=0.5+0.5*Math.cos(2*Math.PI*(hm-rutin.acro)/24);
+  const taban=0.7+0.3*B;
+  const wakeF=dw<1?0.6:dw<2?0.85:1;
+  let bedF=1;
+  if(db<0) bedF=0;
+  else if(siddet==='zor') bedF=db<1?0:db<2?0.55:db<3?0.8:1;
+  else if(siddet==='orta') bedF=db<1?0.75:1;
+  else bedF=db<0.5?0.85:1;
+  return{uyku:false,skor:taban*wakeF*bedF};
+}
+function zamanSinifla(skor){
+  return skor>=ZAMAN_ESIK.ideal?'ideal':skor>=ZAMAN_ESIK.verimli?'verimli':skor>=ZAMAN_ESIK.kabul?'kabul':'gri';
+}
+// Saf hesap (DOM/React'siz) — test edilebilir. SPORCUNUN YEREL saatiyle çalışır (ülke → saat dilimi,
+// bkz. athleteTZ; calcMergedRecovery/athleteLocalNow ile AYNI ilke).
+// tarih verilmezse: şimdiden itibaren 24 saat; verilirse o yerel günün 00:00–24:00'ı.
+// Dönüş: {slots:[{hs,sinif,skor,yarin,gecmis,t}], bed, wake, varsayilan, bugun}
+function zamanlamaHesapla({athlete,siddet,sureDk,hedefMs,restLvl,nowMs,tarih}){
+  const off=tzOffsetMinutes(new Date(nowMs),athleteTZ(athlete));
+  const wallNow=nowMs+off*60000;
+  const ymd=d=>d.getUTCFullYear()+'-'+String(d.getUTCMonth()+1).padStart(2,'0')+'-'+String(d.getUTCDate()).padStart(2,'0');
+  const bugun=ymd(new Date(wallNow));
+  let wallBase;
+  if(tarih){const p=tarih.split('-').map(Number);wallBase=Date.UTC(p[0],p[1]-1,p[2],0,0,0);}
+  else wallBase=Math.floor(wallNow/3600000)*3600000;
+  const rutin=uykuRutiniTarihte(athlete,tarih||bugun);
   const dur=Math.max(20,Math.min(240,sureDk||60))/60;               // saat
-  const awakeLen=((bed-wake)%24+24)%24||24;                         // uyanıklık süresi (sa)
-  const baseD=new Date(nowMs);baseD.setMinutes(0,0,0);
-  const todayStr=localDateStr(new Date(nowMs));
   const slots=[];
   for(let i=0;i<24;i++){
-    const t=new Date(baseD.getTime()+i*3600000);
-    const hs=t.getHours();
-    const dw=((hs-wake)%24+24)%24;                                   // uyanıştan beri geçen saat
-    const yarin=localDateStr(t)!==todayStr;
+    const wallSlot=wallBase+i*3600000;
+    const t=new Date(wallSlot);
+    const hs=t.getUTCHours();
+    const slotTarih=ymd(t);
+    const yarin=!tarih&&slotTarih!==bugun;
+    const gecmis=(wallSlot+3600000)<=wallNow;
+    const tm=wallSlot-off*60000+1800000;                             // slot ortası (mutlak ms)
+    const bt=zamanTemelSkor(hs,dur,siddet,rutin);
     let sinif,skor=0;
-    if(dw>=awakeLen){ sinif='uyku'; }
+    if(bt.uyku){ sinif='uyku'; }
     else{
-      const db=awakeLen-dw-dur;                                      // antrenman bittiğinde yatışa kalan saat
-      const hm=hs+dur/2;
-      const B=0.5+0.5*Math.cos(2*Math.PI*(hm-acro)/24);
-      const taban=0.7+0.3*B;
-      const wakeF=dw<1?0.6:dw<2?0.85:1;
-      let bedF=1;
-      if(db<0) bedF=0;
-      else if(siddet==='zor') bedF=db<1?0:db<2?0.55:db<3?0.8:1;
-      else if(siddet==='orta') bedF=db<1?0.75:1;
-      else bedF=db<0.5?0.85:1;
-      const r=(hedefMs>0)?(hedefMs-(t.getTime()+1800000))/3600000:0;   // toparlanma bitişine kalan saat
+      const r=(hedefMs>0)?(hedefMs-tm)/3600000:0;                   // toparlanma bitişine kalan saat
       let recF=1;
       if(r>0){
         if(siddet==='kolay') recF=r<=12?1:r<=36?0.85:0.55;
@@ -32984,12 +33065,12 @@ function zamanlamaHesapla({athlete,siddet,sureDk,hedefMs,restLvl,nowMs}){
       let lvlF=1;
       if(restLvl===3) lvlF=0.3;
       else if(restLvl===2) lvlF=siddet==='zor'?0.85:siddet==='orta'?0.92:1;
-      skor=taban*wakeF*bedF*recF*lvlF;
-      sinif=skor>=ZAMAN_ESIK.ideal?'ideal':skor>=ZAMAN_ESIK.verimli?'verimli':skor>=ZAMAN_ESIK.kabul?'kabul':'gri';
+      skor=bt.skor*recF*lvlF;
+      sinif=zamanSinifla(skor);
     }
-    slots.push({hs,sinif,skor:Math.round(skor*100)/100,yarin,t:t.getTime()});
+    slots.push({hs,sinif,skor:Math.round(skor*100)/100,yarin,gecmis,t:tm});
   }
-  return{slots,bed,wake,varsayilan,acro};
+  return{slots,bed:rutin.bed,wake:rutin.wake,acro:rutin.acro,varsayilan:rutin.varsayilan,bugun,rutin};
 }
 function zamanAraliklari(slots,siniflar){
   const out=[];let cur=null;
@@ -33005,14 +33086,111 @@ function zamanAraliklari(slots,siniflar){
   });
 }
 
+// ── Planlı antrenmanın yanında "🕐 İdeal saat" bilgisi — Koç Paneli (plan kartı) + Koşu İzlerim ──
+// Gün bazlı: o günün kalan saatleri için en ideal (yoksa verimli / kabul edilebilir) aralık.
+// Toparlanma/banner kısıtı yalnızca bugün ve yarın için uygulanır (uzak günler için bilinmez).
+function ZamanGunBilgisi({athlete,workouts,races,dateStr,ov}){
+  useDakikaTik();
+  if(!athlete||!ov||!dateStr) return null;
+  const siddet=planSiddetSinifi(ov);
+  if(!siddet) return null;
+  const nowMs=Date.now();
+  const bugun=athleteLocalDateStr(athlete);
+  if(dateStr<bugun) return null;
+  const bd=new Date(bugun+'T12:00:00Z');bd.setUTCDate(bd.getUTCDate()+1);
+  const yarinStr=bd.toISOString().slice(0,10);
+  let hedefMs=0,restLvl=0;
+  if(dateStr<=yarinStr){
+    const rest=restUyariHesapla({workouts:athleteWorkoutsOf(workouts,athlete.id),athlete,races,planSnap:null});
+    hedefMs=rest.hedefISO?Date.parse(rest.hedefISO):0;
+    restLvl=rest.lvl;
+  }
+  const z=zamanlamaHesapla({athlete,siddet,sureDk:ov.sure_dk>0?ov.sure_dk:60,hedefMs,restLvl,nowMs,tarih:dateStr});
+  const uygun=z.slots.filter(s=>!s.gecmis);
+  const ideal=zamanAraliklari(uygun,['ideal']);
+  const verimli=zamanAraliklari(uygun,['ideal','verimli']);
+  const kabul=zamanAraliklari(uygun,['ideal','verimli','kabul']);
+  let metin,renk,bg;
+  if(ideal.length){metin='İdeal saat: '+ideal.join(', ');renk='var(--success)';bg='var(--success-bg)';}
+  else if(verimli.length){metin='Verimli saat: '+verimli.join(', ');renk='var(--info)';bg='var(--info-bg)';}
+  else if(kabul.length){metin='Kabul edilebilir saat: '+kabul.join(', ');renk='var(--warn)';bg='var(--warn-bg)';}
+  else{metin=dateStr===bugun?'Bugün için uygun saat kalmadı':'Bu gün için uygun saat yok';renk='var(--text-secondary)';bg='var(--bg-secondary)';}
+  return React.createElement('div',{
+    title:'Biyolojik saat + uyku düzeni'+(dateStr<=yarinStr?' + toparlanma durumu':'')+' + antrenman şiddetine göre hesaplanır.',
+    style:{display:'inline-flex',alignItems:'center',gap:4,marginTop:3,padding:'2px 8px',borderRadius:99,fontSize:10,fontWeight:600,color:renk,background:bg,border:'1px solid '+renk}
+  },'🕐 '+metin);
+}
+
+// ── Saat kullanım istatistiği — sporcu antrenmanlarını İDEAL/VERİMLİ saatlerde ne kadar yapıyor ──
+// CANLI: saklanmaz, her seferinde antrenman listesinden türetilir (yeni antrenman girilince kendiliğinden
+// güncellenir). Her antrenman KENDİ TARİHİNDEKİ uyku rutiniyle değerlendirilir (uykuRutiniTarihte) →
+// yeni rutin geçmişi değiştirmez. Saat (w.time) bilgisi olmayan antrenmanlar hesaba katılmaz; yarışlar
+// (başlangıç saati organizatörce belirlenir) hariç. Koşu türleri dışındaki sporlar dahil değil.
+function saatKullanimIstatistigi(workouts,athlete,gun){
+  gun=gun||56;
+  const KOSU=['kosu','trail','yol','ultra'];
+  const bugun=athleteLocalDateStr(athlete);
+  const sd=new Date(bugun+'T12:00:00Z');sd.setUTCDate(sd.getUTCDate()-gun);
+  const sinir=sd.toISOString().slice(0,10);
+  const sayim={ideal:0,verimli:0,kabul:0,gri:0};
+  let toplam=0,saatsiz=0;
+  (workouts||[]).forEach(w=>{
+    if(!w||!w.date||w.date<sinir||w.date>bugun) return;
+    if(!KOSU.includes(w.spor||'kosu')) return;
+    if(w.tur==='yaris'||w.yol_yarisi||w.trail_yarisi) return;
+    toplam++;
+    const hs=zamanSaatParse(w.time,null);
+    if(hs==null){saatsiz++;return;}
+    const durH=Math.max(0.33,Math.min(4,(toSec(w.sure_sa,w.sure_dk,w.sure_sn)||0)/3600||1));
+    const siddet=w._isTest?(w._testTur==='maf'?'kolay':'zor'):(turSiddetSinifi(w.tur||'')||'kolay');
+    const bt=zamanTemelSkor(hs,durH,siddet,uykuRutiniTarihte(athlete,w.date));
+    sayim[bt.uyku?'gri':zamanSinifla(bt.skor)]++;
+  });
+  const saatli=toplam-saatsiz;
+  return{gun,toplam,saatli,saatsiz,sayim,
+    iyiOran:saatli>0?Math.round((sayim.ideal+sayim.verimli)/saatli*100):null,
+    rutinler:uykuRutiniGecmisi(athlete)};
+}
+function SaatKullanimKarti({workouts,athlete}){
+  if(!athlete) return null;
+  const st=saatKullanimIstatistigi(athleteWorkoutsOf(workouts,athlete.id),athlete,56);
+  const rn=st.rutinler.length?st.rutinler[st.rutinler.length-1]:null;
+  const pad=n=>String(Math.floor(n)).padStart(2,'0')+':'+String(Math.round((n%1)*60)).padStart(2,'0');
+  const rutinMetin=rn
+    ?('Uyku rutini: '+pad(zamanSaatParse(rn.yatis_saati,23))+'–'+pad(zamanSaatParse(rn.uyanis_saati,7))+(rn.from&&rn.from!=='1970-01-01'?' · '+rn.from+' tarihinden beri':'')
+        +(st.rutinler.length>1?' ('+st.rutinler.length+' kayıt — her antrenman kendi tarihindeki rutinle değerlendirilir)':''))
+    :'Uyku rutini girilmemiş — varsayılan 23:00–07:00 ile değerlendirildi.';
+  const ORD=['ideal','verimli','kabul','gri'];
+  return React.createElement('div',{className:'card',style:{marginBottom:16}},
+    React.createElement('div',{className:'card-title',style:{marginTop:0}},'📈 Antrenman Saati Kullanımı — Son 8 hafta'),
+    st.saatli===0
+      ?React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',lineHeight:1.6}},
+          st.toplam===0?'Son 8 haftada koşu antrenmanı kaydı yok.':'Son 8 haftada '+st.toplam+' koşu antrenmanı var ama hiçbirinde başlangıç saati girilmemiş — istatistik için antrenman saatinin kaydedilmesi gerekir.')
+      :React.createElement(React.Fragment,null,
+          React.createElement('div',{style:{display:'flex',alignItems:'baseline',gap:8,marginBottom:8,flexWrap:'wrap'}},
+            React.createElement('span',{style:{fontSize:22,fontWeight:800,color:st.iyiOran>=60?'var(--success)':st.iyiOran>=35?'var(--warn)':'var(--danger)'}},'%'+st.iyiOran),
+            React.createElement('span',{style:{fontSize:12,color:'var(--text-secondary)'}},'antrenman ideal/verimli saatte ('+(st.sayim.ideal+st.sayim.verimli)+' / '+st.saatli+')')),
+          React.createElement('div',{style:{display:'flex',height:14,borderRadius:7,overflow:'hidden',background:'var(--bg-secondary)',marginBottom:8},role:'img',
+            'aria-label':ORD.map(k=>ZAMAN_ETIKET[k]+': '+st.sayim[k]).join(', ')},
+            ORD.map(k=>st.sayim[k]>0&&React.createElement('div',{key:k,title:ZAMAN_ETIKET[k]+': '+st.sayim[k],style:{width:(st.sayim[k]/st.saatli*100)+'%',background:ZAMAN_RENK[k]}}))),
+          React.createElement('div',{style:{display:'flex',gap:12,flexWrap:'wrap',fontSize:11,color:'var(--text-secondary)'}},
+            ORD.map(k=>React.createElement('span',{key:k,style:{display:'inline-flex',alignItems:'center',gap:4}},
+              React.createElement('span',{style:{width:9,height:9,borderRadius:2,background:ZAMAN_RENK[k],display:'inline-block'}}),
+              ZAMAN_ETIKET[k]+' '+st.sayim[k])))),
+    React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',marginTop:8,lineHeight:1.5}},
+      rutinMetin,
+      st.saatsiz>0?(' · '+st.saatsiz+' antrenmanda saat bilgisi yok (hesaba katılmadı)'):'',
+      ' · Yarışlar ve koşu dışı sporlar dahil değil. Yeni uyku rutini yalnızca değişiklik tarihinden sonraki antrenmanları etkiler.')
+  );
+}
+
 // Props: overrideMap (verilmezse planSnap.overrideMap), gomulu (kart içine gömülü — çerçevesiz, Koşu İzlerim),
 // nasilHesaplanir (false → "Nasıl hesaplanır?" bölümü gizlenir; yalnızca Koç Paneli'nde gösterilir),
 // sporcuModu (sporcuya yönelik metinler).
 // Planlanan antrenman: YALNIZCA koç ONAYLI (approved===true) günler dikkate alınır — onaysız plan sayılmaz.
 function ZamanlamaGostergesi({workouts,athlete,races,history,planSnap,overrideMap,gomulu,nasilHesaplanir=true,sporcuModu}){
-  const [tik,setTik]=React.useState(0);
+  useDakikaTik();
   const [manSiddet,setManSiddet]=React.useState(null);
-  React.useEffect(()=>{const id=setInterval(()=>setTik(x=>x+1),60000);return()=>clearInterval(id);},[]);
   React.useEffect(()=>{setManSiddet(null);},[athlete?.id]);
   if(!athlete) return null;
   const nowMs=Date.now();
@@ -33020,8 +33198,10 @@ function ZamanlamaGostergesi({workouts,athlete,races,history,planSnap,overrideMa
   const hedefMs=rest.hedefISO?Date.parse(rest.hedefISO):0;
 
   // Planlanan sıradaki antrenman: bugün (henüz koşu kaydı yoksa) → yarın; yoksa seçici ile belirlenir
-  const todayStr=localDateStr(new Date(nowMs));
-  const tm=new Date(nowMs);tm.setDate(tm.getDate()+1);const tomStr=localDateStr(tm);
+  // SPORCUNUN yerel tarihi/saati (ülke → saat dilimi); cihaz saatine bakılmaz
+  const todayStr=athleteLocalDateStr(athlete);
+  const _td=new Date(todayStr+'T12:00:00Z');_td.setUTCDate(_td.getUTCDate()+1);
+  const tomStr=_td.toISOString().slice(0,10);
   const ovMap=overrideMap||planSnap?.overrideMap||{};
   const bugunYapildi=(workouts||[]).some(w=>w.date===todayStr&&(w.spor||'kosu')==='kosu');
   let planli=null;
@@ -33052,13 +33232,13 @@ function ZamanlamaGostergesi({workouts,athlete,races,history,planSnap,overrideMa
         ' L'+x3.toFixed(1)+' '+y3.toFixed(1)+' A'+R1+' '+R1+' 0 0 0 '+x4.toFixed(1)+' '+y4.toFixed(1)+' Z',
       fill:ZAMAN_RENK[sinif],opacity:1,stroke:'var(--bg-primary)',strokeWidth:1.2});
   };
-  const nd=new Date(nowMs);const hn=nd.getHours()+nd.getMinutes()/60;
+  const nd=athleteLocalNow(athlete);const hn=nd.getUTCHours()+nd.getUTCMinutes()/60;   // sporcunun yerel duvar saati (UTC getter'ları)
   const nAng=hn/24*360+180;
   const [nx,ny]=pol(R2+2,nAng);
   const [bx1,by1]=pol(5,nAng+90),[bx2,by2]=pol(5,nAng-90);
   const etiket=(h,txt)=>{const [x,y]=pol(R1-14,h/24*360+180);
     return React.createElement('text',{key:txt,x:x,y:y+3.5,textAnchor:'middle',fontSize:10,fill:'var(--text-tertiary)'},txt);};
-  const hhmm=String(nd.getHours()).padStart(2,'0')+':'+String(nd.getMinutes()).padStart(2,'0');
+  const hhmm=String(nd.getUTCHours()).padStart(2,'0')+':'+String(nd.getUTCMinutes()).padStart(2,'0');
 
   const svg=React.createElement('svg',{viewBox:'0 0 240 250',width:'100%',style:{maxWidth:250,flexShrink:0},role:'img',
     'aria-label':'24 saatlik antrenman zamanlama kadranı. Şu an '+hhmm+': '+ZAMAN_ETIKET[simdi.sinif]},
@@ -33080,8 +33260,10 @@ function ZamanlamaGostergesi({workouts,athlete,races,history,planSnap,overrideMa
   const notlar=[];
   if(rest.lvl===3) notlar.push('⛔ '+rest.title+' — uyarı bandıyla aynı karar: şimdilik her saat önerilmez.');
   else if(hedefMs>nowMs){
-    const hd=new Date(hedefMs);
-    notlar.push('⏳ Toparlanma ~'+Math.max(1,Math.round((hedefMs-nowMs)/3600000))+' saat sonra ('+String(hd.getHours()).padStart(2,'0')+':'+String(hd.getMinutes()).padStart(2,'0')+(localDateStr(hd)!==todayStr?' yarın':'')+') tamamlanır.');
+    const _off=tzOffsetMinutes(new Date(nowMs),athleteTZ(athlete));
+    const hd=new Date(hedefMs+_off*60000);   // sporcunun yerel duvar saati (UTC getter'ları)
+    const _hdStr=hd.getUTCFullYear()+'-'+String(hd.getUTCMonth()+1).padStart(2,'0')+'-'+String(hd.getUTCDate()).padStart(2,'0');
+    notlar.push('⏳ Toparlanma ~'+Math.max(1,Math.round((hedefMs-nowMs)/3600000))+' saat sonra ('+String(hd.getUTCHours()).padStart(2,'0')+':'+String(hd.getUTCMinutes()).padStart(2,'0')+(_hdStr!==todayStr?' yarın':'')+') tamamlanır.');
   }
   if(siddet==='zor') notlar.push('Zor antrenman: yatıştan en az 3 saat önce bitecek şekilde başlat (yatışa yakın yüksek şiddet uykuya dalmayı ve uyku verimini bozabilir).');
   else if(siddet==='orta') notlar.push('Orta şiddet: yatıştan en az 1 saat önce bitir.');
@@ -33149,6 +33331,71 @@ function ZamanlamaGostergesi({workouts,athlete,races,history,planSnap,overrideMa
   );
 }
 
+// ── Saate duyarlı küçük bileşenler (dakikalık yenileme — her biri KENDİ içinde yeniden çizilir) ──
+function RestWarningBannerLive(props){ useDakikaTik(); return RestWarningBanner(props); }
+
+// Son antrenman toparlanma kutusu — variant:'pano' (Koç Paneli metrik kutusu) | 'sporcu' (Koşu İzlerim Durumum)
+function ToparlanmaKutusu({workouts,athlete,variant}){
+  useDakikaTik();
+  let m=null;
+  try{
+    const aw=(workouts||[]).filter(w=>w.athleteId===athlete?.id).sort((a,b)=>new Date(b.date)-new Date(a.date));
+    m=calcMergedRecovery(aw,athlete);   // her zaman canlı — date+time alanlarından
+  }catch(e){}
+  if(!m) return null;
+  if(variant==='sporcu'){
+    return React.createElement('div',{style:{marginBottom:12,paddingBottom:10,borderBottom:'1px solid var(--border)'}},
+      React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',marginBottom:3}},'💪 Toparlanma'),
+      m.tamamlandi
+        ?React.createElement('div',{style:{fontSize:13,fontWeight:700,color:'var(--success)'}},'✓ Hazırsın')
+        :React.createElement('div',null,
+            React.createElement('div',{style:{fontSize:13,fontWeight:700,color:'var(--'+m.renk+')'}},m.kalanSaat+' saat kaldı'),
+            React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',marginTop:1}},m.kategori+' yorgunluk · Toplam '+m.saatler+' sa'),
+            React.createElement('div',{style:{fontSize:9,color:'var(--text-tertiary)',marginTop:4,fontStyle:'italic',lineHeight:1.4}},
+              '⏱ Tahmini süre — Yük, tür, D+ ve CTL bandınıza göre hesaplanır. Uyku kalitesi, beslenme ve HRV bu süreyi değiştirebilir.'))
+    );
+  }
+  return React.createElement('div',{className:'metric',style:{borderLeft:'3px solid var(--'+(m.tamamlandi?'success':'warn')+')'}},
+    React.createElement('div',{className:'metric-label'},'Son Antrenman Toparlanma'),
+    React.createElement('div',{className:'metric-val '+(m.tamamlandi?'good':m.kalanSaat<=6?'warn':'danger')},
+      m.tamamlandi?'✓ Tamamlandı':(m.kalanSaat+'s kaldı')),
+    React.createElement('div',{className:'metric-sub'},m.tamamlandi?m.kategori+' ('+m.saatler+'s)':m.kategori+' · '+m.saatler+'s önerilen')
+  );
+}
+
+// Son 7 gün metrikleri (Bu Hafta Yük/Mesafe, Mekanik, Ort. Güç, IF, Gelecek Hafta Hedef) — Koç Paneli
+// "Haftalık Özet" ve Koşu İzlerim "Durumum" için TEK ortak bileşen (panel paritesi). 7 günlük pencere
+// "şimdi"ye göre kaydığı için dakikada bir yeniden hesaplanır.
+// lmMult: calcLoadMultiplier(...).mult · molaCap: mola dönüşü haftalık tavan (0 = yok)
+function YediGunMetrikleri({workouts,athlete,lmMult,molaCap}){
+  useDakikaTik();
+  const wks=(workouts||[]).filter(w=>(new Date()-new Date(w.date))<=7*864e5);
+  const wkLoad=round1(wks.reduce((s,w)=>s+(calcMetrics(w,athlete).yukObj||0),0));
+  const wkKm=round1(wks.reduce((s,w)=>s+(parseFloat(w.mesafe)||0),0));
+  const wkMech=round1(wks.reduce((s,w)=>s+(calcMetrics(w,athlete).mechLoad||0),0));
+  const wkPower=wks.filter(w=>parseFloat(w.ort_guc)>0);
+  const avgWkPower=wkPower.length?Math.round(wkPower.reduce((s,w)=>s+parseFloat(w.ort_guc),0)/wkPower.length):null;
+  const wkNP=wkPower.map(w=>calcMetrics(w,athlete)).filter(m=>m.np>0);
+  const avgNP=wkNP.length?Math.round(wkNP.reduce((s,m)=>s+m.np,0)/wkNP.length):null;
+  const avgIF=wkPower.map(w=>calcMetrics(w,athlete).IF).filter(v=>v>0);
+  const meanIF=avgIF.length?round2(avgIF.reduce((s,v)=>s+v,0)/avgIF.length):null;
+  let nextWkTarget=wkLoad>0?round1(wkLoad*lmMult):null;
+  // Mola dönüşü kapağı — mola öncesi haftalık tabanı asla aşmasın (bkz. molaDonusuDurumu)
+  if(nextWkTarget!=null&&molaCap>0) nextWkTarget=round1(Math.min(nextWkTarget,molaCap));
+  const M=(label,val,sub,valCls)=>React.createElement('div',{className:'metric',key:label},
+    React.createElement('div',{className:'metric-label'},label),
+    React.createElement('div',{className:'metric-val'+(valCls?' '+valCls:'')},val),
+    React.createElement('div',{className:'metric-sub'},sub));
+  return React.createElement(React.Fragment,null,
+    M('Bu Hafta Yük',wkLoad,wks.length+' antrenman'),
+    M('Bu Hafta Mesafe',wkKm+' km','Son 7 gün'),
+    M('Mekanik Yük (7g)',wkMech+' AU','Zemin+irtifa düzeltmeli'),
+    avgWkPower&&M('Ort. Güç (7g)',avgWkPower+' W',avgNP?'NP ~'+avgNP+' W':'güç verisi'),
+    meanIF&&M('Ortalama IF',meanIF,'Yoğunluk faktörü',meanIF>=0.85?'warn':meanIF>=0.75?'info':'good'),
+    nextWkTarget&&M('Gelecek Hafta Hedef',nextWkTarget,'TSS hedefi (≈)','info')
+  );
+}
+
 function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
   if(!athlete)return React.createElement('div',{className:'empty'},'Sporcu seçilmedi.');
 
@@ -33202,11 +33449,7 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
   const refMech=useRef();const refZone=useRef();
   const refAnaMetrik=useRef();const refHaftalik=useRef();
 
-  // Son 7 gün metrikleri
-  const wks=workouts.filter(w=>(new Date()-new Date(w.date))<=7*864e5);
-  const wkLoad=round1(wks.reduce((s,w)=>s+(calcMetrics(w,athlete).yukObj||0),0));
-  const wkKm=round1(wks.reduce((s,w)=>s+(parseFloat(w.mesafe)||0),0));
-  const wkMech=round1(wks.reduce((s,w)=>s+(calcMetrics(w,athlete).mechLoad||0),0));
+  // Son 7 gün metrikleri → YediGunMetrikleri bileşeni (dakikalık yenileme, iki panel ortak)
 
   // 2026.09.27 — Göksel talebi: haftanın TÜM yüklenme değerleri (⚖️ Gerçek/Plan ile
   // AYNI TEK KAYNAK) analiz edilerek Pano'da motive edici bir özet cümle gösterilir.
@@ -33220,24 +33463,12 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
   const haftalikYukMsg=React.useMemo(()=>haftalikYukMesaji(haftalikYukDeger),[haftalikYukDeger]);
 
 
-  // Son antrenman toparlanma bilgisi — calcMergedRecovery: aynı gün birden fazla antrenman varsa
-  // sadece sortedW[0]'ı değil, son 72s içindeki TÜM antrenmanları değerlendirir.
-  const athWorkouts=(workouts||[]).filter(w=>w.athleteId===athlete?.id).sort((a,b)=>new Date(b.date)-new Date(a.date));
-  const lastRecovery=React.useMemo(()=>{
-    // Her zaman canlı hesapla — date+time alanlarından, Firebase'deki eski değere güvenme
-    const merged=calcMergedRecovery(athWorkouts,athlete);
-    if(!merged) return null;
-    return{...merged,hedef:new Date(merged.hedefISO)};
-  },[athWorkouts,athlete]);
+  // Son antrenman toparlanma kutusu → ToparlanmaKutusu bileşeni (dakikalık yenileme)
 
   // Yük artış çarpanı
   const lm=calcLoadMultiplier(last?.acwr,last?.phase,hrvEfektifDurum(athlete),athlete?.sakatlık);
-  let nextWkTarget=wkLoad>0?round1(wkLoad*lm.mult):null;
-  // Mola dönüşü kapağı — hesap bu haftanın (henüz temsili olmayan, dönüş sonrası)
-  // yüküne dayanıyor; mola öncesi haftalık tabanı asla aşmasın (bkz. molaDurumu).
-  if(nextWkTarget!=null&&molaDurumu.aktif&&molaDurumu.haftalikOrt>0){
-    nextWkTarget=round1(Math.min(nextWkTarget,molaDurumu.haftalikOrt));
-  }
+  // Mola dönüşü kapağı (bkz. molaDurumu) — YediGunMetrikleri'ne molaCap olarak geçilir
+  const molaCapPano=(molaDurumu.aktif&&molaDurumu.haftalikOrt>0)?molaDurumu.haftalikOrt:0;
 
   // En yakın yarış
   const today=new Date();
@@ -33403,10 +33634,12 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
     })(),
 
     // ── Dinlenme Uyarı Bandı — Koşu İzlerim ile birebir aynı ──────────────
-    RestWarningBanner({workouts,athlete,races,planSnap:restBandSnap,history}),
+    React.createElement(RestWarningBannerLive,{workouts,athlete,races,planSnap:restBandSnap,history}),
 
     // ── Antrenman Zamanlama Göstergesi (24 saatlik ibreli kadran) — yalnızca Koç Paneli Pano ──
     React.createElement(ZamanlamaGostergesi,{workouts,athlete,races,history,planSnap:restBandSnap}),
+    // Sporcunun antrenmanlarını ideal/verimli saatlerde ne kadar yaptığı (canlı; rutin geçmişi tarihli) — yalnızca Koç Paneli
+    React.createElement(SaatKullanimKarti,{workouts,athlete}),
 
     // Faz + yarış + hazırlık skoru
     (last?.phase||nextRace||athlete?.antrenman_amaci)&&React.createElement('div',{className:'card',style:{marginBottom:12,padding:'12px 16px'}},
@@ -33476,13 +33709,7 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
         React.createElement('div',{className:'metric'},React.createElement('div',{className:'metric-label'},'CTL / Fitness'),React.createElement('div',{className:'metric-val info'},last?.ctl!=null?last.ctl.toFixed(1):'—'),React.createElement('div',{className:'metric-sub'},'Kronik yük τ=42g')),
         React.createElement('div',{className:'metric'},React.createElement('div',{className:'metric-label'},'ATL / Yorgunluk'),React.createElement('div',{className:'metric-val warn'},last?.atl!=null?last.atl.toFixed(1):'—'),React.createElement('div',{className:'metric-sub'},'Akut yük τ=7g')),
         React.createElement('div',{className:'metric'},React.createElement('div',{className:'metric-label'},'TSB / Form'),React.createElement('div',{className:'metric-val '+tsbS.cls},last?.tsb!=null?last.tsb.toFixed(1):'—'),React.createElement('div',{className:'metric-sub'},tsbS.label)),
-        lastRecovery&&React.createElement('div',{className:'metric',style:{borderLeft:`3px solid var(--${lastRecovery.tamamlandi?'success':'warn'})`}},
-          React.createElement('div',{className:'metric-label'},'Son Antrenman Toparlanma'),
-          React.createElement('div',{className:'metric-val '+(lastRecovery.tamamlandi?'good':lastRecovery.kalanSaat<=6?'warn':'danger')},
-            lastRecovery.tamamlandi?'✓ Tamamlandı':(lastRecovery.kalanSaat+'s kaldı')
-          ),
-          React.createElement('div',{className:'metric-sub'},lastRecovery.tamamlandi?lastRecovery.kategori+' ('+lastRecovery.saatler+'s)':lastRecovery.kategori+' · '+lastRecovery.saatler+'s önerilen')
-        )
+        React.createElement(ToparlanmaKutusu,{workouts,athlete,variant:'pano'})
       )
     ),
 
@@ -33505,28 +33732,7 @@ function Dashboard({workouts,athlete,history,races,teamLogo,teamName,planSnap}){
         React.createElement('span',{style:{fontSize:11,fontWeight:800,whiteSpace:'nowrap'}},'%'+haftalikYukDeger.pct)
       ),
       React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))',gap:12}},
-        (()=>{
-        // Güç metrikleri hesapla
-        const wkPower=wks.filter(w=>parseFloat(w.ort_guc)>0);
-        const avgWkPower=wkPower.length?Math.round(wkPower.reduce((s,w)=>s+parseFloat(w.ort_guc),0)/wkPower.length):null;
-        const wkNP=wkPower.map(w=>calcMetrics(w,athlete)).filter(m=>m.np>0);
-        const avgNP=wkNP.length?Math.round(wkNP.reduce((s,m)=>s+m.np,0)/wkNP.length):null;
-        const avgIF=wkPower.map(w=>calcMetrics(w,athlete).IF).filter(v=>v>0);
-        const meanIF=avgIF.length?round2(avgIF.reduce((s,v)=>s+v,0)/avgIF.length):null;
-        return[
-          React.createElement('div',{className:'metric'},React.createElement('div',{className:'metric-label'},'Bu Hafta Yük'),React.createElement('div',{className:'metric-val'},wkLoad),React.createElement('div',{className:'metric-sub'},wks.length+' antrenman')),
-          React.createElement('div',{className:'metric'},React.createElement('div',{className:'metric-label'},'Bu Hafta Mesafe'),React.createElement('div',{className:'metric-val'},wkKm+' km'),React.createElement('div',{className:'metric-sub'},'Son 7 gün')),
-          React.createElement('div',{className:'metric'},React.createElement('div',{className:'metric-label'},'Mekanik Yük (7g)'),React.createElement('div',{className:'metric-val'},wkMech+' AU'),React.createElement('div',{className:'metric-sub'},'Zemin+irtifa düzeltmeli')),
-          avgWkPower&&React.createElement('div',{className:'metric'},React.createElement('div',{className:'metric-label'},'Ort. Güç (7g)'),React.createElement('div',{className:'metric-val'},avgWkPower+' W'),React.createElement('div',{className:'metric-sub'},avgNP?'NP ~'+avgNP+' W':'güç verisi')),
-          meanIF&&React.createElement('div',{className:'metric'},React.createElement('div',{className:'metric-label'},'Ortalama IF'),React.createElement('div',{className:'metric-val '+(meanIF>=0.85?'warn':meanIF>=0.75?'info':'good')},meanIF),React.createElement('div',{className:'metric-sub'},'Yoğunluk faktörü')),
-
-          nextWkTarget&&React.createElement('div',{className:'metric'},
-            React.createElement('div',{className:'metric-label'},'Gelecek Hafta Hedef'),
-            React.createElement('div',{className:'metric-val info'},nextWkTarget),
-            React.createElement('div',{className:'metric-sub'},'TSS hedefi (≈)')
-          )
-        ].filter(Boolean);
-      })()
+        React.createElement(YediGunMetrikleri,{workouts,athlete,lmMult:lm.mult,molaCap:molaCapPano})
       )
     ),
 
@@ -39637,7 +39843,21 @@ function SporcuAnketi(){
         // Doğum tarihi hem giriş anketi yanıtı olarak hem de ana profil alanında
         // (a.dogum) saklanır — yaş hesapları uygulama genelinde a.dogum'u kullanır.
         const dogumUpdate=girisForm.dogum_tarihi?{dogum:girisForm.dogum_tarihi}:{};
-        return Object.assign({},a,dogumUpdate,{giris_anketi:Object.assign({},girisForm),giris_anketi_tarih:nowIso,_updatedAt:Date.now()});
+        // 2026.10.08 — Uyku rutini (yatış/uyanış/kronotip) TARİHLİ geçmişi: değer değiştiyse yeni kayıt eklenir
+        // (from = sporcunun yerel bugünü). Antrenman Saati Kullanımı istatistiği her antrenmanı KENDİ tarihindeki
+        // rutinle değerlendirdiği için yeni rutin yalnızca değişiklikten SONRAKİ istatistikleri etkiler.
+        const rutinYeni={yatis_saati:girisForm.yatis_saati||'',uyanis_saati:girisForm.uyanis_saati||'',kronotip:girisForm.kronotip||''};
+        const rutinGecmis=Array.isArray(a.uyku_rutini_gecmisi)?a.uyku_rutini_gecmisi.filter(function(e){return e&&e.from;}).slice().sort(function(x,y){return x.from<y.from?-1:x.from>y.from?1:0;}):[];
+        if(rutinYeni.yatis_saati||rutinYeni.uyanis_saati||rutinYeni.kronotip){
+          const sonR=rutinGecmis.length?rutinGecmis[rutinGecmis.length-1]:null;
+          const degisti=!sonR||sonR.yatis_saati!==rutinYeni.yatis_saati||sonR.uyanis_saati!==rutinYeni.uyanis_saati||sonR.kronotip!==rutinYeni.kronotip;
+          if(degisti){
+            const fromR=athleteLocalDateStr(a);
+            if(sonR&&sonR.from===fromR) rutinGecmis[rutinGecmis.length-1]=Object.assign({from:fromR},rutinYeni);   // aynı gün tekrar kayıt → o günün kaydını güncelle
+            else rutinGecmis.push(Object.assign({from:fromR},rutinYeni));
+          }
+        }
+        return Object.assign({},a,dogumUpdate,{giris_anketi:Object.assign({},girisForm),giris_anketi_tarih:nowIso,uyku_rutini_gecmisi:rutinGecmis,_updatedAt:Date.now()});
       });
       await fbSet('ath2',updated);
       setAthletes(updated);
@@ -41176,7 +41396,12 @@ function SporcuPlanView(){
               zones, savedOv, ov?.sure_dk||0
             );
             return effSure>0&&React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',marginTop:1}},'⏱ '+fmtSure(effSure));
-          })()
+          })(),
+          // 2026.10.08 — 🕐 İdeal saat bilgisi (Koç Paneli plan kartıyla AYNI bileşen/hesap); yalnızca koç ONAYLI,
+          // henüz yapılmamış (bugün/sıradaki) antrenmanlarda.
+          (!isRace&&ov&&ov.approved===true&&(info.status==='today'||info.status==='next'))
+            ?React.createElement(ZamanGunBilgisi,{athlete,workouts,races,dateStr:info.date,ov})
+            :null
         )
       ),
       missedBanner,
@@ -41319,7 +41544,7 @@ function SporcuPlanView(){
 
 
       // ── Dinlenme Uyarı Bandı — Koç Panelindeki Pano ile birebir aynı ───────────
-      RestWarningBanner({workouts,athlete,races,planSnap}),
+      React.createElement(RestWarningBannerLive,{workouts,athlete,races,planSnap}),
 
       // 3-sütun: [Durumum] [Antrenmanlarım] [Liderlik]
       (()=>{
@@ -41428,28 +41653,8 @@ function SporcuPlanView(){
           React.createElement(AcilirKartBaslik,{baslik:'📊 Durumum',acik:durumAcik,onToggle:toggleDurum}),
           accordionWrap(durumAcik,()=>React.createElement(React.Fragment,null,
 
-          // Toparlanma
-          recoveryInfo&&React.createElement('div',{style:{marginBottom:12,paddingBottom:10,borderBottom:'1px solid var(--border)'}},
-            React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',marginBottom:3}},'💪 Toparlanma'),
-            recoveryInfo.tamamlandi
-              ?React.createElement('div',{style:{fontSize:13,fontWeight:700,color:'var(--success)'}},'✓ Hazırsın')
-              :React.createElement('div',null,
-                  React.createElement('div',{style:{fontSize:13,fontWeight:700,color:'var(--'+recoveryInfo.renk+')'}},
-                    recoveryInfo.kalanSaat+' saat kaldı'
-                  ),
-                  React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',marginTop:1}},
-                    recoveryInfo.kategori+' yorgunluk · Toplam '+recoveryInfo.saatler+' sa'
-                  ),
-                  React.createElement('div',{style:{fontSize:9,color:'var(--text-tertiary)',marginTop:4,fontStyle:'italic',lineHeight:1.4}},
-                    '⏱ Tahmini süre — Yük, tür, D+ ve CTL bandınıza göre hesaplanır. Uyku kalitesi, beslenme ve HRV bu süreyi değiştirebilir.'
-                  )
-                )
-          ),
-
-          // 2026.10.08 — Antrenman Zamanlama Göstergesi (Koç Paneli Pano ile AYNI bileşen/hesap — panel paritesi).
-          // Plan: ovMapEff (bu hafta + devralınan onaylı günler); yalnızca onaylı günler dikkate alınır.
-          // "Nasıl hesaplanır?" bölümü yalnızca Koç Paneli'nde.
-          React.createElement(ZamanlamaGostergesi,{workouts,athlete,races,planSnap,overrideMap:ovMapEff,gomulu:true,nasilHesaplanir:false,sporcuModu:true}),
+          // Toparlanma — ToparlanmaKutusu (dakikalık yenileme; Koç Paneli ile aynı hesap)
+          React.createElement(ToparlanmaKutusu,{workouts,athlete,variant:'sporcu'}),
 
           // 2026.09.27 — Göksel talebi: haftalık yüklenme değerlendirmesi (bkz. yukarısı).
           haftalikYukMsg&&React.createElement('div',{style:{
@@ -41471,31 +41676,11 @@ function SporcuPlanView(){
           // (bkz. yukarıdaki 'last' tanımı) — koç panelinden yazılan AYNI faz değeri,
           // iki panelde de aynı sonucu üretir (panel paritesi kırılmaz).
           haftalikYukMsg&&(()=>{
-            const wks7=workouts.filter(w=>(new Date()-new Date(w.date))<=7*864e5);
-            const wkLoad7=round1(wks7.reduce((s,w)=>s+(calcMetrics(w,athlete).yukObj||0),0));
-            const wkKm7=round1(wks7.reduce((s,w)=>s+(parseFloat(w.mesafe)||0),0));
-            const wkMech7=round1(wks7.reduce((s,w)=>s+(calcMetrics(w,athlete).mechLoad||0),0));
-            const wkPower7=wks7.filter(w=>parseFloat(w.ort_guc)>0);
-            const avgWkPower7=wkPower7.length?Math.round(wkPower7.reduce((s,w)=>s+parseFloat(w.ort_guc),0)/wkPower7.length):null;
-            const wkNP7=wkPower7.map(w=>calcMetrics(w,athlete)).filter(m=>m.np>0);
-            const avgNP7=wkNP7.length?Math.round(wkNP7.reduce((s,m)=>s+m.np,0)/wkNP7.length):null;
-            const avgIF7=wkPower7.map(w=>calcMetrics(w,athlete).IF).filter(v=>v>0);
-            const meanIF7=avgIF7.length?round2(avgIF7.reduce((s,v)=>s+v,0)/avgIF7.length):null;
+            // Son 7 gün metrikleri — Koç Paneli "Haftalık Özet" ile AYNI ortak bileşen (dakikalık yenileme)
             const lm7=calcLoadMultiplier(last?.acwr,last?.phase,hrvEfektifDurum(athlete),athlete?.sakatlık);
-            let nextWkTarget7=wkLoad7>0?round1(wkLoad7*lm7.mult):null;
-            // 2026.09.28 — Mola dönüşü kapağı (bkz. molaDonusuDurumu) — Koç Panelindeki
-            // AYNI kısıt (panel paritesi): hesap bu haftanın (henüz temsili olmayan,
-            // dönüş sonrası) yüküne dayanıyor — mola öncesi haftalık tabanı asla aşmasın.
-            if(nextWkTarget7!=null&&last?.molaAktif&&last?.molaHaftalikOrt>0){
-              nextWkTarget7=round1(Math.min(nextWkTarget7,last.molaHaftalikOrt));
-            }
+            const molaCap7=(last?.molaAktif&&last?.molaHaftalikOrt>0)?last.molaHaftalikOrt:0;
             return React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(110px,1fr))',gap:8,marginBottom:12,paddingBottom:10,borderBottom:'1px solid var(--border)'}},
-              React.createElement('div',{className:'metric'},React.createElement('div',{className:'metric-label'},'Bu Hafta Yük'),React.createElement('div',{className:'metric-val'},wkLoad7),React.createElement('div',{className:'metric-sub'},wks7.length+' antrenman')),
-              React.createElement('div',{className:'metric'},React.createElement('div',{className:'metric-label'},'Bu Hafta Mesafe'),React.createElement('div',{className:'metric-val'},wkKm7+' km'),React.createElement('div',{className:'metric-sub'},'Son 7 gün')),
-              React.createElement('div',{className:'metric'},React.createElement('div',{className:'metric-label'},'Mekanik Yük (7g)'),React.createElement('div',{className:'metric-val'},wkMech7+' AU'),React.createElement('div',{className:'metric-sub'},'Zemin+irtifa düzeltmeli')),
-              avgWkPower7&&React.createElement('div',{className:'metric'},React.createElement('div',{className:'metric-label'},'Ort. Güç (7g)'),React.createElement('div',{className:'metric-val'},avgWkPower7+' W'),React.createElement('div',{className:'metric-sub'},avgNP7?'NP ~'+avgNP7+' W':'güç verisi')),
-              meanIF7&&React.createElement('div',{className:'metric'},React.createElement('div',{className:'metric-label'},'Ortalama IF'),React.createElement('div',{className:'metric-val '+(meanIF7>=0.85?'warn':meanIF7>=0.75?'info':'good')},meanIF7),React.createElement('div',{className:'metric-sub'},'Yoğunluk faktörü')),
-              nextWkTarget7&&React.createElement('div',{className:'metric'},React.createElement('div',{className:'metric-label'},'Gelecek Hafta Hedef'),React.createElement('div',{className:'metric-val info'},nextWkTarget7),React.createElement('div',{className:'metric-sub'},'TSS hedefi (≈)'))
+              React.createElement(YediGunMetrikleri,{workouts,athlete,lmMult:lm7.mult,molaCap:molaCap7})
             );
           })(),
 
