@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.08-1421 --><!DOCTYPE html>
+<!-- Version: v2026.10.08-1430 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.08-1421';
+    var RUNNING='v2026.10.08-1430';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.08-1421';
+const APP_VERSION='v2026.10.08-1430';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -32113,7 +32113,8 @@ function SaatKullanimSiralamasiKarti({athletes,workouts}){
           e('tbody',null,rows.map((r,i)=>{
             const st=r.st;
             const renk=st.iyiOran>=60?'var(--success)':st.iyiOran>=35?'var(--warn)':'var(--danger)';
-            const rutinVar=(st.rutinler||[]).length>0;
+            const rutinVar=(st.rutinler||[]).length>0&&!(st.varsSay>0);
+            const rutinEksik=(st.rutinler||[]).length>0&&st.varsSay>0;
             return e('tr',{key:r.athlete.id},
               e('td',null,e('span',{style:{color:'var(--text-tertiary)',fontSize:11}},i+1)),
               e('td',null,e('strong',null,ad(r.athlete))),
@@ -32124,8 +32125,8 @@ function SaatKullanimSiralamasiKarti({athletes,workouts}){
                 ORD.map(k=>st.sayim[k]>0&&e('div',{key:k,title:ZAMAN_ETIKET[k]+': '+st.sayim[k],style:{width:(st.sayim[k]/st.saatli*100)+'%',background:ZAMAN_RENK[k]}})))),
               ORD.map(k=>e('td',{key:k},st.sayim[k])),
               e('td',null,st.saatli+(st.saatsiz>0?' (+'+st.saatsiz+' saatsiz)':'')),
-              e('td',{title:rutinVar?'Giriş Anketi\'nde yatış/uyanış saati kayıtlı':'Giriş Anketi\'nde uyku saati yok — varsayılan 23:00–07:00 ile değerlendirildi'},
-                rutinVar?'✓ kayıtlı':e('span',{style:{color:'var(--warn)'}},'varsayılan'))
+              e('td',{title:rutinVar?'Giriş Anketi\'nde yatış/uyanış saati kayıtlı':rutinEksik?'Yatış veya uyanış saatinden biri boş — '+st.varsSay+' antrenman varsayılan 23:00–07:00 ile değerlendirildi':'Giriş Anketi\'nde uyku saati yok — varsayılan 23:00–07:00 ile değerlendirildi'},
+                rutinVar?'✓ kayıtlı':e('span',{style:{color:'var(--warn)'}},rutinEksik?'eksik':'varsayılan'))
             );
           }))
         )
@@ -33225,7 +33226,9 @@ function athleteWorkoutsOf(workouts,athId){
 // yatis_saati,uyanis_saati,kronotip} eklenir (bkz. SporcuAnketi handleGirisSave). Bir antrenman
 // değerlendirilirken KENDİ TARİHİNDE geçerli rutin kullanılır → yeni rutin yalnızca değişiklik
 // tarihinden SONRAKİ istatistikleri etkiler, geçmiş istatistikler değişmez (Göksel talebi).
-// Hiç kayıt yoksa (ya da antrenman ilk kayıttan önceyse) varsayılan 23:00–07:00 / ara tip kullanılır.
+// Hiç kayıt yoksa varsayılan 23:00–07:00 / ara tip kullanılır. Antrenman İLK kayıttan önceyse İLK kayıtlı rutin geçerli sayılır
+// (2026.10.08 — anket "genelde" alışkanlığı sorar; "from" yalnızca anketin kaydedildiği gündür. Eskiden bu antrenmanlar
+// yanlışlıkla varsayılana düşüyordu). Sonraki rutin DEĞİŞİKLİKLERİ yalnızca değişiklik tarihinden sonrasını etkiler.
 function zamanRutinOlustur(g){
   g=g||{};
   const bed=zamanSaatParse(g.yatis_saati,23), wake=zamanSaatParse(g.uyanis_saati,7);
@@ -33247,8 +33250,11 @@ function uykuRutiniGecmisi(athlete){
 }
 function uykuRutiniTarihte(athlete,dateStr){
   let sec=null;
-  uykuRutiniGecmisi(athlete).forEach(e=>{if(e.from<=dateStr) sec=e;});
-  return sec?Object.assign(zamanRutinOlustur(sec),{from:sec.from,kayitli:true}):Object.assign(zamanRutinOlustur({}),{from:null,kayitli:false});
+  const liste=uykuRutiniGecmisi(athlete);
+  liste.forEach(e=>{if(e.from<=dateStr) sec=e;});
+  if(sec) return Object.assign(zamanRutinOlustur(sec),{from:sec.from,kayitli:true});
+  if(liste.length) return Object.assign(zamanRutinOlustur(liste[0]),{from:liste[0].from,kayitli:true,ilkKayitOncesi:true});   // ilk kayıttan önceki antrenman → ilk rutin
+  return Object.assign(zamanRutinOlustur({}),{from:null,kayitli:false});
 }
 
 // ── Çekirdek skor: bir antrenmanın (başlangıç saati, süre, şiddet) uyku rutinine ve biyolojik saate göre skoru ──
@@ -33465,7 +33471,7 @@ function saatKullanimIstatistigi(workouts,athlete,gun){
   const sd=new Date(bugun+'T12:00:00Z');sd.setUTCDate(sd.getUTCDate()-gun);
   const sinir=sd.toISOString().slice(0,10);
   const sayim={ideal:0,verimli:0,kabul:0,gri:0};
-  let toplam=0,saatsiz=0,uykuSay=0,varsSay=0;const griSaatler=[];
+  let toplam=0,saatsiz=0,uykuSay=0,varsSay=0;const griSaatler=[],uykuKosular=[];
   (workouts||[]).forEach(w=>{
     if(!w||!w.date||w.date<sinir||w.date>bugun) return;
     if(!KOSU.includes(w.spor||'kosu')) return;
@@ -33475,11 +33481,11 @@ function saatKullanimIstatistigi(workouts,athlete,gun){
     if(!c){saatsiz++;return;}
     sayim[c.sinif]++;
     if(c.sinif==='gri') griSaatler.push(c.hs);
-    if(c.uyku) uykuSay++;
+    if(c.uyku){uykuSay++;uykuKosular.push({date:w.date,time:w.time});}
     if(c.varsayilan) varsSay++;
   });
   const saatli=toplam-saatsiz;
-  return{gun,toplam,saatli,saatsiz,sayim,griSaatler,uykuSay,varsSay,
+  return{gun,toplam,saatli,saatsiz,sayim,griSaatler,uykuSay,varsSay,uykuKosular,
     iyiOran:saatli>0?Math.round((sayim.ideal+sayim.verimli)/saatli*100):null,
     rutinler:uykuRutiniGecmisi(athlete)};
 }
@@ -33543,8 +33549,12 @@ function saatKullanimYorumu(workouts,athlete){
     const a=Math.round((s28.sayim.ideal+s28.sayim.verimli)/s28.saatli*100), b=Math.round(onceIyi/onceSaatli*100);
     notlar.push('📊 Eğilim: zirve/uygun saat oranı son 4 haftada %'+a+', önceki 4 haftada %'+b+(a-b>=15?' — yükseliyor.':b-a>=15?' — düşüyor.':' — benzer.'));
   }
-  if(st.varsSay>0) notlar.push('⚠ '+st.varsSay+' antrenman, sporcunun uyku rutini girilmediği için varsayılan 23:00–07:00 ile değerlendirildi; sınıflar kesin olmayabilir — rutin girişini iste.');
-  if(st.uykuSay>0) notlar.push('⚠ '+st.uykuSay+' koşu uyku saatine denk geliyor — saat bilgisinin ve uyku rutininin doğru girildiğini kontrol et.');
+  if(st.varsSay>0) notlar.push('⚠ '+st.varsSay+' antrenman, '+((st.rutinler||[]).length?'Giriş Anketi\'ndeki yatış/uyanış saatlerinden biri boş olduğu':'sporcunun yatış/uyanış saati Giriş Anketi\'ne girilmediği')+' için varsayılan 23:00–07:00 ile değerlendirildi; sınıflar kesin olmayabilir — '+((st.rutinler||[]).length?'eksik saati tamamlamasını iste.':'rutin girişini iste.'));
+  if(st.uykuSay>0){
+    const fm=k=>{const m=String(k.date).match(/^\d{4}-(\d{2})-(\d{2})/);return (m?m[2]+'.'+m[1]:k.date)+(k.time?' '+k.time:'');};
+    const sirali=st.uykuKosular.slice().sort((a,b)=>a.date<b.date?1:a.date>b.date?-1:0);   // en yeni önce
+    notlar.push('⚠ '+st.uykuSay+' koşu uyku saatine denk geliyor ('+sirali.slice(0,6).map(fm).join(', ')+(sirali.length>6?' +'+(sirali.length-6)+' daha':'')+') — saat bilgisinin ve uyku rutininin doğru girildiğini kontrol et.');
+  }
   return {yeterli:true,st,en,enler,pay,dagin,gidis,oneriler,notlar};
 }
 function SaatKullanimYorumKutusu({workouts,athlete}){
@@ -33606,7 +33616,7 @@ function SaatKullanimKarti({workouts,athlete}){
     React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',marginTop:8,lineHeight:1.5}},
       rutinMetin,
       st.saatsiz>0?(' · '+st.saatsiz+' antrenmanda saat bilgisi yok (hesaba katılmadı)'):'',
-      ' · Yarışlar ve koşu dışı sporlar dahil değil. Yeni uyku rutini yalnızca değişiklik tarihinden sonraki antrenmanları etkiler.')
+      ' · Yarışlar ve koşu dışı sporlar dahil değil. İlk kayıttan önceki antrenmanlar da ilk kayıtlı rutinle değerlendirilir; sonraki rutin değişiklikleri yalnızca değişiklik tarihinden sonrasını etkiler.')
   );
 }
 
