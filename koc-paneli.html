@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.08-1614 --><!DOCTYPE html>
+<!-- Version: v2026.10.08-1622 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.08-1614';
+    var RUNNING='v2026.10.08-1622';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.08-1614';
+const APP_VERSION='v2026.10.08-1622';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -33635,7 +33635,10 @@ function SaatKullanimKarti({workouts,athlete}){
 // Koşular: saatKullanimIstatistigi ile AYNI süzgeç (koşu sporları, yarış hariç, başlangıç saati kayıtlı). Koç Paneli (Zamanlama
 // Göstergesi + Karşılaştır sıralaması) ve Koşu İzlerim (gömülü gösterge) BU fonksiyonları ortak kullanır.
 const SAAT_UNVAN_MIN_KOSU=6;       // unvan için son 8 haftada saati kayıtlı en az koşu
-const SAAT_UNVAN_ESIK=0.5;         // bir saat bandı koşuların en az %50'si olmalı; yoksa "Kameleon"
+const SAAT_UNVAN_ESIK=0.5;         // 1) bir saat bandı antrenmanların en az %50'si → o bandın unvanı
+const SAAT_UNVAN_ESIK_KOMSU=0.55;  // 2) %50 yoksa: YAN YANA iki bant birlikte en az %55 → büyük olanın unvanı (pay = ikisinin toplamı)
+const SAAT_UNVAN_ESIK_ZAYIF=0.35;  // 3) olmazsa: en yoğun bant (eşitlik yok) en az %35 → onun unvanı; yoksa "Kameleon"
+const SAAT_BANT_SIRA=['horoz','safak','kahve','ogle','altin','aksam','gece'];   // gün içi sıra; gece ↔ horoz komşu (döngüsel)
 const SAAT_UNVANLARI={
   horoz:{emoji:'🐓',ad:'Horoz Alarmı',bant:'03:00–05:00',renk:'#f59e0b'},
   safak:{emoji:'🌅',ad:'Şafak Avcısı',bant:'05:00–08:00',renk:'#fb7185'},
@@ -33677,9 +33680,28 @@ function saatUnvaniHesapla(workouts,athlete,bitisStr,gun,yanPulluDahil){
   if(n<SAAT_UNVAN_MIN_KOSU) return {n,yeterli:false};
   const sayim={};
   list.forEach(x=>{const b=saatBandiId(x.hs);sayim[b]=(sayim[b]||0)+1;});
-  const [enB,enN]=Object.entries(sayim).sort((a,b)=>b[1]-a[1])[0];
-  const pay=enN/n;
-  const unvan=pay>=SAAT_UNVAN_ESIK?enB:'kameleon';
+  const cnt=SAAT_BANT_SIRA.map(b=>sayim[b]||0);
+  const sir=cnt.map((c,i)=>[SAAT_BANT_SIRA[i],c]).sort((a,b)=>b[1]-a[1]);
+  const tie=sir[1][1]===sir[0][1];
+  let unvan,enB=sir[0][0],enN=sir[0][1],pay=sir[0][1]/n,birlesik=false,komsu=null;
+  if(!tie&&pay>=SAAT_UNVAN_ESIK){
+    unvan=enB;
+  }else{
+    // yan yana en yoğun bant çifti (döngüsel); eşit toplamda büyük bandı olan öne geçer
+    let best=null;
+    for(let i=0;i<SAAT_BANT_SIRA.length;i++){
+      const j=(i+1)%SAAT_BANT_SIRA.length,tot=cnt[i]+cnt[j],mx=Math.max(cnt[i],cnt[j]);
+      if(!best||tot>best.tot||(tot===best.tot&&mx>best.mx)) best={i,j,tot,mx};
+    }
+    if(best.tot/n>=SAAT_UNVAN_ESIK_KOMSU){
+      const buyuk=cnt[best.i]>=cnt[best.j]?best.i:best.j, kucuk=buyuk===best.i?best.j:best.i;
+      unvan=SAAT_BANT_SIRA[buyuk];enB=unvan;komsu=SAAT_BANT_SIRA[kucuk];enN=best.tot;pay=best.tot/n;birlesik=true;
+    }else if(!tie&&pay>=SAAT_UNVAN_ESIK_ZAYIF){
+      unvan=enB;
+    }else{
+      unvan='kameleon';
+    }
+  }
   const yanPullar=[],yanOran={};   // yanOran: pulun dayandığı oran (0..1) — rozette %'li gösterilir
   if(yanPulluDahil){
     const hsler=list.map(x=>x.hs).sort((a,b)=>a-b);
@@ -33691,7 +33713,7 @@ function saatUnvaniHesapla(workouts,athlete,bitisStr,gun,yanPulluDahil){
     const hs=list.filter(x=>{const g=new Date(x.w.date+'T12:00:00Z').getUTCDay();return g===0||g===6;}).length;
     if(hs/n>=0.6){yanPullar.push('hafta');yanOran.hafta=hs/n;}
   }
-  return {n,yeterli:true,unvan,enBand:enB,enN,pay,sayim,yanPullar:yanPullar.slice(0,2),yanOran};
+  return {n,yeterli:true,unvan,enBand:enB,enN,pay,birlesik,komsu,sayim,yanPullar:yanPullar.slice(0,2),yanOran};
 }
 // Unvanın kaç haftadır (ardışık haftalık pencerelerde) aynı olduğu — geriye doğru en fazla 26 hafta.
 function saatUnvaniHaftaSayisi(workouts,athlete,bugunStr,unvan){
@@ -33705,9 +33727,10 @@ function saatUnvaniHaftaSayisi(workouts,athlete,bugunStr,unvan){
 }
 function saatUnvaniAciklama(u){
   if(!u||!u.yeterli) return '';
-  return u.unvan==='kameleon'
-    ?'Son 8 haftada saati kayıtlı '+u.n+' antrenman var ve hiçbir saat bandı antrenmanların %50\'sine ulaşmıyor (en yoğun bant %'+Math.round(u.pay*100)+') — farklı saatlerde antrenman yapılıyor.'
-    :'Son 8 haftada saati kayıtlı '+u.n+' antrenmanın '+u.enN+'\'i ('+SAAT_UNVANLARI[u.enBand].bant+') başladı (%'+Math.round(u.pay*100)+').';
+  const yz=Math.round(u.pay*100);
+  if(u.unvan==='kameleon') return 'Son 8 haftada saati kayıtlı '+u.n+' antrenman var ve belirgin bir saat düzeni yok: hiçbir saat bandı %'+Math.round(SAAT_UNVAN_ESIK_ZAYIF*100)+'\'e ulaşmıyor (ya da eşit), yan yana bantlar birleşince de %'+Math.round(SAAT_UNVAN_ESIK_KOMSU*100)+'\'i bulmuyor (en yoğun bant %'+yz+') — farklı saatlerde antrenman yapılıyor.';
+  if(u.birlesik) return 'Son 8 haftada saati kayıtlı '+u.n+' antrenmanın '+u.enN+'\'i yan yana iki bantta başladı ('+SAAT_UNVANLARI[u.enBand].bant+' ve '+SAAT_UNVANLARI[u.komsu].bant+', toplam %'+yz+'); büyük olan bandın unvanı verildi.';
+  return 'Son 8 haftada saati kayıtlı '+u.n+' antrenmanın '+u.enN+'\'i ('+SAAT_UNVANLARI[u.enBand].bant+') başladı (%'+yz+')'+(u.pay<SAAT_UNVAN_ESIK?' — çoğunluk değil ama en yoğun bant.':'.');
 }
 // Küçük pil: Karşılaştır sıralaması için (unvan + yan pul emojileri)
 function saatUnvaniKucuk(u){
@@ -33747,12 +33770,12 @@ function SaatUnvaniBilgiKutusu({u}){
     fontSize:11,color:'var(--text-secondary)',lineHeight:1.6}},
     e('div',{style:{fontWeight:700,color:'var(--text-primary)',marginBottom:6,fontSize:12}},'🏅 Koşucu Unvanı Nasıl Kazanılır?'),
     satir([B('📅 Hangi antrenmanlar sayılır? '),'Son 8 haftada, başlangıç saati kayıtlı antrenmanlar — koşu ve diğer sporlar (yarışlar sayılmaz). Saat girilmeyen antrenman unvana katılmaz.']),
-    satir([B('🕐 Unvan: '),'En az '+SAAT_UNVAN_MIN_KOSU+' saatli antrenman olmalı. Antrenmanların en az %'+pct+'\'i aynı saat bandında başlıyorsa o bandın unvanı verilir:']),
+    satir([B('🕐 Unvan: '),'En az '+SAAT_UNVAN_MIN_KOSU+' saatli antrenman olmalı. Bir saat bandı antrenmanların en az %'+pct+'\'ini oluşturuyorsa o bandın unvanı verilir. %'+pct+'\'e ulaşılamazsa sırayla: (1) yan yana iki bant birlikte en az %'+Math.round(SAAT_UNVAN_ESIK_KOMSU*100)+' ise (ör. 07:30 ve 08:30 koşuları) büyük olan bandın unvanı; (2) olmazsa en yoğun bant en az %'+Math.round(SAAT_UNVAN_ESIK_ZAYIF*100)+' ise (eşitlik yoksa) onun unvanı verilir. Bantlar:']),
     e('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(210px,1fr))',gap:'2px 12px',margin:'2px 0 6px'}},
       ['horoz','safak','kahve','ogle','altin','aksam','gece'].map(k=>{const T=SAAT_UNVANLARI[k];
         return e('div',{key:k},T.emoji+' ',B(T.ad),' · '+T.bant);})),
-    satir([B(SAAT_UNVANLARI.kameleon.emoji+' '+SAAT_UNVANLARI.kameleon.ad+': '),'hiçbir saat bandı antrenmanların %'+pct+'\'ine ulaşmıyorsa — yani farklı saatlerde antrenman yapılıyorsa — bu unvan verilir.']),
-    satir([B('% '),'Rozet adının yanındaki yüzde, rozetin dayandığı oranı gösterir: unvanda o saat bandındaki antrenmanların payı (Kameleon\'da en yoğun bandın payı), yan pullarda ilgili ölçütün payı.']),
+    satir([B(SAAT_UNVANLARI.kameleon.emoji+' '+SAAT_UNVANLARI.kameleon.ad+': '),'yukarıdakilerin hiçbiri sağlanmıyorsa — yani farklı saatlerde antrenman yapılıyorsa — bu unvan verilir.']),
+    satir([B('% '),'Rozet adının yanındaki yüzde, rozetin dayandığı oranı gösterir: unvanda o saat bandındaki antrenmanların payı (yan yana iki bant birleştiyse ikisinin toplamı; Kameleon\'da en yoğun bandın payı), yan pullarda ilgili ölçütün payı.']),
     satir([B('📆 "X haftadır": '),'aynı unvanı arka arkaya kaç haftalık pencerede koruduğunu gösterir; unvan değişirse sayaç sıfırlanır ("bu hafta kazanıldı").']),
     satir([B('🎖 Yan pullar '),'(en fazla 2): ',
       e('span',null,SAAT_YAN_PULLAR.saatgibi.emoji+' '+SAAT_YAN_PULLAR.saatgibi.ad+' — '+SAAT_YAN_PULLAR.saatgibi.aciklama+' (≥%60); '+
