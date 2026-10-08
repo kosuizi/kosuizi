@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.08-1247 --><!DOCTYPE html>
+<!-- Version: v2026.10.08-1325 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.08-1247';
+    var RUNNING='v2026.10.08-1325';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.08-1247';
+const APP_VERSION='v2026.10.08-1325';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -3040,6 +3040,30 @@ function gunlukHedefUyumuRozeti(rowOvDay,date,athlete,opts){
   return React.createElement('span',props,'🎯 '+(p==null?'—':p+'%'));
 }
 
+// ── 🕐 Uygulama saati rozeti (2026.10.08 — Göksel talebi): tamamlanan koşunun BAŞLADIĞI saatin ideal / verimli / kabul /
+// verimsiz olduğunu ✔ yanında gösterir (🎯 ve ⚖️ ile aynı yerde). Koç Paneli (HaftalikPlanTab) ve Koşu İzlerim
+// (SporcuPlanView) BU fonksiyonu ortak kullanır; sınıflandırma zamanUygulamaSinifi (Saat Kullanımı istatistiğiyle aynı).
+// Saati kayıtlı olmayan / yarış / koşu dışı antrenmanlarda rozet çıkmaz.
+const ZAMAN_UYG_ETIKET={ideal:'İdeal',verimli:'Verimli',kabul:'Kabul',gri:'Verimsiz'};
+const ZAMAN_UYG_RENK={ideal:{fg:'var(--success)',bg:'var(--success-bg)'},verimli:{fg:'var(--info)',bg:'var(--info-bg)'},kabul:{fg:'var(--warn)',bg:'var(--warn-bg)'},gri:{fg:'var(--text-tertiary)',bg:'var(--bg-tertiary)'}};
+function gunlukSaatRozetleri(kosuActuals,athlete,opts){
+  const list=(kosuActuals||[]).map(w=>({w,c:zamanUygulamaSinifi(w,athlete)})).filter(x=>x.c);
+  if(!list.length) return null;
+  return list.map(({w,c},i)=>{
+    const col=ZAMAN_UYG_RENK[c.sinif];
+    const hhmm=(w.time||'').slice(0,5);
+    const props={
+      key:'zs'+i,
+      'data-zaman-sinif':c.sinif,
+      title:'Antrenman '+hhmm+'\'de başladı → '+ZAMAN_UYG_ETIKET[c.sinif]+' saat'+(c.uyku?' (uyku saatine denk geldi)':'')
+        +' · şiddet: '+({kolay:'kolay',orta:'orta',zor:'zor'}[c.siddet])+'. Biyolojik saat + o tarihteki uyku düzenine göre; toparlanma durumu hesaba katılmaz.',
+      style:{fontSize:11,fontWeight:800,lineHeight:1,padding:'3px 7px',borderRadius:99,whiteSpace:'nowrap',color:col.fg,background:col.bg,border:'1px solid '+col.fg}
+    };
+    if(opts&&opts.noExport) props['data-no-export']=true; // paylaşılan Haftalık Reçete görselini değiştirme
+    return React.createElement('span',props,'🕐 '+hhmm+' · '+ZAMAN_UYG_ETIKET[c.sinif]);
+  });
+}
+
 // ── Gerçek/Plan köşe rozeti (2026.09.22 — Göksel talebi) ─────────────────────
 // Tamamlanan antrenmanın ✔ işaretinin yanında, 🎯 Hedef Uyumu'nun (SADECE koşu
 // antrenmanlarında — pace/nabız disiplini ölçer, kuvvet/yüzme gibi günlerde
@@ -3084,6 +3108,7 @@ function rozetAciklamaKutusu(){
   }},
     satir('🎯 Hedef Uyumu','o günkü koşunun, koçun belirlediği pace/nabız hedefine ne kadar uyduğu (sadece koşularda gösterilir).'),
     satir('⚖️ Gerçek/Plan','o gün planlanan antrenman yüküne göre gerçekte yapılan yük (koşu + koşu dışı her antrenmanda gösterilir).'),
+    satir('🕐 Saat','koşunun başladığı saatin biyolojik saat + uyku düzenine göre verimi: İdeal / Verimli / Kabul / Verimsiz (yalnızca başlangıç saati kayıtlı koşularda gösterilir).'),
     satir('✔','antrenman tamamlandı olarak işaretlendi.')
   );
 }
@@ -27461,13 +27486,17 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   // 2026.10.08 — 🕐 İdeal saat bilgisi (Koşu İzlerim kartıyla AYNI bileşen/hesap) — yapılmamış, iptal olmamış,
                   // geçmemiş koşu günlerinde (onaylı ya da onay bekleyen).
                   (!isDone&&!isCancelledDay&&!day.isPast&&day.tip!=='yaris'&&day.tip!=='dinlenme')
-                    ?React.createElement('div',{'data-no-export':true},React.createElement(ZamanGunBilgisi,{athlete,workouts,races,dateStr:day.date,ov:day}))
+                    ?React.createElement('div',{'data-no-export':true},
+                        React.createElement(ZamanGunBilgisi,{athlete,workouts,races,dateStr:day.date,ov:day}),
+                        // 2026.10.08 — Göksel talebi: dinlenme/dikkat penceresindeki güne plan konmuşsa çelişki uyarısı (yalnızca Koç Paneli)
+                        React.createElement(GenelToparlanmaGunUyarisi,{athlete,workouts,races,dateStr:day.date,ov:day}))
                     :null
                 ),
                 // 2026.09.21 — Göksel talebi: ✔'in yanında günün Hedef Uyumu (liderlik skoruna giren
                 // değer) + puana göre renk. Koşu İzlerim'deki ✔ ile AYNI ortak fonksiyon (panel paritesi).
                 // 2026.09.22 — Göksel talebi: 🎯 Hedef Uyumu SADECE koşu antrenmanlarında gösterilir
                 // (pace/nabız disiplini ölçer — kuvvet/yüzme gibi koşu içermeyen günlerde anlamsız).
+                isDone&&split.kosuDone&&gunlukSaatRozetleri(split.kosuActuals,athlete,{noExport:true}),
                 isDone&&split.kosuDone&&gunlukHedefUyumuRozeti((planSnap?.rowOverrides||{})[day.date],day.date,athlete,{noExport:true}),
                 // 2026.09.22 — Göksel talebi: ⚖️ Gerçek/Plan yük kıyaslaması — HER antrenman türünde
                 // (koşu + koşu dışı) gösterilir. day.comparison zaten TEK KAYNAK calcDayComparison'dan geliyor.
@@ -32807,12 +32836,25 @@ function genelToparlanmaDegerlendirmesi(row,athlete,molaDurumu){
       gunRisk:st==='danger'?mechOranTamDinlenmeGun(oran,mEsik.danger):0,
       gunIdeal:st!=='ok'?mechOranTamDinlenmeGun(oran,mEsik.warn):0});
   }
+  // Sporcu profili kaynaklı sinyaller — plan motoru (recommendWorkout) ile AYNI eşikler (sapma olmasın):
+  //  Sakatlık: ≥8 → plan motoru antrenmanı ENGELLER (blocker) → danger; ≥6 yoğun antrenman kolay/aerobiğe indirilir (ağır dikkat);
+  //  4–5 yüksek vuruşlu antrenman aerobiğe indirilir (hafif dikkat; ≥5'te yMod 0.80).
+  //  HRV (çift taraflı doğrulanmış durum: hrvEfektifDurum): düşük → yMod 0.70 "hafif toparlanma" (ağır dikkat);
+  //  dengesiz / 7g ortalama kişisel-yaş eşiğin altı (hrv7Low) → yMod 0.85, Z3 üstü yok (hafif dikkat).
+  // Bunlar GÜN SAYISI projeksiyonu olmayan "durum" sinyalleridir (puan/değer güncellenene kadar sürer) → durum:true.
+  try{
+    const inj=parseInt(athlete?.sakatlık)||1;
+    if(inj>=4) sistemler.push({ad:'Sakatlık ('+inj+'/10)',st:inj>=8?'danger':'warn',agir:inj>=6,durum:true,gunRisk:0,gunIdeal:0});
+    const hrvEf=hrvEfektifDurum(athlete),hrv7=parseSayi(athlete?.hrv_7gun)||0;
+    const hrv7Low=hrv7>0&&hrv7<hrv7Esik(athlete);
+    if(hrvEf==='düşük'||hrvEf==='dengesiz'||hrv7Low) sistemler.push({ad:'HRV'+(hrv7>0?' ('+hrv7+' ms)':''),st:'warn',agir:hrvEf==='düşük',durum:true,gunRisk:0,gunIdeal:0});
+  }catch(e){}
   if(!sistemler.length) return null;
   const enKotu=sistemler.some(x=>x.st==='danger')?'danger':sistemler.some(x=>x.st==='warn')?'warn':'ok';
   const fmtGun=g=>g==null?'60+':Math.ceil(g);
   // null (maxGun'a takılan) her zaman "en uzun/belirsiz" kabul edilir — max karşılaştırmasında kazanır.
   const enBuyuk=(arr,alan)=>arr.reduce((a,b)=>(b[alan]==null||(a[alan]!=null&&b[alan]>a[alan]))?b:a);
-  const out={enKotu,sistemler,okMesaj:null,mesajlar:[],riskGun:0,riskGunMetin:'0',idealGun:0,idealGunMetin:'0',riskBel:null,idealBel:null,dikkatteki:'',pencereGun:0,molaK};
+  const out={enKotu,sistemler,okMesaj:null,mesajlar:[],riskGun:0,riskGunMetin:'0',riskSure:'',belirsiz:false,idealGun:0,idealGunMetin:'0',riskBel:null,idealBel:null,dikkatteki:'',agir:false,pencereGun:0,molaK};
   if(enKotu==='ok'){
     out.okMesaj=molaK.aktif
       ?'✓ Genel değerlendirme (dönüş modu): bu haftanın yükü mola öncesi haftalık ortalamanın %'+(molaK.oran??'—')+'\'i (tabanın altında), TSB ve mekanik yük dengede — tam dinlenmeye gerek yok. ACWR bu dönemde karar dışı.'
@@ -32821,18 +32863,26 @@ function genelToparlanmaDegerlendirmesi(row,athlete,molaDurumu){
   }
   const bindingIdeal=enBuyuk(sistemler,'gunIdeal');
   out.idealGun=bindingIdeal.gunIdeal;out.idealGunMetin=String(fmtGun(bindingIdeal.gunIdeal));out.idealBel=bindingIdeal.ad;
+  const durumVar=sistemler.some(x=>x.durum&&x.st!=='ok');   // sakatlık/HRV gibi süresi hesaplanamayan sinyal var mı
+  out.agir=sistemler.some(x=>x.st==='warn'&&x.agir);
   if(enKotu==='danger'){
     const dangerSis=sistemler.filter(x=>x.st==='danger');
     const bindingRisk=enBuyuk(dangerSis,'gunRisk');
     const ozet=sistemler.map(x=>x.ad+' '+(x.st==='danger'?'🔴':x.st==='warn'?'🟡':'🟢')).join(', ');
     out.riskGun=bindingRisk.gunRisk;out.riskGunMetin=String(fmtGun(bindingRisk.gunRisk));out.riskBel=bindingRisk.ad;
-    out.mesajlar.push({cls:'danger',text:'🛑 Genel değerlendirme: risk bölgesinden çıkış için en az ~'+fmtGun(bindingRisk.gunRisk)+' gün tam dinlenme gerekiyor (belirleyici: '+bindingRisk.ad+'). Sistemler: '+ozet+'.'});
-    out.mesajlar.push({cls:'warn',text:'🟢 Üç göstergenin birden ideal banda dönmesi ~'+fmtGun(bindingIdeal.gunIdeal)+' gün sürebilir (belirleyici: '+bindingIdeal.ad+'). Bu "sıfır antrenman" varsayımıyla üst-sınır bir projeksiyon, kesin süre değil — dönüşte yükü kademeli artır.'});
-    out.pencereGun=Math.max(1,bindingRisk.gunRisk==null?60:Math.ceil(bindingRisk.gunRisk));
+    out.belirsiz=!!bindingRisk.durum;
+    out.riskSure=out.belirsiz?'süresi belirsiz':'~'+out.riskGunMetin+' gün';
+    out.mesajlar.push({cls:'danger',text:out.belirsiz
+      ?'🛑 Genel değerlendirme: '+bindingRisk.ad+' — plan motoru antrenmanı önermiyor; tam dinlenme, değer düşene/güncellenene kadar (süre belirsiz). Sistemler: '+ozet+'.'
+      :'🛑 Genel değerlendirme: risk bölgesinden çıkış için en az ~'+fmtGun(bindingRisk.gunRisk)+' gün tam dinlenme gerekiyor (belirleyici: '+bindingRisk.ad+'). Sistemler: '+ozet+'.'});
+    if(bindingIdeal.gunIdeal!==0) out.mesajlar.push({cls:'warn',text:'🟢 Yük göstergelerinin (ACWR/TSB/mekanik) birden ideal banda dönmesi ~'+fmtGun(bindingIdeal.gunIdeal)+' gün sürebilir (belirleyici: '+bindingIdeal.ad+'). Bu "sıfır antrenman" varsayımıyla üst-sınır bir projeksiyon, kesin süre değil — dönüşte yükü kademeli artır.'});
+    out.pencereGun=bindingRisk.gunRisk==null?60:Math.max(1,Math.ceil(bindingRisk.gunRisk),dangerSis.some(x=>x.durum)?2:0);
   } else {
     out.dikkatteki=sistemler.filter(x=>x.st!=='ok').map(x=>x.ad).join(' + ');
-    out.mesajlar.push({cls:'warn',text:'⚠ Genel değerlendirme: '+out.dikkatteki+' dikkat bandında. Tam durmak şart değil — kademeli yük azaltımıyla ~'+fmtGun(bindingIdeal.gunIdeal)+' gün içinde dengeye dönebilir (belirleyici: '+bindingIdeal.ad+').'});
-    out.pencereGun=Math.max(1,bindingIdeal.gunIdeal==null?60:Math.ceil(bindingIdeal.gunIdeal));
+    out.mesajlar.push({cls:'warn',text:bindingIdeal.gunIdeal===0
+      ?'⚠ Genel değerlendirme: '+out.dikkatteki+' dikkat bandında — plan motoru yoğunluğu düşürüyor (zor/orta antrenman kısıtlı). Süre, bu değerlerin güncellenmesine bağlı.'
+      :'⚠ Genel değerlendirme: '+out.dikkatteki+' dikkat bandında. Tam durmak şart değil — kademeli yük azaltımıyla ~'+fmtGun(bindingIdeal.gunIdeal)+' gün içinde dengeye dönebilir (belirleyici: '+bindingIdeal.ad+').'});
+    out.pencereGun=bindingIdeal.gunIdeal==null?60:Math.max(1,Math.ceil(bindingIdeal.gunIdeal),durumVar?2:0);
   }
   // Uzun aradan (mola) dönüş notu — mevcut mesajlar KORUNUR, yalnızca bağlam ekler (koç kararı kalır).
   if(molaK.aktif&&molaDurumu&&molaDurumu.molaGunSayisi!=null){
@@ -32920,6 +32970,24 @@ function restUyariHesapla({workouts,athlete,races,planSnap,history:preHist}){
     bg='var(--danger-bg)';border='var(--danger)';titleClr='var(--danger)';
   }
 
+  // Genel Toparlanma Değerlendirmesi "tam dinlenme" (danger) diyorsa banner da AYNI kararı verir (tek karar — Pano kartı / gösterge / banner çelişmesin).
+  // Çoğu danger zaten yukarıdaki kritik koşullardan (ACWR/TSB/kalan saat) gelir; yeni olanlar: mekanik yük ve sakatlık ≥8 (plan motorunda blocker).
+  let _gen=null;
+  try{_gen=genelToparlanmaDegerlendirmesi(_formSnap,athlete,_formSnap?.mola||{aktif:_formSnap?.molaAktif,buHaftaYukOrani:_formSnap?.molaYukOrani??null});}catch(e){}
+  if(lvl<3&&_gen&&_gen.enKotu==='danger'){
+    const _sakDanger=_gen.sistemler.find(x=>x.durum&&x.st==='danger');
+    const _digerDanger=_gen.sistemler.some(x=>!x.durum&&x.st==='danger');
+    lvl=3;icon='🛑';
+    if(_sakDanger&&!_digerDanger){
+      title='Sakatlık Puanı Yüksek';
+      text='Sakatlık puanın yüksek ('+(parseInt(athlete.sakatlık)||'')+'/10). Bu aşamada antrenman önerilmez — koçunla görüş.';
+    } else {
+      title='Yüksek Stres — Dinlenme Gerekli';
+      text='Vücudun yüksek stres altında. Bu aşamada ekstra antrenman yarardan çok zarar verir — bugün ya da yarın mutlaka tam dinlenme.';
+    }
+    bg='var(--danger-bg)';border='var(--danger)';titleClr='var(--danger)';
+  }
+
   // SEVİYE 2 — Uyarı
   if(lvl<2){
     if(_kalanSaat>12&&_kalanSaat<=36){
@@ -32952,8 +33020,6 @@ function restUyariHesapla({workouts,athlete,races,planSnap,history:preHist}){
     }
   }
 
-  let _gen=null;
-  try{_gen=genelToparlanmaDegerlendirmesi(_formSnap,athlete,_formSnap?.mola||{aktif:_formSnap?.molaAktif,buHaftaYukOrani:_formSnap?.molaYukOrani??null});}catch(e){}
   return {lvl,icon,title,text,bg,border,titleClr,kalanSaat:_kalanSaat,hedefISO:_hedefISO,tsb:_tsb,acwr:_acwr,phase:_phase,gen:_gen};
 }
 
@@ -33121,7 +33187,7 @@ function zamanSinifla(skor){
 // bkz. athleteTZ; calcMergedRecovery/athleteLocalNow ile AYNI ilke).
 // tarih verilmezse: şimdiden itibaren 24 saat; verilirse o yerel günün 00:00–24:00'ı.
 // Dönüş: {slots:[{hs,sinif,skor,yarin,gecmis,t}], bed, wake, varsayilan, bugun}
-function zamanlamaHesapla({athlete,siddet,sureDk,hedefMs,restLvl,nowMs,tarih,genLvl,genBitisMs}){
+function zamanlamaHesapla({athlete,siddet,sureDk,hedefMs,restLvl,nowMs,tarih,genLvl,genBitisMs,genAgir}){
   const off=tzOffsetMinutes(new Date(nowMs),athleteTZ(athlete));
   const wallNow=nowMs+off*60000;
   const ymd=d=>d.getUTCFullYear()+'-'+String(d.getUTCMonth()+1).padStart(2,'0')+'-'+String(d.getUTCDate()).padStart(2,'0');
@@ -33155,7 +33221,11 @@ function zamanlamaHesapla({athlete,siddet,sureDk,hedefMs,restLvl,nowMs,tarih,gen
       // Genel Toparlanma Değerlendirmesi penceresi (genBitisMs'e kadar) bant seviyesiyle birleşir (yüksek olan kazanır)
       const lvlEff=Math.max(restLvl||0,(genLvl&&tm<genBitisMs)?genLvl:0);
       if(lvlEff===3) lvlF=0.3;
-      else if(lvlEff===2) lvlF=siddet==='zor'?0.85:siddet==='orta'?0.92:1;
+      else if(lvlEff===2){
+        // ağır dikkat (sakatlık ≥6 / HRV düşük): plan motoru yoğun antrenmanı kolay/aerobiğe indirir → zor/orta en iyi ihtimalle "kabul edilebilir"
+        const agirEff=genAgir&&genLvl===2&&tm<genBitisMs;
+        lvlF=siddet==='zor'?(agirEff?0.6:0.85):siddet==='orta'?(agirEff?0.8:0.92):1;
+      }
       skor=bt.skor*recF*lvlF;
       sinif=zamanSinifla(skor);
     }
@@ -33164,11 +33234,17 @@ function zamanlamaHesapla({athlete,siddet,sureDk,hedefMs,restLvl,nowMs,tarih,gen
   return{slots,bed:rutin.bed,wake:rutin.wake,acro:rutin.acro,varsayilan:rutin.varsayilan,bugun,rutin};
 }
 // Genel Toparlanma Değerlendirmesi penceresi: sporcunun yerel gece yarısından itibaren pencereGun gün (danger → tam dinlenme, warn → kademeli).
+// Dikkat bandının saat göstergesine etkisi (zamanlamaHesapla çarpanlarıyla birebir): hafif ×0,85 zor / ×0,92 orta; ağır ×0,60 / ×0,80.
+function DIKKAT_ETKI(agir){
+  return agir
+    ?'zor/orta antrenman için en iyi saatler bile en fazla "kabul edilebilir" gösteriliyor (kolay antrenman etkilenmez).'
+    :'zor/orta antrenman saatleri düşürülüyor (ideal → çoğunlukla verimli; eşiğe yakınlar kabul edilebilir; kolay antrenman etkilenmez).';
+}
 function genPencere(athlete,gen,nowMs){
-  if(!gen||gen.enKotu==='ok'||!(gen.pencereGun>0)) return {genLvl:0,genBitisMs:0};
+  if(!gen||gen.enKotu==='ok'||!(gen.pencereGun>0)) return {genLvl:0,genBitisMs:0,genAgir:false};
   const off=tzOffsetMinutes(new Date(nowMs),athleteTZ(athlete));
   const wallMid=Math.floor((nowMs+off*60000)/86400000)*86400000;
-  return {genLvl:gen.enKotu==='danger'?3:2,genBitisMs:wallMid-off*60000+gen.pencereGun*86400000};
+  return {genLvl:gen.enKotu==='danger'?3:2,genBitisMs:wallMid-off*60000+gen.pencereGun*86400000,genAgir:!!gen.agir};
 }
 function zamanAraliklari(slots,siniflar){
   const out=[];let cur=null;
@@ -33207,7 +33283,7 @@ function ZamanGunBilgisi({athlete,workouts,races,dateStr,ov,sporcuModu}){
   const gen=rest.gen||null;
   const gp=genPencere(athlete,gen,nowMs);
   const sureDk=ov.sure_dk>0?ov.sure_dk:60;
-  const z=zamanlamaHesapla({athlete,siddet,sureDk,hedefMs,restLvl,nowMs,tarih:dateStr,genLvl:gp.genLvl,genBitisMs:gp.genBitisMs});
+  const z=zamanlamaHesapla({athlete,siddet,sureDk,hedefMs,restLvl,nowMs,tarih:dateStr,genLvl:gp.genLvl,genBitisMs:gp.genBitisMs,genAgir:gp.genAgir});
   const genIci=gp.genLvl>0&&z.slots[0].t<gp.genBitisMs;      // bu gün Genel Toparlanma penceresinde mi
   const dinlenme=restLvl===3||(genIci&&gp.genLvl===3);
   const uygun=z.slots.filter(s=>!s.gecmis);
@@ -33220,14 +33296,14 @@ function ZamanGunBilgisi({athlete,workouts,races,dateStr,ov,sporcuModu}){
     const zs=zamanlamaHesapla({athlete,siddet,sureDk,hedefMs:0,restLvl:0,nowMs,tarih:dateStr});
     const su=zs.slots.filter(s=>!s.gecmis);
     const sI=zamanAraliklari(su,['ideal']),sV=zamanAraliklari(su,['ideal','verimli']);
-    const gunTxt=(!sporcuModu&&gen&&genIci&&gp.genLvl===3)?('~'+gen.riskGunMetin+' gün '):'';
-    metin='⛔ '+(sporcuModu?'Dinlenme önerilen dönemde':gunTxt+'tam dinlenme önerisi içinde')
+    const gunTxt=(!sporcuModu&&gen&&genIci&&gp.genLvl===3&&!gen.belirsiz)?(gen.riskSure+' '):'';
+    metin='⛔ '+(sporcuModu?'Dinlenme önerilen dönemde':(gunTxt?gunTxt+'tam dinlenme önerisi içinde':'Tam dinlenme önerisi içinde'))
       +(sI.length?' · yine de yapılacaksa ideal saat: '+sI.join(', '):sV.length?' · yine de yapılacaksa verimli saat: '+sV.join(', '):'');
     renk='var(--danger)';bg='var(--danger-bg)';
     baslik='Genel Toparlanma Değerlendirmesi / uyarı bandı dinlenme öneriyor; saat bilgisi yalnızca "yine de yapılacaksa" içindir ve toparlanma önceliğini kaldırmaz.';
   }
   else{
-    const dikkat=genIci&&gp.genLvl===2?' · ⚠ dikkat bandı':'';
+    const dikkat=genIci&&gp.genLvl===2?(gp.genAgir?' · ⚠ dikkat bandı (ağır)':' · ⚠ dikkat bandı'):'';
     if(ideal.length){metin='İdeal saat: '+ideal.join(', ')+dikkat;renk='var(--success)';bg='var(--success-bg)';}
     else if(verimli.length){metin='Verimli saat: '+verimli.join(', ')+dikkat;renk='var(--info)';bg='var(--info-bg)';}
     else if(kabul.length){metin='Kabul edilebilir saat: '+kabul.join(', ')+dikkat;renk='var(--warn)';bg='var(--warn-bg)';}
@@ -33239,11 +33315,58 @@ function ZamanGunBilgisi({athlete,workouts,races,dateStr,ov,sporcuModu}){
   },'🕐 '+metin);
 }
 
+// ── Plan gününde "tam dinlenme / dikkat" uyarısı — SADECE Koç Paneli (plan kartı) ──────────────────────────
+// Genel Toparlanma Değerlendirmesi (restUyariHesapla().gen — Pano kartı/gösterge ile AYNI kaynak) bir dinlenme (danger) ya da dikkat (warn)
+// penceresi veriyorsa ve plan o pencerenin içindeki bir güne antrenman koymuşsa (ör. "Planı güncelle" hafif bir antrenman ürettiyse bile)
+// koça önerilen antrenmanın yanında çelişki uyarısı gösterilir. Dinlenme penceresinde şiddet ne olursa olsun; dikkat bandında yalnızca
+// orta/zor planlarda uyarılır (kolay plan zaten önerilen davranıştır). Sporcuya (Koşu İzlerim) GÖSTERİLMEZ.
+function GenelToparlanmaGunUyarisi({athlete,workouts,races,dateStr,ov}){
+  if(!athlete||!ov||!dateStr) return null;
+  const bugun=athleteLocalDateStr(athlete);
+  if(dateStr<bugun) return null;
+  const siddet=planSiddetSinifi(ov)||'kolay';
+  const rest=restUyariHesapla({workouts:athleteWorkoutsOf(workouts,athlete.id),athlete,races,planSnap:null});
+  const gen=rest.gen||null;
+  const gunFark=Math.round((Date.parse(dateStr+'T12:00:00Z')-Date.parse(bugun+'T12:00:00Z'))/86400000);
+  const icinde=gen&&gen.enKotu!=='ok'&&gunFark<gen.pencereGun;
+  const plan=planGunAdi(ov);
+  let kritik=false,metin=null;
+  if(icinde&&gen.enKotu==='danger'){
+    kritik=true;
+    const sure=gen.belirsiz?'süresi belirsiz':(gen.riskSure+', bu gün '+(gunFark+1)+'. gün');
+    metin='⛔ Tam dinlenme önerisi içinde ('+sure+' — belirleyici: '+gen.riskBel+'). '
+      +(siddet==='kolay'?'Plan hafif ('+plan+') olsa da bu dönemde tam dinlenme önerilir — dinlenmeye çevirmeyi ya da çok kısa aktif toparlanmaya indirmeyi değerlendir.'
+        :'Planlanan '+plan+' bu öneriyle çelişiyor — dinlenmeye çevir ya da belirgin şekilde hafiflet.');
+  } else if(rest.lvl===3&&gunFark<=1){
+    kritik=true;
+    metin='⛔ '+rest.title+' — uyarı bandı dinlenme öneriyor. '+(siddet==='kolay'?'Plan hafif ('+plan+') olsa da dinlenmeyi değerlendir.':'Planlanan '+plan+' bu öneriyle çelişiyor — dinlenmeye çevir ya da belirgin şekilde hafiflet.');
+  } else if(icinde&&gen.enKotu==='warn'&&siddet!=='kolay'){
+    metin='⚠ Dikkat bandında ('+gen.dikkatteki+'): planlanan '+plan+' yoğunluğu bu dönemde sınırlı tutulmalı — kolay/aerobik ya da kısaltılmış yapıya indirmeyi değerlendir.';
+  }
+  if(!metin) return null;
+  return React.createElement('div',{'data-genel-gun-uyari':kritik?'danger':'warn',style:{marginTop:4,fontSize:11,lineHeight:1.45,padding:'5px 9px',borderRadius:'var(--radius)',
+    background:kritik?'var(--danger-bg)':'var(--warn-bg)',color:kritik?'var(--danger)':'var(--warn)',borderLeft:'3px solid '+(kritik?'var(--danger)':'var(--warn)')}},metin);
+}
+
 // ── Saat kullanım istatistiği — sporcu antrenmanlarını İDEAL/VERİMLİ saatlerde ne kadar yapıyor ──
 // CANLI: saklanmaz, her seferinde antrenman listesinden türetilir (yeni antrenman girilince kendiliğinden
 // güncellenir). Her antrenman KENDİ TARİHİNDEKİ uyku rutiniyle değerlendirilir (uykuRutiniTarihte) →
 // yeni rutin geçmişi değiştirmez. Saat (w.time) bilgisi olmayan antrenmanlar hesaba katılmaz; yarışlar
 // (başlangıç saati organizatörce belirlenir) hariç. Koşu türleri dışındaki sporlar dahil değil.
+// Tamamlanmış BİR antrenmanın başlangıç saatinin verimi — biyolojik saat + o tarihteki uyku rutini (uykuRutiniTarihte) + şiddet.
+// TEK KAYNAK: 📈 Saat Kullanımı istatistiği ve plan/reçete kartlarındaki 🕐 rozeti (Koç Paneli + Koşu İzlerim) bunu kullanır.
+// Saat (w.time) yoksa, koşu dışı spor ya da yarışsa null. Toparlanma durumu (o günkü ACWR/TSB…) hesaba katılmaz — yalnızca saat verimi.
+function zamanUygulamaSinifi(w,athlete){
+  if(!w||!w.date||!athlete) return null;
+  if(!['kosu','trail','yol','ultra'].includes(w.spor||'kosu')) return null;
+  if(w.tur==='yaris'||w.yol_yarisi||w.trail_yarisi) return null;
+  const hs=zamanSaatParse(w.time,null);
+  if(hs==null) return null;
+  const durH=Math.max(0.33,Math.min(4,(toSec(w.sure_sa,w.sure_dk,w.sure_sn)||0)/3600||1));
+  const siddet=w._isTest?(w._testTur==='maf'?'kolay':'zor'):(turSiddetSinifi(w.tur||'')||'kolay');
+  const bt=zamanTemelSkor(hs,durH,siddet,uykuRutiniTarihte(athlete,w.date));
+  return {sinif:bt.uyku?'gri':zamanSinifla(bt.skor),uyku:!!bt.uyku,hs,siddet,skor:bt.skor};
+}
 function saatKullanimIstatistigi(workouts,athlete,gun){
   gun=gun||56;
   const KOSU=['kosu','trail','yol','ultra'];
@@ -33257,12 +33380,9 @@ function saatKullanimIstatistigi(workouts,athlete,gun){
     if(!KOSU.includes(w.spor||'kosu')) return;
     if(w.tur==='yaris'||w.yol_yarisi||w.trail_yarisi) return;
     toplam++;
-    const hs=zamanSaatParse(w.time,null);
-    if(hs==null){saatsiz++;return;}
-    const durH=Math.max(0.33,Math.min(4,(toSec(w.sure_sa,w.sure_dk,w.sure_sn)||0)/3600||1));
-    const siddet=w._isTest?(w._testTur==='maf'?'kolay':'zor'):(turSiddetSinifi(w.tur||'')||'kolay');
-    const bt=zamanTemelSkor(hs,durH,siddet,uykuRutiniTarihte(athlete,w.date));
-    sayim[bt.uyku?'gri':zamanSinifla(bt.skor)]++;
+    const c=zamanUygulamaSinifi(w,athlete);
+    if(!c){saatsiz++;return;}
+    sayim[c.sinif]++;
   });
   const saatli=toplam-saatsiz;
   return{gun,toplam,saatli,saatsiz,sayim,
@@ -33340,7 +33460,7 @@ function ZamanlamaGostergesi({workouts,athlete,races,history,planSnap,overrideMa
   const gen=rest.gen||null;
   const gp=genPencere(athlete,gen,nowMs);
   const genLvl=gp.genLvl;
-  const z=zamanlamaHesapla({athlete,siddet,sureDk,hedefMs,restLvl:rest.lvl,nowMs,genLvl:gp.genLvl,genBitisMs:gp.genBitisMs});
+  const z=zamanlamaHesapla({athlete,siddet,sureDk,hedefMs,restLvl:rest.lvl,nowMs,genLvl:gp.genLvl,genBitisMs:gp.genBitisMs,genAgir:gp.genAgir});
   const dinlenmeOnerisi=rest.lvl===3||genLvl===3;
   // "Yine de yapılacaksa": toparlanma hesaba katılmadan yalnızca biyolojik saat + uyku verimi
   const zSaf=dinlenmeOnerisi?zamanlamaHesapla({athlete,siddet,sureDk,hedefMs:0,restLvl:0,nowMs}):null;
@@ -33402,11 +33522,11 @@ function ZamanlamaGostergesi({workouts,athlete,races,history,planSnap,overrideMa
   else notlar.push('Kolay antrenman: akşam saatleri uykuyu belirgin etkilemez; yine de yatıştan hemen önce bitirmemek iyi olur.');
   if(dinlenmeOnerisi&&(safIdeal.length||safVerimli.length)) notlar.push('↪ Yine de yapılacaksa (toparlanma hesaba katılmadan, yalnızca saat verimi): '+(safIdeal.length?'ideal '+safIdeal.join(', '):'verimli '+safVerimli.join(', '))+'.');
   if(gen&&genLvl===3) notlar.push(sporcuModu
-    ?'🧭 Genel değerlendirme: yük göstergeleri şu an dinlenmeyi öneriyor — bu dönemde saat verimi ikincildir.'
-    :('🧭 Genel değerlendirme: en az ~'+gen.riskGunMetin+' gün tam dinlenme önerisi (belirleyici: '+gen.riskBel+') — bu süre boyunca saat verimi ikincildir; 🧭 Pano kartıyla aynı hesap.'));
+    ?'🧭 Genel değerlendirme: yük/sağlık göstergeleri şu an dinlenmeyi öneriyor — bu dönemde saat verimi ikincildir.'
+    :('🧭 Genel değerlendirme: '+(gen.belirsiz?'tam dinlenme önerisi, süresi belirsiz ('+gen.riskBel+' güncellenene kadar)':'en az '+gen.riskSure+' tam dinlenme önerisi (belirleyici: '+gen.riskBel+')')+' — bu süre boyunca saat verimi ikincildir; 🧭 Pano kartıyla aynı hesap.'));
   else if(gen&&genLvl===2) notlar.push(sporcuModu
-    ?'🧭 Genel değerlendirme: yük göstergeleri dikkat bandında — zor/orta antrenman saatleri bir kademe düşük gösteriliyor.'
-    :('🧭 Genel değerlendirme: '+gen.dikkatteki+' dikkat bandında (~'+gen.idealGunMetin+' gün) — zor/orta antrenman saatleri bir kademe düşük gösteriliyor.'));
+    ?'🧭 Genel değerlendirme: yük/sağlık göstergeleri dikkat bandında — '+DIKKAT_ETKI(gp.genAgir)
+    :('🧭 Genel değerlendirme: '+gen.dikkatteki+' dikkat bandında'+(gen.idealGun===0?'':' (~'+gen.idealGunMetin+' gün)')+' — '+DIKKAT_ETKI(gp.genAgir)));
   if(z.varsayilan) notlar.push(sporcuModu
     ?('ℹ️ Yatış/uyanış saatini Giriş Anketi\'ne girersen gösterge sana göre kişiselleşir (şimdilik '+String(Math.floor(z.bed)).padStart(2,'0')+':00–'+String(Math.floor(z.wake)).padStart(2,'0')+':00 varsayılıyor).')
     :('ℹ️ Sporcunun yatış/uyanış saati Giriş Anketi\'nde yok → varsayılan '+String(Math.floor(z.bed)).padStart(2,'0')+':00–'+String(Math.floor(z.wake)).padStart(2,'0')+':00 kullanıldı.'));
@@ -33416,12 +33536,12 @@ function ZamanlamaGostergesi({workouts,athlete,races,history,planSnap,overrideMa
   if(dinlenmeOnerisi||genLvl===2){
     let t;
     if(dinlenmeOnerisi){
-      const gunTxt=(!sporcuModu&&gen&&genLvl===3)?(' (~'+gen.riskGunMetin+' gün)'):'';
+      const gunTxt=(!sporcuModu&&gen&&genLvl===3)?(' ('+gen.riskSure+')'):'';
       t='🛑 Şu an tam dinlenme önerisi var'+gunTxt+' — gri saatler toparlanma önceliği nedeniyledir; saat seçimi bu öneriyi ortadan kaldırmaz.';
       // Çelişki yalnızca onaylı plan günü gerçekten dinlenme penceresindeyse söylenir (banner kararı bugün+yarını kapsar)
       if(planli&&(rest.lvl===3||(gen&&genLvl===3&&gen.pencereGun>planGunIdx))) t+=' Onaylı plan ('+planGunAdi(planli)+') bu döneme denk geliyor: '+(sporcuModu?'koçunla teyitleşmeden zorlama.':'koç onayı toparlanma uyarısını kaldırmaz; planı ertelemek/hafifletmek koçun kararıdır.');
     } else {
-      t='⚠ '+(sporcuModu?'Yük göstergeleri dikkat bandında':(gen.dikkatteki+' dikkat bandında'))+' — zor/orta antrenman saatleri bir kademe düşük gösteriliyor.';
+      t='⚠ '+(sporcuModu?'Yük/sağlık göstergeleri dikkat bandında':(gen.dikkatteki+' dikkat bandında'))+' — '+DIKKAT_ETKI(gp.genAgir);
     }
     uyariSerit=React.createElement('div',{style:{fontSize:11,lineHeight:1.5,padding:'7px 10px',borderRadius:'var(--radius)',marginBottom:10,
       background:dinlenmeOnerisi?'var(--danger-bg)':'var(--warn-bg)',color:dinlenmeOnerisi?'var(--danger)':'var(--warn)',
@@ -33483,7 +33603,7 @@ function ZamanlamaGostergesi({workouts,athlete,races,history,planSnap,overrideMa
         React.createElement('br'),
         '• Toparlanma: üstteki uyarı bandıyla aynı hesap ve eşikler (12 / 36 saat). Banner “tam dinlenme” diyorsa gösterge de tüm saatleri gri gösterir.',
         React.createElement('br'),
-        '• Genel değerlendirme: Pano’daki 🧭 Genel Toparlanma Değerlendirmesi (ACWR + TSB + mekanik yük) ile aynı hesap. “Tam dinlenme” öneriliyorsa o gün sayısı boyunca (plan günlerindeki 🕐 bilgisi dahil) tüm saatler gri gösterilir ve koç onaylı bir antrenman bu döneme denk geliyorsa çelişki açıkça belirtilir; “yine de yapılacaksa” satırı yalnızca biyolojik saat verimini gösterir. Dikkat bandında ise zor/orta antrenman saatleri bir kademe düşürülür.',
+        '• Genel değerlendirme: Pano’daki 🧭 Genel Toparlanma Değerlendirmesi (ACWR + TSB + mekanik yük + sakatlık puanı + HRV; plan motoruyla aynı eşikler) ile aynı hesap. “Tam dinlenme” öneriliyorsa o gün sayısı boyunca (plan günlerindeki 🕐 bilgisi dahil) tüm saatler gri gösterilir ve koç onaylı bir antrenman bu döneme denk geliyorsa çelişki açıkça belirtilir; “yine de yapılacaksa” satırı yalnızca biyolojik saat verimini gösterir. Dikkat bandında zor/orta antrenman saatleri düşürülür (hafif: ×0,85 / ×0,92; sakatlık ≥6 ya da HRV düşükse ağır: ×0,60 / ×0,80). Sakatlık ≥8 plan motorunda antrenmanı engeller → tam dinlenme önerisi (süresi belirsiz).',
         React.createElement('br'),
         'Genel bir rehberdir; bireysel yanıt değişir, koç kararı önceliklidir.'
       )
@@ -41485,6 +41605,7 @@ function SporcuPlanView(){
         // değer) + puana göre renk. Koç Paneli'ndeki (HaftalikPlanTab) ✔ ile AYNI ortak fonksiyon (panel paritesi).
         // 2026.09.22 — Göksel talebi: 🎯 Hedef Uyumu SADECE koşu antrenmanlarında gösterilir
         // (pace/nabız disiplini ölçer — kuvvet/yüzme gibi koşu içermeyen günlerde anlamsız).
+        fullyDone&&split.kosuDone&&gunlukSaatRozetleri(split.kosuActuals,athlete),
         fullyDone&&split.kosuDone&&gunlukHedefUyumuRozeti(rowOvEff[info.date],info.date,athlete),
         // 2026.09.22 — Göksel talebi: ⚖️ Gerçek/Plan yük kıyaslaması — HER antrenman türünde
         // (koşu + koşu dışı) gösterilir.
