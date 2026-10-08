@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.06-2048 --><!DOCTYPE html>
+<!-- Version: v2026.10.08-0932 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.06-2048';
+    var RUNNING='v2026.10.08-0932';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.06-2048';
+const APP_VERSION='v2026.10.08-0932';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -4610,8 +4610,75 @@ function initFirebase(){
   }catch(e){console.warn('Firebase init failed:',e);return false;}
 }
 
+// ── REVİZE KAYDI (2026.10.08 — Göksel talebi) ─────────────────────────────────────────────
+// Koçun "(revize)" kutusunu işaretlediği günler plan_snapshots/{sporcu}/{hafta}/overrideMap/{tarih}
+// altında _revizeOnaylandi olarak durur; antrenman (wks) kaydında bu bilgi YOKTUR. Seviye motoru
+// (calcSeviyeFromHistory), GPX seviye bildirimi (driftYorumUret) ve Yürü-Koş mantığı ise yalnızca
+// antrenman listesini görür ve senkron çalışır. Köprü: plan_snapshots her okunduğunda/yazıldığında
+// (fbGet/fbSet/fbUpdate) revize işaretli tarihler burada {sporcuId:{tarih:true}} olarak tutulur.
+// Revize edilmiş gün orijinal seviyenin tam karşılığı OLMADIĞI için o günün antrenmanı seviye
+// kararına (yükselt/aynı/düşür) GİRMEZ. Tek paylaşılan kaynak → Koç Paneli ve Koşu İzlerim aynı sonucu görür.
+const _REVIZE_KAYIT={};
+function _revizeKayitAyarla(athId,date,val){
+  if(!athId||!date) return;
+  if(val){ (_REVIZE_KAYIT[athId]||(_REVIZE_KAYIT[athId]={}))[date]=true; }
+  else if(_REVIZE_KAYIT[athId]) delete _REVIZE_KAYIT[athId][date];
+}
+function _revizeKayitIsle(athId,ovMap){
+  if(!athId||!ovMap||typeof ovMap!=='object') return;
+  Object.keys(ovMap).forEach(d=>{ const ov=ovMap[d]; _revizeKayitAyarla(athId,d,!!(ov&&typeof ov==='object'&&ov._revizeOnaylandi)); });
+}
+function _revizeKayitOkundu(key,v){
+  if(typeof key!=='string'||key.indexOf('plan_snapshots/')!==0) return;
+  const p=key.split('/'); const ath=p[1];
+  if(!ath||ath==='_prefs') return;
+  if(p.length===5&&p[3]==='overrideMap'){ _revizeKayitAyarla(ath,p[4],!!(v&&typeof v==='object'&&v._revizeOnaylandi)); return; }
+  if(!v||typeof v!=='object') return;
+  if(p.length===2) Object.keys(v).forEach(wk=>{ const s=v[wk]; if(s&&typeof s==='object') _revizeKayitIsle(ath,s.overrideMap); });
+  else if(p.length===3) _revizeKayitIsle(ath,v.overrideMap);
+  else if(p.length===4&&p[3]==='overrideMap') _revizeKayitIsle(ath,v);
+}
+function _revizeKayitYazildi(key,val){
+  if(typeof key!=='string'||key.indexOf('plan_snapshots/')!==0) return;
+  const p=key.split('/'); const ath=p[1];
+  if(!ath||ath==='_prefs'||!val||typeof val!=='object') return;
+  if(p.length===3){
+    if(val.overrideMap) _revizeKayitIsle(ath,val.overrideMap);
+    Object.keys(val).forEach(k=>{
+      if(k.indexOf('overrideMap/')!==0) return;
+      const sp=k.split('/');
+      if(sp.length===2) _revizeKayitIsle(ath,{[sp[1]]:val[k]});
+      else if(sp.length===3&&sp[2]==='_revizeOnaylandi') _revizeKayitAyarla(ath,sp[1],!!val[k]);
+    });
+  } else if(p.length===4&&p[3]==='overrideMap') _revizeKayitIsle(ath,val);
+  else if(p.length===5&&p[3]==='overrideMap') _revizeKayitIsle(ath,{[p[4]]:val});
+}
+// w (antrenman kaydı): o sporcunun o günü koç tarafından "(revize)" işaretlenmiş mi?
+function revizeliAntrenmanMi(w,athId){
+  if(!w||!w.date) return false;
+  const a=w.athleteId||athId;
+  return !!(a&&_REVIZE_KAYIT[a]&&_REVIZE_KAYIT[a][w.date]);
+}
+// Son REVIZE_YUKLE_HAFTA haftanın snapshot'larını okuyup kaydı doldurur (okuma sırasında fbGet kancası işler).
+const REVIZE_YUKLE_HAFTA=8;
+const _revizeYukleDurum={};
+function revizeKayitYukle(athId,zorla){
+  if(!athId) return Promise.resolve();
+  const d=_revizeYukleDurum[athId];
+  if(d&&!zorla&&Date.now()-d.t<300000) return d.p;
+  const keys=[]; for(let k=0;k>-REVIZE_YUKLE_HAFTA;k--) keys.push(getWeekKey(k));
+  const p=Promise.all(keys.map(wk=>fbGet('plan_snapshots/'+athId+'/'+wk).catch(()=>null))).then(()=>{}).catch(()=>{});
+  _revizeYukleDurum[athId]={t:Date.now(),p};
+  return p;
+}
+
 // Firebase okuma — auth tamamlanınca okur, yoksa localStorage fallback
 async function fbGet(key){
+  const v=await _fbGetRaw(key);
+  try{ _revizeKayitOkundu(key,v); }catch(_e){}
+  return v;
+}
+async function _fbGetRaw(key){
   if(!db&&!initFirebase()){
     return lsGet(key);
   }
@@ -4644,6 +4711,7 @@ async function fbSet(key,val){
     console.warn('[Oturum Kilidi] Bu sekme artık aktif oturum değil, yazma engellendi:',key);
     return;
   }
+  try{ _revizeKayitYazildi(key,val); }catch(_e){}
   if(!db&&!initFirebase()){
     lsSet(key,val);return;
   }
@@ -4723,6 +4791,7 @@ async function fbUpdate(key,val){
     return{blocked:true};
   }
   const clean=stripUndefined(val);
+  try{ _revizeKayitYazildi(key,clean); }catch(_e){}
   if(!db&&!initFirebase()){
     const cur=lsGet(key)||{};
     lsSet(key,_mergeCleanIntoLocal(cur,clean));
@@ -6076,7 +6145,7 @@ function seviyeRpeBilgi(w,athWorkouts){
   if(!(rpe>0)) return {yon:null,n:0,ort:null,neden:'rpe_yok'};
   const sKey=_sKey(w.yapi_notu);
   if(sKey==='-') return {yon:null,n:0,ort:null,neden:'seviye_yok'};
-  const onceki=(athWorkouts||[]).filter(x=>x&&x.id!==w.id&&x.tur===w.tur&&x.date&&w.date&&x.date<w.date&&_sKey(x.yapi_notu)===sKey&&(toSec(x.sure_sa,x.sure_dk,x.sure_sn)||0)>0)
+  const onceki=(athWorkouts||[]).filter(x=>x&&x.id!==w.id&&x.tur===w.tur&&x.date&&w.date&&x.date<w.date&&_sKey(x.yapi_notu)===sKey&&(toSec(x.sure_sa,x.sure_dk,x.sure_sn)||0)>0&&!revizeliAntrenmanMi(x))
     .sort((a,b)=>b.date.localeCompare(a.date)).slice(0,5).map(x=>parseFloat(x.rpe)||null);
   return _rpeReferansDegerlendir(rpe,onceki);
 }
@@ -6132,7 +6201,7 @@ function driftKiyasla(w,athWorkouts){
   if(!mevcut.length) return {durum:'imzasiz'};
   if(!w.tur||!w.date) return {durum:'yok'};
   const sKey=_sKey(w.yapi_notu);
-  const adaylar=(athWorkouts||[]).filter(x=>x&&x.id!==w.id&&x.tur===w.tur&&x.date&&x.date<w.date&&_sKey(x.yapi_notu)===sKey&&Array.isArray(x.drift_bloklar)&&x.drift_bloklar.some(_driftBlokImzaGecerli))
+  const adaylar=(athWorkouts||[]).filter(x=>x&&x.id!==w.id&&x.tur===w.tur&&x.date&&x.date<w.date&&_sKey(x.yapi_notu)===sKey&&!revizeliAntrenmanMi(x)&&Array.isArray(x.drift_bloklar)&&x.drift_bloklar.some(_driftBlokImzaGecerli))
     .sort((a,b)=>b.date.localeCompare(a.date));
   for(const x of adaylar){
     const kullanildi=new Set(),ciftler=[];
@@ -6155,21 +6224,118 @@ function driftKiyasla(w,athWorkouts){
   }
   return {durum:'yok'};
 }
+// ── YÜRÜ-KOŞ SEVİYE KARARI (2026.10.08 — Göksel talebi: drift = FREN, hızlandırıcı değil) ──────────
+// Yürü-Koş doğrusal bir tamamlama programıdır (S1→S16): varsayılan "sıradaki seviye"dir, seviye
+// DÜŞÜRÜLMEZ. İki fren vardır; ikisi de yalnızca AYNI seviyeyi tekrarlatır:
+//  1) RPE freni (eski kural): son seans, önceki ≤5 seansın ortalamasının ≥1.0 üstünde zor geldiyse.
+//  2) Drift freni (yeni): son seansın kardiyak driftı açıkça kötüyse (driftSeviyeOyu → 'alt': koşu
+//     bloklarının süre ağırlıklı ≥%50'si "yüksek" bandında; tekrarlı yapıda eşik 15 puan EF kaybı,
+//     koşu tekrarı ≥4 dk ise 12 puan) — RPE ne olursa olsun ("iyi hissediyorum" tek başına ilerletmez).
+//     Drift orta/iyi/ölçülmemişse veya şüpheliyse (pozitif drift) fren YOKTUR; RPE de drift'i yükseltemez.
+// Fren sınırı (YK_DRIFT_FREN_MAX_TEKRAR=2): aynı S seviyesinde üst üste en fazla 2 kez drift nedeniyle
+// tekrar. Gerekçe: tek seans ısı/uyku/GPS/nabız gecikmesiyle bozulabilir (1 tekrar ucuz bir sigorta;
+// başlangıç düzeyinde tendon-kemik adaptasyonu kardiyovasküler uyumdan yavaş olduğu için "hemen ilerle"
+// yanlış pozitifi pahalıdır). Aynı seviyede 3. kez de kötüyse sorun seviyeden çok başka bir etkendir
+// (hastalık, ısı, uyku, ayakkabı, ölçüm) veya program uygun değildir → sporcu sonsuza dek bekletilmez,
+// fren bırakılır ve koça "kontrol et" uyarısı verilir (karar koçta). Revize günler hesaba girmez.
+const YK_DRIFT_FREN_AKTIF=true;
+const YK_DRIFT_FREN_MAX_TEKRAR=2;
+function _ykAntrenmanMi(w){
+  return !!w&&((w.tur==='yuru_kos'||w._isYuruKos)||(w.yapi_notu&&(w.yapi_notu.startsWith('Yürü-Koş ·')||w.yapi_notu.startsWith('🚶🏃 Yürü-Koş ·'))));
+}
+function ykSeviyeKarari(ykWorkouts){
+  const gecmis=[...(ykWorkouts||[])].filter(w=>!revizeliAntrenmanMi(w))
+    .map(w=>{const m=(w.yapi_notu||'').match(/·\s*S(\d+)/);return m?{date:w.date||'',sIdx:parseInt(m[1]),rpe:parseFloat(w.rpe)||null,w}:null;})
+    .filter(Boolean)
+    .sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const son=gecmis[0]||null;
+  const sonSeviye=son?son.sIdx:0;
+  const k={son,sonSeviye,sonraki:sonSeviye+1,not:'',rpeTekrar:false,rpeOrt:null,driftTekrar:false,driftSayi:0,driftSerbest:false,driftOy:null};
+  if(!son) return k;
+  if(son.rpe!=null){
+    const onceki=gecmis.slice(1,6).map(g=>g.rpe).filter(r=>r!=null&&r>0);
+    if(onceki.length>=2){
+      const ort=onceki.reduce((a,b)=>a+b,0)/onceki.length;
+      k.rpeOrt=ort;
+      if(son.rpe>=ort+1.0){
+        k.rpeTekrar=true;
+        k.not=' · son seans kişisel ortalamaya göre zor geldi (RPE '+son.rpe+' vs ort. '+_r1(ort)+'), seviye tekrarlanıyor';
+      }
+    }
+  }
+  if(YK_DRIFT_FREN_AKTIF&&DRIFT_SEVIYE_SINYALI){
+    const oy=son.w?driftSeviyeOyu(son.w):null;
+    k.driftOy=oy;
+    if(oy&&oy.yon==='alt'){
+      let n=0;
+      for(const g of gecmis){
+        if(g.sIdx!==son.sIdx) break;
+        const o=g.w?driftSeviyeOyu(g.w):null;
+        if(o&&o.yon==='alt') n++; else break;
+      }
+      k.driftSayi=n;
+      if(n<=YK_DRIFT_FREN_MAX_TEKRAR){
+        k.driftTekrar=true;
+        if(!k.rpeTekrar) k.not=' · son seansta kardiyak drift yüksek (ort. '+_kayipMetni(oy.ortKot)+'), seviye tekrarlanıyor ('+n+'/'+YK_DRIFT_FREN_MAX_TEKRAR+')';
+        else k.not+=' · ayrıca drift yüksek';
+      } else {
+        k.driftSerbest=true;
+        if(!k.rpeTekrar) k.not=' · ⚠️ aynı seviyede '+n+'. seans üst üste drift yüksek — fren sınırı doldu, program devam ediyor; koç kontrolü önerilir (ısı/uyku/hastalık/ayakkabı/ölçüm)';
+      }
+    }
+  }
+  if(k.rpeTekrar||k.driftTekrar) k.sonraki=Math.max(sonSeviye,1);
+  return k;
+}
+// GPX Analiz bildirimi (Yürü-Koş): program önerisiyle AYNI karar fonksiyonu → çelişmez. Yürü-Koş doğrusal
+// olduğundan "alt seviyeye dön" ÖNERİLMEZ; drift kötüyse "aynı seviyeyi tekrarla" denir.
+function ykSeviyeMesaji(w,athWorkouts,oy){
+  const onceki=(athWorkouts||[]).filter(x=>x&&x.id!==w.id&&x.date&&w.date&&x.date<w.date&&_ykAntrenmanMi(x));
+  const kar=ykSeviyeKarari([...onceki,w]);
+  if(!kar.son||kar.son.w!==w) return null; // bu seans seviye numarası taşımıyorsa (S yok) mesaj üretme
+  const s=kar.sonSeviye;
+  const ort=_kayipMetni(oy.ortKot);
+  if(kar.rpeTekrar||kar.driftTekrar){
+    const nedenler=[];
+    if(kar.driftTekrar) nedenler.push('Drift yüksek (ort. '+ort+') — RPE iyi gelse bile ölçülen verim kaybı ilerlemeyi durdurur');
+    if(kar.rpeTekrar) nedenler.push('RPE '+kar.son.rpe+', son seansların ortalamasının (RPE '+_r1(kar.rpeOrt)+') belirgin üstünde');
+    const sinir=kar.driftTekrar?(' Aynı seviyede üst üste en fazla '+YK_DRIFT_FREN_MAX_TEKRAR+' tekrar yapılır ('+kar.driftSayi+'/'+YK_DRIFT_FREN_MAX_TEKRAR+'); seviye düşürülmez. Isı, uyku, hidrasyon gibi geçici nedenleri de kontrol et.'):'';
+    return {k:'ayni',baslik:'➡️ Aynı seviyeyi tekrarla (S'+s+')',neden:nedenler.join('; ')+'.'+sinir,notlar:[]};
+  }
+  if(kar.driftSerbest){
+    return {k:'ust',baslik:'⬆️ Programa devam (S'+s+' → S'+(s+1)+') — koç kontrolü önerilir',
+      neden:'Aynı seviyede '+kar.driftSayi+'. seans üst üste drift yüksek (ort. '+ort+'). Tekrar sınırı ('+YK_DRIFT_FREN_MAX_TEKRAR+') doldu, sporcu gereksiz bekletilmiyor; ancak sebebi (ısı, uyku, hastalık, ayakkabı, ölçüm) kontrol et.',notlar:[]};
+  }
+  const driftMetin=oy.yon==='ust'?'Drift kontrol altında':(oy.yon==='ayni'?'Drift orta düzeyde':'Drift');
+  return {k:'ust',baslik:'⬆️ Sıradaki seviyeye geçilebilir (S'+s+' → S'+(s+1)+')',
+    neden:driftMetin+' (ort. '+ort+') — ilerlemeyi engelleyen bir sinyal yok. Yürü-Koş programında drift yalnızca fren olarak kullanılır.',notlar:[]};
+}
 // w: {id,date,tur,yapi_notu,rpe,drift_bloklar}; athWorkouts: o sporcunun antrenmanları
 function driftYorumUret(w,athWorkouts){
   const bl=((w&&w.drift_bloklar)||[]).filter(Boolean);
   if(!bl.length) return null;
   const degerler=bl.map(b=>({label:b.label||'',...driftBlokDegerlendir(b,w.tur)}));
   if(!degerler.some(d=>d.anaPct!=null||d.toparlanmaNabizPct!=null||d.toparlanmaEFPct!=null)) return null;
+  // 2026.10.08 (Göksel talebi): koç bu günü "(revize)" işaretlediyse (tekrar/mesafe/süre değiştirilmiş)
+  // antrenman orijinal seviyenin tam karşılığı değildir → seviye önerisi ve önceki kayıtla kıyas
+  // GÖSTERİLMEZ (program önerisi de aynı kuralla bu kaydı yok sayar: calcSeviyeFromHistory).
+  // Blok değerlendirmeleri (drift yüzdeleri) olduğu gibi gösterilir.
+  const _athId=w.athleteId||((athWorkouts||[]).find(x=>x&&x.athleteId)||{}).athleteId;
+  if(revizeliAntrenmanMi(w,_athId)){
+    return {seviye:{k:'revize',baslik:'✏️ Koç revize etti — seviye önerisi uygulanmaz',
+      neden:'Bu antrenman koç tarafından değiştirilmiş (revize) olduğu için orijinal seviyenin tam karşılığı değil. Seviye değişikliği (yükselt / aynı / düşür) önerilmez ve bir sonraki program önerisinde bu kayıt seviye kararına katılmaz.',
+      notlar:[]},kiyas:null,degerler};
+  }
   const oy=driftSeviyeOyu(w);
   const rpeBilgi=seviyeRpeBilgi(w,athWorkouts);
   const rpeYon=rpeBilgi.yon;
-  const seviye=oy?driftSeviyeMesaji(w,oy,rpeYon,degerler,rpeBilgi):null;
+  // Yürü-Koş: doğrusal program — genel "üst/alt seviye" mesajı yerine ykSeviyeKarari ile aynı mantık.
+  const seviye=oy?(_ykAntrenmanMi(w)?ykSeviyeMesaji(w,athWorkouts,oy):driftSeviyeMesaji(w,oy,rpeYon,degerler,rpeBilgi)):null;
   return {seviye,kiyas:driftKiyasla(w,athWorkouts),degerler};
 }
 function driftYorumUI(y){
   if(!y) return null;
-  const ton={ust:['var(--success-bg)','var(--success)'],ayni:['var(--info-bg)','var(--info)'],alt:['var(--warn-bg)','var(--warn)']};
+  const ton={ust:['var(--success-bg)','var(--success)'],ayni:['var(--info-bg)','var(--info)'],alt:['var(--warn-bg)','var(--warn)'],revize:['var(--bg-secondary,transparent)','var(--text-tertiary)']};
   const durumMetni={iyi:'kontrol altında',orta:'orta',kotu:'yüksek',supheli:'pozitif — karara katılmadı'};
   const tarih=(d)=>String(d).split('-').reverse().join('.');
   const kayip=(f)=>f>=0?('%'+f+' kayıp'):('%'+(-f)+' kazanç');
@@ -16040,6 +16206,10 @@ function calcSeviyeFromHistory(tur, phaseMaxIdx, fallbackIdx, athWorkouts){
   if(!athWorkouts.length) return fallbackIdx;
   const gecmis=athWorkouts
     .filter(w=>w&&w.tur===tur&&w.date&&w.yapi_notu&&(toSec(w.sure_sa,w.sure_dk,w.sure_sn)||0)>0)
+    // 2026.10.08 (Göksel talebi): koçun "(revize)" işaretlediği günün antrenmanı orijinal seviyenin
+    // tam karşılığı DEĞİL — ne son kayıt olarak seviye kararını belirler ne de RPE referansına girer
+    // (bkz. revizeliAntrenmanMi). Geriye kalan geçmişe göre karar verilir; hiç kalmadıysa fallbackIdx.
+    .filter(w=>!revizeliAntrenmanMi(w))
     .map(w=>{
       const m=/S(\d+)/.exec(w.yapi_notu);
       if(!m) return null;
@@ -20751,14 +20921,13 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
     // olarak bilinçli olarak korunuyor — calcSeviyeFromHistory'nin katı w.tur===tur
     // eşleşmesi bazı eski/migrasyon öncesi kayıtları atlayabilirdi.
     if((athlete.seviye||'baslangic')==='baslangic'){
-      const ykWorkoutsAll=(wkStats.athWorkouts||[]).filter(w=>(w.tur==='yuru_kos'||w._isYuruKos)||(w.yapi_notu&&(w.yapi_notu.startsWith('Yürü-Koş ·')||w.yapi_notu.startsWith('🚶🏃 Yürü-Koş ·'))));
+      const ykWorkoutsAll=(wkStats.athWorkouts||[]).filter(_ykAntrenmanMi);
       const tamamlananYK=ykWorkoutsAll.length; // bilgi amaçlı toplam sayaç (seviye kararında kullanılmaz)
-      const ykGecmis=[...ykWorkoutsAll]
-        .map(w=>{const m=(w.yapi_notu||'').match(/·\s*S(\d+)/);return m?{date:w.date||'',sIdx:parseInt(m[1]),rpe:parseFloat(w.rpe)||null}:null;})
-        .filter(Boolean)
-        .sort((a,b)=>(b.date||'').localeCompare(a.date||''));
-      const sonYK2=ykGecmis[0]||null;
-      const sonSeviye=sonYK2?sonYK2.sIdx:0;
+      // Seviye kararı TEK ortak fonksiyondan (ykSeviyeKarari): revize günler hariç, RPE freni + drift freni.
+      // GPX Analiz bildirimi (driftYorumUret) AYNI fonksiyonu kullanır → bildirim ile program önerisi çelişmez.
+      const _ykKarar=ykSeviyeKarari(ykWorkoutsAll);
+      const sonYK2=_ykKarar.son;
+      const sonSeviye=_ykKarar.sonSeviye;
       if(sonSeviye>=16){
         // Program tamamlandı — program bitişi mesajı + antrenörü bilgilendir
         kosuTpl=tplKolay(band,35,zones);
@@ -20783,18 +20952,8 @@ function planDay(date, athlete, simState, phase, daysToRace, daysToIntermediate,
             sure_dk:rahatSure,_downgraded:true,_originalTip:'yuru_kos'};
           kosuUyari=(mechAclOverloadPlan?'Mekanik yük (ATL/CTL) akut aşırı yükte':yukYuksek?'ACWR '+acwr.toFixed(2)+' — yük çok yüksek':'TSB '+tsb.toFixed(1)+' — çok yorgun')+' — Yürü-Koş programı bugün durduruldu, Rahat Yürüyüş\'e geçildi (S'+sonSeviye+' bir sonraki seansta devam edecek)';
         } else {
-        let sonrakiSeans=sonSeviye+1; // varsayılan: programın doğal akışı, sıradaki seviye
-        let _ykNot='';
-        if(sonYK2?.rpe!=null){
-          const oncekiRpelerYK=ykGecmis.slice(1,6).map(g=>g.rpe).filter(r=>r!=null&&r>0);
-          if(oncekiRpelerYK.length>=2){
-            const kisiselOrtYK=oncekiRpelerYK.reduce((a,b)=>a+b,0)/oncekiRpelerYK.length;
-            if(sonYK2.rpe>=kisiselOrtYK+1.0){
-              sonrakiSeans=Math.max(sonSeviye,1);
-              _ykNot=' · son seans kişisel ortalamaya göre zor geldi (RPE '+sonYK2.rpe+' vs ort. '+round1(kisiselOrtYK)+'), seviye tekrarlanıyor';
-            }
-          }
-        }
+        const sonrakiSeans=_ykKarar.sonraki; // varsayılan: sıradaki seviye; RPE/drift freni varsa aynı seviye
+        const _ykNot=_ykKarar.not;
         kosuTpl=tplYuruKos(sonrakiSeans,zones);
         kosuTpl.tur='yuru_kos';
         kosuUyari='Başlangıç programı — S'+sonrakiSeans+'/16 · Son kayıt: '+(sonSeviye>0?('S'+sonSeviye):'yok')+' · Toplam kayıt: '+tamamlananYK+' seans'+_ykNot;
@@ -21529,6 +21688,9 @@ function estimateTipikCaprazYuk(athWorkouts,athlete){
 
 function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanlar=[], optimizeMode=false, forceLastEntry=null, weekEffOverride=null){
   athlete=hrvEfektifAth(athlete); // HRV hükmü: beyan + 7g sayısal bölge çift taraflı doğrulanmış durumla çalış
+  // Revize kaydı (bkz. _REVIZE_KAYIT): senkron çalışan seviye motoru için son haftaların snapshot'larını
+  // arka planda (5 dk'da en fazla bir kez) okutur; sonuç bir sonraki üretimde kullanılır.
+  try{ if(athlete&&athlete.id) revizeKayitYukle(athlete.id); }catch(_e){}
   const today=new Date();
   // forceLastEntry: _stableHist kırpıldığında bile fitness state (ACWR/TSB/CTL/ATL)
   // daima güncel (bu haftaki antrenmanları içeren) history'nin son girişinden alınır.
@@ -24744,6 +24906,10 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         if(onWorkoutsRefresh) onWorkoutsRefresh(freshWorkouts);
       }
     }catch(e){console.warn('handlePlanGuncelle: taze antrenman verisi alınamadı, mevcut state kullanılıyor',e);}
+
+    // 2026.10.08 (Göksel talebi): koçun "(revize)" işaretlediği günler seviye kararına girmesin —
+    // plan üretilmeden ÖNCE son haftaların revize kaydı taze okunur (bkz. _REVIZE_KAYIT).
+    try{ await revizeKayitYukle(athlete.id,true); }catch(e){}
 
     const curSnap=planSnapRef.current||{};
     const todayStr=localDateStr(new Date());
