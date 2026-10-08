@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.08-2109 --><!DOCTYPE html>
+<!-- Version: v2026.10.08-2139 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.08-2109';
+    var RUNNING='v2026.10.08-2139';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.08-2109';
+const APP_VERSION='v2026.10.08-2139';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -33709,13 +33709,41 @@ const SAAT_UNVANLARI={
   altin:{emoji:'🌇',ad:'Altın Saat Kaşifi',bant:'14:00–18:00',renk:'#f97316'},
   aksam:{emoji:'🌆',ad:'Akşam Sefacısı',bant:'18:00–21:00',renk:'#a855f7'},
   gece:{emoji:'🦉',ad:'Gece Bekçisi',bant:'21:00–03:00',renk:'#6366f1'},
-  kameleon:{emoji:'🦎',ad:'Kronotip Kameleonu',bant:'belirgin bir saat yok',renk:'#14b8a6'}
+  kameleon:{emoji:'🌀',ad:'Saat Tanımaz',bant:'belirgin bir saat yok',renk:'#14b8a6'}
 };
+// 🛌 Hafta Sonu Savaşçısı (2026.10.08 — Göksel talebi): artık "antrenmanların çoğu hafta sonu" değil, hafta sonu SÜRESİNE dayanır:
+// tamamlanmış hafta sonlarının (Cmt+Paz) en az yarısında toplam antrenman süresi 3 saatin üzerinde. 3 sa: haftalık 150 dk
+// ("weekend warrior" literatür eşiği, O'Donovan 2017) üstünde, savaşçı sayılacak kadar yüklü bir eşik olarak seçildi — ayarlanabilir tahmin.
+// 🔋 Yüksek Verim (eski 🧭 Yönünü Bulan): iç anahtar 'yon' korunur (geriye uyum).
+const SAAT_HAFTASONU_DK=180;       // hafta sonu (Cmt+Paz) toplam süre eşiği (dk)
+const SAAT_HAFTASONU_ORAN=0.5;     // tamamlanmış hafta sonlarının en az bu oranında eşik aşılmalı
+const SAAT_HAFTASONU_MIN=4;        // değerlendirilecek en az tamamlanmış hafta sonu sayısı
 const SAAT_YAN_PULLAR={
   saatgibi:{emoji:'⏰',ad:'Saat Gibi',aciklama:'antrenmanların çoğu aynı saatte (±30 dk) başlıyor'},
-  yon:{emoji:'🧭',ad:'Yönünü Bulan',aciklama:'antrenmanların çoğu zirve/uygun saatlerde başlıyor'},
-  hafta:{emoji:'🛌',ad:'Hafta Sonu Savaşçısı',aciklama:'antrenmanların çoğu Cumartesi/Pazar yapılıyor'}
+  yon:{emoji:'🔋',ad:'Yüksek Verim',aciklama:'antrenmanların çoğu zirve/uygun saatlerde başlıyor'},
+  hafta:{emoji:'⚔️',ad:'Hafta Sonu Savaşçısı',aciklama:'hafta sonlarının çoğunda toplam '+(SAAT_HAFTASONU_DK/60)+' saatin üzerinde antrenman yapılıyor'}
 };
+// Hafta sonu süre oranı: [sinir, bitisStr] içindeki TAMAMLANMIŞ hafta sonları (Cumartesi ve Pazar ikisi de pencerede) için
+// Cmt+Paz toplam süresi (yarışlar hariç; saat kaydı aranmaz) SAAT_HAFTASONU_DK'yı aşan hafta sonlarının oranı.
+function saatHaftaSonuOrani(workouts,sinir,bitisStr){
+  const sure={};
+  (workouts||[]).forEach(w=>{
+    if(!w||!w.date||w.date<sinir||w.date>bitisStr) return;
+    if(w.tur==='yaris'||w.yol_yarisi||w.trail_yarisi) return;
+    sure[w.date]=(sure[w.date]||0)+(toSec(w.sure_sa,w.sure_dk,w.sure_sn)||0)/60;
+  });
+  let top=0,gecen=0;
+  const d=new Date(sinir+'T12:00:00Z'),son=new Date(bitisStr+'T12:00:00Z');
+  for(;d<=son;d.setUTCDate(d.getUTCDate()+1)){
+    if(d.getUTCDay()!==6) continue;
+    const sat=d.toISOString().slice(0,10);
+    const pz=new Date(d.getTime()+86400000).toISOString().slice(0,10);
+    if(pz>bitisStr) continue;
+    top++;
+    if((sure[sat]||0)+(sure[pz]||0)>SAAT_HAFTASONU_DK) gecen++;
+  }
+  return {top,gecen,oran:top?gecen/top:0};
+}
 function saatBandiId(hs){
   if(hs>=21||hs<3) return 'gece';
   if(hs<5) return 'horoz';
@@ -33772,8 +33800,8 @@ function saatUnvaniHesapla(workouts,athlete,bitisStr,gun,yanPulluDahil){
     if(oSaat>=0.6){yanPullar.push('saatgibi');yanOran.saatgibi=oSaat;}
     const iyi=list.filter(x=>{const c=zamanUygulamaSinifi(x.w,athlete);return c&&(c.sinif==='ideal'||c.sinif==='verimli');}).length;
     if(iyi/n>=0.7){yanPullar.push('yon');yanOran.yon=iyi/n;}
-    const hs=list.filter(x=>{const g=new Date(x.w.date+'T12:00:00Z').getUTCDay();return g===0||g===6;}).length;
-    if(hs/n>=0.6){yanPullar.push('hafta');yanOran.hafta=hs/n;}
+    const hsr=saatHaftaSonuOrani(workouts,sinir,bitisStr);
+    if(hsr.top>=SAAT_HAFTASONU_MIN&&hsr.oran>=SAAT_HAFTASONU_ORAN){yanPullar.push('hafta');yanOran.hafta=hsr.oran;}
   }
   return {n,yeterli:true,unvan,enBand:enB,enN,pay,birlesik,komsu,sayim,yanPullar:yanPullar.slice(0,2),yanOran};
 }
@@ -33814,9 +33842,21 @@ function saatUnvaniBilgiButonu(show,setShow,etiket,baslik){
       color:'var(--info)',fontSize:10,fontWeight:700,padding:'3px 8px',lineHeight:1.3}
   },etiket||'ⓘ Unvan nasıl kazanılır?');
 }
-function SaatUnvaniBilgiKutusu({u}){
+function SaatUnvaniBilgiKutusu({u,sporcu}){
   const e=React.createElement;
   const B=t=>e('b',{style:{color:'var(--text-primary)'}},t);
+  // Koşu İzlerim (sporcu): kural/eşik ayrıntısı YOK — yalnızca unvanlar, saatleri ve yan pul adları (Göksel talebi 2026.10.08).
+  if(sporcu){
+    return e('div',{style:{background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:10,padding:'10px 12px',margin:'0 0 10px',
+      fontSize:11,color:'var(--text-secondary)',lineHeight:1.6}},
+      e('div',{style:{fontWeight:700,color:'var(--text-primary)',marginBottom:6,fontSize:12}},'🏅 Koşucu Unvanları'),
+      e('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(210px,1fr))',gap:'2px 12px',margin:'2px 0 6px'}},
+        ['horoz','safak','kahve','ogle','altin','aksam','gece'].map(k=>{const T=SAAT_UNVANLARI[k];
+          return e('div',{key:k},T.emoji+' ',B(T.ad),' · '+T.bant);})),
+      e('div',{style:{marginBottom:4}},B(SAAT_UNVANLARI.kameleon.emoji+' '+SAAT_UNVANLARI.kameleon.ad+' · '),'belirgin bir saat yok — farklı saatlerde antrenman'),
+      e('div',{style:{marginTop:6}},B('🎖 Yan pullar'),
+        ['saatgibi','yon','hafta'].map(k=>{const Y=SAAT_YAN_PULLAR[k];return e('div',{key:k},Y.emoji+' ',B(Y.ad),' — '+Y.aciklama);})));
+  }
   const satir=(k,mb)=>e('div',{style:{marginBottom:mb==null?4:mb}},k);
   const pct=Math.round(SAAT_UNVAN_ESIK*100);
   let durum=null;
@@ -33837,19 +33877,19 @@ function SaatUnvaniBilgiKutusu({u}){
       ['horoz','safak','kahve','ogle','altin','aksam','gece'].map(k=>{const T=SAAT_UNVANLARI[k];
         return e('div',{key:k},T.emoji+' ',B(T.ad),' · '+T.bant);})),
     satir([B(SAAT_UNVANLARI.kameleon.emoji+' '+SAAT_UNVANLARI.kameleon.ad+': '),'yukarıdakilerin hiçbiri sağlanmıyorsa — yani farklı saatlerde antrenman yapılıyorsa — bu unvan verilir.']),
-    satir([B('% '),'Rozet adının yanındaki yüzde, rozetin dayandığı oranı gösterir: unvanda o saat bandındaki antrenmanların payı (yan yana iki bant birleştiyse ikisinin toplamı; Kameleon\'da en yoğun bandın payı), yan pullarda ilgili ölçütün payı.']),
+    satir([B('% '),'Rozet adının yanındaki yüzde, rozetin dayandığı oranı gösterir: unvanda o saat bandındaki antrenmanların payı (yan yana iki bant birleştiyse ikisinin toplamı; Saat Tanımaz\'da en yoğun bandın payı). Yan pullarda: ⏰ Saat Gibi — medyan başlangıç saatinin ±30 dk\'sında başlayan antrenmanların oranı; '+SAAT_YAN_PULLAR.yon.emoji+' '+SAAT_YAN_PULLAR.yon.ad+' — zirve/uygun saatte başlayan antrenmanların oranı; '+SAAT_YAN_PULLAR.hafta.emoji+' '+SAAT_YAN_PULLAR.hafta.ad+' — '+(SAAT_HAFTASONU_DK/60)+' saati aşan hafta sonlarının oranı.']),
     satir([B('📆 "X haftadır": '),'aynı unvanı arka arkaya kaç haftalık pencerede koruduğunu gösterir; unvan değişirse sayaç sıfırlanır ("bu hafta kazanıldı").']),
     satir([B('🎖 Yan pullar '),'(en fazla 2): ',
       e('span',null,SAAT_YAN_PULLAR.saatgibi.emoji+' '+SAAT_YAN_PULLAR.saatgibi.ad+' — '+SAAT_YAN_PULLAR.saatgibi.aciklama+' (≥%60); '+
         SAAT_YAN_PULLAR.yon.emoji+' '+SAAT_YAN_PULLAR.yon.ad+' — '+SAAT_YAN_PULLAR.yon.aciklama+' (≥%70); '+
-        SAAT_YAN_PULLAR.hafta.emoji+' '+SAAT_YAN_PULLAR.hafta.ad+' — '+SAAT_YAN_PULLAR.hafta.aciklama+' (≥%60).')]),
+        SAAT_YAN_PULLAR.hafta.emoji+' '+SAAT_YAN_PULLAR.hafta.ad+' — '+SAAT_YAN_PULLAR.hafta.aciklama+' (tamamlanmış hafta sonlarının ≥%'+Math.round(SAAT_HAFTASONU_ORAN*100)+'\'inde; en az '+SAAT_HAFTASONU_MIN+' hafta sonu gerekir; Cumartesi+Pazar toplamı, yarışlar hariç).')]),
     durum&&satir([B(''),durum],4),
     e('div',{style:{fontSize:10,fontWeight:400,fontStyle:'italic',color:'var(--text-tertiary)',lineHeight:1.5}},
       'Not: Tamamen eğlence amaçlıdır — saat iyi ya da kötü diye yargılanmaz; gece koşan da sabah koşan kadar havalı bir unvan alır. Unvanlar saklanmaz, kayıtlı antrenmanlardan her seferinde canlı hesaplanır.')
   );
 }
 // Zamanlama Göstergesi içindeki unvan şeridi (Koç Paneli + Koşu İzlerim gömülü gösterge)
-function SaatUnvaniSeridi({workouts,athlete}){
+function SaatUnvaniSeridi({workouts,athlete,sporcuModu}){
   const bugun=athleteLocalDateStr(athlete);
   const aw=athleteWorkoutsOf(workouts,athlete.id);
   const veri=React.useMemo(()=>{
@@ -33868,7 +33908,7 @@ function SaatUnvaniSeridi({workouts,athlete}){
         title:'Antrenman kaydederken başlangıç saati girilirse koşucu unvanı kazanılır.'},
         React.createElement('span',{style:{flex:1,minWidth:160}},'🏅 Koşucu unvanı için son 8 haftada başlangıç saati kayıtlı '+SAAT_UNVAN_MIN_KOSU+' antrenman gerekir ('+u.n+'/'+SAAT_UNVAN_MIN_KOSU+').'),
         saatUnvaniBilgiButonu(bilgiAcik,setBilgiAcik)),
-      bilgiAcik&&React.createElement('div',{style:{marginTop:6}},React.createElement(SaatUnvaniBilgiKutusu,{u})));
+      bilgiAcik&&React.createElement('div',{style:{marginTop:6}},React.createElement(SaatUnvaniBilgiKutusu,{u,sporcu:!!sporcuModu})));
   }
   const T=SAAT_UNVANLARI[u.unvan];
   return React.createElement('div',{style:{marginBottom:10}},
@@ -33880,7 +33920,7 @@ function SaatUnvaniSeridi({workouts,athlete}){
     u.yanPullar.map(k=>{const Y=SAAT_YAN_PULLAR[k];return React.createElement('span',{key:k},pil('#64748b',Y.emoji,
       React.createElement('span',{style:{fontSize:12,fontWeight:700}},Y.ad+(u.yanOran&&u.yanOran[k]!=null?' %'+Math.round(u.yanOran[k]*100):'')),Y.aciklama.charAt(0).toUpperCase()+Y.aciklama.slice(1)+'.',false));}),
     React.createElement('span',{'data-no-export':true,style:{marginLeft:'auto'}},saatUnvaniBilgiButonu(bilgiAcik,setBilgiAcik))),
-   bilgiAcik&&React.createElement('div',{'data-no-export':true},React.createElement(SaatUnvaniBilgiKutusu,{u})));
+   bilgiAcik&&React.createElement('div',{'data-no-export':true},React.createElement(SaatUnvaniBilgiKutusu,{u,sporcu:!!sporcuModu})));
 }
 
 // Props: overrideMap (verilmezse planSnap.overrideMap), gomulu (kart içine gömülü — çerçevesiz, Koşu İzlerim),
@@ -34053,7 +34093,7 @@ function ZamanlamaGostergesi({workouts,athlete,races,history,planSnap,overrideMa
     React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:10}},
       'Önümüzdeki 24 saatte, o saatte başlayacak bir antrenmanın verimi: biyolojik saat + toparlanma + uyku. Dış halka: mavi = bugün, mor = yarın (ibreden saat yönünde gece yarısı çizgisine kadar bugün, çizgiden sonrası yarın).'),
     // 🏅 Koşucu unvanı + yan pullar (eğlence amaçlı; iki panelde de görünür)
-    React.createElement(SaatUnvaniSeridi,{workouts,athlete}),
+    React.createElement(SaatUnvaniSeridi,{workouts,athlete,sporcuModu}),
     uyariSerit,
     React.createElement('div',{style:{display:'flex',gap:16,flexWrap:'wrap',alignItems:'center'}},
       svg,
