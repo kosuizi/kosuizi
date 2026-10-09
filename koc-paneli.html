@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.09-1309 --><!DOCTYPE html>
+<!-- Version: v2026.10.09-1846 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.09-1309';
+    var RUNNING='v2026.10.09-1846';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.09-1309';
+const APP_VERSION='v2026.10.09-1846';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -35809,7 +35809,7 @@ function gpxUnpackPoints(str){
     const ele=(a[3]!==undefined&&a[3]!=='')?parseFloat(a[3]):null;
     out.push({t,d,hr:(hr!=null&&!isNaN(hr))?hr:null,ele:(ele!=null&&!isNaN(ele))?ele:null});
   }
-  return out;
+  return gpxCollapsePauses(out); // eski (boşlukları kapatılmamış) gelen-kutusu verisi için de
 }
 // Ayrıştırılmış dosyadan küçük özet (liste/önizleme için). Saat/tarih GÖNDEREN cihazın yerel saati.
 function gpxGelenOzetUret(parsed,norm){
@@ -35952,7 +35952,53 @@ function gpxNormalizePoints(raw){
   pts.sort((a,b)=>a.t-b.t);
   let running=-Infinity;
   for(const p of pts){ if(p.d<running) p.d=running; else running=p.d; }
+  return gpxCollapsePauses(pts);
+}
+// ── Duraklama (pause) boşluklarını çıkar — 2026.10.09, Göksel bildirimi: sporcu saati
+// ısınma sırasında ~91 sn duraklatmış; GPX'te o aralıkta HİÇ nokta yok (zaman damgası
+// 91 sn atlıyor). Sistem zaman eksenini duvar saatinden (t=timestamp farkı) kurduğu
+// için bu boşluk "antrenman süresi" sayılıyor, sonraki TÜM süre bazlı pencereler (20sn
+// sprint/2dk toparlanma...) 91 sn erkene kayıyor: gerçek sprint "Dinlenme" penceresine
+// düşüyor, "Yokuş Sprint" penceresi yürüyüşü ölçüyor. Saat (Apple Watch) ise duraklama
+// süresini ve duraklama sırasında kat edilen mesafeyi saymaz — bu yüzden burada da hem
+// ZAMAN hem MESAFE ekseninden boşluk çıkarılır (aktif süre ekseni). Eşik: örnekleme
+// aralığının medyanının 8 katı ve en az 15 sn (Garmin akıllı kayıt 1-10sn arası seyrek
+// örnekler; 1sn'lik Apple Watch verisinde 15sn). İdempotent: boşluk kapandıktan sonra
+// tekrar çağrılırsa bir şey yapmaz (paketlenmiş gelen-kutusu verisi için de çağrılır).
+// Sonuç dizisine .pauses=[{atT,gapSec,distM}] eklenir (arayüzde bilgi notu için).
+function gpxCollapsePauses(pts){
+  const pauses=[];
+  if(pts&&pts.length>2){
+    const dts=[];
+    for(let i=1;i<pts.length;i++){const dt=pts[i].t-pts[i-1].t;if(dt>0) dts.push(dt);}
+    if(dts.length){
+      dts.sort((a,b)=>a-b);
+      const medDt=dts[Math.floor(dts.length/2)];
+      const thr=Math.max(15,8*medDt);
+      let offT=0,offD=0,prevT=pts[0].t,prevD=pts[0].d;
+      for(let i=1;i<pts.length;i++){
+        const rawT=pts[i].t,rawD=pts[i].d;
+        const gap=rawT-prevT;
+        if(gap>thr){
+          offT+=gap-medDt;
+          offD+=Math.max(0,rawD-prevD);
+          pauses.push({atT:prevT-(offT-(gap-medDt)),gapSec:gap-medDt,distM:Math.max(0,rawD-prevD)});
+        }
+        prevT=rawT;prevD=rawD;
+        pts[i].t=rawT-offT;
+        pts[i].d=rawD-offD;
+      }
+    }
+  }
+  pts.pauses=pauses;
   return pts;
+}
+function gpxPauseNote(pts){
+  const ps=(pts&&pts.pauses)||[];
+  if(!ps.length) return '';
+  const sec=ps.reduce((a,x)=>a+x.gapSec,0),m=ps.reduce((a,x)=>a+x.distM,0);
+  const mm=Math.floor(Math.round(sec)/60),ss=Math.round(sec)%60;
+  return ` ⏸ ${ps.length} duraklama tespit edildi (${mm}:${String(ss).padStart(2,'0')}, ${Math.round(m)} m) — analiz dışı bırakıldı.`;
 }
 function gpxDistAtTime(points,tSec){
   if(!points||!points.length) return 0;
@@ -36033,7 +36079,8 @@ function gpxFmtPace(secPerKm){
   return `${m}:${s.toString().padStart(2,'0')}/km`;
 }
 function gpxFmtMin(sec){
-  const m=Math.floor(sec/60),s=Math.round(sec%60);
+  sec=Math.round(sec); // önce yuvarla, sonra böl — aksi halde 119.5sn "1:60" çıkıyordu
+  const m=Math.floor(sec/60),s=sec%60;
   return s===0?`${m} dk`:`${m}:${s.toString().padStart(2,'0')}`;
 }
 // ── Toplam irtifa kazanımı (D+) — GPS/barometrik irtifa gürültülü olduğundan ham
@@ -37104,7 +37151,7 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
         if(autoPatch.date) setDate(autoPatch.date);
         if(onAutoFillFromGpx) onAutoFillFromGpx(autoPatch);
       }
-      setStatus({msg:`✓ Sporcudan gelen dosya yüklendi — ${norm.length} nokta, toplam ${totalMin} dk, ${totalKm} km, ${hrCount} nabız örneği. Ekle formundaki alanlar otomatik dolduruldu.`,type:'ok'});
+      setStatus({msg:`✓ Sporcudan gelen dosya yüklendi — ${norm.length} nokta, toplam ${totalMin} dk, ${totalKm} km, ${hrCount} nabız örneği.${gpxPauseNote(norm)} Ekle formundaki alanlar otomatik dolduruldu.`,type:'ok'});
     }catch(err){
       console.error(err);
       setAktifInboxId(null);
@@ -37157,7 +37204,7 @@ function GpxAnalizModal({athlete, initialDate, formSnapshot, workouts, allHistor
           if(onAutoFillFromGpx) onAutoFillFromGpx(autoPatch);
           filledMsg=' Ekle formundaki alanlar otomatik dolduruldu.';
         }
-        setStatus({msg:`✓ ${norm.length} nokta okundu — toplam ${totalMin} dk, ${totalKm} km, ${hrCount} nabız örneği.`+filledMsg,type:'ok'});
+        setStatus({msg:`✓ ${norm.length} nokta okundu — toplam ${totalMin} dk, ${totalKm} km, ${hrCount} nabız örneği.`+gpxPauseNote(norm)+filledMsg,type:'ok'});
       }catch(err){
         console.error(err);
         setStatus({msg:'Dosya okunamadı: '+err.message,type:'err'});
