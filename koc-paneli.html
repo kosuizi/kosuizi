@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.09-0941 --><!DOCTYPE html>
+<!-- Version: v2026.10.09-0950 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.09-0941';
+    var RUNNING='v2026.10.09-0950';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.09-0941';
+const APP_VERSION='v2026.10.09-0950';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -30856,14 +30856,15 @@ const TEST_TURLERI={
 // kullanılan bölümler (phases: kind 'run' = ana/iş bölümü, 'edge' = ısınma/soğuma,
 // 'walk' = dinlenme) var → değerler YAKLAŞIKTIR. Bölüm yapısı beklenen teste uymuyorsa
 // (ör. 5K için tek ana bölüm yok, süre/mesafe makul değil) null döner — uydurulmaz.
-const testGirdiGpxTahmin=(w,tid)=>{
+const TEST_LEGACY_TUR_HARITA={'test_maf':'maf','test_cooper':'cooper','test_5k':'zaman_5k','test_laktat':'lthr_test'};
+const testGirdiGpxTahmin=(w,tid,athlete)=>{
   const cd=w&&w._gpxChartData;
   if(!cd||!Array.isArray(cd.points)||cd.points.length<3||!Array.isArray(cd.phases))return null;
   const pts=cd.points.filter(p=>p&&p.t!=null).slice().sort((a,b)=>a.t-b.t);
   const runs=cd.phases.filter(p=>p.kind==='run'&&p.t1>p.t0);
   if(pts.length<3||!runs.length)return null;
   // [t0,t1] penceresinde pace serisinden mesafe (m); pencerenin ≥%90'ı pace verisiyle örtülmüyorsa null
-  const mesafeM=(t0,t1)=>{
+  const mesafeRaw=(t0,t1)=>{
     let dist=0,cover=0;
     for(let i=0;i<pts.length-1;i++){
       const a=pts[i],b=pts[i+1];
@@ -30872,24 +30873,46 @@ const testGirdiGpxTahmin=(w,tid)=>{
       const v=(1000/a.pace+1000/b.pace)/2;
       dist+=v*(s1-s0);cover+=(s1-s0);
     }
-    return cover>=0.9*(t1-t0)?dist:null;
+    return{dist,cover};
   };
+  const mesafeM=(t0,t1)=>{const r=mesafeRaw(t0,t1);return r.cover>=0.9*(t1-t0)?r.dist:null;};
   const ortHr=(t0,t1)=>{
     const v=pts.filter(p=>p.t>=t0&&p.t<=t1&&p.hr>0).map(p=>p.hr);
     return v.length>=2?Math.round(v.reduce((x,y)=>x+y,0)/v.length):null;
   };
+  // bölüm penceresi içinde kümülatif mesafe → km'ye göre pace (sn/km)
+  const kmPace=(t0,t1,k)=>{
+    const total=mesafeM(t0,t1);
+    if(total==null||total<k*1000-50)return null;
+    // k. km'nin başlangıç/bitiş zamanını bul (ikili ilerleme, 5 sn adım)
+    const distTo=(t)=>mesafeRaw(t0,t).dist;
+    const timeAt=(target)=>{
+      let lo=t0,hi=t1;
+      for(let i=0;i<30;i++){const mid=(lo+hi)/2;if(distTo(mid)<target)lo=mid;else hi=mid;}
+      return hi;
+    };
+    const dA=(k-1)*1000,dB=Math.min(k*1000,total);
+    const ta=k===1?t0:timeAt(dA),tb=timeAt(dB);
+    const dKm=(dB-dA)/1000;
+    return(tb>ta&&dKm>0)?(tb-ta)/dKm:null;
+  };
+  // adaylar arasından hedefe en yakın bölümü seç (tek/çoklu ana bölüm olabilir)
+  const enYakin=(olcu,hedef,tol)=>{
+    let best=null,bd=Infinity;
+    runs.forEach(r=>{const v=olcu(r);if(v==null)return;const d=Math.abs(v-hedef);if(d<=tol&&d<bd){bd=d;best=r;}});
+    return best;
+  };
   if(tid==='zaman_5k'){
-    if(runs.length!==1)return null;
-    const sec=Math.round(runs[0].t1-runs[0].t0);
-    const m=mesafeM(runs[0].t0,runs[0].t1);
-    if(sec<600||sec>7200||m==null||Math.abs(m-5000)>250)return null; // ana bölüm ≈5 km değilse 5K değildir
+    const r=enYakin(r=>mesafeM(r.t0,r.t1),5000,400); // ana bölüm ≈5 km değilse 5K değildir
+    if(!r)return null;
+    const sec=Math.round(r.t1-r.t0);
+    if(sec<600||sec>7200)return null;
     return{sure_sa:String(Math.floor(sec/3600)),sure_dk:String(Math.floor((sec%3600)/60)),sure_sn:String(sec%60)};
   }
   if(tid==='cooper'){
-    if(runs.length!==1)return null;
-    const dur=runs[0].t1-runs[0].t0;
-    if(Math.abs(dur-720)>45)return null; // ana bölüm ≈12 dk değilse Cooper değildir
-    const m=mesafeM(runs[0].t0,runs[0].t1);
+    const r=enYakin(r=>r.t1-r.t0,720,60); // ana bölüm ≈12 dk değilse Cooper değildir
+    if(!r)return null;
+    const m=mesafeM(r.t0,r.t1);
     if(m==null||m<800||m>5000)return null;
     return{mesafe_m:String(Math.round(m/10)*10)};
   }
@@ -30903,21 +30926,48 @@ const testGirdiGpxTahmin=(w,tid)=>{
     }
     return out;
   }
+  if(tid==='maf'){
+    // gpxMafTestFromPhases ile AYNI mantık: en uzun ana koşu bölümü, 1./3./5. km pace'leri
+    // (burada mesafe pace serisinden türetildiği için pace'ler ±birkaç sn yaklaşıktır).
+    let r=null,bm=0;
+    runs.forEach(x=>{const m=mesafeM(x.t0,x.t1);if(m!=null&&m>bm){bm=m;r=x;}});
+    if(!r)return null;
+    const p1=kmPace(r.t0,r.t1,1),p3=kmPace(r.t0,r.t1,3),p5=kmPace(r.t0,r.t1,5);
+    if(!p1)return null;
+    // MAF nabzı: 180−yaş (doğum tarihi varsa), yoksa test bölümü ort. nabzı
+    const yas=athlete&&athlete.dogum?new Date().getFullYear()-new Date(athlete.dogum).getFullYear():null;
+    let mafHr=yas!=null?180-yas:ortHr(r.t0,r.t1);
+    return{maf_nabiz:mafHr!=null?String(mafHr):'',km1_pace:secToPace(p1),km3_pace:p3?secToPace(p3):'',km5_pace:p5?secToPace(p5):''};
+  }
   return null;
+};
+// Kayıtlı _testSonuc'u OLMAYAN test kayıtları (eski/GPX ile eklenmiş) için: girdiler
+// geri doldurulabiliyorsa sonuç bellekte türetilir (Test Geçmişi etiket/rozet/grafik
+// çalışsın diye). Kalıcı yazılmaz — koç Düzenle > Kaydet ile onaylayınca yazılır.
+const testKaydiZenginlestir=(w,athlete)=>{
+  if(!w||w._testSonuc)return w;
+  const tid=w._testTur||TEST_LEGACY_TUR_HARITA[w.tur];
+  const def=TEST_TURLERI[tid];
+  if(!def)return w;
+  try{
+    const sonuc=def.hesapla(testGirdiGeriDoldur(w,tid,athlete));
+    if(sonuc)return{...w,_testSonuc:sonuc,_testTuretildi:true};
+  }catch(e){}
+  return w;
 };
 // Düzenle formu girdi kaynağı: 'kayit' (_testGirdi), 'gpx' (GPX analizinden tahmin),
 // 'sonuc' (sonuçtan geri hesap) — form altındaki bilgi notu için.
-const testGirdiKaynak=(w,tid)=>{
+const testGirdiKaynak=(w,tid,athlete)=>{
   if(w&&w._testGirdi)return 'kayit';
-  if(testGirdiGpxTahmin(w,tid))return 'gpx';
+  if(testGirdiGpxTahmin(w,tid,athlete))return 'gpx';
   return 'sonuc';
 };
-const testGirdiGeriDoldur=(w,tid)=>{
+const testGirdiGeriDoldur=(w,tid,athlete)=>{
   const def=TEST_TURLERI[tid];const out={};
   if(!def||!w)return out;
   const g0=w._testGirdi||{},sn=w._testSonuc||{};
   const has=v=>v!=null&&v!==''&&!(typeof v==='number'&&!isFinite(v));
-  const gpx=testGirdiGpxTahmin(w,tid)||{};
+  const gpx=testGirdiGpxTahmin(w,tid,athlete)||{};
   const gpxVar=!!w._gpxChartData; // GPX kaydında mesafe/süre/ort. nabız TÜM koşuyu kapsar → test girdisi olarak kullanılamaz
   // 1) kayıtlı girdi, 2) _testSonuc'ta doğrudan bulunan alan
   def.girdi.forEach(g=>{
@@ -30929,12 +30979,14 @@ const testGirdiGeriDoldur=(w,tid)=>{
     if(!out.km1_pace&&(sn.km1_pace||sn.maf_pace))out.km1_pace=sn.km1_pace||sn.maf_pace;
     if(!out.km3_pace&&sn.km3_pace)out.km3_pace=sn.km3_pace;
     if(!out.km5_pace&&sn.km5_pace)out.km5_pace=sn.km5_pace;
+    // kayıtlı sonuç yoksa (eski/GPX ile eklenmiş) → GPX bölümlerinden tahmin
+    ['maf_nabiz','km1_pace','km3_pace','km5_pace'].forEach(k=>{if(!out[k]&&gpx[k])out[k]=gpx[k];});
   }else if(tid==='cooper'){
     if(!out.mesafe_m){
       const mm=/~\s*(-?\d+)/.exec(sn.label||'');
       if(mm)out.mesafe_m=String(Math.round(parseInt(mm[1],10)*44.73+504.9)); // kayıtlı sonuçla BİREBİR aynı VO₂max'ı verir
       else if(gpx.mesafe_m)out.mesafe_m=gpx.mesafe_m;
-      else if(!gpxVar&&parseFloat(w.mesafe)>0)out.mesafe_m=String(Math.round(parseFloat(w.mesafe)*1000));
+      else if((!gpxVar||Math.abs(toSec(w.sure_sa||0,w.sure_dk||0,w.sure_sn||0)-720)<=60)&&parseFloat(w.mesafe)>0)out.mesafe_m=String(Math.round(parseFloat(w.mesafe)*1000)); // kayıt süresi ≈12 dk ise (veya GPX yoksa) mesafe testin kendisidir
     }
   }else if(tid==='zaman_5k'){
     if(!has(out.sure_dk)&&!has(out.sure_sn)){
@@ -30947,7 +30999,7 @@ const testGirdiGeriDoldur=(w,tid)=>{
         out.sure_sn=String(sec%60);
       }else if(gpx.sure_dk!=null){
         out.sure_sa=gpx.sure_sa;out.sure_dk=gpx.sure_dk;out.sure_sn=gpx.sure_sn;
-      }else if(!gpxVar&&!w._testSonuc&&w.tur==='test_5k'){
+      }else if((!gpxVar||(parseFloat(w.mesafe)>=4.8&&parseFloat(w.mesafe)<=5.3))&&!w._testSonuc&&(w.tur==='test_5k'||w._isTest)){
         const s2=toSec(w.sure_sa||0,w.sure_dk||0,w.sure_sn||0);
         if(s2>0){out.sure_sa=String(Math.floor(s2/3600));out.sure_dk=String(Math.floor((s2%3600)/60));out.sure_sn=String(s2%60);}
       }
@@ -31779,6 +31831,7 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,o
         const LEGACY_TUR_MAP={'test_maf':'maf','test_cooper':'cooper','test_5k':'zaman_5k','test_laktat':'lthr_test'};
         const allTestWks=(workouts||[])
           .filter(w=>w.athleteId===athlete.id&&(w._isTest||LEGACY_TUR_MAP[w.tur]))
+          .map(w=>testKaydiZenginlestir(w,athlete)) // _testSonuc'u olmayan eski/GPX kayıtları: sonuç bellekte türetilir
           .sort((a,b)=>b.date.localeCompare(a.date));
         if(!allTestWks.length)return React.createElement('div',{className:'empty'},'Henüz kaydedilmiş test sonucu yok.');
         // Gruplama: test türüne göre
@@ -31797,7 +31850,7 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,o
           const tid=w._testTur||LEGACY_TUR_MAP[w.tur];
           const testDef=TEST_TURLERI[tid];
           // girdi alanları: _testGirdi → _testSonuc → geri-hesaplama (bkz. testGirdiGeriDoldur)
-          const preForm={test_tarih:w.date,...testGirdiGeriDoldur(w,tid)};
+          const preForm={test_tarih:w.date,...testGirdiGeriDoldur(w,tid,athlete)};
           setEditRecord(w);
           setEditForm(preForm);
         };
@@ -31927,7 +31980,7 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,o
               React.createElement(ChartTestKiyas,{tid,records:wkList,athlete}),
               wkList.map((w,wIdx)=>{
                 const isEditing=editRecord?.id===w.id;
-                const label=w._testSonuc?.label||(w.notlar?.replace('Test sonucu: ','')||'—');
+                const label=(w._testSonuc?.label||(w.notlar?.replace('Test sonucu: ','')||'Sonuç kayıtlı değil — ✏️ Düzenle ile girin'))+(w._testTuretildi?'  (≈ tahmini — kayıtlı veriden türetildi, Düzenle > Kaydet ile onayla)':'');
                 const cmp=testKarsilastir(tid,w,wkList[wIdx+1]);
                 const icYorum=tid==='maf'?mafIcTestYorum(w):null;
                 return React.createElement('div',{key:w.id,style:{borderTop:'1px solid var(--border)',paddingTop:8,marginTop:8}},
@@ -31954,7 +32007,7 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,o
                         React.createElement('input',{type:g.type||'text',value:editForm[g.k]||'',placeholder:'kayıtlı değil',min:g.min,max:g.max,onChange:e=>setEF(g.k,e.target.value)})
                       ))
                     ),
-                    (testDef&&!w._testGirdi&&tid!=='maf')&&React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:8}},testGirdiKaynak(w,tid)==='gpx'?'ℹ️ Eski kayıt: bu alanlar GPX analizinin kayıtlı verisinden tahmin edildi (yaklaşık olabilir); tahmin edilemeyenler boş bırakıldı. Kontrol edip Kaydet\'e basınca kalıcı saklanır.':'ℹ️ Eski kayıt: girdi değerleri kayıtlı sonuçtan geri hesaplandı (yaklaşık olabilir); kayıtlı olmayanlar boş bırakıldı. Kaydedince girdiler kalıcı saklanır.'),
+                    (testDef&&!w._testGirdi&&(tid!=='maf'||w._testTuretildi))&&React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:8}},testGirdiKaynak(w,tid,athlete)==='gpx'?'ℹ️ Eski kayıt: bu alanlar GPX analizinin kayıtlı verisinden tahmin edildi (yaklaşık olabilir); tahmin edilemeyenler boş bırakıldı. Kontrol edip Kaydet\'e basınca kalıcı saklanır.':'ℹ️ Eski kayıt: girdi değerleri kayıtlı sonuçtan geri hesaplandı (yaklaşık olabilir); kayıtlı olmayanlar boş bırakıldı. Kaydedince girdiler kalıcı saklanır.'),
                     testDef&&(()=>{const prev=testDef.hesapla(editForm);return prev&&React.createElement('div',{style:{fontSize:13,fontWeight:600,padding:'8px 12px',marginBottom:8,background:'var(--success-bg)',borderRadius:'var(--radius)',color:'var(--success)'}},'📊 '+prev.label);})(),
                     React.createElement('div',{className:'flex-gap'},
                       React.createElement('button',{className:'btn btn-primary btn-sm',onClick:handleEditSave},'Kaydet'),
