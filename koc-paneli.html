@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.09-0911 --><!DOCTYPE html>
+<!-- Version: v2026.10.09-0932 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.09-0911';
+    var RUNNING='v2026.10.09-0932';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.09-0911';
+const APP_VERSION='v2026.10.09-0932';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -24160,7 +24160,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     if(!testDef)return;
     const sonuc=testDef.hesapla(markTestForm);
     if(!sonuc){alert('Lütfen gerekli alanları doldur.');return;}
-    const patch={_isTest:true,_testTur:testDef.id,_testSonuc:sonuc,notlar:(w.notlar?w.notlar+' · ':'')+'Test sonucu: '+sonuc.label};
+    const patch={_isTest:true,_testTur:testDef.id,_testSonuc:sonuc,_testGirdi:Object.fromEntries(testDef.girdi.map(g=>[g.k,markTestForm[g.k]]).filter(([,v])=>v!=null&&v!=='')),notlar:(w.notlar?w.notlar+' · ':'')+'Test sonucu: '+sonuc.label};
     if(onUpdateWorkout)onUpdateWorkout(w.id,patch);
     const updates={};
     if(sonuc.vo2max&&testDef.guncelle.includes('vo2max'))updates.vo2max=String(sonuc.vo2max);
@@ -30840,6 +30840,58 @@ const TEST_TURLERI={
   }
 };
 
+// ── Test girdilerini kayıttan geri okuma (09.10.2026, Göksel bildirimi: "Test
+// Geçmişi'nde sadece tarih kayıtlı, diğer alanlar kayıtlı değil görünüyor").
+// KÖK NEDEN: TEST_TURLERI[x].hesapla() yalnızca SONUCU döndürür; MAF dışında
+// (Cooper: mesafe_m, 5K: sure_sa/dk/sn, Laktat: tekrar1-4_nabiz) girdi alanları
+// _testSonuc içinde YOKTU ve ayrıca saklanmıyordu. Test Geçmişi > ✏️ Düzenle bu
+// alanları _testSonuc[g.k]'den doldurduğu için boş ("kayıtlı değil") açılıyordu.
+// ÇÖZÜM: yeni kayıtlar girdileri _testGirdi alanına yazar; bu yardımcı önce
+// _testGirdi'yi, sonra _testSonuc'u, en son eski kayıtlar için sonuçtan/antrenman
+// verisinden geri-hesaplanabilen değerleri kullanır (geri-hesaplanan değer hesapla()'ya
+// verildiğinde AYNI sonucu üretir). Kurtarılamayan alanlar (ör. Laktat 1-3. tekrar
+// nabzı) boş kalır — uydurulmaz.
+const testGirdiGeriDoldur=(w,tid)=>{
+  const def=TEST_TURLERI[tid];const out={};
+  if(!def||!w)return out;
+  const g0=w._testGirdi||{},sn=w._testSonuc||{};
+  const has=v=>v!=null&&v!==''&&!(typeof v==='number'&&!isFinite(v));
+  def.girdi.forEach(g=>{
+    if(has(g0[g.k]))out[g.k]=String(g0[g.k]);
+    else if(has(sn[g.k]))out[g.k]=String(sn[g.k]);
+  });
+  if(tid==='maf'){
+    if(!out.maf_nabiz&&sn.maf_nabiz)out.maf_nabiz=String(sn.maf_nabiz);
+    if(!out.km1_pace&&(sn.km1_pace||sn.maf_pace))out.km1_pace=sn.km1_pace||sn.maf_pace;
+    if(!out.km3_pace&&sn.km3_pace)out.km3_pace=sn.km3_pace;
+    if(!out.km5_pace&&sn.km5_pace)out.km5_pace=sn.km5_pace;
+  }else if(tid==='cooper'){
+    if(!out.mesafe_m){
+      const mm=/~\s*(-?\d+)/.exec(sn.label||'');
+      if(mm)out.mesafe_m=String(Math.round(parseInt(mm[1],10)*44.73+504.9));
+      else if(parseFloat(w.mesafe)>0)out.mesafe_m=String(Math.round(parseFloat(w.mesafe)*1000));
+    }
+  }else if(tid==='zaman_5k'){
+    if(!has(out.sure_dk)&&!has(out.sure_sn)){
+      let sec=0;
+      if(sn.vlt>0)sec=Math.round(5000/sn.vlt);
+      else if(sn.pace_sec>0)sec=Math.round(sn.pace_sec*5);
+      else if(!w._testSonuc&&w.tur==='test_5k')sec=toSec(w.sure_sa||0,w.sure_dk||0,w.sure_sn||0);
+      if(sec>0){
+        out.sure_sa=String(Math.floor(sec/3600));
+        out.sure_dk=String(Math.floor((sec%3600)/60));
+        out.sure_sn=String(sec%60);
+      }
+    }
+  }else if(tid==='lthr_test'){
+    if(!out.tekrar4_nabiz){
+      if(parseInt(w.ort_nabiz)>0)out.tekrar4_nabiz=String(parseInt(w.ort_nabiz));
+      else if(sn.lthr>0)out.tekrar4_nabiz=String(Math.round(sn.lthr/0.98));
+    }
+  }
+  return out;
+};
+
 // ── Test kıyaslama ciddiyeti — GLOBAL/PAYLAŞILAN (15.09.2026, Göksel talebi).
 // Önceleri TestTab içinde yerelken buraya taşındı: hem rozet listesi (testKarsilastir)
 // hem de yeni ChartTestKiyas (aşağıda) AYNI eşik/seviye/hız hesabını kullanmalı —
@@ -31551,7 +31603,7 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,o
     if(Object.keys(updates).length>0)onUpdateAthlete({...athlete,...updates});
     const today2=new Date().toISOString().split('T')[0];
     const testTarih=testForm.test_tarih||today2;
-    const wRecord={id:uid(),athleteId:athlete.id,date:testTarih,spor:'kosu',tur:'aerobik',yapi_notu:activeTest.ad,sure_sa:'0',sure_dk:'45',sure_sn:'0',mesafe:activeTest.id==='zaman_5k'?'5':activeTest.id==='cooper'?String(Math.round((parseFloat(testForm.mesafe_m)||0)/1000*10)/10):'',ort_nabiz:testForm.maf_nabiz||testForm.tekrar4_nabiz||'',rpe:'8',notlar:'Test sonucu: '+sonuc.label,_isTest:true,_testTur:activeTest.id,_testSonuc:sonuc,savedAt:new Date().toISOString()};
+    const wRecord={id:uid(),athleteId:athlete.id,date:testTarih,spor:'kosu',tur:'aerobik',yapi_notu:activeTest.ad,sure_sa:'0',sure_dk:'45',sure_sn:'0',mesafe:activeTest.id==='zaman_5k'?'5':activeTest.id==='cooper'?String(Math.round((parseFloat(testForm.mesafe_m)||0)/1000*10)/10):'',ort_nabiz:testForm.maf_nabiz||testForm.tekrar4_nabiz||'',rpe:'8',notlar:'Test sonucu: '+sonuc.label,_isTest:true,_testTur:activeTest.id,_testSonuc:sonuc,_testGirdi:Object.fromEntries(activeTest.girdi.map(g=>[g.k,testForm[g.k]]).filter(([,v])=>v!=null&&v!=='')),savedAt:new Date().toISOString()};
     onSaveWorkout(wRecord);
     const plan=athPlanlar.find(p=>p.testTur===activeTest.id);
     if(plan)onDeleteTestPlan(plan.id);
@@ -31672,23 +31724,8 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,o
         const handleEditOpen=(w)=>{
           const tid=w._testTur||LEGACY_TUR_MAP[w.tur];
           const testDef=TEST_TURLERI[tid];
-          // girdi alanlarını mevcut sonuçtan veya _testSonuc'tan doldur
-          const preForm={test_tarih:w.date};
-          if(testDef&&w._testSonuc){
-            testDef.girdi.forEach(g=>{
-              if(w._testSonuc[g.k]!=null)preForm[g.k]=String(w._testSonuc[g.k]);
-            });
-            // MAF için km pace'leri _testSonuc'tan al
-            if(tid==='maf'){
-              if(w._testSonuc.maf_pace)preForm.km1_pace=w._testSonuc.maf_pace;
-              if(w._testSonuc.maf_nabiz)preForm.maf_nabiz=String(w._testSonuc.maf_nabiz);
-              // DÜZELTME (15.09.2026): km3/km5 de _testSonuc'ta ayrıca saklanıyor
-              // artık (bkz. hesapla) — düzenlerken bunlar da geri doldurulmalı,
-              // aksi halde koç her düzenlemede km3/km5'i sıfırdan girmek zorunda kalırdı.
-              if(w._testSonuc.km3_pace)preForm.km3_pace=w._testSonuc.km3_pace;
-              if(w._testSonuc.km5_pace)preForm.km5_pace=w._testSonuc.km5_pace;
-            }
-          }
+          // girdi alanları: _testGirdi → _testSonuc → geri-hesaplama (bkz. testGirdiGeriDoldur)
+          const preForm={test_tarih:w.date,...testGirdiGeriDoldur(w,tid)};
           setEditRecord(w);
           setEditForm(preForm);
         };
@@ -31699,7 +31736,7 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,o
           if(!testDef)return;
           const sonuc=testDef.hesapla(editForm);
           if(!sonuc){alert('Lütfen tüm alanları doldurun.');return;}
-          const patch={date:editForm.test_tarih||editRecord.date,_testSonuc:sonuc,_isTest:true,_testTur:tid,notlar:'Test sonucu: '+sonuc.label};
+          const patch={date:editForm.test_tarih||editRecord.date,_testSonuc:sonuc,_testGirdi:Object.fromEntries(testDef.girdi.map(g=>[g.k,editForm[g.k]]).filter(([,v])=>v!=null&&v!=='')),_isTest:true,_testTur:tid,notlar:'Test sonucu: '+sonuc.label};
           onUpdateWorkout(editRecord.id,patch);
           // Eşleşen plan varsa temizle
           const matchingPlan=(testPlanlar||[]).find(p=>p.athId===athlete?.id&&p.testTur===tid&&patch.date>=p.date);
@@ -31845,6 +31882,7 @@ function TestTab({athlete,history,races,workouts,onUpdateAthlete,onSaveWorkout,o
                         React.createElement('input',{type:g.type||'text',value:editForm[g.k]||'',placeholder:'kayıtlı değil',min:g.min,max:g.max,onChange:e=>setEF(g.k,e.target.value)})
                       ))
                     ),
+                    (testDef&&!w._testGirdi&&tid!=='maf')&&React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginBottom:8}},'ℹ️ Eski kayıt: girdi değerleri kayıtlı sonuçtan geri hesaplandı (yaklaşık olabilir); kayıtlı olmayanlar boş bırakıldı. Kaydedince girdiler kalıcı saklanır.'),
                     testDef&&(()=>{const prev=testDef.hesapla(editForm);return prev&&React.createElement('div',{style:{fontSize:13,fontWeight:600,padding:'8px 12px',marginBottom:8,background:'var(--success-bg)',borderRadius:'var(--radius)',color:'var(--success)'}},'📊 '+prev.label);})(),
                     React.createElement('div',{className:'flex-gap'},
                       React.createElement('button',{className:'btn btn-primary btn-sm',onClick:handleEditSave},'Kaydet'),
