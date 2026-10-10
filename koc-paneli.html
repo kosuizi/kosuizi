@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.10-2044 --><!DOCTYPE html>
+<!-- Version: v2026.10.10-2056 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.10-2044';
+    var RUNNING='v2026.10.10-2056';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.10-2044';
+const APP_VERSION='v2026.10.10-2056';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -6366,8 +6366,20 @@ function _uygPatch(w,yeni){
 // Yalnızca seviye numarası (S) taşıyan, revize olmayan, özeti olmayan EN YENİ maxN koşu kaydı işlenir (seviye motoru
 // zaten yalnızca bir türün son birkaç kaydına bakar) ve yalnızca ilgili haftaların snapshot'ı okunur. Reçetede değerlendirilecek
 // pace verisi yoksa n:0'lık "hesaplandı" işareti yazılır (her açılışta tekrar denenmesin; fren uygulanmaz).
+// Tanı (ekranda "Veri yok" satırında gösterilir): otomatik hesabın bu kaydı neden işlemediği/ne yaptığı.
+const _UYG_TANI={};
+function uygulamaTaniMetni(w,ro){
+  if(!w) return '';
+  if(w._rowUygulama) return w._rowUygulama.n>0?('özet var (faz sayısı '+w._rowUygulama.n+', kalite '+Math.round((w._rowUygulama.top||0)/60)+' dk)'):'hesaplandı: reçetede pace odaklı kalite fazı bulunamadı';
+  if(!w.tur) return 'kaydın antrenman türü (tur) boş';
+  if(_sSeviyeNo(w.yapi_notu)==null) return 'yapı notunda seviye (S) yok';
+  if(revizeliAntrenmanMi(w)) return 'koç bu günü "(revize)" işaretlemiş';
+  if(!ro) return 'görüntülenen haftanın reçete verisi (planSnap.rowOverrides) yok';
+  if(!ro[w.date]) return 'bu tarih ('+w.date+') için reçete satırı verisi yok';
+  return 'aday: hesap bekliyor/yazılamadı (spor='+(w.spor||'—')+', tur='+w.tur+')';
+}
 function uygulamaAdaylari(workouts,athleteId,maxN){
-  return (workouts||[]).filter(w=>w&&w.athleteId===athleteId&&w.date&&w.tur&&!w._rowUygulama&&(w.spor||'kosu')==='kosu'&&_sSeviyeNo(w.yapi_notu)!=null&&!revizeliAntrenmanMi(w))
+  return (workouts||[]).filter(w=>w&&w.athleteId===athleteId&&w.date&&w.tur&&!w._rowUygulama&&_sSeviyeNo(w.yapi_notu)!=null&&!revizeliAntrenmanMi(w))
     .sort((a,b)=>b.date.localeCompare(a.date)).slice(0,maxN||15);
 }
 async function uygulamaGecmisiHesapla(athlete,adaylar,onUpdate){
@@ -6614,7 +6626,7 @@ function seviyeKararDokumu(w,athWorkouts,oy,rpeBilgi){
   const o=w._rowUygulama;
   let up;
   if(!UYG_FREN_AKTIF) up={durum:'yok',baslik:'Uygulama freni kapalı',detay:['UYG_FREN_AKTIF=false.']};
-  else if(!o) up={durum:'yok',baslik:'Veri yok — fren uygulanmaz',detay:['Reçeteye pace/nabız işlenmemiş (GPX "Reçeteye Ekle", Haftalık Plan ya da Geçmiş reçete tablosu) veya bu özellikten önceki kayıt.']};
+  else if(!o) up={durum:'yok',baslik:'Veri yok — fren uygulanmaz',detay:['Reçeteye pace/nabız işlenmemiş (GPX "Reçeteye Ekle", Haftalık Plan ya da Geçmiş reçete tablosu) veya bu özellikten önceki kayıt.','Otomatik hesap tanısı: '+(_UYG_TANI[w.id]||'bu kayıt için henüz değerlendirme yapılmadı (Haftalık Plan sekmesi açık değil ya da kayıt görüntülenen haftada değil)')]};
   else if(o.n===0) up={durum:'yok',baslik:'Reçetede pace odaklı kalite verisi yok — fren uygulanmaz',detay:['Reçete satırlarında değerlendirilebilir pace girişi (pace odaklı kalite fazı) bulunamadı.']};
   else if(!u.oy) up={durum:'yok',baslik:'Yetersiz veri — fren uygulanmaz',detay:['Değerlendirilebilir pace odaklı kalite süresi '+dk(o.top||0)+' (en az '+dk(UYG_MIN_KALITE_SN)+').']};
   else {
@@ -24903,13 +24915,21 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
   // 2026.10.10 — Uygulama özeti (geçmiş kayıtlar), GÖRÜNTÜLENEN hafta için: reçete verisi zaten bellekte (planSnap),
   // ağ okuması gerekmez. Özeti olmayan o haftanın kayıtlarına yazılır; reçetede pace verisi yoksa n:0 işareti.
   // (Diğer haftalar için yukarıdaki oturum-başı geçmiş hesabı çalışır.) Yama sonrası aday kalmadığından döngü olmaz.
+  const [,setUygTick]=useState(0);
   useEffect(()=>{
     if(!athlete?.id||!onUpdateWorkout||!UYG_FREN_AKTIF) return;
-    const ro=planSnap&&planSnap.rowOverrides; if(!ro) return;
-    uygulamaAdaylari(workouts,athlete.id,60).filter(w=>ro[w.date]).forEach(w=>{
-      const ozet=uygulamaOzetiHesapla(ro[w.date],w.date,athlete);
-      onUpdateWorkout(w.id,{_rowUygulama:ozet||{v:2,top:0,yavas:0,hizli:0,n:0,agir:0,hrT:0,hrOk:0,hrYuk:0,hrDus:0}});
+    const ro=planSnap&&planSnap.rowOverrides;
+    let degisti=false;
+    (workouts||[]).filter(w=>w&&w.athleteId===athlete.id&&w.date&&_sSeviyeNo(w.yapi_notu)!=null).forEach(w=>{
+      const t=uygulamaTaniMetni(w,ro); if(_UYG_TANI[w.id]!==t){ _UYG_TANI[w.id]=t; degisti=true; }
     });
+    if(ro){
+      uygulamaAdaylari(workouts,athlete.id,60).filter(w=>ro[w.date]).forEach(w=>{
+        const ozet=uygulamaOzetiHesapla(ro[w.date],w.date,athlete);
+        onUpdateWorkout(w.id,{_rowUygulama:ozet||{v:2,top:0,yavas:0,hizli:0,n:0,agir:0,hrT:0,hrOk:0,hrYuk:0,hrDus:0}});
+      });
+    }
+    if(degisti) setUygTick(t=>t+1);
   },[planSnap,workouts,athlete?.id]);
 
   const weekTargets=React.useMemo(()=>{
