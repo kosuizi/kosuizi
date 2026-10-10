@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.09-1846 --><!DOCTYPE html>
+<!-- Version: v2026.10.10-1252 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.09-1846';
+    var RUNNING='v2026.10.10-1252';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.09-1846';
+const APP_VERSION='v2026.10.10-1252';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -3637,8 +3637,35 @@ function calibStampISO(ath,kind){
 function lastVltChangeDate(ath){
   const h=[...((ath&&ath.profileHistory)||[])].filter(x=>x&&x.date).sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
   let prev=null,last=null;
-  h.forEach(x=>{const v=parseSayi(x.vlt); if(prev!==null&&Math.abs(v-prev)>1e-9) last=x.date; prev=v;});
+  h.forEach(x=>{
+    const v=parseSayi(x.vlt);
+    // 2026.10.10 — KÖK NEDEN DÜZELTMESİ (Göksel bildirimi: son kalibrasyon 52 gün önce, 50+ antrenman varken
+    // "yeni antrenman verisi girilmemiş" uyarısı çıkıyordu): SporcuAnketi (sporcunun anket kaydı) profileHistory'ye
+    // `vlt` ALANI OLMADAN snapshot yazar → parseSayi(undefined)=0 → eskiden 3,5 → 0 → 3,5 geçişi "vLT değişti" sayılıyordu;
+    // sonuç: sporcu anketi her doldurduğunda "vLT'nin son değişim tarihi" o güne kayıyor, hem Çıpa hem Sınır taramasının
+    // penceresi o güne kırpılıp neredeyse tüm sinyaller dışarıda kalıyordu (ve Sınır'a sahte "vLT X gün önce değişti" beklemesi
+    // ekleniyordu). vLT değeri olmayan/boş snapshot değişim kanıtı DEĞİLDİR — yalnızca vLT içeren kayıtlar kıyaslanır.
+    if(!(v>0)) return;
+    if(prev!==null&&Math.abs(v-prev)>1e-9) last=x.date;
+    prev=v;
+  });
   return last;
+}
+// 2026.10.10 — "Son kalibrasyondan bu yana yeni antrenman verisi girilmemiş" uyarısının GERÇEK nedenini söyler.
+// Eski metin her durumda "yeni antrenman yok" diyordu; oysa uyarının asıl koşulu "taranan pencerede, kalibrasyon tarihinden
+// sonra PUANLANABİLİR pace/nabız sinyali yok"tur (pencere ayrıca vLT değişimi / diğer kalibrasyona kırpılabilir).
+// Çıpa (runFbScan) ve Sınır (runBoundaryScan) AYNI fonksiyonu kullanır — iki kartta tutarlı metin.
+function calibNoNewDataMessage(o){
+  const calib=o.calibStr, cut=o.cutoffStr;
+  const wk=(o.workouts||[]).filter(w=>w&&w.athleteId===o.athleteId&&w.date);
+  const after=wk.filter(w=>w.date>calib).length;
+  const inWin=wk.filter(w=>w.date>=cut).length;
+  if(after===0) return '🔁 Son kalibrasyondan ('+calib+') bu yana yeni antrenman kaydı yok — bir sonraki antrenmanın ardından tekrar tarayın.';
+  const sigWin=o.sigsInWindow||0;
+  return '🔁 Son kalibrasyondan ('+calib+') bu yana '+after+' antrenman kaydı var, ama taranan pencerede ('+cut+' ve sonrası'
+    +(o.cutoffWhy?' — '+o.cutoffWhy:'')+') '+inWin+' antrenmandan puanlanabilir pace/nabız sinyali üretilemedi'
+    +(sigWin>0?' (pencerede '+sigWin+' sinyal var ama kalibrasyon gününden sonra değil)':'')
+    +'. Sinyal, reçete satırlarına girilen pace/nabızdan çıkar; reçeteye işlenmemiş, Hissiyat odaklı, yarış, Serbest Koşu ve Uzun Yokuş/Power Hiking antrenmanları sinyal üretmez.';
 }
 // ── Sınır beklemesi: vLT yakın zamanda değiştiyse (2026.10.05 — Göksel talebi) ─────────────────────────
 // Çıpa uygulanınca vLT değişir ve Sınır penceresi o tarihe kırpılır; Sınır önerisi vLT değişiminden sonraki
@@ -28638,19 +28665,20 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       onUpdateAthlete({...athlete,fbLastScan:new Date().toISOString()});
 
       let cutoffStr=localDateStr(new Date(Date.now()-FB_SCAN_WINDOW_DAYS*864e5));
+      let cutoffWhy='son '+FB_SCAN_WINDOW_DAYS+' gün'; // pencere başlangıcının nedeni — "yeni veri yok" uyarısında gösterilir (2026.10.10)
       // ── Çapraz Farkındalık — Pencere Temizliği (2026.08.30) ──────────────────
       // Sınır Kalibrasyonu yakın zamanda uygulandıysa, o tarihten ÖNCEKİ sinyaller
       // artık farklı bir zon şekline göre değerlendirilmiş sayılır — Çıpa taramasına
       // karışmasın diye pencere (doğal cutoff'tan daha yeniyse) o tarihe kırpılır.
       const boundaryLastCalibStr=(calibStampISO(athlete,'bc')||'').substring(0,10)||null;
-      if(boundaryLastCalibStr&&boundaryLastCalibStr>cutoffStr) cutoffStr=boundaryLastCalibStr;
+      if(boundaryLastCalibStr&&boundaryLastCalibStr>cutoffStr){cutoffStr=boundaryLastCalibStr;cutoffWhy='Sınır Kalibrasyonu bu tarihte uygulandı';}
       // 2026.10.04/05 — pencere Çıpa'nın KENDİ son kalibrasyonuna VE vLT'nin profil geçmişindeki son gerçek
       // değişim tarihine (elle güncelleme dahil) kırpılır: eski vLT'ye göre okunmuş sinyaller yeniden sayılıp
       // art arda aynı yönde adım önerilmesin.
       const fbCalibClipStr=(calibStampISO(athlete,'fb')||'').substring(0,10)||null;
-      if(fbCalibClipStr&&fbCalibClipStr>cutoffStr) cutoffStr=fbCalibClipStr;
+      if(fbCalibClipStr&&fbCalibClipStr>cutoffStr){cutoffStr=fbCalibClipStr;cutoffWhy='Çıpa kalibrasyonu bu tarihte uygulandı';}
       const _vltChgStr=lastVltChangeDate(athlete);
-      if(_vltChgStr&&_vltChgStr>cutoffStr) cutoffStr=_vltChgStr;
+      if(_vltChgStr&&_vltChgStr>cutoffStr){cutoffStr=_vltChgStr;cutoffWhy='profil geçmişine göre vLT bu tarihte değişti';}
       const sigsAll=extractFeedbackSignals(allSnaps,athlete);
       const sigs=sigsAll.filter(s=>s.date>=cutoffStr);
 
@@ -28662,7 +28690,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       if(fbLastCalibStr){
         const hasNewData=sigs.some(s=>s.date>fbLastCalibStr);
         if(!hasNewData){
-          setFbNoNewData(true);
+          setFbNoNewData(calibNoNewDataMessage({calibStr:fbLastCalibStr,cutoffStr,cutoffWhy,sigsInWindow:sigs.length,workouts,athleteId:athlete.id}));
           return; // analiz yapılmaz, buton görünmez
         }
       }
@@ -28717,6 +28745,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       onUpdateAthlete({...athlete,boundaryLastScan:new Date().toISOString()});
 
       let cutoffStr=localDateStr(new Date(Date.now()-HR_BOUNDARY_SCAN_WINDOW_DAYS*864e5));
+      let cutoffWhy='son '+HR_BOUNDARY_SCAN_WINDOW_DAYS+' gün'; // 2026.10.10 — "yeni veri yok" uyarısında gösterilir
       // ── Çapraz Farkındalık — Pencere Temizliği (2026.08.30) ──────────────────
       // Çıpa yakın zamanda uygulandıysa, o tarihten ÖNCEKİ sinyaller eski (artık
       // geçersiz) vLT referansına göre değerlendirilmiş sayılır — Sınır taramasına
@@ -28727,6 +28756,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       const boundaryLastCalibStr=(calibStampISO(athlete,'bc')||'').substring(0,10)||null;
       if(fbLastCalibStr&&fbLastCalibStr>cutoffStr){
         cutoffStr=fbLastCalibStr;
+        cutoffWhy=(fbLastCalibStr===fbStampStr?'Çıpa kalibrasyonu':'profil geçmişine göre vLT')+' bu tarihte '+(fbLastCalibStr===fbStampStr?'uygulandı':'değişti');
         setBcClippedNote('Pencere '+localDateStr(new Date(fbLastCalibStr+'T12:00:00'))+' itibarıyla kırpıldı — vLT o tarihte değişti ('+(fbLastCalibStr===fbStampStr?'Çıpa kalibrasyonu':'elle güncelleme')+'); öncesi eski vLT\'ye göre okunmuş, karışık sinyal üretebilir.');
       }
       // 2026.10.04 — Göksel kararı: Sınır taraması KENDİ son kalibrasyonuna da kırpılır (Çıpa'daki düzeltmeyle
@@ -28735,6 +28765,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       // kullanıldığı için bu kalibrasyonda uygulanmayan sınırların birikmiş kanıtı da pencereden düşer.
       if(boundaryLastCalibStr&&boundaryLastCalibStr>cutoffStr){
         cutoffStr=boundaryLastCalibStr;
+        cutoffWhy='Sınır Kalibrasyonu bu tarihte uygulandı';
         setBcClippedNote('Pencere '+localDateStr(new Date(boundaryLastCalibStr+'T12:00:00'))+' itibarıyla kırpıldı — Sınır Kalibrasyonu o tarihte uygulandı, öncesi eski sınır şekline göre okunmuştu.');
       }
 
@@ -28744,7 +28775,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       if(boundaryLastCalibStr){
         const hasNewData=sigs.some(s=>s.date>boundaryLastCalibStr);
         if(!hasNewData){
-          setBcNoNewData(true);
+          setBcNoNewData(calibNoNewDataMessage({calibStr:boundaryLastCalibStr,cutoffStr,cutoffWhy,sigsInWindow:sigs.length,workouts,athleteId:athlete.id}));
           return;
         }
       }
@@ -28997,7 +29028,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       ),
       // Yeni veri yok uyarısı
       fbNoNewData&&React.createElement('div',{className:'alert alert-warn',style:{fontSize:12}},
-        '🔁 Son kalibrasyondan bu yana yeni antrenman verisi girilmemiş — bir sonraki antrenmanın ardından tekrar tarayın.'
+        typeof fbNoNewData==='string'?fbNoNewData:'🔁 Son kalibrasyondan bu yana yeni antrenman verisi girilmemiş — bir sonraki antrenmanın ardından tekrar tarayın.'
       ),
       fbError&&React.createElement('div',{className:'alert alert-warn',style:{fontSize:12}},fbError),
       fbRawCount&&React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:10}},
@@ -29208,7 +29239,7 @@ function BolgeTab({athlete,workouts,onUpdateAthlete}){
       ),
       bcClippedNote&&React.createElement('div',{className:'alert alert-info',style:{fontSize:11,marginBottom:8}},'ℹ️ '+bcClippedNote),
       bcNoNewData&&React.createElement('div',{className:'alert alert-warn',style:{fontSize:12}},
-        '🔁 Son kalibrasyondan bu yana yeni antrenman verisi girilmemiş — bir sonraki antrenmanın ardından tekrar tarayın.'
+        typeof bcNoNewData==='string'?bcNoNewData:'🔁 Son kalibrasyondan bu yana yeni antrenman verisi girilmemiş — bir sonraki antrenmanın ardından tekrar tarayın.'
       ),
       bcError&&React.createElement('div',{className:'alert alert-warn',style:{fontSize:12}},bcError),
       bcRawCount&&React.createElement('div',{style:{fontSize:12,color:'var(--text-tertiary)',marginBottom:8}},
