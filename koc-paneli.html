@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.10-2056 --><!DOCTYPE html>
+<!-- Version: v2026.10.10-2115 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -27,7 +27,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.10-2056';
+    var RUNNING='v2026.10.10-2115';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -362,7 +362,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.10-2056';
+const APP_VERSION='v2026.10.10-2115';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -2566,7 +2566,7 @@ function extractFeedbackSignals(allSnapsObj, athlete){
         // Etkin odak: koç seçtiyse o; yoksa autoFocusIndicator'ın kuralı (bkz. OTOMATIK_ODAK_PUANLAMA notu).
         const _autoFk=(zi!=null&&zi>=2&&row.type!=='walk'&&row.type!=='rest'&&!_rpeExcludesPace&&!_isRaceRow&&!_tempoluKolayExcludesPace)?'pace':'hr';
         const _effFocus=(_fk==='hr'||_fk==='pace')?_fk:(OTOMATIK_ODAK_PUANLAMA?_autoFk:null);
-        if(paceDir||hrDir||paceOk||hrOk||mesafeDir||mesafeOk) signals.push({date,label:row.label||null,_rep:_rep??null,type:row.type??null,paceDir,hrDir,paceOk,hrOk,hrWeight,zi:zi??0,zoneId:hr?.id||null,paceDiff,paceTol,mesafeDir,mesafeOk,mesafeDiffPct,mesZoneKolay,focus:_effFocus,calPaceW,calPaceDevSec,calHrW,calHrDevBpm,dur:rowDurSec(row)});
+        if(paceDir||hrDir||paceOk||hrOk||mesafeDir||mesafeOk) signals.push({date,label:row.label||null,_rep:_rep??null,type:row.type??null,paceDir,hrDir,paceOk,hrOk,hrWeight,zi:zi??0,zoneId:hr?.id||null,paceDiff,paceTol,mesafeDir,mesafeOk,mesafeDiffPct,mesZoneKolay,focus:_effFocus,calPaceW,calPaceDevSec,calHrW,calHrDevBpm,dur:((parseFloat(row.h)||0)*3600+(parseFloat(row.m)||0)*60+(parseFloat(row.s)||0)),bpm:(parseFloat(row.bpm)||null),paceSec:(((parseFloat(row.pm)||0)*60+(parseFloat(row.ps)||0))||null),tgtPaceSec:(row._targetPaceSec!=null?row._targetPaceSec:(row._origPaceSec!=null?row._origPaceSec:null)),hrLo:(hr&&hr.lo_bpm)||null,hrHi:(hr&&hr.hi_bpm)||null});
       };
 
       Object.values(rowOvs).forEach(scanRow);
@@ -6657,11 +6657,110 @@ function seviyeKararDokumu(w,athWorkouts,oy,rpeBilgi){
   }
   const etiket=karar==='ust'?('⬆️ '+(yk?'Sıradaki seviye':'Bir üst seviye')+' (S'+s+' → S'+(s+1)+(yk?')':', faz izin verirse)')):(karar==='alt'?('⬇️ Bir alt seviye'+(s>1?' (S'+s+' → S'+(s-1)+')':' (S1 — daha aşağısı yok)')):('➡️ Aynı seviye (S'+s+')'));
   const sonDegil=(athWorkouts||[]).some(x=>x&&x.id!==w.id&&x.date&&w.date&&x.date>w.date&&(yk?_ykAntrenmanMi(x):x.tur===w.tur)&&_sSeviyeNo(x.yapi_notu)!=null&&!revizeliAntrenmanMi(x));
-  return {yk,bacaklar:[
+  return {yk,_w:w,_athW:athWorkouts,bacaklar:[
     {key:'drift',ad:'Kardiyak drift',ikon:'📉',...dr},
     {key:'rpe',ad:'RPE',ikon:'💬',...rp},
     {key:'uyg',ad:'Pace / nabız hedefi',ikon:'🎯',...up}
   ],birlesim,aciklama,karar,etiket,sonDegil};
+}
+// ── TANI RAPORU (2026.10.10 — Göksel talebi) ─────────────────────────────────────────────────
+// Seviye kararındaki pace/nabız yorumunu dışarıdan (Claude ile) doğrulayabilmek için gereken verileri tek metinde toplar:
+// profil/bölgeler/profil geçmişi, bu antrenmanın faz tablosu (hedef ↔ gerçekleşen), karar dökümü ve AYNI türün önceki
+// 3 antrenmanının faz tabloları. Yeni hesap yapmaz; extractFeedbackSignals ve motor fonksiyonlarını kullanır. Panoya kopyalanır.
+function _tanPace(sn){ if(!(sn>0)) return '—'; sn=Math.round(sn); return Math.floor(sn/60)+':'+String(sn%60).padStart(2,'0'); }
+function _tanSure(sn){ if(!(sn>0)) return '—'; sn=Math.round(sn); return Math.floor(sn/60)+':'+String(sn%60).padStart(2,'0'); }
+function _tanZonSatirlari(ath,date){
+  const out=[];
+  try{
+    const a0=athleteAtDate(ath,date)||ath;
+    const z=calcZones(a0);
+    if(z&&z.hrZones) out.push('Nabız bölgeleri: '+z.hrZones.map((h,i)=>(h.id||('Z'+(i+1)))+' '+h.lo_bpm+'–'+h.hi_bpm).join(' · '));
+    if(z&&z.paceZones) out.push('Pace bölgeleri (/km): '+z.paceZones.map((pz,i)=>(pz&&pz.lo_ms&&pz.hi_ms)?('Z'+(i+1)+' '+_tanPace(1000/pz.hi_ms)+'–'+_tanPace(1000/pz.lo_ms)):('Z'+(i+1)+' —')).join(' · '));
+  }catch(e){ out.push('(bölgeler hesaplanamadı: '+e.message+')'); }
+  return out;
+}
+async function seviyeTaniRaporu(w,ath,athWorkouts,dokum){
+  const L=[]; const p=(t)=>L.push(t);
+  p('SEVİYE KARARI TANI RAPORU — '+APP_VERSION);
+  p('Sporcu: '+((ath.ad||'')+' '+(ath.soyad||'')).trim()+' · Antrenman: '+w.date+' · tür: '+(w.tur||'—')+' · '+(w.yapi_notu||'—'));
+  p('');
+  p('── PROFİL ──');
+  try{
+    const vd=calcVltDetail(ath)||{}; const a0=athleteAtDate(ath,w.date)||ath; const vd0=calcVltDetail(a0)||{};
+    p('Güncel: vLT '+(vd.vlt>0?_tanPace(1000/vd.vlt)+'/km':'—')+' ('+(vd.label||'—')+') · LTHR '+(ath.lthr||'—')+' · RHR '+(ath.rhr||'—')+' · MHR '+(ath.mhr||'—'));
+    if(a0!==ath) p('O günün profili: vLT '+(vd0.vlt>0?_tanPace(1000/vd0.vlt)+'/km':'—')+' · LTHR '+(a0.lthr||'—')+' · RHR '+(a0.rhr||'—')+' · MHR '+(a0.mhr||'—'));
+    const ph=(ath.profileHistory||[]).filter(x=>x&&x.date).sort((a,b)=>a.date.localeCompare(b.date)).slice(-8);
+    p('Profil geçmişi (son '+ph.length+'): '+(ph.length?ph.map(x=>x.date+' vLT '+(x.vlt?(parseSayi(x.vlt)>0?_tanPace(1000/parseSayi(x.vlt)):x.vlt):'—')+' LTHR '+(x.lthr||'—')+' RHR '+(x.rhr||'—')+' MHR '+(x.mhr||'—')).join(' | '):'kayıt yok'));
+    const bd=Object.keys(ath).filter(k=>k.indexOf('bd_')===0&&ath[k]!==0&&ath[k]!=null&&ath[k]!=='').map(k=>k+'='+JSON.stringify(ath[k]));
+    p('Sınır kalibrasyonu (bd_*): '+(bd.length?bd.join(', '):'yok'));
+  }catch(e){ p('(profil okunamadı: '+e.message+')'); }
+  _tanZonSatirlari(ath,w.date).forEach(p);
+  p('');
+  p('── BU ANTRENMAN ──');
+  p('Süre '+toSec(w.sure_sa,w.sure_dk,w.sure_sn)+' sn · mesafe '+(w.mesafe||'—')+' km · ort. nabız '+(w.ort_nabiz||'—')+' · maks. nabız '+(w.maks_nabiz||'—')+' · RPE '+(w.rpe||'—'));
+  ['sicaklik','hava','nem','sensor','notlar'].forEach(k=>{ if(w[k]) p(k+': '+String(w[k]).slice(0,200)); });
+  if(w._rowUygulama) p('Uygulama özeti (_rowUygulama): '+JSON.stringify(w._rowUygulama));
+  p('');
+  p('── KARAR DÖKÜMÜ ──');
+  if(dokum){
+    dokum.bacaklar.forEach(b=>p('• '+b.ad+' ['+b.durum+'] '+b.baslik+' — '+b.detay.join(' | ')));
+    p('Birleşim: '+dokum.birlesim);
+    p('Nihai: '+dokum.etiket+(dokum.aciklama&&dokum.aciklama.length?(' — '+dokum.aciklama.join(' ')):''));
+  }
+  p('');
+  const onceki=(athWorkouts||[]).filter(x=>x&&x.id!==w.id&&x.tur===w.tur&&x.date&&x.date<w.date&&!revizeliAntrenmanMi(x)).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,3);
+  const seanslar=[w,...onceki];
+  for(const x of seanslar){
+    const bas=(x===w?'── FAZ TABLOSU (BU ANTRENMAN) ──':'── ÖNCEKİ AYNI TÜR ANTRENMAN ──');
+    p(bas);
+    p(x.date+' · '+(x.yapi_notu||'—')+' · RPE '+(x.rpe||'—')+' · ort. nabız '+(x.ort_nabiz||'—')+' · maks '+(x.maks_nabiz||'—')+(x.sicaklik?(' · sıcaklık '+x.sicaklik):''));
+    try{ const dy=driftSeviyeOyu(x); if(dy) p('Drift: '+dy.yon+' (ort. '+_kayipMetni(dy.ortKot)+')'); }catch(e){}
+    if(x._rowUygulama&&x!==w) p('Uygulama özeti: '+JSON.stringify(x._rowUygulama));
+    try{
+      const snap=await fbGet('plan_snapshots/'+ath.id+'/'+getWeekKeyForDate(x.date)).catch(()=>null);
+      const ro=snap&&snap.rowOverrides&&snap.rowOverrides[x.date];
+      if(!ro){ p('  (bu tarih için reçete satırı verisi bulunamadı)'); p(''); continue; }
+      const sg=extractFeedbackSignals({__gun:{rowOverrides:{[x.date]:ro}}},ath);
+      if(!sg.length) p('  (değerlendirilebilir faz sinyali yok)');
+      sg.forEach(g=>{
+        const pace=g.paceSec>0?('pace '+_tanPace(g.paceSec)+(g.tgtPaceSec>0?(' (hedef '+_tanPace(g.tgtPaceSec)+', '+(g.paceSec-g.tgtPaceSec>0?'+':'')+Math.round(g.paceSec-g.tgtPaceSec)+' sn)'):'')):'pace —';
+        const hrT=g.bpm>0?('nabız '+g.bpm+(g.hrLo&&g.hrHi?(' (bölge '+g.hrLo+'–'+g.hrHi+', '+(g.bpm>g.hrHi?('+'+Math.round(g.bpm-g.hrHi)+' üstünde'):(g.bpm<g.hrLo?(Math.round(g.hrLo-g.bpm)+' altında'):'içinde'))+')'):'')):'nabız —';
+        p('  '+(g.label||'—')+(g._rep!=null?(' #'+(g._rep+1)):'')+' ['+(g.type||'—')+', odak '+(g.focus||'—')+', Z'+((g.zi||0)+1)+'] '+_tanSure(g.dur)+' dk | '+pace+' | '+hrT+' | pace:'+(g.paceDir||(g.paceOk?'hedefte':'—'))+' nabız:'+(g.hrDir||(g.hrOk?'hedefte':'—'))+' | tolerans '+(g.paceTol!=null?Math.round(g.paceTol)+' sn':'—')+' · oy pace '+(g.calPaceW!=null?(+g.calPaceW).toFixed(2):'—')+' nabız '+(g.calHrW!=null?(+g.calHrW).toFixed(2):'—'));
+      });
+    }catch(e){ p('  (faz tablosu okunamadı: '+e.message+')'); }
+    p('');
+  }
+  p('── EK BİLGİ (lütfen doldur) ──');
+  p('Nabız ölçümü: bilekten / göğüs bandıyla: ');
+  p('Hava / sıcaklık / rüzgâr: ');
+  p('Uyku, hastalık belirtisi, stres, önceki gün yükü: ');
+  p('Sporcunun bu antrenman hakkındaki yorumu: ');
+  return L.join('\n');
+}
+function SeviyeTaniButonu({d}){
+  const [metin,setMetin]=useState(null);
+  const [yukleniyor,setYukleniyor]=useState(false);
+  const [kopyalandi,setKopyalandi]=useState(false);
+  const uret=async()=>{
+    setYukleniyor(true);setKopyalandi(false);
+    try{ setMetin(await seviyeTaniRaporu(d._w,d.ath,d._athW,d)); }
+    catch(e){ setMetin('Rapor oluşturulamadı: '+e.message); }
+    setYukleniyor(false);
+  };
+  const kopyala=async()=>{
+    try{ await navigator.clipboard.writeText(metin); setKopyalandi(true); }
+    catch(e){
+      try{ const ta=document.getElementById('seviye-tani-ta'); if(ta){ ta.select(); document.execCommand('copy'); setKopyalandi(true); } }catch(_e){}
+    }
+  };
+  return React.createElement('div',{style:{marginTop:6}},
+    React.createElement('button',{type:'button',className:'btn',style:{fontSize:11},disabled:yukleniyor,onClick:uret},yukleniyor?'⏳ Hazırlanıyor…':'📋 Tanı raporu oluştur'),
+    metin!=null&&React.createElement('div',{style:{marginTop:6}},
+      React.createElement('textarea',{id:'seviye-tani-ta',readOnly:true,value:metin,rows:14,style:{width:'100%',fontFamily:'monospace',fontSize:11,lineHeight:1.4}}),
+      React.createElement('div',{style:{display:'flex',gap:8,alignItems:'center',marginTop:4}},
+        React.createElement('button',{type:'button',className:'btn btn-primary',style:{fontSize:11},onClick:kopyala},'📄 Kopyala'),
+        kopyalandi&&React.createElement('span',{style:{fontSize:11,color:'var(--success)'}},'Kopyalandı — sohbete yapıştırabilirsin')))
+  );
 }
 function seviyeDokumuUI(d){
   if(!d) return null;
@@ -6682,11 +6781,12 @@ function seviyeDokumuUI(d){
     React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',margin:'4px 0'}},d.birlesim),
     React.createElement('div',{style:{padding:'6px 8px',borderRadius:'var(--radius)',background:kt[0],border:'1px solid '+kt[1]}},
       React.createElement('div',{style:{fontWeight:600}},'Nihai karar: '+d.etiket),
-      d.aciklama.map((t,i)=>React.createElement('div',{key:i,style:{fontSize:11,marginTop:2}},t)))
+      d.aciklama.map((t,i)=>React.createElement('div',{key:i,style:{fontSize:11,marginTop:2}},t))),
+    (d.ath&&d._w)?React.createElement(SeviyeTaniButonu,{d}):null
   );
 }
 // w: {id,date,tur,yapi_notu,rpe,drift_bloklar}; athWorkouts: o sporcunun antrenmanları
-function driftYorumUret(w,athWorkouts){
+function driftYorumUret(w,athWorkouts,athlete){
   const bl=((w&&w.drift_bloklar)||[]).filter(Boolean);
   const degerler=bl.map(b=>({label:b.label||'',...driftBlokDegerlendir(b,w.tur)}));
   const _driftVar=degerler.some(d=>d.anaPct!=null||d.toparlanmaNabizPct!=null||d.toparlanmaEFPct!=null);
@@ -6695,6 +6795,7 @@ function driftYorumUret(w,athWorkouts){
     const _a0=w&&(w.athleteId||((athWorkouts||[]).find(x=>x&&x.athleteId)||{}).athleteId);
     if(!w||revizeliAntrenmanMi(w,_a0)) return null;
     const dk0=seviyeKararDokumu(w,athWorkouts,null,null);
+    if(dk0&&athlete) dk0.ath=athlete;
     return dk0?{seviye:null,kiyas:null,degerler:[],dokum:dk0}:null;
   }
   // 2026.10.08 (Göksel talebi): koç bu günü "(revize)" işaretlediyse (tekrar/mesafe/süre değiştirilmiş)
@@ -6712,7 +6813,9 @@ function driftYorumUret(w,athWorkouts){
   const rpeYon=rpeBilgi.yon;
   // Yürü-Koş: doğrusal program — genel "üst/alt seviye" mesajı yerine ykSeviyeKarari ile aynı mantık.
   const seviye=oy?(_ykAntrenmanMi(w)?ykSeviyeMesaji(w,athWorkouts,oy):driftSeviyeMesaji(w,oy,rpeYon,degerler,rpeBilgi,uygulamaFrenDurumuW(w,athWorkouts))):null;
-  return {seviye,kiyas:driftKiyasla(w,athWorkouts),degerler,dokum:seviyeKararDokumu(w,athWorkouts,oy,rpeBilgi)};
+  const _dk=seviyeKararDokumu(w,athWorkouts,oy,rpeBilgi);
+  if(_dk&&athlete) _dk.ath=athlete;
+  return {seviye,kiyas:driftKiyasla(w,athWorkouts),degerler,dokum:_dk};
 }
 function driftYorumUI(y){
   if(!y) return null;
@@ -28016,7 +28119,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     isWorkoutLogged:!!split.kosuDone,
                     driftYorumNode:(()=>{
                       const _dw=(split.kosuActuals||[]).find(x=>x&&Array.isArray(x.drift_bloklar)&&x.drift_bloklar.length)||(split.kosuActuals||[]).find(x=>x&&x.tur&&x.yapi_notu);
-                      return _dw?driftYorumUI(driftYorumUret(_dw,(workouts||[]).filter(x=>x&&x.athleteId===athlete?.id))):null;
+                      return _dw?driftYorumUI(driftYorumUret(_dw,(workouts||[]).filter(x=>x&&x.athleteId===athlete?.id),athlete)):null;
                     })(),
                     savedOverrides:(planSnap?.rowOverrides||{})[day.date],
                     savedCuePatches:(planSnap?.overrideMap?.[day.date]?._cuePatch)||{},
