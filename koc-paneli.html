@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.11-1719 --><!DOCTYPE html>
+<!-- Version: v2026.10.11-1722 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -28,7 +28,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.11-1719';
+    var RUNNING='v2026.10.11-1722';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -363,7 +363,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.11-1719';
+const APP_VERSION='v2026.10.11-1722';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -19318,6 +19318,37 @@ function isRecoveryByFrequency(athlete, w, phase, weekStart){
   const posInBlock=(w%blok);
   return posInBlock>=(blok-din);
 }
+// ── Haftanın yarışları (Yükleme Planı satır rozeti) — TEK KAYNAK (2026.10.11 — Göksel isteği) ──
+// Bir haftaya (Pazartesi..Pazar) düşen TÜM yarışları döndürür: sporcunun tanımlı yarışları
+// (athlete.yarıslar ∩ races) + yarış olarak loglanmış antrenmanlar (tur==='yaris').
+//   status: 'ran'     → o haftada tur==='yaris' antrenmanı var (koşuldu)
+//           'planned' → tarih bugün/gelecek ve henüz koşu kaydı yok (planlı)
+//           'nolog'   → tarih geçmiş ama yarış kaydı girilmemiş
+// Tanımlı olmayan ama yarış olarak loglanmış antrenman da 'ran' olarak listelenir.
+// Koç Paneli'nin tablosu bu fonksiyonu kullanır; yeni bir panelde yarış rozeti gerekirse AYNI
+// fonksiyon çağrılmalı (kopya mantık yazılmamalı — panel paritesi).
+function weekRaceEntries(athRaces, athRaceWks, weekStart, weekEnd, todayStr, primaryId){
+  const a=localDateStr(weekStart), b=localDateStr(weekEnd);
+  const inWk=(d)=>!!d&&d>=a&&d<=b;
+  const wks=(athRaceWks||[]).filter(w=>inWk(w.date));
+  const used=new Set();
+  const out=[];
+  (athRaces||[]).filter(r=>inWk(r.tarih)).forEach(r=>{
+    const wi=wks.findIndex((w,i)=>!used.has(i)&&(
+      (w._yarisRaceId&&w._yarisRaceId===r.id)||(w._yarisId&&w._yarisId===r.id)||
+      (w.date===r.tarih)||(r.ad&&w.yapi_notu&&String(w.yapi_notu).indexOf(r.ad)===0)));
+    if(wi>=0)used.add(wi);
+    out.push({id:r.id,name:r.ad||'Yarış',km:parseFloat(r.mesafe)||0,date:r.tarih,
+      status:wi>=0?'ran':(r.tarih>=todayStr?'planned':'nolog'),isPrimary:r.id===primaryId});
+  });
+  wks.forEach((w,i)=>{
+    if(used.has(i))return;
+    const nm=String(w.yapi_notu||'').replace(/\s*\(.*$/,'').replace(/\s*[–-]\s*[\d.,]+\s*km.*$/,'').trim();
+    out.push({id:null,name:nm||'Yarış',km:parseFloat(w.mesafe)||0,date:w.date,status:'ran',isPrimary:false});
+  });
+  return out.sort((x,y)=>x.date<y.date?-1:x.date>y.date?1:0);
+}
+
 // Manuel dinlenme takası (athlete.dinlenme_takaslar): [{rec:'YYYY-MM-DD', load:'YYYY-MM-DD', at}]
 // rec  = Dinlenme'ye ÇEVRİLEN haftanın Pazartesi anahtarı, load = Yüklenmeye ÇEVRİLEN hafta.
 // Anahtar tarihtir (hafta numarası değil) → sıklık değişse de takas yerinde kalır.
@@ -27186,6 +27217,12 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               // ── İdeal Hazırlık — salt görsel referans (15.07.2026 sohbeti) ──────
               // CTL/gerçekleşen antrenmandan bağımsız, saf yarış formülüne göre
               // hesaplanan hedef; mevcut hedef/revizyon zincirini etkilemez.
+              // Haftanın yarışları rozeti için bir kez hazırla (bkz. weekRaceEntries)
+              const _rbRaceIds=(athlete.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
+              const _rbAthRaces=(races||[]).filter(r=>_rbRaceIds.includes(r.id)&&r.tarih);
+              const _rbRaceWks=(workouts||[]).filter(w=>w.athleteId===athlete.id&&w.tur==='yaris'&&w.date);
+              const _rbToday=localDateStr(new Date());
+              const _rbPrimaryId=(dispSel.primary||plan.primary)?.id||null;
               const _idealManual={};
               (weekTargets||[]).forEach(w=>{if(w._manualRecovery)_idealManual[localDateStr(w.weekStart)]='rec';else if(w._manualLoad)_idealManual[localDateStr(w.weekStart)]='load';});
               const _idealTargets=calcIdealWeeklyTargets((dispSel.primary||plan.primary),athlete,_idealManual);
@@ -27475,6 +27512,20 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   wt.isRaceWeek&&React.createElement('span',{className:'badge badge-danger',style:{marginLeft:4,fontSize:9}},'🏁 Yarış'),
                   !wt.isRaceWeek&&wt.isRecovery&&React.createElement('span',{className:'badge badge-info',style:{marginLeft:4,fontSize:9},title:wt._manualRecovery?'Manuel takas: dinlenme bu haftaya alındı':undefined},wt._manualRecovery?'🔁 Dinlenme':(wt._recoveryDeferred?'⏩ Dinlenme':'Dinlenme')),
                   !wt.isRaceWeek&&wt._manualLoad&&React.createElement('span',{className:'badge badge-gray',style:{marginLeft:4,fontSize:9},title:'Manuel takas: bu hafta dinlenme yerine yüklenme haftası yapıldı'},'🔁 Yük'),
+                  // Haftanın yarışları: koşulmuş (✓) ve planlı yarışlar — hedef yarış haftasındaki ana yarış
+                  // zaten yukarıdaki "🏁 Yarış" rozetiyle gösterildiği için burada tekrarlanmaz.
+                  (()=>{
+                    const _ents=weekRaceEntries(_rbAthRaces,_rbRaceWks,wt.weekStart,wt.weekEnd,_rbToday,_rbPrimaryId)
+                      .filter(e=>!(wt.isRaceWeek&&e.isPrimary));
+                    if(!_ents.length)return null;
+                    return React.createElement('div',{style:{marginTop:3,display:'flex',flexDirection:'column',gap:2,alignItems:'center'},'data-testid':'hafta-yarislari'},
+                      _ents.map((e,ei)=>{
+                        const st=e.status==='ran'?{cls:'badge-good',txt:'koşuldu',ic:'✓'}:e.status==='planned'?{cls:'badge-warn',txt:'planlı',ic:'📅'}:{cls:'badge-gray',txt:'kayıt yok',ic:'?'};
+                        return React.createElement('span',{key:'rb'+ei,className:'badge '+st.cls,style:{fontSize:9,fontWeight:500,whiteSpace:'normal',lineHeight:1.3,maxWidth:150},
+                          title:e.name+(e.km?' · '+e.km+' km':'')+' · '+e.date+' — '+(e.status==='ran'?'yarış koşuldu (antrenman kaydı var)':e.status==='planned'?'planlı yarış':'tarihi geçmiş, yarış antrenman kaydı girilmemiş')},
+                          '🏁 '+e.name+(e.km?' '+e.km+'k':'')+' · '+st.ic+' '+st.txt);
+                      }));
+                  })(),
                   // Tüm ayarlama sebepleri rozetleri (HRV/sakatlık dahil)
                   (wt._adjustReasons||[]).map((r,ri)=>{
                     const cls=r.type==='backoff'?'badge-info':
