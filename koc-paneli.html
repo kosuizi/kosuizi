@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.10-2258 --><!DOCTYPE html>
+<!-- Version: v2026.10.11-1706 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -28,7 +28,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.10-2258';
+    var RUNNING='v2026.10.11-1706';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -363,7 +363,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.10-2258';
+const APP_VERSION='v2026.10.11-1706';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -19293,6 +19293,50 @@ function estimateUzunKosuHedefi(targetKm, targetDp, phase, disiplin, zones, band
   return {km:_tanim.km, dp:_tanim.dp, pay, capped, bandCapKm, yetersiz:!!_tanim.yetersiz, hamKm:km, minKm:uzunKosuMinKm(zones)};
 }
 
+// ── DİNLENME HAFTASI ÇÖZÜCÜ — TEK KAYNAK (2026.10.11 — Göksel isteği) ───────────
+// Bir haftanın "sıklığa göre" dinlenme olup olmadığı BURADAN çıkar; calcWeeklyTargetsCore
+// ve calcIdealWeeklyTargets AYNI fonksiyonu kullanır (eskiden formül iki yerde kopyaydı).
+// GEÇMİŞ HAFTA KİLİDİ: sporcu kartında "Dinlenme Haftası Sıklığı" değiştirildiğinde
+// handleUpdateAthlete, ESKİ sıklığı athlete.dinlenme_siklik_gecmis'e {until, siklik} olarak
+// ekler: weekStart < until olan haftalar eski sıklıkla hesaplanır → tamamlanmış haftaların
+// Dinlenme/Yük durumu değişmez; mevcut ve sonraki haftalar yeni sıklığa göre yeniden hesaplanır.
+function resolveSiklikForWeek(athlete, weekStart){
+  let s=athlete?.dinlenme_siklik||'3x1';
+  const log=Array.isArray(athlete?.dinlenme_siklik_gecmis)?athlete.dinlenme_siklik_gecmis:[];
+  if(log.length&&weekStart){
+    const ws=localDateStr(weekStart);
+    const hit=log.filter(e=>e&&e.until&&e.siklik).slice().sort((a,b)=>a.until<b.until?-1:a.until>b.until?1:0).find(e=>ws<e.until);
+    if(hit) s=hit.siklik;
+  }
+  const [blok,din]=String(s).split('x').map(Number);
+  return{blok,din,str:s};
+}
+function isRecoveryByFrequency(athlete, w, phase, weekStart){
+  if(phase==='Taper')return false;
+  const {blok,din}=resolveSiklikForWeek(athlete,weekStart);
+  // Zirve fazında da dinlenme haftası aktif
+  const posInBlock=(w%blok);
+  return posInBlock>=(blok-din);
+}
+// Manuel dinlenme takası (athlete.dinlenme_takaslar): [{rec:'YYYY-MM-DD', load:'YYYY-MM-DD', at}]
+// rec  = Dinlenme'ye ÇEVRİLEN haftanın Pazartesi anahtarı, load = Yüklenmeye ÇEVRİLEN hafta.
+// Anahtar tarihtir (hafta numarası değil) → sıklık değişse de takas yerinde kalır.
+function takasForWeekKey(athlete, weekKey){
+  const list=Array.isArray(athlete?.dinlenme_takaslar)?athlete.dinlenme_takaslar:[];
+  let r=null;
+  for(const t of list){
+    if(!t)continue;
+    if(t.rec===weekKey)r='rec';
+    else if(t.load===weekKey)r='load';
+  }
+  return r;
+}
+// weekEff dondurma damgası: takas durumu değişirse o haftanın weekEff'i yeniden dondurulur.
+function takasSigForWeek(athlete, weekKey){
+  const list=Array.isArray(athlete?.dinlenme_takaslar)?athlete.dinlenme_takaslar:[];
+  return list.filter(t=>t&&(t.rec===weekKey||t.load===weekKey)).map(t=>t.rec+'>'+t.load).join('|');
+}
+
 function calcWeeklyTargetsCore(athlete, races, workouts, primary, history=[], frozenTargets={}){
   if(!athlete||!primary)return[];
   const today=new Date();
@@ -19307,8 +19351,7 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary, history=[], fr
   const peakW=getAthRaceOverride(athlete,primary.id).peak_w||parseInt(primary.peak_w)||(km>42?4:km>21?3:2);
   const buildW=prepWeeks-taperW-peakW;
 
-  const siklikStr=athlete.dinlenme_siklik||'3x1';
-  const [siklikBlok,siklikDin]=(siklikStr.split('x').map(Number));
+  // Dinlenme sıklığı artık hafta bazında çözülür (bkz. resolveSiklikForWeek — geçmiş hafta kilidi).
 
   // Sporcunun mevcut CTL'sinden band hesapla — baseKm'i ölçekler
   // Daha yumuşak band etkisi: deneyimsiz sporcunun bile yarış-spesifik minimumu yakalayabilmesi için
@@ -19345,12 +19388,7 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary, history=[], fr
     else if(w>=buildW*0.5)phase='Gelişme';
     else phase='Temel';
 
-    const isRecovery=(()=>{
-      if(phase==='Taper')return false;
-      // Zirve fazında da dinlenme haftası aktif
-      const posInBlock=(w%siklikBlok);
-      return posInBlock>=(siklikBlok-siklikDin);
-    })();
+    const isRecovery=isRecoveryByFrequency(athlete,w,phase,weekStart);
 
     let kmPct;
     if(isRaceWeek){
@@ -19485,20 +19523,21 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary, history=[], fr
   const araYarisTarihleri=(races||[])
     .filter(r=>r.id!==primary.id&&r.tarih&&new Date(r.tarih+'T12:00:00')<raceDate)
     .map(r=>new Date(r.tarih+'T12:00:00'));
+  // _recalcWk: isRecovery değiştiğinde kmPct/targetKm/targetDp yeniden hesaplar
+  // (ara yarış ertelemesi VE manuel dinlenme takası tarafından paylaşılır)
+  const _recalcWk=(wk2,isRec)=>{
+    const _w=wk2.weekIdx-1;
+    const ph=wk2.phase;
+    let kp;
+    if(ph==='Zirve'){kp=isRec?0.70:0.90+0.05*(_w-buildW-peakW+1);if(kp>1.0)kp=1.0;}
+    else if(ph==='Gelişme'){const pg=Math.min(1,(_w-Math.floor(buildW*0.5)+1)/Math.ceil(buildW*0.5));kp=isRec?pg*0.55:0.55+pg*0.35;}
+    else{const pg=Math.min(1,(_w+1)/Math.floor(buildW*0.5));kp=isRec?pg*0.45:0.35+pg*0.30;}
+    const tKm=round1(Math.max(wk2._baseKm*0.25,wk2._baseKm*kp));
+    const tDp=Math.round(wk2._baseDp*kp*(isRec?0.5:1));
+    return{kmPct:kp,targetKm:tKm,targetDp:tDp};
+  };
+  const wkHasRace=(wk2)=>araYarisTarihleri.some(rd=>rd>=wk2.weekStart&&rd<=wk2.weekEnd);
   if(araYarisTarihleri.length>0){
-    // _recalcWk: isRecovery değiştiğinde kmPct/targetKm/targetDp yeniden hesaplar
-    const _recalcWk=(wk2,isRec)=>{
-      const _w=wk2.weekIdx-1;
-      const ph=wk2.phase;
-      let kp;
-      if(ph==='Zirve'){kp=isRec?0.70:0.90+0.05*(_w-buildW-peakW+1);if(kp>1.0)kp=1.0;}
-      else if(ph==='Gelişme'){const pg=Math.min(1,(_w-Math.floor(buildW*0.5)+1)/Math.ceil(buildW*0.5));kp=isRec?pg*0.55:0.55+pg*0.35;}
-      else{const pg=Math.min(1,(_w+1)/Math.floor(buildW*0.5));kp=isRec?pg*0.45:0.35+pg*0.30;}
-      const tKm=round1(Math.max(wk2._baseKm*0.25,wk2._baseKm*kp));
-      const tDp=Math.round(wk2._baseDp*kp*(isRec?0.5:1));
-      return{kmPct:kp,targetKm:tKm,targetDp:tDp};
-    };
-    const wkHasRace=(wk2)=>araYarisTarihleri.some(rd=>rd>=wk2.weekStart&&rd<=wk2.weekEnd);
     for(let i=0;i<baseWeeks.length-1;i++){
       const wk=baseWeeks[i];
       if(!wk.isRecovery||wk.isRaceWeek)continue;
@@ -19526,6 +19565,59 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary, history=[], fr
       nxt._origTargetKm=r2.targetKm;nxt._origTargetDp=r2.targetDp;
     }
   }
+
+  // ── Manuel dinlenme takası (2026.10.11 — Göksel isteği) ────────────────────
+  // Koç, Yükleme Planı'ndan "bu hafta ↔ gelecek hafta" dinlenmesini yer değiştirebilir
+  // (athlete.dinlenme_takaslar, anahtar = hafta Pazartesi tarihi). Takas SIKLIK ayarından
+  // bağımsızdır ve yalnızca o iki haftayı etkiler: sonraki dinlenme haftaları (örn. H15)
+  // sıklığa göre OLDUĞU YERDE kalır — döngü kaydırılmaz. İki hafta da _recalcWk ile yeniden
+  // hesaplanır (kmPct/targetKm/targetDp, dinlenme için %50 D+). Ara yarış içeren, Taper
+  // veya yarış haftası olan çiftler uygulanmaz. Takas edilen dinlenme haftası, %8 aşırı
+  // yük geri çekmesinden MUAFTIR (aşağıda) — dinlenme hedefi düşük olduğundan, takas
+  // öncesi yüklenmiş km "aşım" görünüp sonraki yük haftasını yanlışlıkla kesmesin.
+  const _takaslar=Array.isArray(athlete.dinlenme_takaslar)?athlete.dinlenme_takaslar:[];
+  if(_takaslar.length){
+    const _byKey={};
+    baseWeeks.forEach(wk=>{_byKey[localDateStr(wk.weekStart)]=wk;});
+    const _applyFlag=(wk,isRec,marker)=>{
+      const r=_recalcWk(wk,isRec);
+      const fk=localDateStr(wk.weekStart);
+      wk.isRecovery=isRec;wk._isRecovery=isRec;
+      wk._kmPct=r.kmPct;
+      wk._origTargetKm=r.targetKm;wk._origTargetDp=r.targetDp;
+      // Geçmiş haftada dondurulmuş hedef varsa hedef değerleri ona sadık kalır
+      if(wk.isPast&&frozenTargets[fk]){
+        wk.targetKm=frozenTargets[fk].targetKm;wk.targetDp=frozenTargets[fk].targetDp;
+      } else {
+        wk.targetKm=r.targetKm;wk.targetDp=r.targetDp;
+      }
+      // Gerçekleşme durumu yeni (ham) hedefe göre yeniden hesaplanır
+      if(wk.isPast){
+        wk.kmRatio=r.targetKm>0?(wk.actualKm/r.targetKm):null;
+        let st='normal';
+        if(wk.kmRatio!==null){
+          if(wk.kmRatio<0.40)st='missed';
+          else if(wk.kmRatio<0.85)st='deficit';
+          else if(wk.kmRatio<=1.20)st='ok';
+          else st='overshoot';
+        }
+        wk.weekStatus=st;
+      }
+      wk[marker]=true;
+    };
+    const _ok=(wk)=>wk&&!wk.isRaceWeek&&wk.phase!=='Taper'&&!wkHasRace(wk);
+    for(const t of _takaslar){
+      if(!t||!t.rec||!t.load)continue;
+      const a=_byKey[t.rec], b=_byKey[t.load];
+      if(!_ok(a)||!_ok(b))continue;
+      _applyFlag(a,true,'_manualRecovery');
+      _applyFlag(b,false,'_manualLoad');
+      // Takas yeni bir dinlenme ürettiği için ertelenmiş-dinlenme etiketi geçersiz
+      delete a._recoveryDeferred;delete b._recoveryDeferred;
+    }
+  }
+  // Ara yarış içeren haftaları işaretle (UI: takas engeli + yarış rozeti için ortak bilgi)
+  baseWeeks.forEach(wk=>{if(araYarisTarihleri.length&&wkHasRace(wk))wk._araYaris=true;});
 
   // ── Geri çekme mantığı (antrenman bilimi tabanlı) ─────────────────────────
   // KALDIRILDI (21.09.2026 — Göksel onayı): "Telafi" mekanizması (eksik haftaların
@@ -19557,12 +19649,15 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary, history=[], fr
     // ilerliyordu). Düzeltme: backoff artık SADECE bir sonraki tek haftaya
     // taşınır — o hafta da zaten geçmişse (fırsat kaçmışsa) sessizce düşer,
     // daha sonraki bambaşka bir "güncel hafta"ya asla sıçramaz.
-    const myBackoff=overshootBackoff;
+    // Manuel takasla dinlenmeye çevrilen hafta geri çekmeden MUAFTIR (2026.10.11): taşınan
+    // backoff tüketilmez (düşer) ve bu haftanın "aşımı" sonraki haftaya backoff taşımaz.
+    // Gerekçe: takas öncesi yüklenmiş km, dinlenme hedefine göre yapay "aşım" görünür.
+    const myBackoff=wk._manualRecovery?0:overshootBackoff;
     overshootBackoff=0;
 
     if(wk.isPast){
       // Geçmiş hafta bitti — backoff birikimini güncelle
-      if(wk.weekStatus==='overshoot'){
+      if(wk.weekStatus==='overshoot'&&!wk._manualRecovery){
         // Aşırı hafta — SADECE bir sonraki haftada (Temel/Gelişme) %8 geri çekme.
         // Bu haftanın kendisi zaten geçmiş, bu yüzden myBackoff burada uygulanmaz —
         // sadece overshootBackoff bir sonraki iterasyona (bir sonraki hafta) taşınır.
@@ -19622,8 +19717,8 @@ function calcIdealWeeklyTargets(primary, athlete){
   const peakW=getAthRaceOverride(athlete,primary.id).peak_w||parseInt(primary.peak_w)||(km>42?4:km>21?3:2);
   const buildW=prepWeeks-taperW-peakW;
 
-  const siklikStr=athlete?.dinlenme_siklik||'3x1';
-  const [siklikBlok,siklikDin]=(siklikStr.split('x').map(Number));
+  // Dinlenme sıklığı: calcWeeklyTargetsCore ile AYNI çözücü (isRecoveryByFrequency) — tek kaynak.
+  // NOT: İdeal eğri manuel takastan ETKİLENMEZ (orijinal periyotlama referansı olarak kalır).
 
   const out=[];
   for(let w=0;w<prepWeeks+1;w++){
@@ -19642,11 +19737,7 @@ function calcIdealWeeklyTargets(primary, athlete){
     else if(w>=buildW*0.5)phase='Gelişme';
     else phase='Temel';
 
-    const isRecovery=(()=>{
-      if(phase==='Taper')return false;
-      const posInBlock=(w%siklikBlok);
-      return posInBlock>=(siklikBlok-siklikDin);
-    })();
+    const isRecovery=isRecoveryByFrequency(athlete,w,phase,weekStart);
 
     let kmPct;
     if(isRaceWeek){
@@ -25289,15 +25380,18 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
   // arttığında rozet, koç bir şey yapmadan kendiliğinden yükselebiliyordu. Artık kilit
   // YÖNDEN BAĞIMSIZ: aynı weekKey için bir kez yazıldıktan sonra ne yukarı ne aşağı
   // hiçbir otomatik güncelleme yapılmaz — sadece yeni bir hafta başladığında yeniden yazılır.
+  const _takasSigNow=takasSigForWeek(athlete,weekKey);
   React.useEffect(()=>{
     if(!curWeekEffective||!athlete||!weekKey)return;
     const snap=planSnapRef.current;
     if(!snap)return;
     const ex=snap.weekEff;
     // Dondurma koşulu: aynı hafta ise YÖNDEN BAĞIMSIZ dokunma — yeni hafta değilse hiç yazma.
-    if(ex&&ex._weekKey===weekKey) return;
-    // İlk yazım (yeni hafta) → yaz/dondur
-    const newWeekEff={...curWeekEffective,_v:WEEK_EFF_VERSION,_weekKey:weekKey};
+    // İSTİSNA (2026.10.11): manuel dinlenme takası bu haftayı etkiliyorsa (_takasSig değiştiyse)
+    // hedef BİLEREK yeniden dondurulur — takas, koçun açık kararıdır (otomatik erime değil).
+    if(ex&&ex._weekKey===weekKey&&(ex._takasSig||'')===_takasSigNow) return;
+    // İlk yazım (yeni hafta ya da takas) → yaz/dondur
+    const newWeekEff={...curWeekEffective,_v:WEEK_EFF_VERSION,_weekKey:weekKey,_takasSig:_takasSigNow};
     const updated={...snap,weekEff:newWeekEff};
     
     // NOT: frozenTargets artık otomatik değil, koç "Gelecek Hafta Planı" butonuna bastığında kaydedilir
@@ -25316,7 +25410,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     // bulunup fbUpdate ile alt-yol hedeflenerek çözülen "kayıp güncelleme" yarışı gibi. Çözüm:
     // DB'ye SADECE değişen alanı (weekEff) gönder; kardeş alanlara asla dokunma.
     fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,{weekEff:stripUndefined(newWeekEff)}).catch(()=>{});
-  },[curWeekEffective,athlete?.id,weekKey]);
+  },[curWeekEffective,athlete?.id,weekKey,_takasSigNow]);
 
   // planSnap'e formSnap yaz — Koşu İzlerim CTL/ATL/TSB/ACWR için buildHistory çalıştırmaz
   React.useEffect(()=>{
@@ -25382,9 +25476,9 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     // snapReady olmadan gösterme — async yükleme titremesini önler
     if(!snapReady) return null;
     const frozen=planSnap?.weekEff;
-    if(frozen&&frozen._weekKey===weekKey) return frozen;
+    if(frozen&&frozen._weekKey===weekKey&&(frozen._takasSig||'')===_takasSigNow) return frozen;
     return curWeekEffective;
-  },[snapReady,planSnap,curWeekEffective,weekKey]);
+  },[snapReady,planSnap,curWeekEffective,weekKey,_takasSigNow]);
 
   // Rampa AÇIKKEN gelecek hafta planı/rozeti için rampa zinciri (21.09.2026): eskiden burada ayrı
   // bir "bu haftanın efektifi × (1+oran)" hesabı vardı — tablodaki zincirle (kayan pencere, D+
@@ -25472,9 +25566,77 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       return;
     }
     if(!window.confirm('Bu haftanın hedefi yeniden hesaplansın mı?\n\nŞimdiki: '+fmt(old)+'\nYeni: '+fmt(nw)+'\n\nGün reçeteleri otomatik değişmez; gerekirse sonra "Planı Güncelle"ye basın.'))return;
-    const newWeekEff={...nw,_v:WEEK_EFF_VERSION,_weekKey:weekKey};
+    const newWeekEff={...nw,_v:WEEK_EFF_VERSION,_weekKey:weekKey,_takasSig:_takasSigNow};
     setPlanSnap({...snap,weekEff:newWeekEff});
     fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,{weekEff:stripUndefined(newWeekEff)}).catch(()=>{alert('Hedef kaydedilemedi, bağlantıyı kontrol edip tekrar deneyin.');});
+  };
+  // ── Dinlenme Haftası Takası: bu hafta ↔ gelecek hafta (2026.10.11 — Göksel isteği) ──────
+  // Sporcu kartındaki "Dinlenme Haftası Sıklığı"ndan BAĞIMSIZ, yalnızca bu hafta ile gelecek
+  // hafta arasında dinlenme/yüklenme bayrağını yer değiştirir (athlete.dinlenme_takaslar,
+  // anahtar = hafta Pazartesi tarihi). Sonraki döngü sıklığa göre OLDUĞU YERDE devam eder.
+  // Hesap calcWeeklyTargetsCore içinde yapılır (bkz. "Manuel dinlenme takası" bloğu): iki
+  // hafta da dinlenme/yük formülüyle yeniden hesaplanır; takas edilen dinlenme haftası %8
+  // aşırı yük geri çekmesinden muaftır. Burada: uygunluk kontrolü, önizleme (eski→yeni),
+  // kayıt ve — varsa — "Gelecek Hafta Planı" ile dondurulmuş hedeflerin yenilenmesi.
+  const _takasTargetsFor=(ath2)=>{
+    const racesOverride=selectedPrimary?races.map(r=>({...r,__force:r.id===selectedPrimary})):races;
+    const prevWeekEndStr=localDateStr(getWeekBounds(-1).end);
+    const stableHistory=(history||[]).filter(h=>h.date<=prevWeekEndStr);
+    return calcWeeklyTargets(ath2,racesOverride,workouts||[],planMode==='optimize',stableHistory,frozenTargets);
+  };
+  const takasDurumu=React.useMemo(()=>{
+    if(!athlete||!weekTargets||!weekTargets.length)return null;
+    const ci=weekTargets.findIndex(w=>w.isCurrent);
+    if(ci<0||ci+1>=weekTargets.length)return null;
+    const cw=weekTargets[ci], nx=weekTargets[ci+1];
+    if(cw._baseKm==null||nx._baseKm==null)return null; // hazırlık öncesi/yarışsız hafta — takas yok
+    const ck=localDateStr(cw.weekStart), nk=localDateStr(nx.weekStart);
+    const aktif=(athlete.dinlenme_takaslar||[]).filter(t=>t&&([ck,nk].includes(t.rec)||[ck,nk].includes(t.load)));
+    const engel=(w)=>w.isRaceWeek?'yarış haftası':w.phase==='Taper'?'Taper dönemi':w._araYaris?'ara yarış var':null;
+    const sebep=engel(cw)||engel(nx);
+    const biri=(!!cw.isRecovery)!==(!!nx.isRecovery);
+    return{cw,nx,ck,nk,aktif,
+      uygun:!sebep&&biri&&!cw.isPast,
+      sebep:sebep?((engel(cw)?'H'+cw.weekIdx:'H'+nx.weekIdx)+' için '+sebep):(!biri?'bu hafta ve gelecek hafta aynı tipte (ikisi de dinlenme ya da ikisi de yük)':null),
+      yon:nx.isRecovery?'sonrakiniAl':'buHafta'};
+  },[athlete,weekTargets]);
+  const handleDinlenmeTakas=async(geriAl)=>{
+    const d=takasDurumu;
+    if(!d||!athlete||!onUpdateAthlete)return;
+    const eskiListe=Array.isArray(athlete.dinlenme_takaslar)?athlete.dinlenme_takaslar:[];
+    let yeniListe;
+    if(geriAl){
+      yeniListe=eskiListe.filter(t=>!(t&&([d.ck,d.nk].includes(t.rec)||[d.ck,d.nk].includes(t.load))));
+    } else {
+      if(!d.uygun){alert('Takas yapılamıyor: '+(d.sebep||'uygun değil'));return;}
+      // dinlenme olan hafta yük olur, yük olan hafta dinlenme olur
+      const recWk=d.nx.isRecovery?d.cw:d.nx, loadWk=d.nx.isRecovery?d.nx:d.cw;
+      yeniListe=[...eskiListe.filter(t=>!(t&&([d.ck,d.nk].includes(t.rec)||[d.ck,d.nk].includes(t.load)))),
+        {rec:localDateStr(recWk.weekStart),load:localDateStr(loadWk.weekStart),at:Date.now()}];
+    }
+    const yeniAth={...athlete,dinlenme_takaslar:yeniListe};
+    let yeniPlan=null;
+    try{yeniPlan=_takasTargetsFor(yeniAth);}catch(e){yeniPlan=null;}
+    if(!yeniPlan){alert('Yeni hedefler hesaplanamadı, işlem yapılmadı.');return;}
+    const ycw=yeniPlan.find(w=>localDateStr(w.weekStart)===d.ck), ynx=yeniPlan.find(w=>localDateStr(w.weekStart)===d.nk);
+    if(!ycw||!ynx){alert('Yeni hedefler hesaplanamadı, işlem yapılmadı.');return;}
+    const satir=(w)=>'H'+w.weekIdx+(w.isRecovery?' (Dinlenme)':' (Yük)')+': '+w.targetKm+' km / D+'+(w.targetDp||0)+' m';
+    const msg=(geriAl?'Takas GERİ ALINSIN mı?\n\n':'Dinlenme haftası takas edilsin mi?\n\n')+
+      'Şimdi:\n  '+satir(d.cw)+'\n  '+satir(d.nx)+'\n\nSonra:\n  '+satir(ycw)+'\n  '+satir(ynx)+'\n\n'+
+      (geriAl?'':'• Sonraki dinlenme haftaları sıklık ayarına göre OLDUĞU YERDE kalır.\n• Takas edilen dinlenme haftasına %8 aşırı yük geri çekmesi uygulanmaz.\n')+
+      '• Bu haftanın hedefi yeni değerle yeniden dondurulur; gün reçeteleri otomatik değişmez — gerekirse sonra "Planı Güncelle"ye basın.';
+    if(!window.confirm(msg))return;
+    // Dondurulmuş (Gelecek Hafta Planı) hedefler varsa yeni değerle yenile — aksi halde hafta
+    // bittiğinde eski (takas öncesi) hedef kullanılırdı.
+    try{
+      for(const [k,w] of [[d.ck,ycw],[d.nk,ynx]]){
+        const sn=await fbGet(`plan_snapshots/${athlete.id}/${k}`);
+        if(sn?.frozenTargets){
+          await fbUpdate(`plan_snapshots/${athlete.id}/${k}`,{frozenTargets:{targetKm:w.targetKm,targetDp:w.targetDp}});
+        }
+      }
+    }catch(e){console.warn('Takas: dondurulmuş hedef yenilenemedi',e);}
+    onUpdateAthlete(yeniAth);
   };
   const handlePlanGuncelle=async()=>{
     // Önce Firebase'den en taze athlete verisini çek — anket güncellemesi sonrası
@@ -26960,6 +27122,27 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
           )
         );
       })(),
+      // ── Dinlenme haftası takası (bu hafta ↔ gelecek hafta) — 2026.10.11 ──
+      (()=>{
+        const d=takasDurumu;
+        if(!d)return null;
+        const aktif=d.aktif.length>0;
+        if(!aktif&&!d.uygun)return null; // gereksiz kalabalık yapma
+        const stl={marginBottom:10,padding:'8px 12px',borderRadius:'var(--radius)',background:'var(--info-bg)',color:'var(--info)',borderLeft:'3px solid var(--info)',fontSize:12,lineHeight:1.5,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'};
+        const recW=d.cw._manualRecovery?d.cw:(d.nx._manualRecovery?d.nx:null);
+        const loadW=d.cw._manualLoad?d.cw:(d.nx._manualLoad?d.nx:null);
+        return React.createElement('div',{style:stl,'data-testid':'dinlenme-takas'},
+          React.createElement('span',{style:{flex:1,minWidth:200}},
+            aktif
+              ?('🔁 Manuel takas aktif: '+(recW?'H'+recW.weekIdx+' dinlenme':'')+(recW&&loadW?' · ':'')+(loadW?'H'+loadW.weekIdx+' yüklenme':'')+' — sonraki dinlenme haftaları sıklığa göre yerinde.')
+              :('🔁 Dinlenme haftasını yer değiştir: '+(d.yon==='sonrakiniAl'
+                  ?'H'+d.nx.weekIdx+' (gelecek hafta) dinlenmesi bu haftaya (H'+d.cw.weekIdx+') alınır, gelecek hafta yüklenir.'
+                  :'Bu haftanın (H'+d.cw.weekIdx+') dinlenmesi gelecek haftaya (H'+d.nx.weekIdx+') alınır, bu hafta yüklenir.'))),
+          aktif
+            ?React.createElement('button',{className:'btn btn-sm',onClick:()=>handleDinlenmeTakas(true),style:{background:'var(--bg-tertiary)',color:'var(--text-primary)',border:'1px solid var(--border)'}},'↩ Takası geri al')
+            :React.createElement('button',{className:'btn btn-sm',onClick:()=>handleDinlenmeTakas(false),style:{background:'var(--info)',color:'#fff',border:'none'}},'🔁 Takas et')
+        );
+      })(),
       React.createElement('div',{className:'table-wrap'},
         React.createElement('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:12}},
           React.createElement('thead',null,React.createElement('tr',{style:{background:'var(--bg-secondary)'}},
@@ -27279,7 +27462,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     wt.weekStart.toLocaleDateString('tr-TR',{day:'2-digit',month:'short'})
                   ),
                   wt.isRaceWeek&&React.createElement('span',{className:'badge badge-danger',style:{marginLeft:4,fontSize:9}},'🏁 Yarış'),
-                  !wt.isRaceWeek&&wt.isRecovery&&React.createElement('span',{className:'badge badge-info',style:{marginLeft:4,fontSize:9}},wt._recoveryDeferred?'⏩ Dinlenme':'Dinlenme'),
+                  !wt.isRaceWeek&&wt.isRecovery&&React.createElement('span',{className:'badge badge-info',style:{marginLeft:4,fontSize:9},title:wt._manualRecovery?'Manuel takas: dinlenme bu haftaya alındı':undefined},wt._manualRecovery?'🔁 Dinlenme':(wt._recoveryDeferred?'⏩ Dinlenme':'Dinlenme')),
+                  !wt.isRaceWeek&&wt._manualLoad&&React.createElement('span',{className:'badge badge-gray',style:{marginLeft:4,fontSize:9},title:'Manuel takas: bu hafta dinlenme yerine yüklenme haftası yapıldı'},'🔁 Yük'),
                   // Tüm ayarlama sebepleri rozetleri (HRV/sakatlık dahil)
                   (wt._adjustReasons||[]).map((r,ri)=>{
                     const cls=r.type==='backoff'?'badge-info':
@@ -40485,6 +40669,20 @@ function App(){
     const forceSnap=!!newA._forceSnap;
     if(forceSnap){newA={...newA};delete newA._forceSnap;}
     if(oldA){
+      // 2026.10.11 — Dinlenme Haftası Sıklığı değişince TAMAMLANMIŞ haftalar eski sıklıkla kalsın:
+      // eski sıklık, "bu haftanın Pazartesi'sinden ÖNCEKİ haftalar için geçerli" diye kaydedilir
+      // (bkz. resolveSiklikForWeek). Aynı hafta içinde tekrar değiştirilirse ilk kayıt zaten
+      // geçmişi koruduğu için yeni kayıt eklenmez.
+      const _oldSik=oldA.dinlenme_siklik||'3x1', _newSik=newA.dinlenme_siklik||'3x1';
+      if(_oldSik!==_newSik){
+        const _until=localDateStr(getWeekBounds(0).start);
+        const _log=Array.isArray(newA.dinlenme_siklik_gecmis)?newA.dinlenme_siklik_gecmis:(Array.isArray(oldA.dinlenme_siklik_gecmis)?oldA.dinlenme_siklik_gecmis:[]);
+        if(!_log.some(e=>e&&e.until===_until)){
+          newA={...newA,dinlenme_siklik_gecmis:[..._log,{until:_until,siklik:_oldSik}]};
+        } else if(newA.dinlenme_siklik_gecmis!==_log){
+          newA={...newA,dinlenme_siklik_gecmis:_log};
+        }
+      }
       const changes=detectChanges(oldA,newA);
       if(changes.length>0){
         const messages=generateMessages(changes,newA);
