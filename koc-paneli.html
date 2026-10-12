@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.12-1513 --><!DOCTYPE html>
+<!-- Version: v2026.10.12-1532 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -28,7 +28,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.12-1513';
+    var RUNNING='v2026.10.12-1532';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -363,7 +363,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.12-1513';
+const APP_VERSION='v2026.10.12-1532';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -4775,6 +4775,30 @@ function revizeKayitYukle(athId,zorla){
   const p=Promise.all(keys.map(wk=>fbGet('plan_snapshots/'+athId+'/'+wk).catch(()=>null))).then(()=>{}).catch(()=>{});
   _revizeYukleDurum[athId]={t:Date.now(),p};
   return p;
+}
+// 2026.10.12 (Göksel talebi): Geçmiş listesinde "Yapı" metninin sonunda "(revize)" görünsün. Geçmiş HER haftayı
+// gösterdiği için (revizeKayitYukle yalnızca son 8 haftayı okur) bu gün için yalnızca tek bir minik alan okunur:
+// plan_snapshots/{sporcu}/{hafta}/overrideMap/{tarih}/_revizeOnaylandi. Sonuç _REVIZE_KAYIT'a işlenir (seviye motoruyla
+// ortak kaynak); aynı gün oturum boyunca bir kez sorulur. Koç Paneli Geçmiş + Koşu İzlerim Geçmiş aynı bileşeni kullanır.
+const _revizeGunKontrol={};
+function revizeGunuKontrolEt(athId,date){
+  if(!athId||!date) return Promise.resolve();
+  const k=athId+'|'+date;
+  if(_revizeGunKontrol[k]) return _revizeGunKontrol[k];
+  if(_REVIZE_KAYIT[athId]&&_REVIZE_KAYIT[athId][date]) return Promise.resolve();
+  _revizeGunKontrol[k]=_fbGetRaw('plan_snapshots/'+athId+'/'+getWeekKeyForDate(date)+'/overrideMap/'+date+'/_revizeOnaylandi')
+    .then(v=>{ if(v===true) _revizeKayitAyarla(athId,date,true); })
+    .catch(()=>{ delete _revizeGunKontrol[k]; });
+  return _revizeGunKontrol[k];
+}
+function RevizeEtiket({athId,date}){
+  const [v,setV]=React.useState(()=>revizeliAntrenmanMi({date,athleteId:athId}));
+  React.useEffect(()=>{
+    let acik=true;
+    revizeGunuKontrolEt(athId,date).then(()=>{ if(acik) setV(revizeliAntrenmanMi({date,athleteId:athId})); });
+    return ()=>{ acik=false; };
+  },[athId,date]);
+  return v?React.createElement('span',{style:{color:'var(--warn)',fontWeight:700,marginLeft:4}},'(revize)'):null;
 }
 
 // Firebase okuma — auth tamamlanınca okur, yoksa localStorage fallback
@@ -39515,7 +39539,10 @@ function Gecmis({workouts,athletes,races,onDelete,onBulkDelete,onUpdate}){
                     :React.createElement('span',{style:{color:'var(--danger)',fontSize:11},title:'athleteId: '+w.athleteId},'Silinmiş sporcu')
                 ),
                 React.createElement('td',null,w.tur?React.createElement('span',{className:'badge '+turBadge},turLabel):'—'),
-                React.createElement('td',null,_gTxt(_yokusSprintAd(w.yapi_notu))||'—'),
+                React.createElement('td',null,
+                  _gTxt(_yokusSprintAd(w.yapi_notu))||'—',
+                  _gTxt(_yokusSprintAd(w.yapi_notu))&&w.athleteId&&React.createElement(RevizeEtiket,{athId:w.athleteId,date:w.date})
+                ),
                 React.createElement('td',null,w.mesafe?(+w.mesafe).toFixed(2)+' km':'—'),
                 React.createElement('td',null,m.durSec>0?fmtDur(m.durSec):'—'),
                 React.createElement('td',null,
@@ -44281,7 +44308,7 @@ function SporcuPlanView(){
                       React.createElement('div',{style:{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',marginBottom:4}},
                         React.createElement('span',{style:{fontSize:11,fontWeight:700,color:'var(--text-tertiary)'}},_fmtDateH(w.date)),
                         w.tur&&React.createElement('span',{className:'badge '+(turBadgeH[w.tur]||'badge-gray'),style:{fontSize:10}},turLabel),
-                        w.yapi_notu&&React.createElement('span',{style:{fontSize:11,color:'var(--text-secondary)'}},_yokusSprintAd(w.yapi_notu))
+                        w.yapi_notu&&React.createElement('span',{style:{fontSize:11,color:'var(--text-secondary)'}},_yokusSprintAd(w.yapi_notu),athId&&React.createElement(RevizeEtiket,{athId,date:w.date}))
                       ),
                       React.createElement('div',{style:{display:'flex',gap:12,flexWrap:'wrap'}},
                         w.mesafe&&React.createElement('span',{style:{fontSize:12,fontWeight:600}},(+w.mesafe).toFixed(2)+' km'),
