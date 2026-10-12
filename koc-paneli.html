@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.11-1837 --><!DOCTYPE html>
+<!-- Version: v2026.10.12-1424 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -28,7 +28,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.11-1837';
+    var RUNNING='v2026.10.12-1424';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -363,7 +363,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.11-1837';
+const APP_VERSION='v2026.10.12-1424';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -15256,14 +15256,34 @@ function ReceteTablosu({yapilar, zones, measureZones, isYuruyus, tip, savedOverr
   const editableCell=(rowIdx, field, displayVal)=>{
     if(readOnly) return displayVal;
     const isEditing=editCell?.rowIdx===rowIdx&&editCell?.field===field;
+    // KÖK NEDEN DÜZELTMESİ (2026.10.12 — Göksel: "Pazar'daki aynı antrenmanı Pazartesi kurunca TOPLAM
+    // satırında küçük fark çıkıyor", örn. 32:00 → 31:46): hücreye tıklayıp değeri DEĞİŞTİRMEDEN çıkmak
+    // bile onBlur ile updateCell'i çağırıyor ve satıra "elle düzenlendi" kaydı (mesafe + _editedField)
+    // yazıyordu. Süre Odaklı satırda ekranda görünen mesafe YUVARLANMIŞTIR (3728 m → 3700 m); bu
+    // yuvarlanmış değer elle girilmiş sayılınca süre yeniden mesafe × pace'ten türetiliyordu
+    // (3,7 km × 8:35 = 31:46) ve Süre Odaklı rozeti süreyi artık geri yuvarlamıyordu. Düzeltme:
+    // değer değişmediyse hiçbir şey kaydedilmez, sadece düzenleme kutusu kapanır.
+    // KAPSAM: yalnızca antrenman HENÜZ kaydedilmemişken (isWorkoutLogged=false, yani plan kurulurken).
+    // "Ekle"den sonra koçun ekranda görünen (öneri) değerle AYNI sayıyı girmesi geçerli bir GERÇEKLEŞEN
+    // değer girişidir (extractFeedbackSignals yalnızca rowOverrides'ı okur) — o akış eskisi gibi kalır.
+    const _normCellVal=(v)=>{
+      const s=String(v==null?'':v).trim();
+      if(s===''||s==='—') return '0';
+      const n=Number(s);
+      return isFinite(n)?String(n):s;
+    };
+    const _commitCell=(rawVal)=>{
+      if(!isWorkoutLogged&&_normCellVal(rawVal)===_normCellVal(displayVal)){ setEditCell(null); return; }
+      updateCell(rowIdx,field,rawVal);
+    };
     if(isEditing) return React.createElement('input',{
       autoFocus:true,
       type:'number',
       defaultValue:displayVal,
       style:{width:'100%',fontFamily:'monospace',fontSize:11,fontWeight:700,border:'2px solid var(--info)',borderRadius:3,padding:'2px 4px',background:'#ffffff',color:'#000',textAlign:'center'},
-      onBlur:e=>updateCell(rowIdx,field,e.target.value),
+      onBlur:e=>_commitCell(e.target.value),
       onKeyDown:e=>{
-        if(e.key==='Enter') updateCell(rowIdx,field,e.target.value);
+        if(e.key==='Enter') _commitCell(e.target.value);
         if(e.key==='Escape') setEditCell(null);
       }
     });
@@ -24894,7 +24914,39 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         if(rampDeepSearchTokenRef.current!==_rampToken) return;
         const snap=stored||null;
         snapFetchOkRef.current=true;
-        if(snap) setPlanSnap(snap);
+        // KÖK NEDEN DÜZELTMESİ (2026.10.12 — Göksel: "Pazar günü Gelecek Haftayı Göster ile Pazartesi'ye
+        // onay tiki attığım antrenman, Pazartesi gelince Koç Paneli'nde görünmedi; yerine kolay koşu çıktı"):
+        // Gelecek hafta için atanan/onaylanan günler, atandıkları anda GEÇEN haftanın snapshot'ında
+        // (yeni haftanın TARİHİYLE) durur. Hafta dönünce yeni haftanın snapshot'ı henüz yoktur; bu günleri
+        // yeni haftaya devreden haftaSnapshotMirasi Koşu İzlerim ve Bugün sekmesinde zaten kullanılıyordu,
+        // ama Koç Paneli'nin Plan sekmesi yalnızca kendi haftasının snapshot'ına bakıyordu — snapshot
+        // (lastSavedAt+overrideMap) yoksa "Snapshot yok: taze üret" dalına düşüp onaylı günü hiç görmeden
+        // taze (onaysız) öneriyi gösteriyordu. Panel paritesi: devir burada da AYNI fonksiyonla yapılır.
+        // Devralınan günler yeni haftanın snapshot'ına da yazılır (alt-yol güncellemesi — kardeş alanlara
+        // dokunmaz); böylece snapshot'ı doğrudan okuyan diğer yerler de aynı günü görür. Yeni haftanın
+        // kendi girişi (ör. tik kaldırılmış) her zaman önceliklidir; snapshot üretilmişse (generatedAt) devir yapılmaz.
+        let _devirSnap=null;
+        try{
+          if(!(snap&&snap.generatedAt)&&prev&&prev.overrideMap){
+            const _m=haftaSnapshotMirasi(snap,prev);
+            if(_m.devralinan.length>0){
+              const _devirTs=(snap&&snap.lastSavedAt)||prev.lastSavedAt||new Date().toISOString();
+              _devirSnap={...(snap||{}),overrideMap:_m.overrideMap,lastSavedAt:_devirTs};
+              if(Object.keys(_m.rowOverrides).length) _devirSnap.rowOverrides=_m.rowOverrides;
+              if(Object.keys(_m.manualOverrides).length) _devirSnap.manualOverrides=_m.manualOverrides;
+              const _devirUpd={};
+              _m.devralinan.forEach(ds=>{
+                _devirUpd['overrideMap/'+ds]=_m.overrideMap[ds];
+                if(_m.rowOverrides[ds]) _devirUpd['rowOverrides/'+ds]=_m.rowOverrides[ds];
+                if(_m.manualOverrides[ds]) _devirUpd['manualOverrides/'+ds]=_m.manualOverrides[ds];
+              });
+              if(!(snap&&snap.lastSavedAt)) _devirUpd.lastSavedAt=_devirTs;
+              fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,stripUndefined(_devirUpd)).catch(()=>{});
+            }
+          }
+        }catch(_devirErr){console.warn('Hafta devri hatası:',_devirErr);_devirSnap=null;}
+        if(_devirSnap) setPlanSnap(_devirSnap);
+        else if(snap) setPlanSnap(snap);
         // KÖK NEDEN DÜZELTMESİ (28.09.2026 — "yarış seçimimi hatırlamıyor, Otomatiğe dönüyor"):
         // Hedef yarış + plan modu eskiden SADECE o haftanın snapshot'ına yazılıyordu ve o
         // snapshot yoksa (yeni hafta / henüz plan üretilmemiş) HİÇ kaydedilmiyordu; yeni hafta
