@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.12-1532 --><!DOCTYPE html>
+<!-- Version: v2026.10.12-1614 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -28,7 +28,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.12-1532';
+    var RUNNING='v2026.10.12-1614';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -363,7 +363,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.12-1532';
+const APP_VERSION='v2026.10.12-1614';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -8845,6 +8845,41 @@ function AdCardItem({cardDef,teamName,teamLogo,athletes,override,onSave,allHisto
 }
 
 
+// ── Tanı ↔ Plan kapsam notu (2026.10.12 — Göksel bildirimi, Erhan Kaya) ─────────
+// Tanı'nın "Sadece kolay / Aerobik zorunlu / Aerobik tercih" hükmü BUGÜNÜN gerçek
+// sinyallerine göre verilir; Planı Güncelle (generateTwoWeekPlan) ise ileri günleri o günün
+// PROJEKSİYON ACWR'siyle ve %20 gevşek simüle eşikle (acwrEsikleri isSimulated=true)
+// değerlendirir. İkisi farklı günleri yargıladığı için, bugün kısıtlı olsa da planın
+// Perşembe'si kaliteli olabilir — bu tasarım gereği doğrudur ama satır kapsamı söylemiyordu.
+// Bu fonksiyon Planı Güncelle'nin kullandığı AYNI üreticiyi çalıştırıp (sporcu sayfasındaki
+// hedef yarış/Optimize seçimi ve rotasyon sayacı bilinmediği için seçimsiz, varsayılanla)
+// kapsamı açıkça yazar. Bugün için kısıt aktifken plan bugüne de kaliteli antrenman
+// üretiyorsa bu GERÇEK tutarsızlıktır ve ayrıca işaretlenir.
+function taniPlanKapsamNotu(ath,history,races,athWks,todayStr,sigs){
+  const plan=generateTwoWeekPlan(ath,history,races,athWks,[],false,null,null);
+  const gunler=(plan?.weeks||[]).flatMap(w=>w.days||[]).filter(d=>d&&d.date>=todayStr)
+    .sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
+  if(!gunler.length)return null;
+  const kal=d=>KALITELI_TIPLERI.includes(d.tip);
+  const fmtG=ds=>DAYS_SHORT[new Date(ds+'T12:00:00').getDay()]+' '+ds.slice(8,10)+'.'+ds.slice(5,7);
+  const ad=d=>String(d.yapi_notu||TUR_LABELS[d.tip]||d.tip||'').split(' — ')[0];
+  const bugun=gunler.find(d=>d.date===todayStr);
+  const bugunYapildi=(athWks||[]).some(w=>w.date===todayStr);
+  if(bugun&&kal(bugun)&&!bugunYapildi){
+    return '🔴 Plan tutarsızlığı: bu kısıt bugün için aktif olduğu hâlde Planı Güncelle bugüne "'+ad(bugun)+'" üretiyor.';
+  }
+  const ilk=gunler.find(d=>d.date>todayStr&&kal(d));
+  if(!ilk) return '📅 Bu hüküm bugün içindir; plana göre önümüzdeki günlerde de kaliteli antrenman yok.';
+  const planKaynakli=!!(sigs&&(sigs.planForceEasy||sigs.planPreferLow));
+  if(planKaynakli) return '📅 Plana göre ilk kaliteli gün: '+fmtG(ilk.date)+' ('+ad(ilk)+').';
+  const pa=ilk.simState&&ilk.simState.acwr;
+  let esik=null;
+  try{esik=acwrEsikleri(ilk.phase||'Temel',ath,true).forceEasyEsik;}catch(e){}
+  return '📅 Bu hüküm BUGÜN içindir; Planı Güncelle ileri günleri projeksiyon ACWR\'siyle değerlendirir — ilk kaliteli gün: '
+    +fmtG(ilk.date)+' ('+ad(ilk)+')'
+    +(pa!=null&&esik!=null?' · öngörülen ACWR '+pa+' (simüle eşik '+esik+')':'')+'.';
+}
+
 // ── Tanı Paneli ──────────────────────────────────────────────────────────────
 function TaniPaneliTab({athletes,allHistory,races,workouts}){
   const [rows,setRows]=React.useState([]);
@@ -8954,6 +8989,21 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
             }
             if(sigs.level==='forceLow') sorunlar.push('⚠ Aerobik zorunlu (kaliteli antrenman bloke)'+(sigs.zoneReasons?.length?' — '+sigs.zoneReasons.join(' · '):''));
             if(sigs.level==='preferLow') sorunlar.push((sigs.planPreferLow?'💡 Aerobik tercih (planlı dinlenme haftası)':'💡 Aerobik tercih (hafif zone uyarısı)')+(sigs.zoneReasons?.length?' — '+sigs.zoneReasons.join(' · '):''));
+            // 2026.10.12 — Göksel bildirimi (Erhan Kaya): Tanı "Sadece kolay öneri (ACWR 1.22 > 1.21)" derken
+            // sporcu sayfasında Planı Güncelle Perşembe için Cruise üretmişti. KÖK NEDEN: yukarıdaki hüküm
+            // yalnızca BUGÜNÜN gerçek ACWR'sini yargılıyor; plan üreticisi ise ileri günleri o günün
+            // PROJEKSİYON ACWR'siyle (ve %20 gevşek simüle eşikle — bkz. acwrEsikleri isSimulated)
+            // değerlendiriyor (bugün+yarın kolay, ACWR düşünce kaliteli gün açılır). İki hesap farklı
+            // günleri yargıladığı için çelişiyor GİBİ görünüyordu, ama satır bunu söylemiyordu.
+            // Artık kısıt aktifken plan üreticisinin gerçek çıktısı (Planı Güncelle'nin kullandığı AYNI
+            // generateTwoWeekPlan) okunup kapsam açıkça yazılıyor; bugün için kısıta rağmen kaliteli
+            // antrenman üretilirse bu gerçek tutarsızlık olarak ayrıca işaretleniyor.
+            if(['forceEasy','forceLow','preferLow'].includes(sigs.level)){
+              try{
+                const _kn=taniPlanKapsamNotu(ath,history,races||[],athWks,todayStr,sigs);
+                if(_kn) sorunlar.push(_kn);
+              }catch(_eKn){/* plan okunamazsa satır eklenmez — mevcut hükümler etkilenmez */}
+            }
             // NOT (Temmuz 2026 — Göksel'in kararıyla): "Yarış/Disiplin Uyumsuzluğu"
             // (trail etiketli ama D+ düşük) kontrolü tamamen kaldırıldı. Önce
             // (_canHillSprint&&_raceDp<=300) matematiksel olarak anlamsızdı, sonra
@@ -9023,7 +9073,8 @@ function TaniPaneliTab({athletes,allHistory,races,workouts}){
               mechKardioRatio:mechKardioRatio!==null?round2(mechKardioRatio):null,
               kaliteliYapildi,
               sorunlar,
-              sorunSayisi:sorunlar.length,
+              // 2026.10.12: "📅" kapsam notu bilgi satırıdır (bkz. taniPlanKapsamNotu) — sorun sayısına girmez
+              sorunSayisi:sorunlar.filter(s=>!String(s).startsWith('📅')).length,
             };
           }catch(e){
             return{id:ath.id,ad:(ath.ad||ath.id),hata:e.message,sorunlar:['🔴 Hesap hatası: '+e.message],sorunSayisi:99,sigLevel:'normal',ctl:0,atl:0,tsb:0,acwr:null,band:1,phase:'-',lowPct:null,highPct:null,anaPct:null,sigReasons:'',effDisiplin:'-',isTrail:false,_raceDp:0,_canHillSprint:false,primaryAd:'-',primaryMesafe:0,primaryIsTrail:false,daysToRace:null,antrenmanAmaci:'-',hrv:'-',disiplin:'-',seviye:'-',sakatlık:parseInt(ath.sakatlık)||1,mechAclOvl:false,mechKardioDanger:false,mechKardioWarn:false,mechKardioRatio:null,kaliteliYapildi:false,düşükYükIstisnası:false};
