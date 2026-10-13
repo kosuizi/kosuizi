@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.13-0954 --><!DOCTYPE html>
+<!-- Version: v2026.10.13-1038 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -28,7 +28,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.13-0954';
+    var RUNNING='v2026.10.13-1038';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -392,7 +392,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.13-0954';
+const APP_VERSION='v2026.10.13-1038';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -26042,6 +26042,48 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         const ath2=(planSnap&&planSnap.rotOffset!=null)?{...athlete,_planRotOffset:planSnap.rotOffset}:athlete;
         const fresh=generateTwoWeekPlan(ath2,stable,dayRaces,workouts||[],testPlanlar||[],planMode==='optimize',history[history.length-1],null);
         tablo(fresh&&fresh.weeks&&fresh.weeks.find(w=>w.weekOff===0),'(B) SIFIRDAN üretilen plan (kayıt kullanılmadan)');
+      });
+      // (C) PAZARTESİ SİMÜLASYONU: "bu haftanın ilk günü (Pzt 08:00) plan motoru ne üretirdi?" — saati geçici olarak
+      // Pazartesi 08:00'e sabitler, Pazar'a kadarki antrenman/geçmişle SIFIRDAN plan + revize tahmini üretir.
+      // Yalnızca okur; Date mutlaka finally ile geri yüklenir. Sporcu kartı (koşu günleri vb.) BUGÜNKÜ hâliyle alınır.
+      await step('Pazartesi simülasyonu',async()=>{
+        P('');P('== 6. (C) PAZARTESİ 08:00 SİMÜLASYONU (hafta başında revize ne çıkardı?) ==');
+        const mon=getWeekBounds(0).start;
+        const monStr=localDateStr(mon);
+        const prevEnd=localDateStr(getWeekBounds(-1).end);
+        const fakeMs=new Date(mon.getFullYear(),mon.getMonth(),mon.getDate(),8,0,0).getTime();
+        const wksPre=(workouts||[]).filter(w=>w.date&&w.date<monStr);
+        const histPre=(history||[]).filter(h=>h.date<=prevEnd);
+        const lastPre=histPre[histPre.length-1]||null;
+        P('simüle zaman='+monStr+' 08:00 | antrenman(<Pzt)='+wksPre.filter(w=>w.athleteId===athlete.id).length+' | history son satır='+(lastPre?lastPre.date+' ctl='+n1(lastPre.ctl)+' atl='+n1(lastPre.atl)+' tsb='+n1((lastPre.ctl||0)-(lastPre.atl||0))+' acwr='+n1(lastPre.acwr):'yok'));
+        const RealDate=Date;
+        class FakeDate extends RealDate{
+          constructor(...a){if(a.length===0)super(fakeMs);else super(...a);}
+          static now(){return fakeMs;}
+        }
+        let simPlan=null,simErr=null;
+        try{
+          window.Date=FakeDate;
+          const ath2=(planSnap&&planSnap.rotOffset!=null)?{...athlete,_planRotOffset:planSnap.rotOffset}:athlete;
+          simPlan=generateTwoWeekPlan(ath2,histPre,dayRaces,wksPre,testPlanlar||[],planMode==='optimize',lastPre,null);
+        }catch(e){simErr=e;}
+        finally{window.Date=RealDate;}
+        if(simErr){P('!! simülasyon hatası: '+(simErr.stack||simErr));return;}
+        const wk=simPlan&&simPlan.weeks&&simPlan.weeks.find(w=>w.weekOff===0);
+        if(!wk){P('simüle hafta-0 yok');return;}
+        const zones=calcZones(athlete);
+        const athW=wksPre.filter(w=>w.athleteId===athlete.id);
+        const athRaceIds=(athlete.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
+        const allR=(races||[]).filter(r=>athRaceIds.includes(r.id));
+        const wt0=(effTargets||[]).find(w=>w.isCurrent)||{};
+        const e=estimateWeekKmDp(wk,zones,athW,allR,wt0.targetKm,wt0.targetDp);
+        P('(C) Pzt sabahı plan: TOPLAM tahmin='+n1(e.km)+' km / D+'+n1(e.dp)+' | plan wt.targetKm='+n1(wk.wt&&wk.wt.targetKm)+' wt.rec='+(!!(wk.wt&&wk.wt.isRecovery))+' wt.manLoad='+(!!(wk.wt&&wk.wt._manualLoad))+' → revize kararı: '+(e.km<(wk.wt&&wk.wt.targetKm||0)*0.95?'REVİZE':'revize yok'));
+        (wk.days||[]).forEach((d,i)=>{
+          const b=e.breakdown[i]||{};
+          const s=d._sig;
+          const sg=s?J({lvl:s.level,fe:!!s.forceEasy,fl:!!s.forceLow,pl:!!s.preferLow,pfe:!!s.planForceEasy,ppl:!!s.planPreferLow,acwr:s._acwr,neden:((s.forceEasyNedenler||[]).map(n=>n&&n.metin).filter(Boolean)).concat((s.zoneReasons||[]).slice(0,2)).map(x=>String(x).slice(0,70))}):'—';
+          P('   '+d.date+' tip='+(d.tip||'—')+' sure_dk='+(d.sure_dk==null?'—':d.sure_dk)+' → '+n1(b.km)+' km ['+(b.src||'—')+'] sinyal='+sg);
+        });
       });
       P('');P('— sonu —');
     }catch(e){
