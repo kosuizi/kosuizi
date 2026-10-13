@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.13-1439 --><!DOCTYPE html>
+<!-- Version: v2026.10.13-1452 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -28,7 +28,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.13-1439';
+    var RUNNING='v2026.10.13-1452';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -392,12 +392,19 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.13-1439';
+const APP_VERSION='v2026.10.13-1452';
 // ── GENEL YÜKLEME İZLEYİCİSİ (2026.10.13) — tüm sekmeler için: bekleyen Firebase okumalarını sayar ──
-var _YUK={bekleyen:0,toplam:0,bitenSon:0,dinleyen:new Set(),arka:0,planAcik:false};
+var _YUK={bekleyen:0,toplam:0,bitenSon:0,dinleyen:new Set(),arka:0,planAcik:false,liste:{},sira:0};
 // arka: Yükleme Planı tablosunun ARKA PLAN okumaları (fbGet(...,{arka:true})). Yükleme Planı gizliyken genel göstergeye
 // sayılmaz (okuma yine çalışır); plan açılınca henüz bitmemiş olanlar göstergeye girer. (2026.10.13)
 function _yukBek(){ return _YUK.bekleyen+(_YUK.planAcik?_YUK.arka:0); }
+// fbGet(key,{arka:'daima'}): ekranı o an değiştirmeyen saf arka plan işi (ör. sonraki plan üretimi için kayıt toplama) — HİÇ sayılmaz.
+// Göstergede (tıklanınca) şu an SAYILAN bekleyen okumaların yolları listelenir → hangi istek takıldı görülebilir.
+function _yukBeklenenler(){
+  var o=[];
+  for(var id in _YUK.liste){var e=_YUK.liste[id]; if(e.g==='n'||(e.g==='p'&&_YUK.planAcik)) o.push(String(e.key).replace(/^plan_snapshots\//,'snap/'));}
+  return o;
+}
 function _yukBildir(){ _YUK.dinleyen.forEach(function(f){ try{f();}catch(e){} }); }
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
@@ -4807,7 +4814,7 @@ function revizeKayitYukle(athId,zorla){
   const d=_revizeYukleDurum[athId];
   if(d&&!zorla&&Date.now()-d.t<300000) return d.p;
   const keys=[]; for(let k=0;k>-REVIZE_YUKLE_HAFTA;k--) keys.push(getWeekKey(k));
-  const p=Promise.all(keys.map(wk=>fbGet('plan_snapshots/'+athId+'/'+wk).catch(()=>null))).then(()=>{}).catch(()=>{});
+  const p=Promise.all(keys.map(wk=>fbGet('plan_snapshots/'+athId+'/'+wk,{arka:'daima'}).catch(()=>null))).then(()=>{}).catch(()=>{});
   _revizeYukleDurum[athId]={t:Date.now(),p};
   return p;
 }
@@ -4838,17 +4845,20 @@ function RevizeEtiket({athId,date}){
 
 // Firebase okuma — auth tamamlanınca okur, yoksa localStorage fallback
 async function fbGet(key,opts){
-  const arka=!!(opts&&opts.arka);
-  if(arka)_YUK.arka++;else{_YUK.bekleyen++;_YUK.toplam++;}
+  const _g=opts&&opts.arka;                 // true → Yükleme Planı arka planı · 'daima' → hiç sayılmaz
+  const daima=_g==='daima', arka=_g===true;
+  const _id=++_YUK.sira; _YUK.liste[_id]={key:key,g:daima?'d':(arka?'p':'n')};
+  if(arka)_YUK.arka++;else if(!daima){_YUK.bekleyen++;_YUK.toplam++;}
   _yukBildir();
   try{
     const v=await _fbGetRaw(key);
     try{ _revizeKayitOkundu(key,v); }catch(_e){}
     return v;
   } finally {
-    if(arka)_YUK.arka--;else _YUK.bekleyen--;
+    delete _YUK.liste[_id];
+    if(arka)_YUK.arka--;else if(!daima)_YUK.bekleyen--;
     // Gizli plana ait arka plan okuması ekranda bir şey değiştirmez → "son okuma" zamanını ilerletme
-    if(!arka||_YUK.planAcik)_YUK.bitenSon=Date.now();
+    if(!daima&&(!arka||_YUK.planAcik))_YUK.bitenSon=Date.now();
     _yukBildir();
   }
 }
@@ -4862,11 +4872,12 @@ function YuklemeGostergesi(){
     const t=Date.now();
     const hesap=(t-(YuklemeGostergesi._sonDon||0))<1500;
     const sakin=_yukBek()===0&&_YUK.toplam>0&&(t-_YUK.bitenSon)>1500&&!hesap;
-    return{sakin,bekleyen:_yukBek(),toplam:_YUK.toplam,hesap};
+    return{sakin,bekleyen:_yukBek(),toplam:_YUK.toplam,hesap,liste:_yukBeklenenler().join('\n')};
   };
   const [d,setD]=React.useState(hesapla);
+  const [ac,setAc]=React.useState(false);
   React.useEffect(()=>{
-    const guncelle=()=>setD(prev=>{const n=hesapla();return(prev.sakin===n.sakin&&prev.bekleyen===n.bekleyen&&prev.toplam===n.toplam&&prev.hesap===n.hesap)?prev:n;});
+    const guncelle=()=>setD(prev=>{const n=hesapla();return(prev.sakin===n.sakin&&prev.bekleyen===n.bekleyen&&prev.toplam===n.toplam&&prev.hesap===n.hesap&&prev.liste===n.liste)?prev:n;});
     _YUK.dinleyen.add(guncelle);
     let son=performance.now();
     const id=setInterval(()=>{
@@ -4882,10 +4893,15 @@ function YuklemeGostergesi(){
     React.createElement('style',null,'@keyframes yukKayan{0%{background-position:0 0}100%{background-position:40px 0}}'),
     !d.sakin&&React.createElement('div',{'aria-hidden':true,style:{position:'fixed',top:0,left:0,right:0,height:3,zIndex:99999,
       backgroundImage:'repeating-linear-gradient(45deg,var(--warn) 0 10px,transparent 10px 20px)',backgroundSize:'40px 100%',animation:'yukKayan .8s linear infinite',opacity:0.9}}),
-    React.createElement('span',{'data-testid':'genel-yukleme',
+    React.createElement('span',{style:{position:'relative',display:'inline-block'}},
+    React.createElement('span',{'data-testid':'genel-yukleme',onClick:()=>setAc(v=>!v),
       title:d.sakin?('Tüm veri istekleri tamamlandı ('+d.toplam+' okuma) ve ağır hesaplama sürmüyor — sayfa tam açıldı.'):'Sayfa hâlâ yükleniyor: bekleyen veri istekleri ya da ağır hesaplama var; tablolar/rozetler eksik görünebilir.',
       style:{fontSize:9,fontWeight:600,letterSpacing:'0.3px',padding:'1px 6px',borderRadius:4,whiteSpace:'nowrap',
-        background:'var(--bg-secondary)',color:renk,border:'1px solid '+renk,cursor:'help'}},metin));
+        background:'var(--bg-secondary)',color:renk,border:'1px solid '+renk,cursor:'pointer'}},metin),
+    ac&&React.createElement('div',{'data-testid':'genel-yukleme-detay',onClick:()=>setAc(false),
+      style:{position:'absolute',top:'100%',left:0,marginTop:4,zIndex:100000,minWidth:200,maxWidth:340,padding:'6px 8px',fontSize:10,lineHeight:1.5,
+        background:'var(--bg-secondary)',color:'var(--text-primary)',border:'1px solid var(--border)',borderRadius:6,boxShadow:'0 4px 14px rgba(0,0,0,.35)',whiteSpace:'pre-wrap',wordBreak:'break-all'}},
+      d.liste?('Bekleyen okumalar:\n'+d.liste):(d.hesap?'Bekleyen okuma yok — ağır hesaplama sürüyor.':'Bekleyen okuma yok.'))));
 }
 async function _fbGetRaw(key){
   if(!db&&!initFirebase()){
@@ -6521,7 +6537,7 @@ async function uygulamaGecmisiHesapla(athlete,adaylar,onUpdate){
   for(const w of adaylar){
     try{
       const wk=getWeekKeyForDate(w.date);
-      if(!(wk in snapCache)) snapCache[wk]=await fbGet('plan_snapshots/'+athlete.id+'/'+wk).catch(()=>null);
+      if(!(wk in snapCache)) snapCache[wk]=await fbGet('plan_snapshots/'+athlete.id+'/'+wk,{arka:'daima'}).catch(()=>null);
       const snap=snapCache[wk];
       if(!snap) continue; // snapshot okunamadı/yok → işaret yazma, sonraki oturumda yeniden denenir
       const ozet=uygulamaOzetiHesapla((snap.rowOverrides||{})[w.date],w.date,athlete);
