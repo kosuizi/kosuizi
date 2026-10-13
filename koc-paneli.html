@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.13-1226 --><!DOCTYPE html>
+<!-- Version: v2026.10.13-1439 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -28,7 +28,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.13-1226';
+    var RUNNING='v2026.10.13-1439';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -392,9 +392,12 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.13-1226';
+const APP_VERSION='v2026.10.13-1439';
 // ── GENEL YÜKLEME İZLEYİCİSİ (2026.10.13) — tüm sekmeler için: bekleyen Firebase okumalarını sayar ──
-var _YUK={bekleyen:0,toplam:0,bitenSon:0,dinleyen:new Set()};
+var _YUK={bekleyen:0,toplam:0,bitenSon:0,dinleyen:new Set(),arka:0,planAcik:false};
+// arka: Yükleme Planı tablosunun ARKA PLAN okumaları (fbGet(...,{arka:true})). Yükleme Planı gizliyken genel göstergeye
+// sayılmaz (okuma yine çalışır); plan açılınca henüz bitmemiş olanlar göstergeye girer. (2026.10.13)
+function _yukBek(){ return _YUK.bekleyen+(_YUK.planAcik?_YUK.arka:0); }
 function _yukBildir(){ _YUK.dinleyen.forEach(function(f){ try{f();}catch(e){} }); }
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
@@ -4834,13 +4837,20 @@ function RevizeEtiket({athId,date}){
 }
 
 // Firebase okuma — auth tamamlanınca okur, yoksa localStorage fallback
-async function fbGet(key){
-  _YUK.bekleyen++;_YUK.toplam++;_yukBildir();
+async function fbGet(key,opts){
+  const arka=!!(opts&&opts.arka);
+  if(arka)_YUK.arka++;else{_YUK.bekleyen++;_YUK.toplam++;}
+  _yukBildir();
   try{
     const v=await _fbGetRaw(key);
     try{ _revizeKayitOkundu(key,v); }catch(_e){}
     return v;
-  } finally { _YUK.bekleyen--;_YUK.bitenSon=Date.now();_yukBildir(); }
+  } finally {
+    if(arka)_YUK.arka--;else _YUK.bekleyen--;
+    // Gizli plana ait arka plan okuması ekranda bir şey değiştirmez → "son okuma" zamanını ilerletme
+    if(!arka||_YUK.planAcik)_YUK.bitenSon=Date.now();
+    _yukBildir();
+  }
 }
 
 // Genel yükleme göstergesi: üst çubukta (tüm sekmelerde görünür) + ekranın en üstünde ince hareketli çubuk.
@@ -4851,8 +4861,8 @@ function YuklemeGostergesi(){
   const hesapla=()=>{
     const t=Date.now();
     const hesap=(t-(YuklemeGostergesi._sonDon||0))<1500;
-    const sakin=_YUK.bekleyen===0&&_YUK.toplam>0&&(t-_YUK.bitenSon)>1500&&!hesap;
-    return{sakin,bekleyen:_YUK.bekleyen,toplam:_YUK.toplam,hesap};
+    const sakin=_yukBek()===0&&_YUK.toplam>0&&(t-_YUK.bitenSon)>1500&&!hesap;
+    return{sakin,bekleyen:_yukBek(),toplam:_YUK.toplam,hesap};
   };
   const [d,setD]=React.useState(hesapla);
   React.useEffect(()=>{
@@ -12121,7 +12131,33 @@ function HedefGidisGrafigi(p){
       const idealPeak=fut.reduce((m,r)=>Math.max(m,r.ideal||0),0);
       const rampPeak=fut.reduce((m,r)=>Math.max(m,r.rampa||0),0);
       const fark=Math.round((rampPeak-idealPeak)*10)/10;
+      // ── Faz bantları (2026.10.13): ardışık aynı fazlı haftalar tek şeffaf bant; Zirve biraz daha belirgin ──
+      const FAZ_RENK={'Temel':'#94a3b8','Gelişme':'#3b82f6','Zirve':'#ef4444','Taper':'#ec4899'};
+      const fazRenk=(f)=>FAZ_RENK[f]||'#a3a3a3';
+      const adimX=(W-pl-pr)/Math.max(1,n-1);
+      const bands=[];
+      rows.forEach((r,i)=>{
+        const f=r.w.phase||'';
+        const son=bands[bands.length-1];
+        if(son&&son.faz===f&&son.i1===i-1)son.i1=i;else bands.push({faz:f,i0:i,i1:i});
+      });
+      // Faz bazında "rampa İdeal'e ne kadar yaklaşıyor" özeti (yalnızca kalan haftalar, yarış haftası hariç)
+      const fazOzet=[];
+      bands.forEach(bd=>{
+        if(fazOzet.some(o=>o.faz===bd.faz))return;
+        const rs=rows.filter(r=>r.w.phase===bd.faz&&!r.w.isPast&&!r.w.isRaceWeek&&r.ideal>0&&r.rampa!=null);
+        if(!rs.length)return;
+        const sI=rs.reduce((t,r)=>t+r.ideal,0),sR=rs.reduce((t,r)=>t+r.rampa,0);
+        const worst=rs.reduce((m,r)=>Math.min(m,r.rampa-r.ideal),0);
+        fazOzet.push({faz:bd.faz,pct:Math.round(sR/sI*100),worst:Math.round(worst*10)/10,n:rs.length});
+      });
       const sv=h('svg',{viewBox:'0 0 '+W+' '+H,style:{width:'100%',height:'auto',display:'block'},role:'img','aria-label':'Hedef gidişatı grafiği',onMouseLeave:()=>setHov(null)},
+        bands.map((bd,k)=>{
+          const x0=Math.max(pl,X(bd.i0)-adimX/2),x1=Math.min(W-pr,X(bd.i1)+adimX/2);
+          return h('g',{key:'b'+k},
+            h('rect',{x:x0,y:pt,width:Math.max(0,x1-x0),height:H-pt-pb,fill:fazRenk(bd.faz),opacity:bd.faz==='Zirve'?0.2:0.12}),
+            (x1-x0)>34&&h('text',{x:(x0+x1)/2,y:pt+10,textAnchor:'middle',fontSize:9,fontWeight:bd.faz==='Zirve'?700:500,fill:fazRenk(bd.faz)},bd.faz));
+        }),
         ticks.map(t=>h('g',{key:'t'+t},
           h('line',{x1:pl,x2:W-pr,y1:Y(t),y2:Y(t),stroke:'var(--border)',strokeWidth:0.5}),
           h('text',{x:pl-5,y:Y(t)+3,textAnchor:'end',fontSize:9,fill:'var(--text-tertiary)'},t))),
@@ -12155,6 +12191,14 @@ function HedefGidisGrafigi(p){
         h('div',{style:{display:'flex',gap:12,flexWrap:'wrap',fontSize:11,marginTop:6}},
           ['ideal','ctl','rampa','gercek'].map(k=>h('span',{key:k,style:{display:'inline-flex',alignItems:'center',gap:4}},
             h('span',{style:{display:'inline-block',width:14,height:0,borderTop:'3px '+(k==='ideal'?'dashed':'solid')+' '+RENK[k]}}),AD[k]))),
+        h('div',{style:{display:'flex',gap:10,flexWrap:'wrap',fontSize:11,marginTop:4}},
+          ['Temel','Gelişme','Zirve','Taper'].filter(f=>bands.some(bd=>bd.faz===f)).map(f=>h('span',{key:f,style:{display:'inline-flex',alignItems:'center',gap:4}},
+            h('span',{style:{display:'inline-block',width:12,height:10,borderRadius:2,background:fazRenk(f),opacity:f==='Zirve'?0.5:0.35}}),f))),
+        fazOzet.length>0&&h('div',{style:{display:'flex',gap:6,flexWrap:'wrap',marginTop:6}},
+          fazOzet.map(o=>h('span',{key:o.faz,
+            title:o.faz+': kalan '+o.n+' hafta; rampa hedefleri toplamda İdeal\'in %'+o.pct+'\'i. En büyük haftalık açık: '+o.worst+birim,
+            style:{fontSize:11,padding:'2px 8px',borderRadius:10,border:'1px solid '+fazRenk(o.faz),color:o.pct>=98?'var(--success)':'var(--warn)'}},
+            o.faz+': İdeal\'in %'+o.pct+'\'i'+(o.worst<-0.5?' (en kötü '+o.worst+birim+')':'')))),
         h('div',{style:{fontSize:11,marginTop:6,color:Math.abs(fark)<0.5?'var(--success)':'var(--warn)'}},
           'Kalan haftalarda İdeal zirve '+idealPeak+birim+' · rampayla ulaşılan en yüksek '+rampPeak+birim+
           (Math.abs(fark)<0.5?' — rampa İdeal zirveye ulaşıyor.':' ('+(fark>0?'+':'')+fark+birim+') — rampa İdeal zirveye ulaşamıyor; oranı yükseltmeyi dene.')),
@@ -25298,6 +25342,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
   const [pastWeekEffs,setPastWeekEffs]=useState({}); // geçmiş hafta revize hedefleri (weekEff)
   // 2026.10.13: Yükleme göstergesi — geçmiş hafta hedeflerinin (10 hafta, sırayla) yüklenme ilerlemesi.
   const [pastEffProg,setPastEffProg]=useState({done:0,total:10,finished:false});
+  // Yükleme Planı açık/kapalı bilgisini genel yükleme göstergesine bildir (gizliyken arka plan okumaları sayılmaz)
+  useEffect(()=>{ _YUK.planAcik=!!showLoading; _yukBildir(); return()=>{ _YUK.planAcik=false; _yukBildir(); }; },[showLoading]);
 
 
   // 1. Snapshot yükle — sporcu değişince önce sıfırla
@@ -25449,7 +25495,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         if(rampDeepSearchTokenRef.current!==_rampToken) return;
         const wk=getWeekKey(w);
         try{
-          const snap=await fbGet(`plan_snapshots/${athlete.id}/${wk}`);
+          const snap=await fbGet(`plan_snapshots/${athlete.id}/${wk}`,{arka:true}); // Yükleme Planı verisi: gizliyken genel göstergeye sayılmaz
           if(snap?.frozenTargets) frozen[wk]=snap.frozenTargets;
           // weekEff: o hafta mevcut haftayken kaydedilen revize hedef (effKm/effDp)
           if(snap?.weekEff) effMap[wk]=snap.weekEff;
