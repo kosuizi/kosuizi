@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.13-1038 --><!DOCTYPE html>
+<!-- Version: v2026.10.13-1042 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -28,7 +28,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.13-1038';
+    var RUNNING='v2026.10.13-1042';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -392,7 +392,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.13-1038';
+const APP_VERSION='v2026.10.13-1042';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -26001,13 +26001,16 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         const wa=(weekActuals||[])[(weekTargets||[]).findIndex(w=>w.isCurrent)];
         P('weekActuals(bu hafta)='+J(wa||null));
       });
+      const snaps={};
       await step('Firebase',async()=>{
         P('');P('== 4. FIREBASE plan_snapshots (geçen / bu / gelecek hafta) ==');
         for(const off of [-1,0,1]){
           const k=getWeekKey(off);
           let sn=null;
           try{sn=await fbGet('plan_snapshots/'+athlete.id+'/'+k);}catch(e){P('['+k+'] okunamadı: '+e.message);continue;}
+          snaps[off]=sn;
           if(!sn){P('['+k+' ('+(off===0?'bu':off<0?'geçen':'gelecek')+' hafta)] kayıt YOK');continue;}
+          P('['+k+'] kayıtlı sporcu profili (athleteProfile)='+J(sn.athleteProfile||null));
           P('['+k+' ('+(off===0?'bu':off<0?'geçen':'gelecek')+' hafta)] generatedAt='+(sn.generatedAt||'—')+' lastSavedAt='+(sn.lastSavedAt||'—')+' lastReviewAt='+(sn.lastReviewAt||'—')+
             ' rotOffset='+(sn.rotOffset==null?'—':sn.rotOffset)+' planMode='+(sn.planMode||'—'));
           P('   frozenTargets='+J(sn.frozenTargets||null)+' | weekEff='+J(sn.weekEff||null));
@@ -26047,7 +26050,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       // Pazartesi 08:00'e sabitler, Pazar'a kadarki antrenman/geçmişle SIFIRDAN plan + revize tahmini üretir.
       // Yalnızca okur; Date mutlaka finally ile geri yüklenir. Sporcu kartı (koşu günleri vb.) BUGÜNKÜ hâliyle alınır.
       await step('Pazartesi simülasyonu',async()=>{
-        P('');P('== 6. (C) PAZARTESİ 08:00 SİMÜLASYONU (hafta başında revize ne çıkardı?) ==');
+        P('');P('== 6. PAZARTESİ 08:00 SİMÜLASYONU (hafta başında revize ne çıkardı?) ==');
         const mon=getWeekBounds(0).start;
         const monStr=localDateStr(mon);
         const prevEnd=localDateStr(getWeekBounds(-1).end);
@@ -26056,34 +26059,44 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         const histPre=(history||[]).filter(h=>h.date<=prevEnd);
         const lastPre=histPre[histPre.length-1]||null;
         P('simüle zaman='+monStr+' 08:00 | antrenman(<Pzt)='+wksPre.filter(w=>w.athleteId===athlete.id).length+' | history son satır='+(lastPre?lastPre.date+' ctl='+n1(lastPre.ctl)+' atl='+n1(lastPre.atl)+' tsb='+n1((lastPre.ctl||0)-(lastPre.atl||0))+' acwr='+n1(lastPre.acwr):'yok'));
-        const RealDate=Date;
-        class FakeDate extends RealDate{
-          constructor(...a){if(a.length===0)super(fakeMs);else super(...a);}
-          static now(){return fakeMs;}
-        }
-        let simPlan=null,simErr=null;
-        try{
-          window.Date=FakeDate;
-          const ath2=(planSnap&&planSnap.rotOffset!=null)?{...athlete,_planRotOffset:planSnap.rotOffset}:athlete;
-          simPlan=generateTwoWeekPlan(ath2,histPre,dayRaces,wksPre,testPlanlar||[],planMode==='optimize',lastPre,null);
-        }catch(e){simErr=e;}
-        finally{window.Date=RealDate;}
-        if(simErr){P('!! simülasyon hatası: '+(simErr.stack||simErr));return;}
-        const wk=simPlan&&simPlan.weeks&&simPlan.weeks.find(w=>w.weekOff===0);
-        if(!wk){P('simüle hafta-0 yok');return;}
         const zones=calcZones(athlete);
         const athW=wksPre.filter(w=>w.athleteId===athlete.id);
         const athRaceIds=(athlete.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
         const allR=(races||[]).filter(r=>athRaceIds.includes(r.id));
         const wt0=(effTargets||[]).find(w=>w.isCurrent)||{};
-        const e=estimateWeekKmDp(wk,zones,athW,allR,wt0.targetKm,wt0.targetDp);
-        P('(C) Pzt sabahı plan: TOPLAM tahmin='+n1(e.km)+' km / D+'+n1(e.dp)+' | plan wt.targetKm='+n1(wk.wt&&wk.wt.targetKm)+' wt.rec='+(!!(wk.wt&&wk.wt.isRecovery))+' wt.manLoad='+(!!(wk.wt&&wk.wt._manualLoad))+' → revize kararı: '+(e.km<(wk.wt&&wk.wt.targetKm||0)*0.95?'REVİZE':'revize yok'));
-        (wk.days||[]).forEach((d,i)=>{
-          const b=e.breakdown[i]||{};
-          const s=d._sig;
-          const sg=s?J({lvl:s.level,fe:!!s.forceEasy,fl:!!s.forceLow,pl:!!s.preferLow,pfe:!!s.planForceEasy,ppl:!!s.planPreferLow,acwr:s._acwr,neden:((s.forceEasyNedenler||[]).map(n=>n&&n.metin).filter(Boolean)).concat((s.zoneReasons||[]).slice(0,2)).map(x=>String(x).slice(0,70))}):'—';
-          P('   '+d.date+' tip='+(d.tip||'—')+' sure_dk='+(d.sure_dk==null?'—':d.sure_dk)+' → '+n1(b.km)+' km ['+(b.src||'—')+'] sinyal='+sg);
-        });
+        const sim=(athX,etiket)=>{
+          const RealDate=Date;
+          class FakeDate extends RealDate{
+            constructor(...a){if(a.length===0)super(fakeMs);else super(...a);}
+            static now(){return fakeMs;}
+          }
+          let simPlan=null,simErr=null;
+          try{
+            window.Date=FakeDate;
+            const ath2=(planSnap&&planSnap.rotOffset!=null)?{...athX,_planRotOffset:planSnap.rotOffset}:athX;
+            simPlan=generateTwoWeekPlan(ath2,histPre,dayRaces,wksPre,testPlanlar||[],planMode==='optimize',lastPre,null);
+          }catch(e){simErr=e;}
+          finally{window.Date=RealDate;}
+          if(simErr){P('!! '+etiket+' simülasyon hatası: '+(simErr.stack||simErr));return;}
+          const wk=simPlan&&simPlan.weeks&&simPlan.weeks.find(w=>w.weekOff===0);
+          if(!wk){P(etiket+': simüle hafta-0 yok');return;}
+          const e=estimateWeekKmDp(wk,zones,athW,allR,wt0.targetKm,wt0.targetDp);
+          P(etiket+': TOPLAM tahmin='+n1(e.km)+' km / D+'+n1(e.dp)+' | hedef='+n1(wk.wt&&wk.wt.targetKm)+' → revize kararı: '+(e.km<(wk.wt&&wk.wt.targetKm||0)*0.95?'REVİZE':'revize yok')+' | koşu='+J(athX.kosu_gunleri||[])+' çapraz='+J(athX.capraz_gunleri||[])+' uzun='+J(athX.uzun_gun||null));
+          (wk.days||[]).forEach((d,i)=>{
+            const b=e.breakdown[i]||{};
+            const s=d._sig;
+            const sg=s?J({lvl:s.level,fe:!!s.forceEasy,fl:!!s.forceLow,pl:!!s.preferLow,pfe:!!s.planForceEasy,ppl:!!s.planPreferLow,acwr:s._acwr}):'—';
+            P('   '+d.date+' tip='+(d.tip||'—')+' sure_dk='+(d.sure_dk==null?'—':d.sure_dk)+' → '+n1(b.km)+' km ['+(b.src||'—')+'] '+sg);
+          });
+        };
+        sim(athlete,'(C) bugünkü sporcu kartıyla');
+        // (D) geçen haftanın kaydındaki sporcu profiliyle (koşu/çapraz/uzun gün) — profil hafta içinde değiştiyse fark burada çıkar
+        const pp=snaps[-1]&&snaps[-1].athleteProfile;
+        if(pp){
+          const ayni=J({k:pp.kosu_gunleri||[],c:pp.capraz_gunleri||[],u:pp.uzun_gun||null})===J({k:athlete.kosu_gunleri||[],c:athlete.capraz_gunleri||[],u:athlete.uzun_gun||null});
+          if(ayni)P('(D) geçen haftanın kayıtlı profili bugünküyle AYNI — ayrı simülasyon gerekmedi.');
+          else sim({...athlete,kosu_gunleri:pp.kosu_gunleri||[],capraz_gunleri:pp.capraz_gunleri||[],uzun_gun:pp.uzun_gun!==undefined?pp.uzun_gun:athlete.uzun_gun,disiplin:pp.disiplin||athlete.disiplin},'(D) geçen haftanın KAYITLI profiliyle');
+        } else P('(D) geçen haftanın kaydında athleteProfile yok.');
       });
       P('');P('— sonu —');
     }catch(e){
