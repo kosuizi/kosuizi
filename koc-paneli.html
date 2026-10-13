@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.12-2131 --><!DOCTYPE html>
+<!-- Version: v2026.10.13-0813 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -28,7 +28,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.12-2131';
+    var RUNNING='v2026.10.13-0813';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -315,13 +315,15 @@ async function captureElement(el, bgColor){
   return canvas;
 }
 
-async function shareElement(el, filename, shareText){
+// bgOverride (opsiyonel, 2026.10.13): Koşu İzlerim'in tema seçimi (kiDark) body.dark'tan BAĞIMSIZ olduğu için
+// çağıran taraf, görselin zemin rengini kendisi verebilir. Verilmezse eski davranış (body.dark) aynen sürer.
+async function shareElement(el, filename, shareText, bgOverride){
   if(!el)return;
   await loadHtml2CanvasLib();
   // data-no-export elementlerini geçici gizle
   const noExport=el.querySelectorAll('[data-no-export]');
   noExport.forEach(e=>{e._prevDisplay=e.style.display;e.style.display='none';});
-  const bgColor=document.body.classList.contains('dark')?'#0a1220':'#f0f4f9';
+  const bgColor=bgOverride||(document.body.classList.contains('dark')?'#0a1220':'#f0f4f9');
   let canvas;
   try{ canvas=await captureElement(el, bgColor); }
   finally{ noExport.forEach(e=>{e.style.display=e._prevDisplay||'';}); }
@@ -363,7 +365,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.12-2131';
+const APP_VERSION='v2026.10.13-0813';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -42998,6 +43000,10 @@ function SporcuPlanView(){
   const [weekFilterH,setWeekFilterH]=useState(()=>getWeekKeyForDate(new Date().toISOString().slice(0,10)));
   const [turFilterH,setTurFilterH]=useState('');
   const [expandedRecipeH,setExpandedRecipeH]=useState({});
+  // 2026.10.13 — Göksel talebi: Antrenmanlarım gün kartlarında tamamlanan antrenmanlar için "📤 Paylaş"
+  // (Koç Paneli'ndeki reçete "📤 Paylaş" butonuyla AYNI shareElement/html2canvas yolu).
+  const dayCardRefs=useRef({});
+  const [sharingDay,setSharingDay]=useState(null);
   const [snapCacheH,setSnapCacheH]=useState({});
   const [snapLoadingH,setSnapLoadingH]=useState({});
   // Koşu İzlerim özet kartlarının (📊 Durumum, 🏆 Bu Hafta Liderlik,
@@ -43287,11 +43293,34 @@ function SporcuPlanView(){
     if(!['completed','today_done','today','missed'].includes(info.status)) return null;
     const gonderilen=(gpxGonderilenler||[]).filter(g=>g.tarih===info.date);
     const hepsiIslendi=gonderilen.length>0&&gonderilen.every(g=>g.durum==='islendi');
-    return React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginTop:8}},
+    // data-no-export: paylaşılan antrenman görselinde GPX Yükle satırı çıkmaz
+    return React.createElement('div',{'data-no-export':true,style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginTop:8}},
       React.createElement('button',{type:'button',className:'btn btn-sm',onClick:()=>setGpxYukleDate(info.date)},'📤 GPX Yükle'),
       gonderilen.length>0&&React.createElement('span',{style:{fontSize:11,color:'var(--success)'}},
         '✓ '+gonderilen.length+' dosya gönderildi'+(hepsiIslendi?' · işlendi':' · koçun inceleyecek'))
     );
+  };
+
+  // 2026.10.13 — Göksel talebi: tamamlanan antrenman kartını görsel olarak paylaş/indir.
+  // Koç Paneli'ndeki reçete "📤 Paylaş" ile AYNI yol (shareElement → html2canvas → Web Share / indir).
+  // Kartın şeffaf zemini görselde okunaksız kalmasın diye yakalama süresince geçici zemin + sağ boşluk verilir
+  // (hemen geri alınır); Koşu İzlerim teması body.dark'tan bağımsız olduğundan zemin rengi buradan çözülür.
+  const shareDayCard=async(info,baslik)=>{
+    const el=dayCardRefs.current[info.date];
+    if(!el||sharingDay)return;
+    setSharingDay(info.date);
+    const prev={bg:el.style.background,pr:el.style.paddingRight,br:el.style.borderRadius};
+    try{
+      const bg=(getComputedStyle(el).getPropertyValue('--bg-primary')||'').trim()||(kiDark?'#0f1b2d':'#dce7f5');
+      el.style.background=bg;el.style.paddingRight='12px';el.style.borderRadius='8px';
+      const adSoyad=((athlete?.ad||'')+' '+(athlete?.soyad||'')).trim();
+      await shareElement(el,'antrenman_'+info.date+'.png',baslik+' — '+fmtDate(info.date)+(adSoyad?' — '+adSoyad:''),bg);
+    }catch(e){
+      if(e.name!=='AbortError')alert('Paylaşım hatası: '+e.message);
+    }finally{
+      el.style.background=prev.bg;el.style.paddingRight=prev.pr;el.style.borderRadius=prev.br;
+      setSharingDay(null);
+    }
   };
 
   // Tek bir günü Haftalık Plan stilinde render et
@@ -43596,6 +43625,7 @@ function SporcuPlanView(){
 
     return React.createElement('div',{
       key:info.date+'_'+idx,
+      ref:(node)=>{ if(node) dayCardRefs.current[info.date]=node; },
       style:{
         borderLeft:'3px solid '+borderColor,
         paddingLeft:12,
@@ -43622,7 +43652,16 @@ function SporcuPlanView(){
         // 2026.09.22 — Göksel talebi: ⚖️ Gerçek/Plan yük kıyaslaması — HER antrenman türünde
         // (koşu + koşu dışı) gösterilir.
         fullyDone&&_gpComparison&&gercekPlanKoseRozeti(_gpComparison),
-        fullyDone&&React.createElement('span',{style:{fontSize:18,color:'var(--success)',fontWeight:900,lineHeight:1}},'✔')
+        fullyDone&&React.createElement('span',{style:{fontSize:18,color:'var(--success)',fontWeight:900,lineHeight:1}},'✔'),
+        // 2026.10.13 — Göksel talebi: tamamlanan antrenmanlar için 📤 Paylaş (Koç Paneli'ndeki ile aynı renk/etiket).
+        // data-no-export → butonun kendisi görselde çıkmaz.
+        isCompleted&&React.createElement('button',{
+          type:'button','data-no-export':true,className:'btn btn-sm',
+          disabled:sharingDay===info.date,
+          title:'Antrenmanı görsel olarak paylaş veya indir',
+          style:{background:'var(--info)',color:'#fff',border:'none',marginLeft:'auto'},
+          onClick:()=>shareDayCard(info,title)
+        },sharingDay===info.date?'⏳':'📤 Paylaş')
       ),
       // Başlık satırı: emoji + isim + süre
       React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:8}},
