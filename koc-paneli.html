@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.13-1113 --><!DOCTYPE html>
+<!-- Version: v2026.10.13-1139 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -28,7 +28,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.13-1113';
+    var RUNNING='v2026.10.13-1139';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -392,7 +392,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.13-1113';
+const APP_VERSION='v2026.10.13-1139';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -25108,6 +25108,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
   // değiştirirdi (kök neden buydu).
   const [frozenTargets,setFrozenTargets]=useState({});
   const [pastWeekEffs,setPastWeekEffs]=useState({}); // geçmiş hafta revize hedefleri (weekEff)
+  // 2026.10.13: Yükleme göstergesi — geçmiş hafta hedeflerinin (10 hafta, sırayla) yüklenme ilerlemesi.
+  const [pastEffProg,setPastEffProg]=useState({done:0,total:10,finished:false});
 
 
   // 1. Snapshot yükle — sporcu değişince önce sıfırla
@@ -25120,6 +25122,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     setPlanSnap(null);
     setPrevWeekSnap(null);
     setFrozenTargets({});
+    setPastEffProg({done:0,total:10,finished:false});
     setSnapReady(false);
     snapFetchOkRef.current=false;
     // DÜZELTME: Rampa ayarları (rampModeOn/rampRatePct) sadece SPORCU değiştiğinde
@@ -25263,10 +25266,12 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
           // weekEff: o hafta mevcut haftayken kaydedilen revize hedef (effKm/effDp)
           if(snap?.weekEff) effMap[wk]=snap.weekEff;
         }catch(e){}
+        if(rampDeepSearchTokenRef.current===_rampToken) setPastEffProg({done:w+11,total:10,finished:false});
       }
       if(rampDeepSearchTokenRef.current!==_rampToken) return;
       setFrozenTargets(frozen);
       setPastWeekEffs(effMap);
+      setPastEffProg({done:10,total:10,finished:true});
     })();
   },[athlete?.id,weekKey]);
 
@@ -27644,6 +27649,25 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       })(),
       // ── Takas/Revize Teşhisi butonu (2026.10.13) — yalnızca okur, hiçbir şeyi değiştirmez ──
       React.createElement('div',{style:{marginBottom:8,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}},
+        // ── Sayfa yükleme göstergesi (2026.10.13) — yalnızca bu sekmenin ASENKRON yüklemelerini izler ──
+        (()=>{
+          const okPlan=!!snapReady, okEff=!!pastEffProg.finished, okCalc=!!plan&&(weekTargets||[]).length>0;
+          const tam=okPlan&&okEff&&okCalc;
+          const oran=Math.round(((okPlan?1:0)+(Math.min(pastEffProg.done,10)/10)+(okCalc?1:0))/3*100);
+          const adim=(ad,ok,ek)=>React.createElement('span',{key:ad,style:{whiteSpace:'nowrap',opacity:ok?0.75:1,fontWeight:ok?400:600}},(ok?'✓ ':'⏳ ')+ad+(ek||''));
+          return React.createElement('div',{'data-testid':'yukleme-gostergesi',
+            title:tam?'Plan kaydı, geçmiş hafta hedefleri ve hesaplamalar tamamlandı — tablodaki revize rozetleri tam.':'Sayfa hâlâ yükleniyor: revize rozetleri ve hedefler eksik görünebilir.',
+            style:{flex:'1 1 280px',minWidth:240,padding:'5px 10px',borderRadius:'var(--radius)',fontSize:11,lineHeight:1.4,
+              background:tam?'var(--success-bg)':'var(--warn-bg)',color:tam?'var(--success)':'var(--warn)',
+              borderLeft:'3px solid '+(tam?'var(--success)':'var(--warn)')}},
+            React.createElement('div',{style:{display:'flex',gap:10,flexWrap:'wrap',alignItems:'center'}},
+              React.createElement('strong',null,tam?'✓ Sayfa tam yüklendi':'⏳ Yükleniyor… %'+oran),
+              adim('Plan kaydı',okPlan),
+              adim('Geçmiş hedefler',okEff,okEff?'':' '+Math.min(pastEffProg.done,10)+'/10'),
+              adim('Hesaplama',okCalc)),
+            !tam&&React.createElement('div',{style:{height:3,marginTop:4,borderRadius:2,background:'rgba(128,128,128,0.25)',overflow:'hidden'}},
+              React.createElement('div',{style:{height:'100%',width:oran+'%',background:'var(--warn)',transition:'width .3s'}})));
+        })(),
         React.createElement('button',{className:'btn btn-sm','data-testid':'teshis-btn',disabled:teshisBusy,onClick:handleTeshis,
           title:'Hafta hedefi, takas, revize ve plan kayıtlarını toplar (yalnızca okur). Çıktıyı kopyalayıp Claude\'a iletin.',
           style:{background:'var(--bg-tertiary)',color:'var(--text-primary)',border:'1px solid var(--border)'}},
