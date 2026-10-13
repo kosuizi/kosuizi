@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.13-0933 --><!DOCTYPE html>
+<!-- Version: v2026.10.13-0954 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -28,7 +28,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.13-0933';
+    var RUNNING='v2026.10.13-0954';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -392,7 +392,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.13-0933';
+const APP_VERSION='v2026.10.13-0954';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -25944,6 +25944,112 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       sebep:sebep?((engel(cw)?'H'+cw.weekIdx:'H'+nx.weekIdx)+' için '+sebep):(!biri?'bu hafta ve gelecek hafta aynı tipte (ikisi de dinlenme ya da ikisi de yük)':null),
       yon:nx.isRecovery?'sonrakiniAl':'buHafta'};
   },[athlete,weekTargets]);
+  // ── TAKAS/REVİZE TEŞHİSİ (2026.10.13 — Göksel isteği) ─────────────────────────────────────
+  // YALNIZCA OKUR, hiçbir şey yazmaz/değiştirmez. "Bu hafta 52.6 beklenirken revize 20.1'e düştü"
+  // gibi durumlarda kök nedeni görmek için: takas kayıtları, hafta hedefleri (bayraklarıyla), dondurulmuş
+  // weekEff, Firebase'deki plan kayıtları (geçen/bu/gelecek hafta) ve günlük km tahmin dökümü —
+  // hem KAYITLI plandan (ekrandaki) hem SIFIRDAN üretilen plandan — yan yana, kopyalanabilir metin.
+  const [teshisMetni,setTeshisMetni]=React.useState(null);
+  const [teshisBusy,setTeshisBusy]=React.useState(false);
+  const handleTeshis=async()=>{
+    if(!athlete)return;
+    setTeshisBusy(true);
+    const L=[];const P=(s)=>L.push(s);
+    const J=(o)=>{try{return JSON.stringify(o);}catch(e){return '(serileştirilemedi)';}};
+    const n1=(x)=>(typeof x==='number'&&isFinite(x))?String(Math.round(x*10)/10):(x==null?'—':String(x));
+    const step=async(ad,fn)=>{try{await fn();}catch(e){P('!! '+ad+' hesaplanamadı: '+(e&&e.message?e.message:e));}};
+    try{
+      P('TEŞHİS — Takas/Revize | '+APP_VERSION+' | '+new Date().toString());
+      await step('Genel',async()=>{
+        P('');P('== 1. GENEL ==');
+        P('athleteId='+athlete.id+' | weekKey(bu hafta)='+weekKey+' | planMode='+planMode+' | selectedPrimary='+(selectedPrimary||'—'));
+        P('rampModeOn='+rampModeOn+' | rampRatePct='+rampRatePct+' | rampDpRatePct='+rampDpRatePct+' | snapReady='+snapReady);
+        P('dinlenme_siklik='+(athlete.dinlenme_siklik||'(boş→3x1)')+' | dinlenme_siklik_gecmis='+J(athlete.dinlenme_siklik_gecmis||[]));
+        P('dinlenme_takaslar='+J(athlete.dinlenme_takaslar||[]));
+        P('kosu_gunleri='+J(athlete.kosu_gunleri||[])+' | capraz_gunleri='+J(athlete.capraz_gunleri||[])+' | uzun_gun='+J(athlete.uzun_gun||null));
+        P('frozenTargets(state)='+J(frozenTargets||{}));
+      });
+      await step('weekTargets',async()=>{
+        P('');P('== 2. weekTargets (Yükleme Planı satırları, bu hafta ±2) ==');
+        const ci=(weekTargets||[]).findIndex(w=>w.isCurrent);
+        (weekTargets||[]).forEach((w,i)=>{
+          if(ci>=0&&Math.abs(i-ci)>2)return;
+          P((i===ci?'>> ':'   ')+'H'+w.weekIdx+' '+localDateStr(w.weekStart)+' faz='+w.phase+' rec='+(!!w.isRecovery)+' manRec='+(!!w._manualRecovery)+' manLoad='+(!!w._manualLoad)+
+            ' defer='+(!!w._recoveryDeferred)+' hedefKm='+n1(w.targetKm)+' hamKm='+n1(w._origTargetKm)+' hedefDp='+n1(w.targetDp)+' kmPct='+n1(w._kmPct)+
+            ' backoff='+(w.backoffUygulandı?('%'+w.backoffPct):'—')+' past='+(!!w.isPast)+' gercekKm='+n1(w.actualKm)+' durum='+(w.weekStatus||'—'));
+        });
+        if(planMode==='optimize'&&selectedPrimary){
+          const ei=(effTargets||[]).findIndex(w=>w.isCurrent);
+          const e=ei>=0?effTargets[ei]:null;
+          P('effTargets(bu hafta; Optimize+yarış seçili → revize hesabı bunu kullanır): '+(e?('H'+e.weekIdx+' rec='+(!!e.isRecovery)+' manLoad='+(!!e._manualLoad)+' hedefKm='+n1(e.targetKm)):'yok'));
+        }
+      });
+      await step('Revize',async()=>{
+        P('');P('== 3. REVİZE HEDEF (bu hafta) ==');
+        P('curWeekEffective(canlı)='+J(curWeekEffective));
+        const we=planSnap&&planSnap.weekEff;
+        P('planSnap.weekEff(dondurulmuş)='+J(we||null));
+        P('displayCurWeekEff(ekranda)='+J(displayCurWeekEff));
+        P('takasSigNow='+J(_takasSigNow));
+        try{
+          const ci=(effTargets||[]).findIndex(w=>w.isCurrent);
+          if(ci>=0){
+            const rp=computeRampProjection(effTargets,rampModeOn,rampRatePct,null,null,rampDpRatePct);
+            P('rampa girişi(bu hafta)='+J(rp[localDateStr(effTargets[ci].weekStart)]||null));
+          }
+        }catch(e){P('rampa girişi okunamadı: '+e.message);}
+        const wa=(weekActuals||[])[(weekTargets||[]).findIndex(w=>w.isCurrent)];
+        P('weekActuals(bu hafta)='+J(wa||null));
+      });
+      await step('Firebase',async()=>{
+        P('');P('== 4. FIREBASE plan_snapshots (geçen / bu / gelecek hafta) ==');
+        for(const off of [-1,0,1]){
+          const k=getWeekKey(off);
+          let sn=null;
+          try{sn=await fbGet('plan_snapshots/'+athlete.id+'/'+k);}catch(e){P('['+k+'] okunamadı: '+e.message);continue;}
+          if(!sn){P('['+k+' ('+(off===0?'bu':off<0?'geçen':'gelecek')+' hafta)] kayıt YOK');continue;}
+          P('['+k+' ('+(off===0?'bu':off<0?'geçen':'gelecek')+' hafta)] generatedAt='+(sn.generatedAt||'—')+' lastSavedAt='+(sn.lastSavedAt||'—')+' lastReviewAt='+(sn.lastReviewAt||'—')+
+            ' rotOffset='+(sn.rotOffset==null?'—':sn.rotOffset)+' planMode='+(sn.planMode||'—'));
+          P('   frozenTargets='+J(sn.frozenTargets||null)+' | weekEff='+J(sn.weekEff||null));
+          const om=sn.overrideMap||{};
+          Object.keys(om).sort().forEach(ds=>{
+            const o=om[ds]||{};
+            P('   '+ds+' tip='+(o.tip||'—')+' sure_dk='+(o.sure_dk==null?'—':o.sure_dk)+' onay='+(o.approved?'✓':'—')+' baslik='+String(o.baslik||'').slice(0,40));
+          });
+        }
+      });
+      await step('Günlük döküm',async()=>{
+        const zones=calcZones(athlete);
+        const athW=(workouts||[]).filter(w=>w.athleteId===athlete.id);
+        const athRaceIds=(athlete.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
+        const allR=(races||[]).filter(r=>athRaceIds.includes(r.id));
+        const wt0=(effTargets||[]).find(w=>w.isCurrent)||{};
+        const tablo=(wk,etiket)=>{
+          if(!wk){P(etiket+': hafta-0 plan yok');return;}
+          const e=estimateWeekKmDp(wk,zones,athW,allR,wt0.targetKm,wt0.targetDp);
+          P(etiket+': TOPLAM tahmin='+n1(e.km)+' km / D+'+n1(e.dp)+' | plan wt.targetKm='+n1(wk.wt&&wk.wt.targetKm)+' wt.rec='+(!!(wk.wt&&wk.wt.isRecovery))+' wt.manLoad='+(!!(wk.wt&&wk.wt._manualLoad)));
+          (wk.days||[]).forEach((d,i)=>{
+            const b=e.breakdown[i]||{};
+            P('   '+d.date+' tip='+(d.tip||'—')+' sure_dk='+(d.sure_dk==null?'—':d.sure_dk)+' past='+(!!d.isPast)+' onay='+(d.approved?'✓':'—')+' → '+n1(b.km)+' km ['+(b.src||'—')+']');
+          });
+        };
+        P('');P('== 5. GÜNLÜK KM DÖKÜMÜ — hedef '+n1(wt0.targetKm)+' km ==');
+        const cur=plan&&plan.weeks&&plan.weeks.find(w=>w.weekOff===0);
+        tablo(cur,'(A) EKRANDAKİ/KAYITLI plan (revize bunu toplar)');
+        // SIFIRDAN üret: kayıtlı snapshot'ı hiç kullanmadan — farklı çıkarsa kök neden bayat kayıttır
+        const prevEnd=localDateStr(getWeekBounds(-1).end);
+        const stable=(history||[]).filter(h=>h.date<=prevEnd);
+        const ath2=(planSnap&&planSnap.rotOffset!=null)?{...athlete,_planRotOffset:planSnap.rotOffset}:athlete;
+        const fresh=generateTwoWeekPlan(ath2,stable,dayRaces,workouts||[],testPlanlar||[],planMode==='optimize',history[history.length-1],null);
+        tablo(fresh&&fresh.weeks&&fresh.weeks.find(w=>w.weekOff===0),'(B) SIFIRDAN üretilen plan (kayıt kullanılmadan)');
+      });
+      P('');P('— sonu —');
+    }catch(e){
+      P('!! TEŞHİS HATASI: '+(e&&e.stack?e.stack:e));
+    }
+    setTeshisMetni(L.join('\n'));
+    setTeshisBusy(false);
+  };
   const handleDinlenmeTakas=async(geriAl)=>{
     const d=takasDurumu;
     if(!d||!athlete||!onUpdateAthlete)return;
@@ -27466,6 +27572,23 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
           )
         );
       })(),
+      // ── Takas/Revize Teşhisi butonu (2026.10.13) — yalnızca okur, hiçbir şeyi değiştirmez ──
+      React.createElement('div',{style:{marginBottom:8,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}},
+        React.createElement('button',{className:'btn btn-sm','data-testid':'teshis-btn',disabled:teshisBusy,onClick:handleTeshis,
+          title:'Hafta hedefi, takas, revize ve plan kayıtlarını toplar (yalnızca okur). Çıktıyı kopyalayıp Claude\'a iletin.',
+          style:{background:'var(--bg-tertiary)',color:'var(--text-primary)',border:'1px solid var(--border)'}},
+          teshisBusy?'⏳ Toplanıyor…':'🔍 Takas/Revize Teşhisi')),
+      teshisMetni!=null&&React.createElement('div',{'data-testid':'teshis-modal',style:{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',zIndex:10000,display:'flex',alignItems:'center',justifyContent:'center',padding:16},onClick:(e)=>{if(e.target===e.currentTarget)setTeshisMetni(null);}},
+        React.createElement('div',{style:{background:'var(--bg-primary)',color:'var(--text-primary)',border:'1px solid var(--border)',borderRadius:'var(--radius)',padding:14,width:'min(900px,100%)',maxHeight:'90vh',display:'flex',flexDirection:'column',gap:10}},
+          React.createElement('div',{style:{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}},
+            React.createElement('strong',{style:{flex:1,fontSize:14}},'🔍 Takas/Revize Teşhisi'),
+            React.createElement('button',{className:'btn btn-sm',style:{background:'var(--info)',color:'#fff',border:'none'},onClick:async()=>{
+              const ta=document.getElementById('teshis-textarea');
+              try{await navigator.clipboard.writeText(teshisMetni);alert('Kopyalandı.');}
+              catch(e){if(ta){ta.focus();ta.select();try{document.execCommand('copy');alert('Kopyalandı.');}catch(e2){alert('Otomatik kopyalama olmadı — metni seçip elle kopyalayın.');}}}
+            }},'📋 Kopyala'),
+            React.createElement('button',{className:'btn btn-sm',style:{background:'var(--bg-tertiary)',color:'var(--text-primary)',border:'1px solid var(--border)'},onClick:()=>setTeshisMetni(null)},'Kapat')),
+          React.createElement('textarea',{id:'teshis-textarea',readOnly:true,value:teshisMetni,style:{width:'100%',flex:1,minHeight:'50vh',fontFamily:'ui-monospace,Menlo,Consolas,monospace',fontSize:11,lineHeight:1.4,background:'var(--bg-secondary)',color:'var(--text-primary)',border:'1px solid var(--border)',borderRadius:'var(--radius)',padding:8,resize:'vertical'}}))),
       // ── Dinlenme haftası takası (bu hafta ↔ gelecek hafta) — 2026.10.11 ──
       (()=>{
         const d=takasDurumu;
