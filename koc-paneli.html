@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.13-1139 --><!DOCTYPE html>
+<!-- Version: v2026.10.13-1216 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -28,7 +28,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.13-1139';
+    var RUNNING='v2026.10.13-1216';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -392,7 +392,10 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.13-1139';
+const APP_VERSION='v2026.10.13-1216';
+// ── GENEL YÜKLEME İZLEYİCİSİ (2026.10.13) — tüm sekmeler için: bekleyen Firebase okumalarını sayar ──
+var _YUK={bekleyen:0,toplam:0,bitenSon:0,dinleyen:new Set()};
+function _yukBildir(){ _YUK.dinleyen.forEach(function(f){ try{f();}catch(e){} }); }
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -4832,9 +4835,47 @@ function RevizeEtiket({athId,date}){
 
 // Firebase okuma — auth tamamlanınca okur, yoksa localStorage fallback
 async function fbGet(key){
-  const v=await _fbGetRaw(key);
-  try{ _revizeKayitOkundu(key,v); }catch(_e){}
-  return v;
+  _YUK.bekleyen++;_YUK.toplam++;_yukBildir();
+  try{
+    const v=await _fbGetRaw(key);
+    try{ _revizeKayitOkundu(key,v); }catch(_e){}
+    return v;
+  } finally { _YUK.bekleyen--;_YUK.bitenSon=Date.now();_yukBildir(); }
+}
+
+// Genel yükleme göstergesi: üst çubukta (tüm sekmelerde görünür) + ekranın en üstünde ince hareketli çubuk.
+// "Yüklendi" = bekleyen Firebase okuması yok + son okumadan ≥1,5 sn geçti + ana iş parçacığı son 1,5 sn tıkanmadı
+// (ağır hesaplama; zamanlayıcı gecikmesinden anlaşılır). Hesaplama sırasında sayfa donarsa son çizilen hâl
+// (yükleniyor) ekranda kalır — yani yanlış "yüklendi" göstermeye değil, geç "yüklendi" göstermeye eğilimlidir.
+function YuklemeGostergesi(){
+  const hesapla=()=>{
+    const t=Date.now();
+    const hesap=(t-(YuklemeGostergesi._sonDon||0))<1500;
+    const sakin=_YUK.bekleyen===0&&_YUK.toplam>0&&(t-_YUK.bitenSon)>1500&&!hesap;
+    return{sakin,bekleyen:_YUK.bekleyen,toplam:_YUK.toplam,hesap};
+  };
+  const [d,setD]=React.useState(hesapla);
+  React.useEffect(()=>{
+    const guncelle=()=>setD(prev=>{const n=hesapla();return(prev.sakin===n.sakin&&prev.bekleyen===n.bekleyen&&prev.toplam===n.toplam&&prev.hesap===n.hesap)?prev:n;});
+    _YUK.dinleyen.add(guncelle);
+    let son=performance.now();
+    const id=setInterval(()=>{
+      const now=performance.now();
+      if(now-son>700) YuklemeGostergesi._sonDon=Date.now(); // ana iş parçacığı tıkanmıştı → ağır hesaplama
+      son=now;guncelle();
+    },300);
+    return()=>{_YUK.dinleyen.delete(guncelle);clearInterval(id);};
+  },[]);
+  const renk=d.sakin?'var(--success)':'var(--warn)';
+  const metin=d.sakin?'✓ Yüklendi':('⏳ Yükleniyor…'+(d.bekleyen>0?' '+d.bekleyen+' istek':'')+(d.hesap&&d.bekleyen===0?' · hesaplanıyor':''));
+  return React.createElement(React.Fragment,null,
+    React.createElement('style',null,'@keyframes yukKayan{0%{background-position:0 0}100%{background-position:40px 0}}'),
+    !d.sakin&&React.createElement('div',{'aria-hidden':true,style:{position:'fixed',top:0,left:0,right:0,height:3,zIndex:99999,
+      backgroundImage:'repeating-linear-gradient(45deg,var(--warn) 0 10px,transparent 10px 20px)',backgroundSize:'40px 100%',animation:'yukKayan .8s linear infinite',opacity:0.9}}),
+    React.createElement('span',{'data-testid':'genel-yukleme',
+      title:d.sakin?('Tüm veri istekleri tamamlandı ('+d.toplam+' okuma) ve ağır hesaplama sürmüyor — sayfa tam açıldı.'):'Sayfa hâlâ yükleniyor: bekleyen veri istekleri ya da ağır hesaplama var; tablolar/rozetler eksik görünebilir.',
+      style:{fontSize:9,fontWeight:600,letterSpacing:'0.3px',padding:'1px 6px',borderRadius:4,whiteSpace:'nowrap',
+        background:'var(--bg-secondary)',color:renk,border:'1px solid '+renk,cursor:'help'}},metin));
 }
 async function _fbGetRaw(key){
   if(!db&&!initFirebase()){
@@ -11984,6 +12025,149 @@ function ctlBand(ctl){
   if(ctl<60)return 3;
   if(ctl<80)return 4;
   return 5;
+}
+
+// CTL band → eski Hedef çarpanı (band 1→0.75 … 5→1.20). 2026.10.13: tek kaynak.
+// calcWeeklyTargetsCore (HEDEF_CTL_BAND_CARPANI=true iken) ve tablodaki salt-okunur "📊 CTL" satırı bunu kullanır.
+// RAMPA/REVİZE bu çarpanı KULLANMAZ (rampa İdeal Hedef üzerinde çalışır).
+function ctlBandKmCarpani(band){
+  return band<=1?0.75:band===2?0.85:band===3?1.00:band===4?1.10:1.20;
+}
+// CTL hedefinde D+ da aynı çarpanla ölçeklensin mi? (2026.10.13 — YENİ; eski sistemde D+ ölçeklenmezdi.) false → D+ ölçeksiz.
+const CTL_DP_OLCEKLE=true;
+// Geçici bayrak: true iken calcWeeklyTargetsCore Hedef'i ESKİ gibi İdeal × band çarpanı olarak üretir.
+var _CTL_HEDEF_ZORLA=false;
+// Eski (CTL bandına göre ölçekli) haftalık hedefleri BİREBİR üretir — yalnızca görüntü/karşılaştırma içindir;
+// sonuç hiçbir yerde rampaya, revizeye, snapshot'a ya da Firebase'e GİRMEZ. frozenTargets bilinçli olarak boş.
+function calcCtlOlcekliHedefler(athlete,races,workouts,optimizeMode,history){
+  _CTL_HEDEF_ZORLA=true;
+  try{return calcWeeklyTargets(athlete,races,workouts,optimizeMode,history,{});}
+  catch(e){return [];}
+  finally{_CTL_HEDEF_ZORLA=false;}
+}
+
+// ── Hedef Gidişatı grafiği (2026.10.13) — İdeal · CTL · Rampa etkili · Gerçekleşen ──────────────
+// Salt görsel/simülasyon: kaydırıcılar yalnızca ÖNİZLEME yapar; "Uygula" denmedikçe hiçbir ayar değişmez.
+// Rampa çizgisi, Yükleme Planı tablosundakiyle AYNI rampSimulate(weekTargets,…) fonksiyonundan gelir.
+function HedefGidisGrafigi(p){
+  const h=React.createElement;
+  const [acik,setAcik]=React.useState(false);
+  const [metrik,setMetrik]=React.useState('km');
+  const [pOn,setPOn]=React.useState(null);
+  const [pKm,setPKm]=React.useState(null);
+  const [pDp,setPDp]=React.useState(null);
+  const [hov,setHov]=React.useState(null);
+  const onE=pOn==null?p.rampModeOn:pOn;
+  const kmR=pKm==null?p.rampRatePct:pKm;
+  const dpR=pDp==null?p.rampDpRatePct:pDp;
+  const degisti=pOn!=null||pKm!=null||pDp!=null;
+  const isKm=metrik==='km';
+  const rows=React.useMemo(()=>{
+    if(!acik)return null;
+    try{
+      const idealByWk={};
+      (p.idealHesapla?p.idealHesapla():[]).forEach(iw=>{idealByWk[localDateStr(iw.weekStart)]=iw;});
+      const idx=(p.weekTargets||[]).map((w,i)=>({w,a:(p.weekActuals||[])[i]||{km:0,dp:0}}));
+      idx.sort((x,y)=>(x.w.weekIdx||0)-(y.w.weekIdx||0));
+      const ws=idx.map(o=>o.w);
+      let sim=null;
+      try{sim=rampSimulate(ws,onE,kmR,p.curEffKm,p.curEffDp,dpR);}catch(e){}
+      const simMap={};
+      if(sim)sim.entries.forEach(e=>{simMap[localDateStr(e.w.weekStart)]=e;});
+      const ctlMap={};
+      (p.ctlWeekTargets||[]).forEach(c=>{ctlMap[localDateStr(c.weekStart)]=c;});
+      return idx.map(({w,a})=>{
+        const wk=localDateStr(w.weekStart);
+        const id=idealByWk[wk],c=ctlMap[wk],e=simMap[wk];
+        const ideal=id?(isKm?id.targetKm:id.targetDp):(isKm?w.targetKm:w.targetDp);
+        let ctl=null;
+        if(c)ctl=isKm?c.targetKm:((CTL_DP_OLCEKLE&&!c.isRaceWeek)?Math.round(c.targetDp*(p.ctlMult||1)):c.targetDp);
+        let rampa=null;
+        if(!w.isPast)rampa=e?(isKm?e.targetKm:e.targetDp):(isKm?w.targetKm:w.targetDp);
+        const _gv=(w.isPast||w.isCurrent)?(isKm?a.km:a.dp):null;
+        const gercek=(_gv!=null&&_gv>0)?_gv:null; // henüz koşu yoksa (0) çizgi sıfıra dalmasın
+        return{w,ideal,ctl,rampa,gercek};
+      });
+    }catch(e){return [];}
+  },[acik,metrik,p.weekTargets,p.ctlWeekTargets,p.weekActuals,p.rampModeOn,p.rampRatePct,p.rampDpRatePct,p.curEffKm,p.curEffDp,p.ctlMult,onE,kmR,dpR]);
+
+  const RENK={ideal:'#a78bfa',ctl:'#22d3ee',rampa:'var(--success)',gercek:'var(--warn)'};
+  const AD={ideal:'🎯 İdeal',ctl:'📊 CTL',rampa:'📈 Rampa etkili',gercek:'🏃 Gerçekleşen'};
+  const birim=isKm?' km':' m';
+  const segBtn=(on,txt,fn,key)=>h('button',{key,className:'seg-btn '+(on?'on':'off'),'aria-pressed':on,onClick:fn,style:{fontSize:11}},txt);
+  const mkSlider=(label,val,setVal)=>h(React.Fragment,{key:label},
+    h('span',{style:{fontSize:11,color:'var(--text-secondary)'}},label),
+    h('input',{type:'range',min:RAMP_PCT_MIN,max:RAMP_PCT_MAX,step:1,value:val,onChange:e=>setVal(parseInt(e.target.value)),style:{width:90,accentColor:'var(--success)',cursor:'pointer'}}),
+    h('span',{style:{fontSize:12,fontWeight:700,minWidth:30}},'%'+val));
+
+  let govde=null;
+  if(acik){
+    if(!rows||!rows.length){
+      govde=h('div',{style:{fontSize:12,color:'var(--text-tertiary)',padding:8}},'Grafik verisi yok.');
+    } else {
+      const W=720,H=250,pl=40,pr=12,pt=10,pb=24,n=rows.length;
+      const vals=[];
+      rows.forEach(r=>['ideal','ctl','rampa','gercek'].forEach(k=>{const v=r[k];if(v!=null&&isFinite(v))vals.push(v);}));
+      const yMax=Math.max(10,...vals)*1.1;
+      const step=yMax>1500?500:yMax>600?200:yMax>300?100:yMax>150?50:yMax>70?20:10;
+      const X=i=>pl+(n>1?i*(W-pl-pr)/(n-1):(W-pl-pr)/2);
+      const Y=v=>pt+(H-pt-pb)*(1-v/yMax);
+      const yol=(k)=>{let d='',pen=false;rows.forEach((r,i)=>{const v=r[k];if(v==null||!isFinite(v)){pen=false;return;}d+=(pen?'L':'M')+X(i).toFixed(1)+' '+Y(v).toFixed(1)+' ';pen=true;});return d;};
+      const ticks=[];for(let t=0;t<=yMax;t+=step)ticks.push(t);
+      const labEvery=Math.ceil(n/14);
+      const curI=rows.findIndex(r=>r.w.isCurrent);
+      const hr=hov!=null?rows[hov]:null;
+      const fut=rows.filter(r=>!r.w.isPast&&!r.w.isRaceWeek);
+      const idealPeak=fut.reduce((m,r)=>Math.max(m,r.ideal||0),0);
+      const rampPeak=fut.reduce((m,r)=>Math.max(m,r.rampa||0),0);
+      const fark=Math.round((rampPeak-idealPeak)*10)/10;
+      const sv=h('svg',{viewBox:'0 0 '+W+' '+H,style:{width:'100%',height:'auto',display:'block'},role:'img','aria-label':'Hedef gidişatı grafiği',onMouseLeave:()=>setHov(null)},
+        ticks.map(t=>h('g',{key:'t'+t},
+          h('line',{x1:pl,x2:W-pr,y1:Y(t),y2:Y(t),stroke:'var(--border)',strokeWidth:0.5}),
+          h('text',{x:pl-5,y:Y(t)+3,textAnchor:'end',fontSize:9,fill:'var(--text-tertiary)'},t))),
+        rows.map((r,i)=>(i%labEvery===0||i===n-1)?h('text',{key:'x'+i,x:X(i),y:H-8,textAnchor:'middle',fontSize:9,fill:'var(--text-tertiary)'},'H'+r.w.weekIdx):null),
+        curI>=0&&h('line',{x1:X(curI),x2:X(curI),y1:pt,y2:H-pb,stroke:'var(--text-tertiary)',strokeWidth:1,strokeDasharray:'3 3'}),
+        h('path',{d:yol('ideal'),fill:'none',stroke:RENK.ideal,strokeWidth:2,strokeDasharray:'6 4'}),
+        h('path',{d:yol('ctl'),fill:'none',stroke:RENK.ctl,strokeWidth:2}),
+        h('path',{d:yol('rampa'),fill:'none',stroke:RENK.rampa,strokeWidth:2.5}),
+        h('path',{d:yol('gercek'),fill:'none',stroke:RENK.gercek,strokeWidth:1.5,opacity:0.8}),
+        rows.map((r,i)=>r.gercek!=null&&r.gercek>0?h('circle',{key:'g'+i,cx:X(i),cy:Y(r.gercek),r:3,fill:RENK.gercek}):null),
+        hov!=null&&h('line',{x1:X(hov),x2:X(hov),y1:pt,y2:H-pb,stroke:'var(--text-secondary)',strokeWidth:0.8}),
+        rows.map((r,i)=>h('rect',{key:'h'+i,x:X(i)-(W-pl-pr)/Math.max(1,n-1)/2,y:pt,width:(W-pl-pr)/Math.max(1,n-1),height:H-pt-pb,fill:'transparent',onMouseEnter:()=>setHov(i),onClick:()=>setHov(i)})));
+      govde=h('div',null,
+        h('div',{style:{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',marginBottom:8}},
+          segBtn(isKm,'Mesafe',()=>setMetrik('km'),'m1'),
+          segBtn(!isKm,'D+',()=>setMetrik('dp'),'m2'),
+          h('span',{style:{width:10}}),
+          h('span',{style:{fontSize:11,color:'var(--text-secondary)'}},'Rampa:'),
+          segBtn(!onE,'Sabit %10',()=>setPOn(false),'r1'),
+          segBtn(onE,'Dinamik',()=>setPOn(true),'r2'),
+          onE&&mkSlider('Mesafe',kmR,setPKm),
+          onE&&mkSlider('D+',dpR,setPDp)),
+        h('div',{style:{fontSize:11,minHeight:16,marginBottom:4,color:'var(--text-secondary)'}},
+          hr
+            ?('H'+hr.w.weekIdx+' · '+hr.w.phase+(hr.w.isRecovery?' (Dinlenme)':'')+' — '+
+               ['ideal','ctl','rampa','gercek'].filter(k=>hr[k]!=null).map(k=>AD[k]+' '+hr[k]+birim).join(' · '))
+            :'Bir haftanın üstüne gel/dokun: değerler burada görünür.'),
+        sv,
+        h('div',{style:{display:'flex',gap:12,flexWrap:'wrap',fontSize:11,marginTop:6}},
+          ['ideal','ctl','rampa','gercek'].map(k=>h('span',{key:k,style:{display:'inline-flex',alignItems:'center',gap:4}},
+            h('span',{style:{display:'inline-block',width:14,height:0,borderTop:'3px '+(k==='ideal'?'dashed':'solid')+' '+RENK[k]}}),AD[k]))),
+        h('div',{style:{fontSize:11,marginTop:6,color:Math.abs(fark)<0.5?'var(--success)':'var(--warn)'}},
+          'Kalan haftalarda İdeal zirve '+idealPeak+birim+' · rampayla ulaşılan en yüksek '+rampPeak+birim+
+          (Math.abs(fark)<0.5?' — rampa İdeal zirveye ulaşıyor.':' ('+(fark>0?'+':'')+fark+birim+') — rampa İdeal zirveye ulaşamıyor; oranı yükseltmeyi dene.')),
+        h('div',{style:{display:'flex',gap:8,alignItems:'center',marginTop:8,flexWrap:'wrap'}},
+          h('span',{style:{fontSize:10,color:'var(--text-tertiary)'}},
+            degisti?'Önizleme — henüz kaydedilmedi.':'Gösterilen: şu an kayıtlı rampa ayarı ('+(p.rampModeOn?'Dinamik %'+p.rampRatePct+' / D+ %'+p.rampDpRatePct:'Sabit %10')+').'),
+          degisti&&h('button',{className:'btn btn-sm',style:{fontSize:11},onClick:()=>{setPOn(null);setPKm(null);setPDp(null);}},'↺ Kayıtlı ayara dön'),
+          degisti&&h('button',{className:'btn btn-sm btn-primary',style:{fontSize:11},
+            title:'Bu rampa ayarını Yükleme Planı\'na kaydet (sporcunun tablosu ve revize hesabı bu ayarla çalışır)',
+            onClick:()=>{ if(p.onUygula)p.onUygula(onE,kmR,dpR); setPOn(null);setPKm(null);setPDp(null); }},'✔ Bu ayarı uygula')));
+    }
+  }
+  return h('div',{'data-testid':'hedef-gidisi-grafigi',style:{marginBottom:10,padding:'8px 12px',background:'var(--bg-secondary)',borderRadius:'var(--radius)',border:'1px solid var(--border)'}},
+    h('button',{className:'btn btn-sm',style:{fontSize:11,marginBottom:acik?8:0},onClick:()=>setAcik(!acik)},acik?'📉 Hedef Gidişatını Gizle':'📉 Hedef Gidişatı (İdeal · CTL · Rampa)'),
+    govde);
 }
 
 // Blok sayısı — CTL bandı + faz
@@ -19597,8 +19781,10 @@ function calcWeeklyTargetsCore(athlete, races, workouts, primary, history=[], fr
   // Hedef 49.8 km = ×0.75). Artık çarpan SABİT 1.00: ham plan = İdeal eğri; sporcunun mevcut seviyesine göre
   // gerçekçilik rampa tavanıyla (rampSimulate: min(plan, seviye × (1+oran))) sağlanır, hedefi küçülterek DEĞİL.
   // Eski davranışa dönmek için HEDEF_CTL_BAND_CARPANI=true yapılır.
-  const HEDEF_CTL_BAND_CARPANI=false;
-  const bandKmMod=!HEDEF_CTL_BAND_CARPANI?1.00:(currentBand<=1?0.75:currentBand===2?0.85:currentBand===3?1.00:currentBand===4?1.10:1.20);
+  // _CTL_HEDEF_ZORLA: yalnızca calcCtlOlcekliHedefler (grafik / "📊 CTL" satırı) geçici olarak true yapar —
+  // böylece ESKİ band-çarpanlı Hedef, mevcut çekirdek hesabın aynısıyla (taban, taper, yarış haftası dahil) üretilir.
+  const HEDEF_CTL_BAND_CARPANI=false||_CTL_HEDEF_ZORLA;
+  const bandKmMod=!HEDEF_CTL_BAND_CARPANI?1.00:ctlBandKmCarpani(currentBand);
 
   // Geçmiş haftaların gerçekleşme durumunu hesapla — geri çekme/re-base için
   const athWks=(workouts||[]).filter(w=>w.athleteId===athlete.id);
@@ -25588,6 +25774,26 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     return calcWeeklyTargets(athlete,racesOverride,workouts||[],planMode==='optimize',stableHistory,frozenTargets);
   },[athlete,history,races,selectedPrimary,workouts,planMode,frozenTargets]);
 
+  // ESKİ "CTL'ye göre ayrı hedef" (2026.10.13) — yalnızca Yükleme Planı açıkken hesaplanır; SALT GÖRÜNTÜ:
+  // rampa, revize, snapshot ya da Firebase bu değeri KULLANMAZ. Girdi weekTargets ile aynı (stableHistory).
+  const ctlHedef=React.useMemo(()=>{
+    if(!athlete||!showLoading)return{plan:[],mult:1};
+    try{
+      const racesOverride=selectedPrimary
+        ?races.map(r=>({...r,__force:r.id===selectedPrimary}))
+        :races;
+      const prevWeekEndStr=localDateStr(getWeekBounds(-1).end);
+      const stableHistory=(history||[]).filter(h=>h.date<=prevWeekEndStr);
+      const lastH=stableHistory.length?stableHistory[stableHistory.length-1]:null;
+      return{
+        plan:calcCtlOlcekliHedefler(athlete,racesOverride,workouts||[],planMode==='optimize',stableHistory),
+        mult:ctlBandKmCarpani(ctlBand(lastH?.ctl||0)),
+        band:ctlBand(lastH?.ctl||0),
+        ctl:lastH?.ctl||0
+      };
+    }catch(e){return{plan:[],mult:1};}
+  },[athlete,history,races,selectedPrimary,workouts,planMode,showLoading]);
+
   // BU HAFTANIN REVİZE HEDEFİ İÇİN hafta takvimi (28.09.2026 — "Optimize'da hedef seçilen yarıştan bağımsız olmalı"):
   // curWeekEffective (koyu sayı) rampa tabanını (computeRampProjection) tüm hazırlık takviminden hesaplar.
   // Bu takvim SEÇİLİ yarışın hazırlık dönemine dayandığından, Optimize'da bile bu haftanın revize hedefi
@@ -27647,6 +27853,27 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
           )
         );
       })(),
+      // ── Hedef Gidişatı grafiği (2026.10.13): İdeal · CTL · Rampa etkili · Gerçekleşen ──
+      React.createElement(HedefGidisGrafigi,{
+        weekTargets:weekTargets,
+        ctlWeekTargets:ctlHedef.plan,
+        ctlMult:ctlHedef.mult,
+        weekActuals:weekActuals,
+        rampModeOn:rampModeOn,rampRatePct:rampRatePct,rampDpRatePct:rampDpRatePct,
+        curEffKm:displayCurWeekEff?.isRevised?displayCurWeekEff.effKm:null,
+        curEffDp:displayCurWeekEff?.isRevised?displayCurWeekEff.effDp:null,
+        idealHesapla:()=>{
+          const _m={};
+          (weekTargets||[]).forEach(w=>{if(w._manualRecovery)_m[localDateStr(w.weekStart)]='rec';else if(w._manualLoad)_m[localDateStr(w.weekStart)]='load';});
+          return calcIdealWeeklyTargets((dispSel.primary||plan.primary),athlete,_m);
+        },
+        onUygula:(on,km,dp)=>{
+          setRampModeOn(on);setRampRatePct(km);setRampDpRatePct(dp);
+          const u={...(planSnapRef.current||{}),rampModeOn:on,rampRatePct:km,rampDpRatePct:dp,lastSavedAt:new Date().toISOString()};
+          setPlanSnap(u);
+          fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,u).catch(()=>{});
+        }
+      }),
       // ── Takas/Revize Teşhisi butonu (2026.10.13) — yalnızca okur, hiçbir şeyi değiştirmez ──
       React.createElement('div',{style:{marginBottom:8,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}},
         // ── Sayfa yükleme göstergesi (2026.10.13) — yalnızca bu sekmenin ASENKRON yüklemelerini izler ──
@@ -27749,6 +27976,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
               const _idealTargets=calcIdealWeeklyTargets((dispSel.primary||plan.primary),athlete,_idealManual);
               const _idealByWeekKey={};
               _idealTargets.forEach(iw=>{_idealByWeekKey[localDateStr(iw.weekStart)]=iw;});
+              const _ctlByWk={};
+              (ctlHedef.plan||[]).forEach(c=>{_ctlByWk[localDateStr(c.weekStart)]=c;});
 
               // ── Rampa-vs-İdeal Karar Motoru — paylaşılan sinyaller (20.07.2026) ──
               // Hedef, İdeal'i belirgin aştığında (bkz. aşağıdaki _decGapPct eşiği)
@@ -28108,6 +28337,19 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     style:{fontSize:9,fontWeight:400,marginTop:1,whiteSpace:'nowrap',color:'#a78bfa'},
                     title:'İdeal Hazırlık — CTL/gerçekleşen antrenmandan bağımsız, saf yarış formülüne göre hedef ('+wt.phase+(_idealWk.isRecovery?', Dinlenme':'')+')'
                   },'🎯 İdeal: '+_idealWk.targetKm+'km'),
+                  // 2026.10.13 — SALT-OKUNUR bilgi: eski "CTL'ye göre ayrı hedef" (İdeal × band çarpanı).
+                  // Rampa / revize / Hedef BUNU KULLANMAZ; yalnızca "sporcunun şu anki CTL bandına göre
+                  // ölçeklenmiş hedef ne olurdu" referansıdır. Geçmiş, yarış haftası ve çarpan 1.00 iken gösterilmez.
+                  (()=>{
+                    // Eski hesabın BİREBİR çıktısı (ctlHedef.plan = bayrak açık çekirdek hesap) — bkz. calcCtlOlcekliHedefler
+                    const _cw=_ctlByWk[wtWeekKey];
+                    if(wt.isPast||wt.isRaceWeek||!_cw||!(_cw.targetKm>0))return null;
+                    if(Math.abs(_cw.targetKm-(parseFloat(wt.targetKm)||0))<=0.05)return null;
+                    return React.createElement('div',{
+                      style:{fontSize:9,fontWeight:400,marginTop:1,whiteSpace:'nowrap',color:'#22d3ee'},
+                      title:'CTL hedefi (salt-okunur) — eski sistemin hesabı: CTL '+Math.round(ctlHedef.ctl||0)+', band '+ctlHedef.band+', çarpan ×'+ctlHedef.mult.toFixed(2)+'. Rampa ve revize bu değeri KULLANMAZ; İdeal hedef üzerinden çalışır.'
+                    },'📊 CTL: '+_cw.targetKm+'km (×'+ctlHedef.mult.toFixed(2)+')');
+                  })(),
                   _decision&&React.createElement('div',{
                     style:{fontSize:9,fontWeight:600,marginTop:1,whiteSpace:'nowrap',
                       color:_decision.level==='kirmizi'?'var(--danger)':_decision.level==='sari'?'var(--warn)':'var(--success)'},
@@ -28156,7 +28398,18 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   _idealWk&&_idealWk.targetDp>0&&Math.abs(_idealWk.targetDp-(parseFloat(wt.targetDp)||0))>=1&&React.createElement('div',{
                     style:{fontSize:9,fontWeight:400,marginTop:1,whiteSpace:'nowrap',color:'#a78bfa'},
                     title:'İdeal Hazırlık — CTL/gerçekleşen antrenmandan bağımsız, saf yarış formülüne göre hedef ('+wt.phase+(_idealWk.isRecovery?', Dinlenme':'')+')'
-                  },'🎯 İdeal: '+_idealWk.targetDp+'m')
+                  },'🎯 İdeal: '+_idealWk.targetDp+'m'),
+                  // CTL D+ hedefi (YENİ — eski sistemde D+ ölçeklenmezdi; CTL_DP_OLCEKLE=false ile kapanır). Salt-okunur.
+                  (()=>{
+                    const _cw=_ctlByWk[wtWeekKey];
+                    if(!CTL_DP_OLCEKLE||wt.isPast||wt.isRaceWeek||!_cw||!(_cw.targetDp>0))return null;
+                    const _cdp=Math.round(_cw.targetDp*ctlHedef.mult);
+                    if(Math.abs(_cdp-(parseFloat(wt.targetDp)||0))<1)return null;
+                    return React.createElement('div',{
+                      style:{fontSize:9,fontWeight:400,marginTop:1,whiteSpace:'nowrap',color:'#22d3ee'},
+                      title:'CTL hedefi D+ (salt-okunur) — D+ de aynı band çarpanıyla ölçeklendi (×'+ctlHedef.mult.toFixed(2)+'). Rampa ve revize bu değeri KULLANMAZ.'
+                    },'📊 CTL: '+_cdp+'m');
+                  })()
                 ),
                 React.createElement('td',{style:{padding:'6px 8px',fontFamily:'monospace',textAlign:'center',color:act.dp>0?'var(--success)':'var(--text-tertiary)'}},act.dp||'—'),
                 React.createElement('td',{style:{padding:'6px 8px',fontFamily:'monospace',textAlign:'center',color:diffDp>=0?'var(--success)':'var(--danger)'}},
@@ -41858,6 +42111,7 @@ function App(){
             style:{fontSize:9,color:'var(--text-tertiary)',fontWeight:400,letterSpacing:'0.5px',
               background:'var(--bg-secondary)',padding:'1px 5px',borderRadius:4,cursor:'help'}
           },APP_VERSION),
+          React.createElement(YuklemeGostergesi),
           athlete&&React.createElement('span',{
             title:'Sporcunun anketi en son ne zaman doldurduğu',
             style:{fontSize:9,fontWeight:400,letterSpacing:'0.3px',
