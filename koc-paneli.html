@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.13-0836 --><!DOCTYPE html>
+<!-- Version: v2026.10.13-0933 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -28,7 +28,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.13-0836';
+    var RUNNING='v2026.10.13-0933';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -392,7 +392,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.13-0836';
+const APP_VERSION='v2026.10.13-0933';
 // 🔧 (2026.08.16 — Göksel talebi, 2026.08.19'da panelden açılıp kapanabilir
 // bir anahtara dönüştürüldü): Koşu İzlerim'deki (SporcuPlanView) "🏆 Bu Hafta
 // Liderlik" mini widget'ının sporculara gösterilip gösterilmeyeceğini belirler.
@@ -34625,7 +34625,57 @@ const ZAMAN_PENCERE={dusukSa:0.5,ortaSa:1,zirveBitisSa:3.25,uygunYatisaKalanSa:5
 // "Tercih ettiğiniz antrenman saati" (Giriş Anketi) → temsili saat. Tercih varsa zirve penceresi bu saati ORTALAR (pencere uzunluğu korunur,
 // uyanıştan sonraki ilk saatte başlayamaz). Bu saatler tasarım varsayımıdır; tercih ve kronotip yoksa pencere uyanıştan 1–3,25 sa sonradır.
 const ZAMAN_TERCIH_SAAT={'Sabah erken':6,'Sabah':8.5,'Öğle':12.5,'Akşam':18,'Gece':21};
-// Zirve penceresi [bas, bit) — uyanıştan geçen saat cinsinden. Öncelik: tercih → kronotip → varsayılan (1–3,25).
+
+// ── GERÇEK VERİ: sporcunun ALIŞILMIŞ antrenman saati (2026.10.13 — Göksel kararı) ─────────────────────────────────
+// Son 8 haftadaki saati kayıtlı koşuların (yarış + test hariç) uyanıştan geçen saat (dw) cinsinden EN YOĞUN kümesi bulunur
+// (pencere uzunluğu L=2,25 sa genişliğinde; ortalama DEĞİL — sabah+akşam karışıksa ortalama öğleye düşerdi). Küme, koşuların
+// ağırlıklı payının en az %40'ını almıyorsa "dağınık" sayılır ve etkisiz kalır (Saat Düzeni Yorumu'ndaki eşikle aynı).
+// AĞIRLIK (tasarım varsayımı, bilimsel sonuç değil): w = f × wMaks.  f = (koşu sayısı − 6) / (16 − 6) → 0..1 (6 koşuda 0, 16'da tam);
+//   wMaks = 0,50; anketten pencereyi kaydıran bilgi YOKSA (tercih saati boş VE kronotip boş/"ara tip") 0,70.
+//   Pencere merkezi = w × alışkanlık merkezi + (1−w) × anket merkezi. Sınırlar (uyanıştan en erken 1 sa; yatışa 3 sa kala biter) AYNEN geçerli.
+// Son haftalar daha ağır sayılır (yarı ömür 21 gün). Her antrenmanın dw'si KENDİ tarihindeki uyku rutinine göre hesaplanır.
+// NEYİ ETKİLEMEZ: uyku ataleti, yatış öncesi cezası (bedF), akşam düşüş noktası, toparlanma çarpanları — bunlar fizyolojik kuraldır.
+// KAPSAM: yalnızca İLERİYE DÖNÜK kullanımlar (gösterge kadranı + plan günündeki 🕐 çipi). Geçmişi değerlendiren kartlar
+// (Son 8 hafta, Saat Düzeni Yorumu, Karşılaştır) zamanUygulamaSinifi'nı kullanır ve alışkanlıktan ETKİLENMEZ (aksi halde alıştığı saat hep "ideal" çıkar — döngüsellik).
+// Yalnızca koşu sporları sayılır (diğer sporların saati takım/salon programına bağlı olabilir).
+const ZAMAN_ALISKANLIK={gun:56,minKosu:6,tamKosu:16,wMaks:0.5,wMaksAnketsiz:0.7,minPay:0.4,yarilanmaGun:21,spor:['kosu','trail','yol','ultra']};
+function zamanAliskanlik(wks,athlete,bugunStr){
+  const A=ZAMAN_ALISKANLIK, L=ZAMAN_PENCERE.zirveBitisSa-ZAMAN_PENCERE.ortaSa;
+  if(!athlete||!bugunStr) return null;
+  const bugunMs=Date.parse(bugunStr+'T12:00:00Z');
+  const sinir=new Date(bugunMs-A.gun*86400000).toISOString().slice(0,10);
+  const legacyTest=['test_maf','test_cooper','test_5k','test_laktat'];
+  const pts=[];
+  (wks||[]).forEach(w=>{
+    if(!w||!w.date||w.date<sinir||w.date>bugunStr) return;
+    if(w.athleteId&&athlete.id&&w.athleteId!==athlete.id) return;
+    if(w.tur==='yaris'||w.yol_yarisi||w.trail_yarisi||w._isTest||legacyTest.includes(w.tur)) return;
+    if(!A.spor.includes(w.spor||'kosu')) return;
+    const hs=zamanSaatParse(w.time,null);
+    if(hs==null) return;
+    const r=uykuRutiniTarihte(athlete,w.date);
+    const awakeLen=((r.bed-r.wake)%24+24)%24||24;
+    const dw=((hs-r.wake)%24+24)%24;
+    if(dw>=awakeLen) return;                                         // uyku saatine denk gelen kayıt (hatalı giriş olabilir) sayılmaz
+    const yas=Math.max(0,(bugunMs-Date.parse(w.date+'T12:00:00Z'))/86400000);
+    pts.push({dw,wt:Math.pow(0.5,yas/A.yarilanmaGun)});
+  });
+  const n=pts.length;
+  if(n<A.minKosu) return{n,f:0,merkez:null,pay:null,durum:'yetersiz'};
+  const toplam=pts.reduce((s,p)=>s+p.wt,0);
+  let best=null;
+  pts.forEach(p=>{
+    let cw=0,sx=0;
+    pts.forEach(q=>{if(q.dw>=p.dw-1e-9&&q.dw<p.dw+L){cw+=q.wt;sx+=q.wt*q.dw;}});
+    if(!best||cw>best.cw+1e-9) best={cw,merkez:sx/cw};
+  });
+  const pay=best.cw/toplam;
+  if(pay<A.minPay) return{n,f:0,merkez:best.merkez,pay,durum:'dagin'};
+  const f=Math.min(1,Math.max(0,(n-A.minKosu)/(A.tamKosu-A.minKosu)));
+  return{n,f,merkez:best.merkez,pay,durum:f>0?'ok':'yetersiz'};
+}
+// Zirve penceresi [bas, bit) — uyanıştan geçen saat cinsinden. Öncelik: tercih → kronotip → varsayılan (1–3,25);
+// rutin.aliskanlik (zamanAliskanlik) varsa pencere merkezi anket merkezi ile alışkanlık merkezi arasında w oranında kaydırılır.
 function zamanZirvePenceresi(rutin){
   const P=ZAMAN_PENCERE, L=P.zirveBitisSa-P.ortaSa;
   const awakeLen=((rutin.bed-rutin.wake)%24+24)%24||24;
@@ -34634,9 +34684,16 @@ function zamanZirvePenceresi(rutin){
     const dwT=((rutin.tercih-rutin.wake)%24+24)%24;                 // tercih edilen saat, uyanıştan kaç saat sonra
     if(dwT<awakeLen) bas=dwT-L/2;                                   // uyanıklık dışına düşen tercih (ör. uyanıştan önceki saat) yok sayılır
   }
+  const al=rutin.aliskanlik;
+  let w=0;
+  if(al&&al.f>0&&al.merkez!=null){
+    const anketsiz=rutin.tercih==null&&!rutin.kron;                 // anket pencereyi kaydırmıyor → alışkanlık daha ağır
+    w=al.f*(anketsiz?ZAMAN_ALISKANLIK.wMaksAnketsiz:ZAMAN_ALISKANLIK.wMaks);
+    bas=(w*al.merkez+(1-w)*(bas+L/2))-L/2;
+  }
   bas=Math.min(bas,awakeLen-P.ortaYatisaKalanSa-L);                 // pencere yatışa 3 sa kala biter (akşam kuralı: son 3 sa "düşük dinçlik") — "Gece" tercihi en yakın izinli saate çekilir
   bas=Math.max(P.ortaSa,bas);                                       // uyku ataleti: pencere uyanıştan en erken 1 sa sonra başlar
-  return{bas,bit:bas+L};
+  return{bas,bit:bas+L,w};
 }
 // Taban skorları: mevcut eşiklerle (ZAMAN_ESIK) tam sınıfa denk gelir; toparlanma/banner çarpanları (×0,92 vb.) eski davranışı korur
 // (zirve saat → dikkat bandında çoğunlukla uygun saat).
@@ -34677,7 +34734,8 @@ function zamanSinifla(skor){
 // bkz. athleteTZ; calcMergedRecovery/athleteLocalNow ile AYNI ilke).
 // tarih verilmezse: şimdiden itibaren 24 saat; verilirse o yerel günün 00:00–24:00'ı.
 // Dönüş: {slots:[{hs,sinif,skor,yarin,gecmis,t}], bed, wake, varsayilan, bugun}
-function zamanlamaHesapla({athlete,siddet,sureDk,hedefMs,restLvl,nowMs,tarih,genLvl,genBitisMs,genAgir}){
+// wks (isteğe bağlı): sporcunun antrenmanları → verilirse zirve penceresi ALIŞILMIŞ saatle kaydırılır (zamanAliskanlik). Verilmezse yalnızca anket.
+function zamanlamaHesapla({athlete,siddet,sureDk,hedefMs,restLvl,nowMs,tarih,genLvl,genBitisMs,genAgir,wks}){
   const off=tzOffsetMinutes(new Date(nowMs),athleteTZ(athlete));
   const wallNow=nowMs+off*60000;
   const ymd=d=>d.getUTCFullYear()+'-'+String(d.getUTCMonth()+1).padStart(2,'0')+'-'+String(d.getUTCDate()).padStart(2,'0');
@@ -34685,7 +34743,9 @@ function zamanlamaHesapla({athlete,siddet,sureDk,hedefMs,restLvl,nowMs,tarih,gen
   let wallBase;
   if(tarih){const p=tarih.split('-').map(Number);wallBase=Date.UTC(p[0],p[1]-1,p[2],0,0,0);}
   else wallBase=Math.floor(wallNow/3600000)*3600000;
-  const rutin=uykuRutiniTarihte(athlete,tarih||bugun);
+  const rutin0=uykuRutiniTarihte(athlete,tarih||bugun);
+  const al=wks?zamanAliskanlik(wks,athlete,bugun):null;              // alışkanlık HER ZAMAN bugünün 8 haftalık penceresinden (gelecek günler için de)
+  const rutin=al?Object.assign({},rutin0,{aliskanlik:al}):rutin0;
   const dur=Math.max(20,Math.min(240,sureDk||60))/60;               // saat
   const slots=[];
   for(let i=0;i<24;i++){
@@ -34722,7 +34782,7 @@ function zamanlamaHesapla({athlete,siddet,sureDk,hedefMs,restLvl,nowMs,tarih,gen
     }
     slots.push({hs,sinif,skor:Math.round(skor*100)/100,yarin,gecmis,t:tm});
   }
-  return{slots,bed:rutin.bed,wake:rutin.wake,varsayilan:rutin.varsayilan,bugun,rutin};
+  return{slots,bed:rutin.bed,wake:rutin.wake,varsayilan:rutin.varsayilan,bugun,rutin,aliskanlik:al,pencere:zamanZirvePenceresi(rutin)};
 }
 // Genel Toparlanma Değerlendirmesi penceresi: sporcunun yerel gece yarısından itibaren pencereGun gün (danger → tam dinlenme, warn → kademeli).
 // Dikkat bandının saat göstergesine etkisi (zamanlamaHesapla çarpanlarıyla birebir): hafif ×0,85 zor / ×0,92 orta; ağır ×0,60 / ×0,80.
@@ -34781,7 +34841,7 @@ function ZamanGunBilgisi({athlete,workouts,races,dateStr,ov,sporcuModu}){
   const gen=rest.gen||null;
   const gp=genPencere(athlete,gen,nowMs);
   const sureDk=ov.sure_dk>0?ov.sure_dk:60;
-  const z=zamanlamaHesapla({athlete,siddet,sureDk,hedefMs,restLvl,nowMs,tarih:dateStr,genLvl:gp.genLvl,genBitisMs:gp.genBitisMs,genAgir:gp.genAgir});
+  const z=zamanlamaHesapla({athlete,siddet,sureDk,hedefMs,restLvl,nowMs,tarih:dateStr,genLvl:gp.genLvl,genBitisMs:gp.genBitisMs,genAgir:gp.genAgir,wks:athleteWorkoutsOf(workouts,athlete.id)});
   const genIci=gp.genLvl>0&&z.slots[0].t<gp.genBitisMs;      // bu gün Genel Toparlanma penceresinde mi
   const dinlenme=restLvl===3||(genIci&&gp.genLvl===3);
   const uygun=z.slots.filter(s=>!s.gecmis);
@@ -34791,7 +34851,7 @@ function ZamanGunBilgisi({athlete,workouts,races,dateStr,ov,sporcuModu}){
   let metin,renk=null,bg=null,hex=null,ertele=false,baslik='Uyanıştan geçen süre + uyku düzeni'+(dateStr<=yarinStr||genIci?' + toparlanma durumu':'')+' + antrenman şiddetine göre hesaplanır.';
   if(dinlenme){
     // Tam dinlenme önerisi varken "uygun saat" gösterilmez: önce uyarı, saat bilgisi yalnızca "yine de yapılacaksa".
-    const zs=zamanlamaHesapla({athlete,siddet,sureDk,hedefMs:0,restLvl:0,nowMs,tarih:dateStr});
+    const zs=zamanlamaHesapla({athlete,siddet,sureDk,hedefMs:0,restLvl:0,nowMs,tarih:dateStr,wks:athleteWorkoutsOf(workouts,athlete.id)});
     const su=zs.slots.filter(s=>!s.gecmis);
     const sI=zamanAraliklari(su,['ideal']),sV=zamanAraliklari(su,['ideal','verimli']);
     const gunTxt=(!sporcuModu&&gen&&genIci&&gp.genLvl===3&&!gen.belirsiz)?(gen.riskSure+' '):'';
@@ -34814,7 +34874,7 @@ function ZamanGunBilgisi({athlete,workouts,races,dateStr,ov,sporcuModu}){
       // Önerilen saat kalmadı. Sebep toparlanma mı (toparlanma hesaba katılmadan önerilen saat VAR) yoksa yalnızca gün sonu mu?
       let toparlanmaYuzunden=false;
       if(!sporcuModu){
-        const zs=zamanlamaHesapla({athlete,siddet,sureDk,hedefMs:0,restLvl:0,nowMs,tarih:dateStr});
+        const zs=zamanlamaHesapla({athlete,siddet,sureDk,hedefMs:0,restLvl:0,nowMs,tarih:dateStr,wks:athleteWorkoutsOf(workouts,athlete.id)});
         toparlanmaYuzunden=zs.slots.some(s=>!s.gecmis&&ZAMAN_ONERILEN_SINIFLAR.includes(s.sinif));
       }
       if(toparlanmaYuzunden){
@@ -35348,10 +35408,10 @@ function ZamanlamaGostergesi({workouts,athlete,races,history,planSnap,overrideMa
   const gen=rest.gen||null;
   const gp=genPencere(athlete,gen,nowMs);
   const genLvl=gp.genLvl;
-  const z=zamanlamaHesapla({athlete,siddet,sureDk,hedefMs,restLvl:rest.lvlSaatsiz,nowMs,genLvl:gp.genLvl,genBitisMs:gp.genBitisMs,genAgir:gp.genAgir});
+  const z=zamanlamaHesapla({athlete,siddet,sureDk,hedefMs,restLvl:rest.lvlSaatsiz,nowMs,genLvl:gp.genLvl,genBitisMs:gp.genBitisMs,genAgir:gp.genAgir,wks:workouts});
   const dinlenmeOnerisi=rest.lvl===3||genLvl===3;
   // "Yine de yapılacaksa": toparlanma hesaba katılmadan yalnızca biyolojik saat + uyku verimi
-  const zSaf=dinlenmeOnerisi?zamanlamaHesapla({athlete,siddet,sureDk,hedefMs:0,restLvl:0,nowMs}):null;
+  const zSaf=dinlenmeOnerisi?zamanlamaHesapla({athlete,siddet,sureDk,hedefMs:0,restLvl:0,nowMs,wks:workouts}):null;
   const safIdeal=zSaf?zamanAraliklari(zSaf.slots,['ideal']):[];
   const safVerimli=zSaf?zamanAraliklari(zSaf.slots,['ideal','verimli']):[];
   const {slots}=z;
@@ -35448,6 +35508,20 @@ function ZamanlamaGostergesi({workouts,athlete,races,history,planSnap,overrideMa
     ?('ℹ️ Uyku/uyanış saatini Giriş Anketi\'ne girersen gösterge sana göre kişiselleşir (şimdilik '+String(Math.floor(z.bed)).padStart(2,'0')+':00–'+String(Math.floor(z.wake)).padStart(2,'0')+':00 varsayılıyor).')
     :('ℹ️ Sporcunun uyku/uyanış saati Giriş Anketi\'nde yok → varsayılan '+String(Math.floor(z.bed)).padStart(2,'0')+':00–'+String(Math.floor(z.wake)).padStart(2,'0')+':00 kullanıldı.'));
   if(!sporcuModu) zamanSporcuNotlari(athlete).forEach(n=>notlar.push(n));   // kısa uyku / vardiyalı tempo uyarıları — yalnızca koç görünümü
+  // Alışkanlık (gerçek veri) notu — zirve penceresinin alışılmış saate kaydırıldığını açıkça gösterir (bkz. zamanAliskanlik)
+  if(z.aliskanlik&&z.aliskanlik.n>0){
+    const al=z.aliskanlik, hm=dw=>{const h=(((z.wake+dw)%24)+24)%24;return String(Math.floor(h)).padStart(2,'0')+':'+String(Math.round((h%1)*60)%60).padStart(2,'0');};
+    const pw=z.pencere;
+    // Anket ile alışkanlık birbirinden uzaksa (merkezler > pencere uzunluğu) karışım ikisinin de göstermediği bir saate düşer → koça açıkça belirt
+    const pBase=zamanZirvePenceresi(Object.assign({},z.rutin,{aliskanlik:null}));
+    const LPen=ZAMAN_PENCERE.zirveBitisSa-ZAMAN_PENCERE.ortaSa;
+    const uyusmaz=!sporcuModu&&al.durum==='ok'&&pw&&pw.w>0&&Math.abs((pBase.bas+LPen/2)-al.merkez)>LPen;
+    if(al.durum==='ok'&&pw&&pw.w>0) notlar.push(sporcuModu
+      ?('🕐 Son 8 haftada en çok ~'+hm(al.merkez)+' civarında koştun; zirve saat aralığı buna doğru %'+Math.round(pw.w*100)+' oranında kaydırıldı ('+hm(pw.bas)+'–'+hm(pw.bit)+').')
+      :('🕐 Alışkanlık (son 8 hafta, '+al.n+' koşu): en yoğun saat ~'+hm(al.merkez)+' (koşuların %'+Math.round(al.pay*100)+'’i) → zirve penceresi anket değerine %'+Math.round(pw.w*100)+' oranında karıştırıldı: '+hm(pw.bas)+'–'+hm(pw.bit)+'.'+(uyusmaz?' ⚠ Anketin gösterdiği saat ('+hm(pBase.bas)+'–'+hm(pBase.bit)+') ile alışkanlık birbirinden uzak; pencere ikisinin arasında kalıyor — sporcuyla teyit et.':'')));
+    else if(!sporcuModu&&al.durum==='dagin') notlar.push('🕐 Alışkanlık (son 8 hafta, '+al.n+' koşu): saatler dağınık (en yoğun küme %'+Math.round(al.pay*100)+' < %'+Math.round(ZAMAN_ALISKANLIK.minPay*100)+') → zirve penceresi yalnızca ankete göre.');
+    else if(!sporcuModu&&al.durum==='yetersiz') notlar.push('🕐 Alışkanlık: son 8 haftada saati kayıtlı '+al.n+' koşu var (en az '+(ZAMAN_ALISKANLIK.minKosu+1)+' gerekir) → zirve penceresi yalnızca ankete göre.');
+  }
 
   // Öne çıkan uyarı şeridi: tam dinlenme önerisi varken onaylı plan / yeşil saatler tuhaf görünmesin (çelişki açıkça belirtilir)
   let uyariSerit=null;
@@ -35515,7 +35589,7 @@ function ZamanlamaGostergesi({workouts,athlete,races,history,planSnap,overrideMa
     nasilHesaplanir&&React.createElement('details',{style:{marginTop:10}},
       React.createElement('summary',{style:{fontSize:11,color:'var(--text-tertiary)',cursor:'pointer'}},'Nasıl hesaplanır? (bilimsel dayanak)'),
       React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',lineHeight:1.6,marginTop:6}},
-        '• Uyanıştan geçen süre: Zirve saat, uyandıktan 1–3,25 saat sonrasıdır (uyanış 06:00 ise 07:00–09:15). Uygun saat bunu izler ve uykuya 5 saat kalana kadar sürer; uykuya 5–3 saat kala Orta saat, son 3 saatte Düşük dinçlik gelir (kolay antrenman akşam bir sınıf yukarıda sayılır). Bu pencere ve sınırlar bilimsel bir sonuç değil, koçun tecrübesine dayalı bir tasarım kararıdır; dayanıklılıkta sabah–akşam farkı için güvenilir kanıt yoktur, performans zirvesi saatten çok uyanmadan geçen süreyle ve alışılmış antrenman saatiyle ilişkilidir (Facer-Childs & Brandstaetter 2015; Rae ve ark. 2015). Sporcu Giriş Anketi\'nde tercih ettiği antrenman saatini belirtmişse zirve penceresi o saati ortalar (alışılmış saat kanıtı: Rae ve ark. 2015); tercih yoksa kronotip pencereyi kaydırır (akşamcı +1 saat, sabahçı −1 saat, uyanıştan en erken 1 saat sonra). Kısa ortalama uyku ve “çok yoğun / vardiyalı” iş temposu skoru değiştirmez, yalnızca uyarı notu olarak gösterilir.',
+        '• Uyanıştan geçen süre: Zirve saat, uyandıktan 1–3,25 saat sonrasıdır (uyanış 06:00 ise 07:00–09:15). Uygun saat bunu izler ve uykuya 5 saat kalana kadar sürer; uykuya 5–3 saat kala Orta saat, son 3 saatte Düşük dinçlik gelir (kolay antrenman akşam bir sınıf yukarıda sayılır). Bu pencere ve sınırlar bilimsel bir sonuç değil, koçun tecrübesine dayalı bir tasarım kararıdır; dayanıklılıkta sabah–akşam farkı için güvenilir kanıt yoktur, performans zirvesi saatten çok uyanmadan geçen süreyle ve alışılmış antrenman saatiyle ilişkilidir (Facer-Childs & Brandstaetter 2015; Rae ve ark. 2015). Sporcu Giriş Anketi\'nde tercih ettiği antrenman saatini belirtmişse zirve penceresi o saati ortalar (alışılmış saat kanıtı: Rae ve ark. 2015); tercih yoksa kronotip pencereyi kaydırır (akşamcı +1 saat, sabahçı −1 saat, uyanıştan en erken 1 saat sonra). Gerçek veri: son 8 haftada saati kayıtlı koşular (yarış ve testler hariç) yeterliyse sporcunun alışılmış antrenman saati de pencereyi kaydırır — koşuların en az %40’ı aynı ~2 saatlik bandaysa o küme alışkanlık sayılır; etkisi 6 koşuda 0’dan 16 koşuda %50’ye (anket pencereyi kaydırmıyorsa %70’e) kadar artar, son haftalar daha ağırdır. Uyku ataleti, uykudan önceki ceza ve akşam düşüşü alışkanlıktan etkilenmez; geçmişi değerlendiren kartlar (Son 8 hafta, Saat Düzeni Yorumu) bu kaydırmayı kullanmaz (aksi halde alıştığı saat hep “zirve” çıkardı). Ağırlıklar tasarım varsayımıdır. Kısa ortalama uyku ve “çok yoğun / vardiyalı” iş temposu skoru değiştirmez, yalnızca uyarı notu olarak gösterilir.',
         React.createElement('br'),
         '• Uyku: akşam egzersizi genel olarak uykuyu bozmaz (23 çalışmalık meta-analiz, Stutz ve ark. 2019); ancak uykudan <1 saat önce biten yüksek şiddetli egzersizde uykuya dalma ve uyku verimi bozulabilir. Bu yüzden ceza şiddete göre artar.',
         React.createElement('br'),
