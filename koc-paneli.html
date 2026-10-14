@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.14-1333 --><!DOCTYPE html>
+<!-- Version: v2026.10.14-1340 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -28,7 +28,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.14-1333';
+    var RUNNING='v2026.10.14-1340';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -392,7 +392,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.14-1333';
+const APP_VERSION='v2026.10.14-1340';
 // ── GENEL YÜKLEME İZLEYİCİSİ (2026.10.13) — tüm sekmeler için: bekleyen Firebase okumalarını sayar ──
 var _YUK={bekleyen:0,toplam:0,bitenSon:0,dinleyen:new Set(),arka:0,planAcik:false,liste:{},sira:0};
 // arka: Yükleme Planı tablosunun ARKA PLAN okumaları (fbGet(...,{arka:true})). Yükleme Planı gizliyken genel göstergeye
@@ -1625,7 +1625,7 @@ function molaAraliklariIsaretle(history){
       const ctlOnce=history[j-1].ctl||0;
       if(ctlOnce>0){
         const bit=molaDonusBitisIdx(history,e,ctlOnce);
-        for(let i=e;i<bit;i++){out[i].donus=true;out[i].donusGun=i-e+1;}
+        for(let i=e;i<bit;i++){out[i].donus=true;out[i].donusGun=i-e+1;out[i].donusCtlHedef=ctlOnce*MOLA_KORUMA_CTL_ORAN;out[i].donusEmniyetKalan=Math.max(0,MOLA_DONUS_EMNIYET_GUN-(i-e));}
       }
     }
     j=e;
@@ -1678,7 +1678,49 @@ function oturmaNedeni(d,mod){
   if(mod==='mech')return d.mechIsinma?'mech':null;
   return d.yukIsinma?'yuk':null;
 }
+// Turuncu alanın TAHMİNİ bitişi — grafiğin son günü (bugün) turuncuysa. Alan, aktif nedenlerin HEPSİ bitince biter (en geç biten).
+//   yük/mekanik ısınma: kalan gün kesin (YUK_ISINMA_GUN / MECH_ISINMA_GUN − geçen gün)
+//   dönüş: CTL mola öncesi düzeye dönene kadar — son 14 günün ortalama günlük yükü sürerse ln-formülüyle tahmin (τ_kronik=42);
+//          bu yük hedef CTL'nin altındaysa CTL hedefe ulaşmaz → en geç dönüş emniyet sınırı (MOLA_DONUS_EMNIYET_GUN).
+// Dönüş: null (son gün turuncu değil) ya da {kalanGun,tarih,parcalar:[{ad,kalanGun,tarih,tahmin,not}]}
+function oturmaBitis(data,mod){
+  if(!data||!data.length)return null;
+  const son=data[data.length-1];
+  if(!son||son.mola)return null;
+  const baz=son.date;
+  const tarihAl=n=>{const d=new Date(baz+'T12:00:00');d.setDate(d.getDate()+n);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');};
+  const parcalar=[];
+  if(son.donus){
+    const C=son.ctl||0,T=son.donusCtlHedef||0;
+    const L=data.slice(-14).reduce((s,d)=>s+(d.load||0),0)/Math.min(14,data.length);
+    const emn=son.donusEmniyetKalan!=null?son.donusEmniyetKalan:MOLA_DONUS_EMNIYET_GUN;
+    let kalan,not='';
+    if(T>0&&L>T&&C<T){
+      kalan=Math.max(1,Math.ceil(MOLA_CTL_TAU*Math.log((L-C)/(L-T))));
+      if(kalan>emn){kalan=emn;not='emniyet sınırı';}
+      else not='son 14 günün yük temposu sürerse';
+    } else {kalan=emn;not='mevcut yük CTL hedefine yetmiyor, en geç emniyet sınırı';}
+    parcalar.push({ad:'dönüş (CTL mola öncesine dönene kadar)',kalanGun:kalan,tarih:tarihAl(kalan),tahmin:true,not});
+  }
+  if(mod==='mech'){
+    if(son.mechIsinma&&(son.mechGun>0||data.some(d=>d.mech>0))){
+      const k=Math.max(1,MECH_ISINMA_GUN-(son.mechGun||0));
+      parcalar.push({ad:'mekanik referans',kalanGun:k,tarih:tarihAl(k),tahmin:false,not:''});
+    }
+  } else if(son.yukIsinma){
+    const k=Math.max(1,YUK_ISINMA_GUN-(son.yukGun||0));
+    parcalar.push({ad:'kısa yük geçmişi',kalanGun:k,tarih:tarihAl(k),tahmin:false,not:''});
+  }
+  if(!parcalar.length)return null;
+  const en=parcalar.reduce((a,b)=>b.kalanGun>a.kalanGun?b:a);
+  return{kalanGun:en.kalanGun,tarih:en.tarih,tahmin:parcalar.some(x=>x.tahmin),parcalar};
+}
+const MOLA_CTL_TAU=42; // CTL sönüm sabiti (gün) — buildHistory λ_ctl ile aynı (τ=42)
+function oturmaEtiketi(bitis){
+  return bitis?('Veri oturuyor · ~'+fmtShort(bitis.tarih)+' ('+bitis.kalanGun+' gün'+(bitis.tahmin?', tahmini':'')+')'):'Veri oturuyor';
+}
 function oturmaGolgePlugin(data,mod){
+  const bitis=oturmaBitis(data,mod);
   return {
     id:'oturmaGolge',
     beforeDatasetsDraw(chart){
@@ -1695,10 +1737,16 @@ function oturmaGolgePlugin(data,mod){
         if(r>l){
           ctx.fillStyle='rgba(249,115,22,0.16)';
           ctx.fillRect(l,chartArea.top,r-l,chartArea.bottom-chartArea.top);
-          if(r-l>70){
-            ctx.fillStyle='rgba(194,65,12,0.95)';ctx.font='10px sans-serif';
+          // Sürmekte olan (bugüne uzanan) alanın etiketi tahmini bitişi de söyler (2. satır)
+          const surer=e===data.length-1&&bitis;
+          ctx.font='10px sans-serif';
+          const l1='Veri oturuyor';
+          const l2=surer?(bitis.tahmin?'~':'')+fmtShort(bitis.tarih)+' · '+bitis.kalanGun+' gün':null;
+          if(r-l>ctx.measureText(l1).width+12){
+            ctx.fillStyle='rgba(194,65,12,0.95)';
             ctx.textAlign='center';ctx.textBaseline='top';
-            ctx.fillText('Veri oturuyor',(l+r)/2,chartArea.top+3);
+            ctx.fillText(l1,(l+r)/2,chartArea.top+3);
+            if(l2&&r-l>ctx.measureText(l2).width+12)ctx.fillText(l2,(l+r)/2,chartArea.top+15);
           }
         }
         i=e+1;
@@ -1725,6 +1773,7 @@ function molaAciklamaSatiri(data,acwrMi,mod){
   const molaVar=data.some(d=>d.mola);
   const donusVar=acwrMi&&data.some(d=>d.donus);
   const nedenler=new Set(data.map(d=>oturmaNedeni(d,mod)).filter(Boolean));
+  const bitis=oturmaBitis(data,mod);
   if(!molaVar&&!donusVar&&!nedenler.size)return null;
   const parca=[];
   if(molaVar)parca.push(React.createElement('span',{key:'m',style:{display:'inline-flex',alignItems:'center',gap:4}},
@@ -1734,7 +1783,10 @@ function molaAciklamaSatiri(data,acwrMi,mod){
     const ad={donus:'mola sonrası dönüş (CTL mola öncesine dönene kadar)',yuk:'kısa yük geçmişi (<'+YUK_ISINMA_GUN+' gün)',mech:'mekanik referans oluşuyor (<'+MECH_ISINMA_GUN+' gün)'};
     parca.push(React.createElement('span',{key:'o',style:{display:'inline-flex',alignItems:'center',gap:4}},
       React.createElement('span',{style:{display:'inline-block',width:10,height:10,background:'rgba(249,115,22,0.40)',borderRadius:2}}),
-      'veri oturuyor: '+[...nedenler].map(k=>ad[k]).join(' · ')+' — turuncu alan bitince değerler güvenilir'));
+      'veri oturuyor: '+[...nedenler].map(k=>ad[k]).join(' · ')+' — turuncu alan bitince değerler güvenilir'
+      +(bitis?'. '+(bitis.tahmin?'Tahmini bitiş: ':'Bitiş: ')+fmtShort(bitis.tarih)+' ('+bitis.kalanGun+' gün kaldı'
+        +((()=>{const en=bitis.parcalar.find(x=>x.kalanGun===bitis.kalanGun);return en&&en.not?'; '+en.not:'';})())+')'
+        +(bitis.parcalar.length>1?' — '+bitis.parcalar.map(x=>x.ad.split(' (')[0]+' '+fmtShort(x.tarih)+' ('+x.kalanGun+' gün)').join(' · '):''):'')));
   }
   if(donusVar)parca.push(React.createElement('span',{key:'d',style:{display:'inline-flex',alignItems:'center',gap:4}},
     React.createElement('span',{style:{display:'inline-block',width:16,borderTop:'2px dashed rgba(37,99,235,0.55)'}}),
