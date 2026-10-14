@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.14-1303 --><!DOCTYPE html>
+<!-- Version: v2026.10.14-1333 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -28,7 +28,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.14-1303';
+    var RUNNING='v2026.10.14-1333';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -392,7 +392,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.14-1303';
+const APP_VERSION='v2026.10.14-1333';
 // ── GENEL YÜKLEME İZLEYİCİSİ (2026.10.13) — tüm sekmeler için: bekleyen Firebase okumalarını sayar ──
 var _YUK={bekleyen:0,toplam:0,bitenSon:0,dinleyen:new Set(),arka:0,planAcik:false,liste:{},sira:0};
 // arka: Yükleme Planı tablosunun ARKA PLAN okumaları (fbGet(...,{arka:true})). Yükleme Planı gizliyken genel göstergeye
@@ -1665,28 +1665,80 @@ function molaGolgePlugin(data){
     }
   };
 }
-// Tooltip alt satırı — imleç mola/dönüş gününün üzerindeyse durumu söyler.
-function molaTooltipFooter(data){
+// ── Turuncu "veri oturuyor" alanı — 2026.10.14 (Göksel talebi) ─────────────────────────────────
+// Grafik değerlerinin henüz güvenilir olmadığı günler turuncu şeffaf alanla işaretlenir; alan bittiğinde grafik anlamlıdır.
+// MEVCUT tanımlarla birebir tutarlı (yeni eşik YOK):
+//   • yük grafikleri (ATL/CTL, ACWR): kısa yük geçmişi — buildHistory.yukIsinma (yukGun < YUK_ISINMA_GUN) VEYA dönüş dönemi
+//     (molaAraliklariIsaretle.donus: CTL mola öncesi düzeye dönene kadar — molaDonusuDurumu ile AYNI kural)
+//   • mekanik grafik: mekanik referans oluşumu — buildHistory.mechIsinma (mechGun < MECH_ISINMA_GUN) VEYA dönüş dönemi
+// Mola günleri (gri) turuncuya boyanmaz.
+function oturmaNedeni(d,mod){
+  if(!d||d.mola)return null;
+  if(d.donus)return 'donus';
+  if(mod==='mech')return d.mechIsinma?'mech':null;
+  return d.yukIsinma?'yuk':null;
+}
+function oturmaGolgePlugin(data,mod){
+  return {
+    id:'oturmaGolge',
+    beforeDatasetsDraw(chart){
+      const {ctx,chartArea,scales}=chart;const x=scales&&scales.x;
+      if(!x||!chartArea||!data||!data.length)return;
+      const step=data.length>1?(x.getPixelForValue(1)-x.getPixelForValue(0)):(chartArea.right-chartArea.left);
+      ctx.save();
+      let i=0;
+      while(i<data.length){
+        if(!oturmaNedeni(data[i],mod)){i++;continue;}
+        let e=i;while(e+1<data.length&&oturmaNedeni(data[e+1],mod))e++;
+        const l=Math.max(chartArea.left,x.getPixelForValue(i)-step/2);
+        const r=Math.min(chartArea.right,x.getPixelForValue(e)+step/2);
+        if(r>l){
+          ctx.fillStyle='rgba(249,115,22,0.16)';
+          ctx.fillRect(l,chartArea.top,r-l,chartArea.bottom-chartArea.top);
+          if(r-l>70){
+            ctx.fillStyle='rgba(194,65,12,0.95)';ctx.font='10px sans-serif';
+            ctx.textAlign='center';ctx.textBaseline='top';
+            ctx.fillText('Veri oturuyor',(l+r)/2,chartArea.top+3);
+          }
+        }
+        i=e+1;
+      }
+      ctx.restore();
+    }
+  };
+}
+// Tooltip alt satırı — imleç mola / dönüş / veri-oturuyor gününün üzerindeyse durumu söyler.
+function molaTooltipFooter(data,mod){
   return items=>{
     const d=data[items&&items[0]?items[0].dataIndex:-1];
     if(!d)return '';
     if(d.mola)return 'Mola günü ('+d.molaGun+' gün antrenmansız aralık)';
-    if(d.donus)return 'Dönüşün '+d.donusGun+'. günü — ACWR bilgi amaçlı (CTL mola öncesine dönene kadar)';
+    const n=oturmaNedeni(d,mod);
+    if(n==='donus')return 'Dönüşün '+d.donusGun+'. günü — değerler oturuyor (CTL mola öncesine dönene kadar'+(mod==='acwr'?'; ACWR bilgi amaçlı':'')+')';
+    if(n==='mech')return 'Mekanik referans oluşuyor ('+(d.mechGun||0)+'/'+MECH_ISINMA_GUN+'. gün) — değerler oturuyor';
+    if(n==='yuk')return 'Kısa yük geçmişi ('+(d.yukGun||0)+'/'+YUK_ISINMA_GUN+'. gün) — değerler oturuyor';
     return '';
   };
 }
-// Grafik altı açıklama satırı — yalnızca grafikte mola/dönüş varsa görünür.
-function molaAciklamaSatiri(data,acwrMi){
+// Grafik altı açıklama satırı — yalnızca grafikte mola / dönüş / veri-oturuyor günü varsa görünür.
+function molaAciklamaSatiri(data,acwrMi,mod){
   const molaVar=data.some(d=>d.mola);
   const donusVar=acwrMi&&data.some(d=>d.donus);
-  if(!molaVar&&!donusVar)return null;
+  const nedenler=new Set(data.map(d=>oturmaNedeni(d,mod)).filter(Boolean));
+  if(!molaVar&&!donusVar&&!nedenler.size)return null;
   const parca=[];
   if(molaVar)parca.push(React.createElement('span',{key:'m',style:{display:'inline-flex',alignItems:'center',gap:4}},
     React.createElement('span',{style:{display:'inline-block',width:10,height:10,background:'rgba(148,163,184,0.45)',borderRadius:2}}),
     MOLA_ESIK_GUN+'+ gün antrenmansız mola'));
+  if(nedenler.size){
+    const ad={donus:'mola sonrası dönüş (CTL mola öncesine dönene kadar)',yuk:'kısa yük geçmişi (<'+YUK_ISINMA_GUN+' gün)',mech:'mekanik referans oluşuyor (<'+MECH_ISINMA_GUN+' gün)'};
+    parca.push(React.createElement('span',{key:'o',style:{display:'inline-flex',alignItems:'center',gap:4}},
+      React.createElement('span',{style:{display:'inline-block',width:10,height:10,background:'rgba(249,115,22,0.40)',borderRadius:2}}),
+      'veri oturuyor: '+[...nedenler].map(k=>ad[k]).join(' · ')+' — turuncu alan bitince değerler güvenilir'));
+  }
   if(donusVar)parca.push(React.createElement('span',{key:'d',style:{display:'inline-flex',alignItems:'center',gap:4}},
     React.createElement('span',{style:{display:'inline-block',width:16,borderTop:'2px dashed rgba(37,99,235,0.55)'}}),
-    'dönüş dönemi — CTL mola öncesine dönene kadar (ACWR bilgi amaçlı)'));
+    'kesikli ACWR çizgisi: dönüş dönemi (ACWR bilgi amaçlı)'));
   return React.createElement('div',{style:{display:'flex',flexWrap:'wrap',gap:12,fontSize:10,color:'var(--text-tertiary)',marginTop:4}},parca);
 }
 
@@ -31206,7 +31258,7 @@ function ChartATLCTL({history}){
     const atlBandTop=data.map(d=>(d.acwr!=null&&d.ctl>0)?round1(d.ctl*(acwrFazBand(d.phase).peak+0.15)):null);
     inst.current=new Chart(ref.current,{
       type:'bar',
-      plugins:[molaGolgePlugin(data)],
+      plugins:[oturmaGolgePlugin(data,'yuk'),molaGolgePlugin(data)],
       data:{
         labels,
         datasets:[
@@ -31224,7 +31276,7 @@ function ChartATLCTL({history}){
           callbacks:{
             label:ctx=>ctx.dataset.label+': '+(ctx.raw!=null?ctx.raw.toFixed(1):'—'),
             afterLabel:ctx=>(ctx.dataset.label==='ATL'&&atlBandBot[ctx.dataIndex]!=null)?'İdeal ATL: '+atlBandBot[ctx.dataIndex]+'–'+atlBandTop[ctx.dataIndex]:'',
-            footer:molaTooltipFooter(data)
+            footer:molaTooltipFooter(data,'yuk')
           }}},
         scales:{
           x:{ticks:{color:tickColor,font:{size:10},maxTicksLimit:8},grid:{color:gridColor},border:{display:false}},
@@ -31239,7 +31291,7 @@ function ChartATLCTL({history}){
   },[history]);
   return React.createElement(React.Fragment,null,
     React.createElement('div',{style:{position:'relative',height:210}},React.createElement('canvas',{ref})),
-    molaAciklamaSatiri(history.slice(-90),false));
+    molaAciklamaSatiri(history.slice(-90),false,'yuk'));
 }
 
 function ChartACWR({history}){
@@ -31263,7 +31315,7 @@ function ChartACWR({history}){
     const riskLine=data.map(d=>{const b=acwrFazBand(d.phase);return b.highZero;});
     inst.current=new Chart(ref.current,{
       type:'line',
-      plugins:[molaGolgePlugin(data)],
+      plugins:[oturmaGolgePlugin(data,'acwr'),molaGolgePlugin(data)],
       data:{labels,datasets:[
         // Alt sınır (fill: +1 → bir sonraki datasete kadar doldur)
         {label:'_bandBot',data:bandBot,borderColor:'transparent',borderWidth:0,pointRadius:0,
@@ -31293,7 +31345,7 @@ function ChartACWR({history}){
             callbacks:{
               label:ctx=>'ACWR: '+(ctx.raw!=null?ctx.raw.toFixed(2):'—'),
               afterLabel:ctx=>{const d=data[ctx.dataIndex];return d?.phase?'Faz: '+d.phase+' (ideal '+bandBot[ctx.dataIndex]+'–'+bandTop[ctx.dataIndex]+')':'';},
-              footer:molaTooltipFooter(data)
+              footer:molaTooltipFooter(data,'acwr')
             }
           },
         },
@@ -31309,7 +31361,7 @@ function ChartACWR({history}){
     React.createElement('div',{style:{position:'relative',height:170}},
       React.createElement('canvas',{ref})
     ),
-    molaAciklamaSatiri(history.slice(-90),true));
+    molaAciklamaSatiri(history.slice(-90),true,'acwr'));
 }
 
 function ChartMech({history}){
@@ -31322,7 +31374,7 @@ function ChartMech({history}){
     if(inst.current)inst.current.destroy();
     inst.current=new Chart(ref.current,{
       type:'bar',
-      plugins:[molaGolgePlugin(history)],
+      plugins:[oturmaGolgePlugin(history,'mech'),molaGolgePlugin(history)],
       data:{
         labels:history.map(d=>fmtShort(d.date)),
         datasets:[
@@ -31333,7 +31385,7 @@ function ChartMech({history}){
       },
       options:{
         responsive:true,maintainAspectRatio:false,
-        plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+(ctx.raw!=null?ctx.raw.toFixed(1):'—'),footer:molaTooltipFooter(history)}}},
+        plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+(ctx.raw!=null?ctx.raw.toFixed(1):'—'),footer:molaTooltipFooter(history,'mech')}}},
         scales:{
           x:{ticks:{color:tickColor,font:{size:10},maxTicksLimit:8},grid:{color:gridColor},border:{display:false}},
           y:{ticks:{color:tickColor,font:{size:10}},grid:{color:gridColor},border:{display:false}}
@@ -31344,7 +31396,7 @@ function ChartMech({history}){
   },[history]);
   return React.createElement(React.Fragment,null,
     React.createElement('div',{style:{position:'relative',height:180}},React.createElement('canvas',{ref})),
-    molaAciklamaSatiri(history,false));
+    molaAciklamaSatiri(history,false,'mech'));
 }
 
 const PHASE_COLORS={Temel:'badge-gray',Gelişme:'badge-info',Zirve:'badge-warn',Taper:'badge-danger','Yarış Sonrası':'badge-gray'};
