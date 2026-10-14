@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.14-2103 --><!DOCTYPE html>
+<!-- Version: v2026.10.14-2127 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -28,7 +28,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.14-2103';
+    var RUNNING='v2026.10.14-2127';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -392,7 +392,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.14-2103';
+const APP_VERSION='v2026.10.14-2127';
 // ── GENEL YÜKLEME İZLEYİCİSİ (2026.10.13) — tüm sekmeler için: bekleyen Firebase okumalarını sayar ──
 var _YUK={bekleyen:0,toplam:0,bitenSon:0,dinleyen:new Set(),arka:0,planAcik:false,liste:{},sira:0};
 // arka: Yükleme Planı tablosunun ARKA PLAN okumaları (fbGet(...,{arka:true})). Yükleme Planı gizliyken genel göstergeye
@@ -9685,6 +9685,7 @@ function SporcularTab({athletes,races,athHistory,allHistory,workouts,onAdd,onUpd
   };
   const [expandHist,setExpandHist]=useState({});
   const [expandCard,setExpandCard]=useState({});
+  const [raporId,setRaporId]=useState(null); // Program Raporu penceresi (14.10.2026)
   const [showPastRaces,setShowPastRaces]=useState(false);
   const rMap=Object.fromEntries(races.map(r=>[r.id,r]));
   const hrv_colors={düşük:'badge-danger',dengesiz:'badge-warn',dengeli:'badge-good'};
@@ -9923,6 +9924,11 @@ function SporcularTab({athletes,races,athHistory,allHistory,workouts,onAdd,onUpd
           React.createElement('div',{style:{flex:1,fontSize:14,fontWeight:600,color:a.pasif?'var(--text-tertiary)':'inherit'}},(a.ad||'')+' '+(a.soyad||'')),
           a.pasif&&React.createElement('span',{style:{fontSize:11,fontWeight:700,padding:'2px 8px',borderRadius:99,background:'var(--warn-bg)',color:'var(--warn)',border:'1px solid var(--warn)',flexShrink:0}},'🚫 Pasif'),
           ctl!=null&&React.createElement('span',{className:'badge badge-info',style:{fontSize:11,flexShrink:0}},'CTL '+ctl.toFixed(1)),
+          React.createElement('button',{
+            className:'btn btn-sm',title:'Program / hazırlık raporu',
+            onClick:(e)=>{e.stopPropagation();setRaporId(a.id);},
+            style:{fontSize:11,padding:'2px 8px',flexShrink:0}
+          },'📋 Rapor'),
           React.createElement('span',{style:{fontSize:11,color:'var(--text-tertiary)',flexShrink:0}},isExpanded?'▲':'▼')
         ),
         // Kapalı kart özeti (14.10.2026 — Göksel isteği): yarış hedefi varsa yarış + hazırlık
@@ -10204,6 +10210,12 @@ function SporcularTab({athletes,races,athHistory,allHistory,workouts,onAdd,onUpd
       )
     ),
 
+    raporId&&(()=>{
+      const ra=athletes.find(x=>x.id===raporId);
+      if(!ra)return null;
+      return React.createElement(ErrorBoundary,null,
+        React.createElement(SporcuRaporModal,{a:ra,races,workouts,history:allHistory?.[ra.id]||[],onClose:()=>setRaporId(null)}));
+    })(),
     showA&&React.createElement(SporcuModal,{onClose:()=>setShowA(false),onSave:(d)=>{editA?onUpdate({...d,_forceSnap:true}):onAdd(d);setShowA(false);},initial:editA,races}),
     showR&&React.createElement(YarısModal,{onClose:()=>setShowR(false),onSave:(d)=>{if(editR)onUpdateRace({...d,id:editR.id});else onAddRace({...d,id:uid()});setShowR(false);},initial:editR})
   );
@@ -19342,6 +19354,340 @@ function sporcuKapaliOzet(a,races){
   return{tip:'amac',am,gecenHafta,so,asim:gecenHafta>=so.max,
     pct:Math.min(100,Math.round(gecenGun/(so.max*7)*100)),minPct:Math.round(so.min/so.max*100)};
 }
+// ── SPORCU PROGRAM RAPORU (14.10.2026 — Göksel isteği) ───────────────────────────────
+// Sporcular kartındaki "📋 Rapor" butonu: sporcunun YARIŞ HAZIRLIĞI ya da ANTRENMAN AMACI
+// programının başlangıcından bugüne yapılan antrenmanları, toplamları (koşu süre/mesafe/D+),
+// başlangıç→şimdi gelişimi ve program değerlendirmesini gösterir; paylaşılabilir (görsel + metin).
+// Program seçimi (TEK KAYNAK = amacDurumu/selectRaces ile aynı kurallar):
+//  1) birincil yarışın hazırlık penceresi (prep_weeks; tanımsızsa 12) BAŞLAMIŞSA → yarış hazırlığı
+//  2) değilse seçili antrenman amacı (başlangıç = antrenman_amaci_tarih)
+//  3) ikisi de yoksa en son geçmiş yarışın hazırlığı (tamamlanmış program)
+//  4) hiçbiri → koç başlangıç tarihini kendisi seçer
+// Değerlendirme genel göstergelere (süreklilik, yük dengesi, gelişen/gerileyen gösterge) dayanır;
+// hacim beklentisi amacın kendi tanımına uyar (Hacim Artır ↑, Hacim Koru ≈, Aktif Toparlanma ↓ ...).
+const RAPOR_KOSU_SPORLAR=['kosu','trail','yol','ultra'];
+const RAPOR_HACIM_BEKLENTI={hacim_artir:'artis',hacim_koru:'sabit',hiz_gelistir:'sabit',kuvvet_gelistir:'sabit',aerobik_taban:'artis',vo2max_artir:'sabit',toparlanma:'dusus_beklenen',genel_kondisyon:'artis'};
+function raporProgramSec(a,races){
+  const today=new Date();
+  const todayStr=localDateStr(today);
+  const {primary}=selectRaces(a,races||[]);
+  const am=a.antrenman_amaci?ANTRENMAN_AMACLARI.find(x=>x.v===a.antrenman_amaci):null;
+  const amacProg=(bekleyen)=>({tip:'amac',am,start:a.antrenman_amaci_tarih||'',end:todayStr,devam:true,bekleyenYaris:bekleyen||null});
+  if(primary){
+    const rd=new Date(primary.tarih+'T12:00:00');
+    const pwRaw=parseInt(primary.prep_weeks)||0;
+    const pw=pwRaw||12;
+    const hb=new Date(rd.getTime()-pw*7*864e5);
+    const gunKaldi=Math.max(0,Math.ceil((rd-today)/864e5));
+    if(gunKaldi<=pw*7)return{tip:'yaris',race:primary,pw,pwVarsayilan:!pwRaw,start:localDateStr(hb),end:todayStr,devam:true,gunKaldi};
+    if(am)return amacProg(primary);
+    return{tip:'bekle',race:primary,pw,start:'',end:todayStr,devam:true,gunKaldi,hbTarih:localDateStr(hb)};
+  }
+  if(am)return amacProg(null);
+  const athIds=(a.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
+  const past=(races||[]).filter(r=>athIds.includes(r.id)&&r.tarih&&new Date(r.tarih+'T12:00:00')<=today)
+    .sort((x,y)=>x.tarih<y.tarih?1:-1)[0];
+  if(past){
+    const rd=new Date(past.tarih+'T12:00:00');
+    const pwRaw=parseInt(past.prep_weeks)||0;const pw=pwRaw||12;
+    return{tip:'yaris',race:past,pw,pwVarsayilan:!pwRaw,start:localDateStr(new Date(rd.getTime()-pw*7*864e5)),end:past.tarih,devam:false,gunKaldi:0};
+  }
+  return{tip:'yok',start:'',end:todayStr,devam:true};
+}
+function raporFmtPace(sn){
+  if(!(sn>0))return'—';
+  const m=Math.floor(sn/60),s=Math.round(sn%60);
+  return (s===60?(m+1)+':00':m+':'+String(s).padStart(2,'0'))+' /km';
+}
+function sporcuProgramRaporu(a,prog,start,workouts,history){
+  const dayMs=864e5;
+  const D=(s)=>new Date(s+'T12:00:00');
+  const addDays=(s,n)=>localDateStr(new Date(D(s).getTime()+n*dayMs));
+  const end=prog.end;
+  const toplamGun=Math.max(1,Math.round((D(end)-D(start))/dayMs)+1);
+  const gunStr=(w)=>(w.date||'').split('T')[0];
+  const wks=(workouts||[]).filter(w=>w.athleteId===a.id&&gunStr(w)>=start&&gunStr(w)<=end)
+    .sort((x,y)=>gunStr(x)<gunStr(y)?-1:gunStr(x)>gunStr(y)?1:0);
+  const isKosu=(w)=>RAPOR_KOSU_SPORLAR.includes(w.spor||'kosu');
+  const sure=(w)=>toSec(w.sure_sa,w.sure_dk,w.sure_sn);
+  const kmOf=(w)=>parseFloat(w.mesafe)||0;
+  const dpOf=(w)=>parseFloat(w.irtifa)||0;
+  const ozet=(list)=>({n:list.length,sn:list.reduce((s,w)=>s+sure(w),0),km:round1(list.reduce((s,w)=>s+kmOf(w),0)),dp:Math.round(list.reduce((s,w)=>s+dpOf(w),0))});
+  const kosu=wks.filter(isKosu), diger=wks.filter(w=>!isKosu(w));
+  const grupla=(list,keyFn,lblFn)=>{
+    const m={};
+    list.forEach(w=>{const k=keyFn(w);(m[k]=m[k]||{k,label:lblFn(w),list:[]}).list.push(w);});
+    return Object.values(m).map(g=>({label:g.label,...ozet(g.list)})).sort((x,y)=>y.n-x.n||y.sn-x.sn);
+  };
+  const turSatirlari=grupla(kosu,w=>w.tur||'_serbest',w=>w.tur?(TUR_LABELS[w.tur]||w.tur):'Serbest koşu (tür belirtilmemiş)');
+  const digerSatirlari=grupla(diger,w=>w.spor||'diger',w=>(SPOR_MAP[w.spor]?.emoji||'')+' '+(SPOR_MAP[w.spor]?.l||w.spor||'Diğer'));
+  // Süreklilik: en az 1 antrenman yapılan hafta / geçen hafta (kısmi son hafta ceza yaratmasın diye tam haftalar esas)
+  const haftaSet=new Set(wks.map(w=>Math.floor(Math.round((D(gunStr(w))-D(start))/dayMs)/7)));
+  const hafta=Math.max(1,Math.ceil(toplamGun/7));
+  const den=toplamGun>=7?Math.max(1,Math.floor(toplamGun/7)):1;
+  const aktifHafta=Math.min(haftaSet.size,den);
+  const sureklilik=Math.min(1,aktifHafta/den);
+  // Karşılaştırma dilimleri: ≥28 gün → ilk 14 / son 14 gün; 14–27 gün → ilk 7 / son 7 gün
+  const seg=toplamGun>=28?14:(toplamGun>=14?7:0);
+  const dilim=(list,f,from,to)=>list.filter(w=>gunStr(w)>=from&&gunStr(w)<=to).reduce((s,w)=>s+f(w),0);
+  const hf=(list,f)=>{
+    if(!seg)return null;
+    return{once:dilim(list,f,start,addDays(start,seg-1))/(seg/7),son:dilim(list,f,addDays(end,-(seg-1)),end)/(seg/7)};
+  };
+  const yuzde=(o,s)=>o>0?(s-o)/o*100:(s>0?Infinity:0);
+  // beklenen: artis | sabit | dusus_beklenen | dusus (düşük=iyi) | bilgi
+  const hukum=(o,s,beklenen,esik)=>{
+    const p=yuzde(o,s);
+    if(beklenen==='bilgi')return'notr';
+    if(beklenen==='artis')return p>=esik?'iyi':(p<=-esik?'kotu':'notr');
+    if(beklenen==='dusus'||beklenen==='dusus_beklenen')return p<=-esik?'iyi':(p>=esik?'kotu':'notr');
+    if(beklenen==='sabit'){const ap=Math.abs(p);return ap<=esik?'iyi':(ap>2*esik?'kotu':'notr');}
+    return'notr';
+  };
+  const pctTxt=(o,s)=>{const p=yuzde(o,s);return !isFinite(p)?'yeni':((p>0?'+':'')+Math.round(p)+'%');};
+  const amV=a.antrenman_amaci||'';
+  const hacimBekle=prog.tip==='amac'?(RAPOR_HACIM_BEKLENTI[prog.am?.v]||'artis'):'artis';
+  const satirlar=[];
+  // 1) Haftalık koşu hacmi
+  const hk=hf(kosu,kmOf);
+  satirlar.push(hk?{key:'hacim',label:'Haftalık koşu hacmi',onceTxt:round1(hk.once)+' km',sonTxt:round1(hk.son)+' km',degisim:pctTxt(hk.once,hk.son),
+      v:hukum(hk.once,hk.son,hacimBekle,hacimBekle==='sabit'?10:5),not:hacimBekle==='sabit'?'amaç gereği hacim sabit beklenir':hacimBekle==='dusus_beklenen'?'amaç gereği hacim azalması beklenir':''}
+    :{key:'hacim',label:'Haftalık koşu hacmi',v:'yok',not:'karşılaştırma için en az 14 gün gerekir'});
+  // 2) Haftalık D+ (yalnızca D+ varsa)
+  const toplamDp=ozet(kosu).dp;
+  if(toplamDp>0){
+    const hd=hf(kosu,dpOf);
+    satirlar.push(hd?{key:'dplus',label:'Haftalık D+',onceTxt:Math.round(hd.once)+' m',sonTxt:Math.round(hd.son)+' m',degisim:pctTxt(hd.once,hd.son),v:'notr',not:''}
+      :{key:'dplus',label:'Haftalık D+',v:'yok',not:'karşılaştırma için en az 14 gün gerekir'});
+  }
+  // 3) Aerobik verimlilik — buildHistory aerEff (140 bpm'e normalize pace, sn/km; DÜŞÜK = iyi)
+  const hist=(history||[]).filter(h=>h.date>=start&&h.date<=end);
+  const aerList=hist.filter(h=>h.aerEff!=null);
+  if(aerList.length>=4){
+    const mid=Math.floor(aerList.length/2);
+    const ort=(l)=>l.reduce((s,h)=>s+h.aerEff,0)/l.length;
+    const o=ort(aerList.slice(0,mid)), s=ort(aerList.slice(mid));
+    const d=s-o;
+    satirlar.push({key:'aer',label:'Aerobik verimlilik',onceTxt:raporFmtPace(o),sonTxt:raporFmtPace(s),degisim:(d>0?'+':'')+Math.round(d)+' sn/km',
+      v:hukum(o,s,'dusus',2),not:'140 bpm eşdeğeri pace; düşmesi = aynı nabızda daha hızlı'});
+  }else{
+    satirlar.push({key:'aer',label:'Aerobik verimlilik',v:'yok',not:'yeterli veri yok (nabızlı, sabit tempolu koşular gerekir)'});
+  }
+  // 4) En uzun koşu: pencerenin ilk yarısı vs ikinci yarısı
+  if(toplamGun>=14&&kosu.length>=2){
+    const ortaGun=addDays(start,Math.floor(toplamGun/2)-1);
+    const mx=(l)=>l.reduce((m,w)=>Math.max(m,kmOf(w)),0);
+    const o=mx(kosu.filter(w=>gunStr(w)<=ortaGun)), s=mx(kosu.filter(w=>gunStr(w)>ortaGun));
+    if(o>0||s>0)satirlar.push({key:'uzun',label:'En uzun koşu (1. yarı → 2. yarı)',onceTxt:round1(o)+' km',sonTxt:round1(s)+' km',degisim:pctTxt(o,s),
+      v:hukum(o,s,hacimBekle==='dusus_beklenen'?'bilgi':'artis',10),not:''});
+  }
+  // 5) Fitness (CTL): program başlangıcındaki değer → bugün
+  if(hist.length||(history||[]).length){
+    const hh=history||[];
+    const onceE=[...hh].filter(h=>h.date<=start).pop();
+    const sonE=[...hh].filter(h=>h.date<=end).pop();
+    if(sonE){
+      const o=onceE?onceE.ctl:0, s=sonE.ctl;
+      satirlar.push({key:'ctl',label:'Fitness (CTL)',onceTxt:round1(o),sonTxt:round1(s),degisim:(s-o>0?'+':'')+round1(s-o),
+        v:hukum(o,s,hacimBekle==='dusus_beklenen'?'bilgi':(hacimBekle==='sabit'?'sabit':'artis'),hacimBekle==='sabit'?10:5),not:''});
+    }
+  }
+  // Testler
+  const LEG={'test_maf':'maf','test_cooper':'cooper','test_5k':'zaman_5k','test_laktat':'lthr_test'};
+  const testler=wks.filter(w=>w._isTest||LEG[w.tur]).map(w=>{
+    const id=w._testTur||LEG[w.tur];
+    return{date:gunStr(w),ad:TEST_TURLERI[id]?.ad||id||'Test',sonuc:w._testSonuc?.label||''};
+  });
+  // Yük dengesi
+  const sonH=(history||[]).filter(h=>h.date<=end).pop();
+  const acwr=sonH?.acwr??null;
+  const acwrTxt=acwr==null?null:(acwr<0.8?'düşük':acwr<=1.3?'dengeli':acwr<=1.5?'yüksek':'riskli');
+  // Karar
+  const iyi=satirlar.filter(r=>r.v==='iyi').length, kotu=satirlar.filter(r=>r.v==='kotu').length;
+  let k,neden;
+  if(wks.length<3||toplamGun<14){k='erken';neden='Değerlendirme için en az 2 hafta ve 3 antrenman gerekir (şu an '+toplamGun+' gün, '+wks.length+' antrenman).';}
+  else if(sureklilik<0.6){k='dikkat';neden='Antrenman sürekliliği düşük: '+aktifHafta+'/'+den+' haftada antrenman yapılmış (%'+Math.round(sureklilik*100)+').';}
+  else if(acwr!=null&&acwr>1.5){k='dikkat';neden='Güncel yük dengesi (ACWR '+acwr.toFixed(2)+') riskli bölgede.';}
+  else if(kotu>iyi){k='dikkat';neden=kotu+' gösterge geriledi, '+iyi+' gösterge iyileşti.';}
+  else if(iyi>=2||(iyi>=1&&kotu===0)){k='iyi';neden=iyi+' gösterge iyileşti'+(kotu?', '+kotu+' gösterge geriledi':'')+'; süreklilik %'+Math.round(sureklilik*100)+'.';}
+  else{k='notr';neden='Belirgin bir iyileşme ya da gerileme yok; süreklilik %'+Math.round(sureklilik*100)+'.';}
+  const etiket=prog.devam
+    ?{iyi:'✅ Yolunda',notr:'➖ Belirgin değişim yok',dikkat:'⚠️ Dikkat gerekli',erken:'⏳ Değerlendirme için erken'}[k]
+    :{iyi:'✅ Başarılı',notr:'➖ Belirgin gelişme yok',dikkat:'⚠️ Hedefin altında',erken:'⏳ Veri yetersiz'}[k];
+  // Programa özgü durum bilgisi
+  let durum='',ilerleme=null,uyari='';
+  if(prog.tip==='yaris'){
+    const toplamP=prog.pw*7;
+    const gecen=Math.round((D(end)-D(start))/dayMs);
+    ilerleme=Math.max(0,Math.min(100,Math.round(gecen/toplamP*100)));
+    if(prog.devam)durum='Hazırlık devam ediyor · '+Math.min(prog.pw,Math.floor(gecen/7)+1)+'/'+prog.pw+'. hafta · yarışa '+prog.gunKaldi+' gün kaldı';
+    else durum='Hazırlık tamamlandı · yarış '+fmtDate(prog.race.tarih);
+    const yKm=parseFloat(prog.race.mesafe)||0;
+    const enUzun=kosu.reduce((m,w)=>Math.max(m,kmOf(w)),0);
+    if(yKm>0&&enUzun>0)uyari='En uzun koşu '+round1(enUzun)+' km — yarış mesafesinin %'+Math.round(enUzun/yKm*100)+'’i ('+yKm+' km).';
+  }else if(prog.tip==='amac'){
+    const so=PROGRAM_SURE_ONERISI[prog.am.v];
+    const gecenHf=Math.floor(Math.round((D(end)-D(start))/dayMs)/7);
+    if(so){
+      ilerleme=Math.min(100,Math.round(Math.round((D(end)-D(start))/dayMs)/(so.max*7)*100));
+      durum='Program devam ediyor · '+gecenHf+' haftadır · önerilen süre '+so.min+'–'+so.max+' hafta';
+      if(gecenHf>=so.max){
+        const nx=PROGRAM_SONRAKI_ONERI[prog.am.v];const nxA=nx&&ANTRENMAN_AMACLARI.find(x=>x.v===nx.sonraki);
+        uyari='Önerilen süre doldu — gözden geçirme zamanı'+(nxA?' (önerilen sonraki program: '+nxA.emoji+' '+nxA.l+')':'')+'.';
+      }
+    }else durum='Program devam ediyor · '+gecenHf+' haftadır · süresiz (aktif hedef yok)';
+    if(prog.bekleyenYaris)uyari=(uyari?uyari+' ':'')+'Yarış hedefi: '+prog.bekleyenYaris.ad+' ('+fmtDate(prog.bekleyenYaris.tarih)+') — hazırlık '+fmtDate(localDateStr(new Date(D(prog.bekleyenYaris.tarih).getTime()-(parseInt(prog.bekleyenYaris.prep_weeks)||12)*7*dayMs)))+' tarihinde başlıyor.';
+  }else{
+    durum='Seçilen dönem · '+toplamGun+' gün';
+  }
+  const liste=wks.map(w=>({date:gunStr(w),tur:(SPOR_MAP[w.spor||'kosu']?.emoji||'')+' '+(w.tur?(TUR_LABELS[w.tur]||w.tur):(SPOR_MAP[w.spor||'kosu']?.l||'Antrenman')),
+    sn:sure(w),km:kmOf(w),dp:dpOf(w),hr:parseFloat(w.ort_nabiz)||0,rpe:parseFloat(w.rpe)||0}));
+  return{start,end,toplamGun,hafta,wks:wks.length,kosu:ozet(kosu),diger:ozet(diger),toplam:ozet(wks),
+    enUzun:round1(kosu.reduce((m,w)=>Math.max(m,kmOf(w)),0)),haftalikKm:round1(ozet(kosu).km/Math.max(1,toplamGun/7)),
+    turSatirlari,digerSatirlari,satirlar,testler,sureklilik,aktifHafta,den,acwr,acwrTxt,
+    karar:{k,etiket,neden},durum,ilerleme,uyari,liste};
+}
+function raporMetni(a,prog,r){
+  const L=[];
+  const ad=((a.ad||'')+' '+(a.soyad||'')).trim();
+  L.push('📋 Koşu İzi — Program Raporu');
+  L.push(ad);
+  L.push(prog.tip==='yaris'?'🏁 '+prog.race.ad+' ('+fmtDate(prog.race.tarih)+') hazırlığı':prog.tip==='amac'?prog.am.emoji+' Amaç: '+prog.am.l:'Seçilen dönem');
+  L.push(fmtDate(r.start)+' – '+fmtDate(r.end)+' · '+r.toplamGun+' gün');
+  L.push(r.durum+(r.ilerleme!=null?' (%'+r.ilerleme+')':''));
+  L.push('');
+  L.push('Koşu: '+r.kosu.n+' antrenman · '+fmtDur(r.kosu.sn)+' · '+r.kosu.km+' km · D+ '+r.kosu.dp+' m');
+  if(r.diger.n)L.push('Diğer sporlar: '+r.diger.n+' antrenman · '+fmtDur(r.diger.sn));
+  L.push('Haftalık ort. '+r.haftalikKm+' km · en uzun koşu '+r.enUzun+' km');
+  const gel=r.satirlar.filter(x=>x.v!=='yok');
+  if(gel.length){L.push('');L.push('Gelişim (başlangıç → şimdi):');
+    gel.forEach(x=>L.push('• '+x.label+': '+x.onceTxt+' → '+x.sonTxt+' ('+x.degisim+')'+(x.v==='iyi'?' ✅':x.v==='kotu'?' ⚠️':'')));}
+  if(r.testler.length){L.push('');L.push('Testler: '+r.testler.map(t=>t.ad+(t.sonuc?' — '+t.sonuc:'')+' ('+fmtDate(t.date)+')').join('; '));}
+  L.push('');
+  L.push('Değerlendirme: '+r.karar.etiket+' — '+r.karar.neden);
+  if(r.uyari)L.push(r.uyari);
+  return L.join('\n');
+}
+
+// Rapor penceresi — paylaşılabilir (görsel: ShareBtn/shareCard, metin: panoya kopyala)
+function SporcuRaporModal({a,races,workouts,history,onClose}){
+  const prog=useMemo(()=>raporProgramSec(a,races),[a,races]);
+  const [baslangic,setBaslangic]=useState('');
+  const [listeAcik,setListeAcik]=useState(false);
+  const [kopyalandi,setKopyalandi]=useState(false);
+  const kartRef=useRef(null);
+  const start=baslangic||prog.start||'';
+  const r=useMemo(()=>start&&start<=prog.end?sporcuProgramRaporu(a,prog,start,workouts,history):null,[a,prog,start,workouts,history]);
+  const ad=((a.ad||'')+' '+(a.soyad||'')).trim();
+  const kRenk={iyi:'var(--success)',notr:'var(--text-secondary)',dikkat:'var(--warn)',erken:'var(--info)'};
+  const vRenk={iyi:'var(--success)',kotu:'var(--danger)',notr:'var(--text-tertiary)',yok:'var(--text-tertiary)'};
+  const vOk={iyi:'▲',kotu:'▼',notr:'●',yok:''};
+  const progBaslik=prog.tip==='yaris'?'🏁 '+prog.race.ad+(prog.devam?' hazırlığı':' hazırlığı (tamamlandı)'):prog.tip==='amac'?prog.am.emoji+' Antrenman Amacı: '+prog.am.l:'📋 Seçilen dönem';
+  const tile=(ikon,deger,etiket)=>React.createElement('div',{style:{background:'var(--bg-secondary)',border:'1px solid var(--border)',borderRadius:8,padding:'8px 10px'}},
+    React.createElement('div',{style:{fontSize:17,fontWeight:700,lineHeight:1.2}},deger),
+    React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',marginTop:2}},ikon+' '+etiket));
+  const th={fontSize:10,fontWeight:600,color:'var(--text-tertiary)',textAlign:'right',padding:'3px 6px',textTransform:'uppercase',letterSpacing:'.3px'};
+  const td={fontSize:12,padding:'4px 6px',textAlign:'right',borderTop:'1px solid var(--border)'};
+  const tdL={...td,textAlign:'left'};
+  const sec=(t)=>React.createElement('div',{style:{fontSize:11,fontWeight:700,textTransform:'uppercase',letterSpacing:'.5px',color:'var(--text-tertiary)',margin:'14px 0 6px'}},t);
+  const tabloSatir=(s,i)=>React.createElement('tr',{key:i},
+    React.createElement('td',{style:tdL},s.label),React.createElement('td',{style:td},s.n),
+    React.createElement('td',{style:td},fmtDur(s.sn)),React.createElement('td',{style:td},s.km?s.km+' km':'—'),React.createElement('td',{style:td},s.dp?s.dp+' m':'—'));
+  const kopyala=()=>{
+    if(!r)return;
+    const t=raporMetni(a,prog,r);
+    const bitir=()=>{setKopyalandi(true);setTimeout(()=>setKopyalandi(false),2000);};
+    if(navigator.clipboard)navigator.clipboard.writeText(t).then(bitir).catch(()=>alert(t));else alert(t);
+  };
+  const dosyaAdi='kosuizi_rapor_'+((a.ad||'sporcu')+'_'+(a.soyad||'')).replace(/[^A-Za-z0-9]+/g,'_')+'_'+localDateStr(new Date())+'.png';
+  return React.createElement('div',{className:'modal-bg',onClick:e=>{if(e.target.className==='modal-bg')onClose()}},
+    React.createElement('div',{className:'modal',style:{maxWidth:720}},
+      React.createElement('div',{className:'modal-title'},
+        React.createElement('span',null,'📋 Program Raporu'),
+        React.createElement('button',{className:'modal-close',onClick:onClose},'×')),
+      // Kontroller (görsele dahil edilmez)
+      React.createElement('div',{'data-no-export':true,style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:12}},
+        React.createElement('label',{style:{fontSize:12,color:'var(--text-secondary)',display:'flex',alignItems:'center',gap:6}},
+          'Başlangıç tarihi',
+          React.createElement('input',{type:'date',value:start,max:prog.end,onChange:e=>setBaslangic(e.target.value),style:{fontSize:12,padding:'3px 6px'}})),
+        baslangic&&prog.start&&React.createElement('button',{className:'btn btn-sm',onClick:()=>setBaslangic('')},'Program başlangıcına dön'),
+        React.createElement('div',{style:{flex:1}}),
+        r&&React.createElement(ShareBtn,{elRef:kartRef,filename:dosyaAdi,title:'Koşu İzi — Program Raporu — '+ad,text:raporMetni(a,prog,r)}),
+        r&&React.createElement('button',{className:'btn btn-sm',onClick:kopyala},kopyalandi?'✓ Kopyalandı':'📋 Metni Kopyala')),
+      !r&&React.createElement('div',{className:'empty',style:{padding:'20px 8px'}},
+        prog.tip==='bekle'
+          ?'🏁 '+prog.race.ad+' hazırlığı henüz başlamadı (başlangıç: '+fmtDate(prog.hbTarih)+') ve seçili bir antrenman amacı yok. Rapor için yukarıdan bir başlangıç tarihi seç.'
+          :prog.tip==='yok'
+          ?'Bu sporcunun yarış hedefi ya da antrenman amacı yok. Rapor için yukarıdan bir başlangıç tarihi seç.'
+          :prog.tip==='amac'&&!prog.start
+          ?'Antrenman amacının başlangıç tarihi kayıtlı değil. Rapor için yukarıdan bir başlangıç tarihi seç.'
+          :'Geçerli bir başlangıç tarihi seç.'),
+      r&&React.createElement('div',{ref:kartRef,style:{background:'var(--bg-primary)',padding:14,borderRadius:10,border:'1px solid var(--border)'}},
+        // Başlık
+        React.createElement('div',{style:{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:10,flexWrap:'wrap'}},
+          React.createElement('div',{style:{minWidth:0}},
+            React.createElement('div',{style:{fontSize:16,fontWeight:700}},ad),
+            React.createElement('div',{style:{fontSize:13,fontWeight:600,marginTop:2}},progBaslik),
+            React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:2}},fmtDate(r.start)+' – '+fmtDate(r.end)+' · '+r.toplamGun+' gün ('+r.hafta+' hafta)')),
+          React.createElement('span',{style:{fontSize:12,fontWeight:700,padding:'4px 10px',borderRadius:99,border:'1px solid '+kRenk[r.karar.k],color:kRenk[r.karar.k],whiteSpace:'nowrap'}},r.karar.etiket)),
+        // Durum + ilerleme
+        React.createElement('div',{style:{marginTop:10}},
+          React.createElement('div',{style:{fontSize:12,color:'var(--text-secondary)',marginBottom:4}},r.durum+(r.ilerleme!=null?' · %'+r.ilerleme:'')),
+          r.ilerleme!=null&&React.createElement('div',{style:{height:6,borderRadius:99,background:'var(--bg-secondary)',border:'1px solid var(--border)',overflow:'hidden'}},
+            React.createElement('div',{style:{width:r.ilerleme+'%',height:'100%',background:prog.tip==='yaris'?'var(--info)':(prog.am?.renk||'var(--info)'),borderRadius:99}}))),
+        // Özet kutuları
+        sec('Toplam (koşu antrenmanları)'),
+        React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(120px,1fr))',gap:8}},
+          tile('🏃',r.kosu.n,'koşu antrenmanı'),
+          tile('⏱️',fmtDur(r.kosu.sn),'toplam koşu süresi'),
+          tile('📏',r.kosu.km+' km','toplam mesafe'),
+          tile('⛰️',r.kosu.dp+' m','toplam D+'),
+          tile('📆',r.haftalikKm+' km','haftalık ortalama'),
+          tile('🏔️',r.enUzun+' km','en uzun koşu')),
+        r.diger.n>0&&React.createElement('div',{style:{fontSize:11,color:'var(--text-tertiary)',marginTop:6}},'Diğer sporlar: '+r.diger.n+' antrenman · '+fmtDur(r.diger.sn)+(r.diger.km?' · '+r.diger.km+' km':'')),
+        // Tür dağılımı
+        r.turSatirlari.length>0&&sec('Yapılan antrenmanlar'),
+        r.turSatirlari.length>0&&React.createElement('table',{style:{width:'100%',borderCollapse:'collapse'}},
+          React.createElement('thead',null,React.createElement('tr',null,
+            React.createElement('th',{style:{...th,textAlign:'left'}},'Tür'),React.createElement('th',{style:th},'Adet'),React.createElement('th',{style:th},'Süre'),React.createElement('th',{style:th},'Mesafe'),React.createElement('th',{style:th},'D+'))),
+          React.createElement('tbody',null,r.turSatirlari.map(tabloSatir),r.digerSatirlari.map((s,i)=>tabloSatir(s,'d'+i)))),
+        // Gelişim
+        sec('Gelişim (başlangıç → şimdi)'),
+        React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:6}},
+          r.satirlar.map(x=>React.createElement('div',{key:x.key,style:{display:'flex',alignItems:'baseline',gap:8,fontSize:12,flexWrap:'wrap',padding:'6px 8px',borderRadius:8,background:'var(--bg-secondary)',border:'1px solid var(--border)'}},
+            React.createElement('span',{style:{fontWeight:600,flex:'1 1 150px'}},x.label),
+            x.v==='yok'
+              ?React.createElement('span',{style:{color:'var(--text-tertiary)',fontSize:11}},'— '+x.not)
+              :React.createElement(React.Fragment,null,
+                React.createElement('span',{style:{color:'var(--text-secondary)'}},x.onceTxt+' → '+x.sonTxt),
+                React.createElement('span',{style:{fontWeight:700,color:vRenk[x.v]}},vOk[x.v]+' '+x.degisim)),
+            x.v!=='yok'&&x.not&&React.createElement('span',{style:{flexBasis:'100%',fontSize:10,color:'var(--text-tertiary)'}},x.not)))),
+        r.testler.length>0&&sec('Testler'),
+        r.testler.length>0&&React.createElement('div',{style:{fontSize:12,display:'flex',flexDirection:'column',gap:3}},
+          r.testler.map((t,i)=>React.createElement('div',{key:i},'🧪 '+fmtDate(t.date)+' · '+t.ad+(t.sonuc?' — '+t.sonuc:'')))),
+        // Değerlendirme
+        sec('Değerlendirme'),
+        React.createElement('div',{style:{padding:'10px 12px',borderRadius:8,border:'1px solid '+kRenk[r.karar.k],background:'var(--bg-secondary)'}},
+          React.createElement('div',{style:{fontSize:13,fontWeight:700,color:kRenk[r.karar.k]}},r.karar.etiket),
+          React.createElement('div',{style:{fontSize:12,marginTop:3}},r.karar.neden),
+          React.createElement('div',{style:{fontSize:11,color:'var(--text-secondary)',marginTop:4}},
+            'Süreklilik: '+r.aktifHafta+'/'+r.den+' haftada antrenman'+(r.acwr!=null?' · Güncel yük dengesi (ACWR): '+r.acwr.toFixed(2)+' ('+r.acwrTxt+')':'')),
+          r.uyari&&React.createElement('div',{style:{fontSize:11,marginTop:4,color:'var(--text-secondary)'}},r.uyari)),
+        // Antrenman listesi (isteğe bağlı)
+        React.createElement('div',{'data-no-export':true,style:{marginTop:10}},
+          React.createElement('button',{className:'btn btn-sm',onClick:()=>setListeAcik(v=>!v)},(listeAcik?'▲ ':'▼ ')+'Antrenman listesi ('+r.liste.length+') — görsele '+(listeAcik?'dahil':'dahil değil'))),
+        listeAcik&&React.createElement('table',{style:{width:'100%',borderCollapse:'collapse',marginTop:6}},
+          React.createElement('thead',null,React.createElement('tr',null,
+            React.createElement('th',{style:{...th,textAlign:'left'}},'Tarih'),React.createElement('th',{style:{...th,textAlign:'left'}},'Antrenman'),React.createElement('th',{style:th},'Süre'),React.createElement('th',{style:th},'Mesafe'),React.createElement('th',{style:th},'D+'),React.createElement('th',{style:th},'Nabız'),React.createElement('th',{style:th},'RPE'))),
+          React.createElement('tbody',null,r.liste.map((w,i)=>React.createElement('tr',{key:i},
+            React.createElement('td',{style:tdL},fmtDate(w.date)),React.createElement('td',{style:tdL},w.tur),React.createElement('td',{style:td},fmtDur(w.sn)),
+            React.createElement('td',{style:td},w.km?round1(w.km)+' km':'—'),React.createElement('td',{style:td},w.dp?Math.round(w.dp)+' m':'—'),
+            React.createElement('td',{style:td},w.hr||'—'),React.createElement('td',{style:td},w.rpe||'—'))))),
+        React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',marginTop:12,paddingTop:8,borderTop:'1px dashed var(--border)'}},
+          'Koşu İzi · Program Raporu · '+fmtDate(localDateStr(new Date()))+' · Değerlendirme genel göstergelere dayanır; koç yorumu önceliklidir.'))
+    ));
+}
+
 function calcWeeklyTargets(athlete, races, workouts, optimizeMode=false, history=[], frozenTargets={}){
   const plan=calcWeeklyTargetsRaceAware(athlete,races,workouts,optimizeMode,history,frozenTargets);
   try{
