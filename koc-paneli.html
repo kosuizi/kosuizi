@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.14-2127 --><!DOCTYPE html>
+<!-- Version: v2026.10.15-0122 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -28,7 +28,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.14-2127';
+    var RUNNING='v2026.10.15-0122';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -392,7 +392,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.14-2127';
+const APP_VERSION='v2026.10.15-0122';
 // ── GENEL YÜKLEME İZLEYİCİSİ (2026.10.13) — tüm sekmeler için: bekleyen Firebase okumalarını sayar ──
 var _YUK={bekleyen:0,toplam:0,bitenSon:0,dinleyen:new Set(),arka:0,planAcik:false,liste:{},sira:0};
 // arka: Yükleme Planı tablosunun ARKA PLAN okumaları (fbGet(...,{arka:true})). Yükleme Planı gizliyken genel göstergeye
@@ -9940,8 +9940,10 @@ function SporcularTab({athletes,races,athHistory,allHistory,workouts,onAdd,onUpd
             renk=oz.gunKaldi<=14?'var(--warn)':'var(--info)';
             ikon='🏁';baslik=oz.race.ad||'Yarış';pct=oz.pct;
             sag=fmtDate(oz.race.tarih)+' · '+(oz.gunKaldi>0?oz.gunKaldi+' gün kaldı':'bugün');
-            altYazi=oz.basladi
-              ?'Hazırlık %'+oz.pct+' · '+oz.hafta+'/'+oz.pw+'. hafta'+(oz.pwVarsayilan?' (hazırlık süresi tanımsız, 12 hf varsayıldı)':'')
+            altYazi=oz.pwYok
+              ?'Hazırlık süresi tanımlı değil'+(oz.amac?' · şu an amaç: '+oz.amac.emoji+' '+oz.amac.l:'')
+              :oz.basladi
+              ?'Hazırlık %'+oz.pct+' · '+oz.hafta+'/'+oz.pw+'. hafta'
               :'Hazırlık '+oz.hbGunSonra+' gün sonra başlıyor ('+fmtDate(oz.hbTarih)+')'+(oz.amac?' · şu an amaç: '+oz.amac.emoji+' '+oz.amac.l:'');
           }else if(oz.tip==='amac'){
             renk=oz.asim?'var(--warn)':oz.am.renk;
@@ -10214,7 +10216,7 @@ function SporcularTab({athletes,races,athHistory,allHistory,workouts,onAdd,onUpd
       const ra=athletes.find(x=>x.id===raporId);
       if(!ra)return null;
       return React.createElement(ErrorBoundary,null,
-        React.createElement(SporcuRaporModal,{a:ra,races,workouts,history:allHistory?.[ra.id]||[],onClose:()=>setRaporId(null)}));
+        React.createElement(SporcuRaporModal,{a:ra,races,workouts,history:allHistory?.[ra.id]||[],onClose:()=>setRaporId(null),onUpdate}));
     })(),
     showA&&React.createElement(SporcuModal,{onClose:()=>setShowA(false),onSave:(d)=>{editA?onUpdate({...d,_forceSnap:true}):onAdd(d);setShowA(false);},initial:editA,races}),
     showR&&React.createElement(YarısModal,{onClose:()=>setShowR(false),onSave:(d)=>{if(editR)onUpdateRace({...d,id:editR.id});else onAddRace({...d,id:uid()});setShowR(false);},initial:editR})
@@ -19320,8 +19322,8 @@ function amacDurumu(athlete,races){
 // Sporcular sekmesinde kart KAPALIYKEN: sporcunun yarış hedefi (selectRaces → birincil
 // yarış; amacDurumu ile aynı kaynak) varsa yarış + hazırlık ilerlemesi, yoksa antrenman
 // amacı + program ilerlemesi gösterilir. Her iki durumda da yüzde (0–100) döner.
-//  - Yarış: ilerleme = hazırlık penceresi (prep_weeks; tanımsızsa 12 — kodun geri kalanıyla
-//    aynı varsayılan) içinde geçen süre / pencere süresi. Hazırlık başlamadıysa %0.
+//  - Yarış: ilerleme = hazırlık penceresi (prep_weeks) içinde geçen süre / pencere süresi.
+//    Hazırlık başlamadıysa ya da prep_weeks tanımsızsa %0 (süre varsayılmaz — amacDurumu kuralı).
 //  - Amaç: ilerleme = amacın başlangıç tarihinden geçen süre / PROGRAM_SURE_ONERISI.max
 //    (hafta). Süresiz amaçta (hacim_koru) yüzde yoktur → pct:null (çizgili bar).
 function sporcuKapaliOzet(a,races){
@@ -19331,15 +19333,17 @@ function sporcuKapaliOzet(a,races){
   if(primary){
     const raceDate=new Date(primary.tarih+'T12:00:00');
     const gunKaldi=Math.max(0,Math.ceil((raceDate-today)/864e5));
-    const pwRaw=parseInt(primary.prep_weeks)||0;
-    const pw=pwRaw||12;
+    const pw=parseInt(primary.prep_weeks)||0;
+    const am0=a.antrenman_amaci?ANTRENMAN_AMACLARI.find(x=>x.v===a.antrenman_amaci):null;
+    // prep_weeks tanımsız → yarış planı devrede değil (amacDurumu ile aynı kural); süre varsayılmaz
+    if(!pw)return{tip:'yaris',race:primary,gunKaldi,pct:0,basladi:false,pwYok:true,amac:am0};
     const toplamGun=pw*7;
     const gecenGun=toplamGun-gunKaldi; // negatif → hazırlık henüz başlamadı
     const basladi=gecenGun>0;
     const pct=basladi?Math.min(100,Math.round(gecenGun/toplamGun*100)):0;
     const hb=new Date(raceDate.getTime()-toplamGun*864e5);
     const am=a.antrenman_amaci?ANTRENMAN_AMACLARI.find(x=>x.v===a.antrenman_amaci):null;
-    return{tip:'yaris',race:primary,gunKaldi,pct,basladi,pw,pwVarsayilan:!pwRaw,
+    return{tip:'yaris',race:primary,gunKaldi,pct,basladi,pw,
       hafta:Math.min(pw,Math.floor(Math.max(0,gecenGun)/7)+1),
       hbGunSonra:basladi?0:Math.max(0,Math.ceil((hb-today)/864e5)),hbTarih:localDateStr(hb),
       amac:(!basladi&&am)?am:null};
@@ -19359,10 +19363,11 @@ function sporcuKapaliOzet(a,races){
 // programının başlangıcından bugüne yapılan antrenmanları, toplamları (koşu süre/mesafe/D+),
 // başlangıç→şimdi gelişimi ve program değerlendirmesini gösterir; paylaşılabilir (görsel + metin).
 // Program seçimi (TEK KAYNAK = amacDurumu/selectRaces ile aynı kurallar):
-//  1) birincil yarışın hazırlık penceresi (prep_weeks; tanımsızsa 12) BAŞLAMIŞSA → yarış hazırlığı
+//  1) birincil yarışın hazırlık penceresi (prep_weeks tanımlı) BAŞLAMIŞSA → yarış hazırlığı
 //  2) değilse seçili antrenman amacı (başlangıç = antrenman_amaci_tarih)
 //  3) ikisi de yoksa en son geçmiş yarışın hazırlığı (tamamlanmış program)
-//  4) hiçbiri → koç başlangıç tarihini kendisi seçer
+//  4) hiçbiri → raporlanacak program yok. Rapor başlangıcı HER ZAMAN programın kendi başlangıcıdır
+//     (elle seçilemez); yalnızca amaç başlangıç tarihi hiç kayıtlı değilse koç onu girip kaydeder.
 // Değerlendirme genel göstergelere (süreklilik, yük dengesi, gelişen/gerileyen gösterge) dayanır;
 // hacim beklentisi amacın kendi tanımına uyar (Hacim Artır ↑, Hacim Koru ≈, Aktif Toparlanma ↓ ...).
 const RAPOR_KOSU_SPORLAR=['kosu','trail','yol','ultra'];
@@ -19375,13 +19380,14 @@ function raporProgramSec(a,races){
   const amacProg=(bekleyen)=>({tip:'amac',am,start:a.antrenman_amaci_tarih||'',end:todayStr,devam:true,bekleyenYaris:bekleyen||null});
   if(primary){
     const rd=new Date(primary.tarih+'T12:00:00');
-    const pwRaw=parseInt(primary.prep_weeks)||0;
-    const pw=pwRaw||12;
-    const hb=new Date(rd.getTime()-pw*7*864e5);
+    // 14.10.2026: rapor başlangıcı HER ZAMAN programın kendi başlangıcıdır — yarış hazırlığı için
+    // yarış tarihi − prep_weeks (amacDurumu ile aynı kural: prep_weeks tanımsızsa yarış programı
+    // henüz devrede değildir, geçerli program antrenman amacıdır; süre VARSAYILMAZ).
+    const pw=parseInt(primary.prep_weeks)||0;
     const gunKaldi=Math.max(0,Math.ceil((rd-today)/864e5));
-    if(gunKaldi<=pw*7)return{tip:'yaris',race:primary,pw,pwVarsayilan:!pwRaw,start:localDateStr(hb),end:todayStr,devam:true,gunKaldi};
+    if(pw&&gunKaldi<=pw*7)return{tip:'yaris',race:primary,pw,start:localDateStr(new Date(rd.getTime()-pw*7*864e5)),end:todayStr,devam:true,gunKaldi};
     if(am)return amacProg(primary);
-    return{tip:'bekle',race:primary,pw,start:'',end:todayStr,devam:true,gunKaldi,hbTarih:localDateStr(hb)};
+    return{tip:'bekle',race:primary,pw,start:'',end:todayStr,devam:true,gunKaldi,hbTarih:pw?localDateStr(new Date(rd.getTime()-pw*7*864e5)):''};
   }
   if(am)return amacProg(null);
   const athIds=(a.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
@@ -19389,8 +19395,8 @@ function raporProgramSec(a,races){
     .sort((x,y)=>x.tarih<y.tarih?1:-1)[0];
   if(past){
     const rd=new Date(past.tarih+'T12:00:00');
-    const pwRaw=parseInt(past.prep_weeks)||0;const pw=pwRaw||12;
-    return{tip:'yaris',race:past,pw,pwVarsayilan:!pwRaw,start:localDateStr(new Date(rd.getTime()-pw*7*864e5)),end:past.tarih,devam:false,gunKaldi:0};
+    const pw=parseInt(past.prep_weeks)||0;
+    if(pw)return{tip:'yaris',race:past,pw,start:localDateStr(new Date(rd.getTime()-pw*7*864e5)),end:past.tarih,devam:false,gunKaldi:0};
   }
   return{tip:'yok',start:'',end:todayStr,devam:true};
 }
@@ -19570,13 +19576,13 @@ function raporMetni(a,prog,r){
 }
 
 // Rapor penceresi — paylaşılabilir (görsel: ShareBtn/shareCard, metin: panoya kopyala)
-function SporcuRaporModal({a,races,workouts,history,onClose}){
+function SporcuRaporModal({a,races,workouts,history,onClose,onUpdate}){
   const prog=useMemo(()=>raporProgramSec(a,races),[a,races]);
-  const [baslangic,setBaslangic]=useState('');
+  const [yeniTarih,setYeniTarih]=useState('');
   const [listeAcik,setListeAcik]=useState(false);
   const [kopyalandi,setKopyalandi]=useState(false);
   const kartRef=useRef(null);
-  const start=baslangic||prog.start||'';
+  const start=prog.start||'';
   const r=useMemo(()=>start&&start<=prog.end?sporcuProgramRaporu(a,prog,start,workouts,history):null,[a,prog,start,workouts,history]);
   const ad=((a.ad||'')+' '+(a.soyad||'')).trim();
   const kRenk={iyi:'var(--success)',notr:'var(--text-secondary)',dikkat:'var(--warn)',erken:'var(--info)'};
@@ -19607,21 +19613,26 @@ function SporcuRaporModal({a,races,workouts,history,onClose}){
         React.createElement('button',{className:'modal-close',onClick:onClose},'×')),
       // Kontroller (görsele dahil edilmez)
       React.createElement('div',{'data-no-export':true,style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:12}},
-        React.createElement('label',{style:{fontSize:12,color:'var(--text-secondary)',display:'flex',alignItems:'center',gap:6}},
-          'Başlangıç tarihi',
-          React.createElement('input',{type:'date',value:start,max:prog.end,onChange:e=>setBaslangic(e.target.value),style:{fontSize:12,padding:'3px 6px'}})),
-        baslangic&&prog.start&&React.createElement('button',{className:'btn btn-sm',onClick:()=>setBaslangic('')},'Program başlangıcına dön'),
+        r&&React.createElement('span',{style:{fontSize:12,color:'var(--text-secondary)'}},
+          'Program başlangıcı: ',React.createElement('b',null,fmtDate(r.start)),
+          prog.tip==='yaris'?' (yarış hazırlığı başlangıcı)':' (antrenman amacı başlangıcı)'),
         React.createElement('div',{style:{flex:1}}),
         r&&React.createElement(ShareBtn,{elRef:kartRef,filename:dosyaAdi,title:'Koşu İzi — Program Raporu — '+ad,text:raporMetni(a,prog,r)}),
         r&&React.createElement('button',{className:'btn btn-sm',onClick:kopyala},kopyalandi?'✓ Kopyalandı':'📋 Metni Kopyala')),
       !r&&React.createElement('div',{className:'empty',style:{padding:'20px 8px'}},
         prog.tip==='bekle'
-          ?'🏁 '+prog.race.ad+' hazırlığı henüz başlamadı (başlangıç: '+fmtDate(prog.hbTarih)+') ve seçili bir antrenman amacı yok. Rapor için yukarıdan bir başlangıç tarihi seç.'
+          ?(prog.pw
+            ?'🏁 '+prog.race.ad+' hazırlığı henüz başlamadı (başlangıç: '+fmtDate(prog.hbTarih)+') ve seçili bir antrenman amacı yok — raporlanacak bir program yok.'
+            :'🏁 '+prog.race.ad+' için hazırlık süresi tanımlı değil ve seçili bir antrenman amacı yok — raporlanacak bir program yok. Yarışa hazırlık süresi ekle ya da sporcuya bir antrenman amacı seç.')
           :prog.tip==='yok'
-          ?'Bu sporcunun yarış hedefi ya da antrenman amacı yok. Rapor için yukarıdan bir başlangıç tarihi seç.'
+          ?'Bu sporcunun yarış hedefi ya da antrenman amacı yok — raporlanacak bir program yok.'
           :prog.tip==='amac'&&!prog.start
-          ?'Antrenman amacının başlangıç tarihi kayıtlı değil. Rapor için yukarıdan bir başlangıç tarihi seç.'
-          :'Geçerli bir başlangıç tarihi seç.'),
+          ?React.createElement('div',null,
+              React.createElement('div',{style:{marginBottom:8}},prog.am.emoji+' '+prog.am.l+' programının başlangıç tarihi kayıtlı değil (bu özellikten önce seçilmiş). Programın gerçek başlangıç tarihini gir; sporcu kartına kaydedilir ve rapor bu tarihten başlar.'),
+              onUpdate&&React.createElement('div',{style:{display:'flex',gap:8,justifyContent:'center',alignItems:'center',flexWrap:'wrap'}},
+                React.createElement('input',{type:'date',value:yeniTarih,max:prog.end,onChange:e=>setYeniTarih(e.target.value),style:{fontSize:12,padding:'3px 6px'}}),
+                React.createElement('button',{className:'btn btn-sm btn-primary',disabled:!yeniTarih,onClick:()=>onUpdate({...a,antrenman_amaci_tarih:yeniTarih})},'Başlangıcı Kaydet')))
+          :'Program başlangıç tarihi belirlenemedi.'),
       r&&React.createElement('div',{ref:kartRef,style:{background:'var(--bg-primary)',padding:14,borderRadius:10,border:'1px solid var(--border)'}},
         // Başlık
         React.createElement('div',{style:{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:10,flexWrap:'wrap'}},
