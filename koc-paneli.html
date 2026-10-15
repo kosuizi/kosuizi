@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.15-1033 --><!DOCTYPE html>
+<!-- Version: v2026.10.15-1046 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -28,7 +28,7 @@
 // RUNNING değeri APP_VERSION ve dosya başındaki Version yorumuyla AYNI olmalıdır.
 (function(){
   try{
-    var RUNNING='v2026.10.15-1033';
+    var RUNNING='v2026.10.15-1046';
     // Calisan kopyanin surumu KENDI dosya basi Version yorumundan okunur (elle guncellenen sabit
     // unutulup sunucudaki surumle uyusmayinca sayfa HER acilista yenileniyordu - 2026.09.29 duzeltmesi).
     try{
@@ -392,7 +392,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.15-1033';
+const APP_VERSION='v2026.10.15-1046';
 // ── GENEL YÜKLEME İZLEYİCİSİ (2026.10.13) — tüm sekmeler için: bekleyen Firebase okumalarını sayar ──
 var _YUK={bekleyen:0,toplam:0,bitenSon:0,dinleyen:new Set(),arka:0,planAcik:false,liste:{},sira:0};
 // arka: Yükleme Planı tablosunun ARKA PLAN okumaları (fbGet(...,{arka:true})). Yükleme Planı gizliyken genel göstergeye
@@ -42099,18 +42099,28 @@ function GirisAnketiModal({athlete,onClose}){
 // konteynerine sabit genişlik verilir, CSS zoom ile ekrana sığacak şekilde
 // küçültülür. Tercih cihaza özgü localStorage'da saklanır (Firebase'e yazılmaz).
 const PCV_WIDTH=1200; // .content / Koşu İzlerim içerik genişliği ile eşleşir
-function usePcView(){
+// 15.10.2026 (Göksel — mobil tarayıcıda PC modunda sağda açık renkli şerit): zoom artık
+// İÇERİK KUTUSUNUN gerçek kullanılabilir genişliğine göre hesaplanır. gutter = dış sarmalayıcının
+// yatay padding toplamı (Koşu İzlerim'de 16+16=32). Eskiden window.innerWidth/PCV_WIDTH kullanılıyordu:
+// (a) padding hesaba katılmadığı için içerik gutter kadar taşıyordu, (b) mobil Chrome'da innerWidth
+// pinch-zoom'la değişen görsel viewport'u verdiği için ölçüm yanlış çıkabiliyordu.
+// documentElement.clientWidth düzen (layout) viewport genişliğidir — bunlardan etkilenmez.
+function usePcView(gutter){
+  const _g=gutter||0;
   const [pcView,setPcView]=useState(()=>{
     try{return localStorage.getItem('kosuizi_pc_view')==='1';}catch{return false;}
   });
   const [zoom,setZoom]=useState(1);
   useEffect(()=>{
     if(!pcView){setZoom(1);return;}
-    const recalc=()=>setZoom(Math.min(1,window.innerWidth/PCV_WIDTH));
+    const recalc=()=>{
+      const vw=(document.documentElement&&document.documentElement.clientWidth)||window.innerWidth;
+      setZoom(Math.min(1,Math.max(0.1,(vw-_g)/PCV_WIDTH)));
+    };
     recalc();
     window.addEventListener('resize',recalc);
     return ()=>window.removeEventListener('resize',recalc);
-  },[pcView]);
+  },[pcView,_g]);
   const toggle=()=>setPcView(v=>{
     const nv=!v;
     try{localStorage.setItem('kosuizi_pc_view',nv?'1':'0');}catch{}
@@ -44380,8 +44390,21 @@ function SporcuPlanView(){
   const [gpxGonderilenler,setGpxGonderilenler]=useState([]);
   const gpxListeYenile=()=>{if(!athId)return;gpxGelenListe(athId).then(l=>setGpxGonderilenler(l||[])).catch(()=>{});};
   useEffect(()=>{gpxListeYenile();},[athId]);
-  const {pcView,zoom:pcZoom,toggle:togglePcView}=usePcView();
+  const {pcView,zoom:pcZoom,toggle:togglePcView}=usePcView(32); // 32 = sarmalayıcının padding:'20px 16px' yatay toplamı
   const [kiDark,toggleKiDark]=useKiTheme();
+  // Koşu İzlerim'in teması (kiDark) yalnızca iç sarmalayıcı div'e uygulanır; <html>/<body> ise
+  // global :root'taki AÇIK --bg-tertiary'yi (#d6e2f0) kullanır. Sarmalayıcı sayfadan dar kaldığında
+  // (PC görünümü + zoom, ya da mobilde yatay taşma) yan tarafta o açık zemin şerit olarak görünüyordu
+  // (15.10.2026 — Göksel'in ekran görüntüsü). Çözüm: html/body zeminini sarmalayıcının zeminiyle
+  // AYNI renge çekmek (+ color-scheme, aşırı kaydırma/overscroll alanı da uysun). Sayfadan çıkılırken
+  // eski değerler geri yüklenir. Renkler _koIzThemeVars içindeki --bg-tertiary ile AYNI olmalı.
+  useEffect(()=>{
+    const bg=kiDark?'#0a1220':'#bcd0e8';
+    const de=document.documentElement,bd=document.body;
+    const prev={deBg:de.style.backgroundColor,bdBg:bd.style.backgroundColor,deCs:de.style.colorScheme};
+    de.style.backgroundColor=bg;bd.style.backgroundColor=bg;de.style.colorScheme=kiDark?'dark':'light';
+    return ()=>{de.style.backgroundColor=prev.deBg;bd.style.backgroundColor=prev.bdBg;de.style.colorScheme=prev.deCs;};
+  },[kiDark]);
   // Bu haftanın Pace Disiplin (Hedef Uyumu) puanları — "Bu Hafta Liderlik"
   // widget'ı için. Koç panelindeki LiderlikTab ile AYNI fonksiyon
   // (fetchWeekPaceScores) + AYNI hafta (weekOffset=0) — panel paritesi.
@@ -45043,7 +45066,7 @@ function SporcuPlanView(){
   // burada, TAM DA _koIzThemeVars'ın uygulandığı düğümde yeniden var(...) ile
   // tanımlamak, bu düğümün kendi hesaplanan rengini DOĞRU çözer ve bu doğru
   // renk aşağıya miras kalır — tek tek her metni düzeltmeye gerek kalmaz.
-  return React.createElement('div',{style:{minHeight:'100vh',background:'var(--bg-tertiary)',color:'var(--text-primary)',padding:'20px 16px',..._koIzThemeVars}},
+  return React.createElement('div',{style:{minHeight:'100vh',background:'var(--bg-tertiary)',color:'var(--text-primary)',padding:'20px 16px',overflowX:'clip',..._koIzThemeVars}},
     React.createElement('style',null,
       '@media (max-width: 900px){.plan-3col{grid-template-columns:1fr !important;}}'
     ),
