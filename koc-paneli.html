@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.16-1105 --><!DOCTYPE html>
+<!-- Version: v2026.10.16-1243 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -392,7 +392,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.16-1105';
+const APP_VERSION='v2026.10.16-1243';
 // ── GENEL YÜKLEME İZLEYİCİSİ (2026.10.13) — tüm sekmeler için: bekleyen Firebase okumalarını sayar ──
 var _YUK={bekleyen:0,toplam:0,bitenSon:0,dinleyen:new Set(),arka:0,planAcik:false,liste:{},sira:0};
 // arka: Yükleme Planı tablosunun ARKA PLAN okumaları (fbGet(...,{arka:true})). Yükleme Planı gizliyken genel göstergeye
@@ -6087,6 +6087,33 @@ const BAGLAMSAL_TIPLERI=['hazirlik'];
 const YK_ORTA_KALITELI_MIN_S=13;
 function ykSeviyeNo(txt){const m=/Yürü-Koş[\s·]*S(\d+)/i.exec(String(txt||''));return m?parseInt(m[1],10):0;}
 function ykKaliteliMi(tip,yapiNotu){return tip==='yuru_kos'&&ykSeviyeNo(yapiNotu)>=YK_ORTA_KALITELI_MIN_S;}
+// ── Kısaltılmış Yürü-Koş seansı (2026.10.16 — hacim kontrolü, aşağı yönlü) ─────────────────────────────
+// Hacim kontrolü bir seansı kısalttığında yapı notuna " · kısaltılmış" eklenir ve tekrar sayısı / koşu süresi
+// yapı notunda ("5×[3dk koş / 90sn yürü]") taşınır. tplYuruKos bu bilgiyi geri okur → iki panel de (Koç Paneli ve
+// Koşu İzlerim, yapı notundaki S numarasından şablonu yeniden üreten kodlar) AYNI kısaltılmış seansı gösterir.
+// Isınma/soğuma (5+5 dk) ve yürüyüş molası sabittir; yalnızca seviye, tekrar sayısı ve koşu süresi değişir.
+function ykSureStr(sn){ sn=Math.round(sn); if(sn%60===0) return (sn/60)+'dk'; if(sn<120) return sn+'sn'; return Math.floor(sn/60)+'dk'+(sn%60)+'sn'; }
+function ykSureParse(txt){
+  const m=/^(?:(\d+)dk)?(?:(\d+)sn)?$/.exec(String(txt||'').trim());
+  if(!m||(!m[1]&&!m[2])) return 0;
+  return parseInt(m[1]||'0',10)*60+parseInt(m[2]||'0',10);
+}
+function ykKisaOpts(x){
+  if(x&&typeof x==='object') return (x.rep>0&&x.runSn>0)?{rep:x.rep,runSn:x.runSn}:null;
+  const s=String(x||'');
+  if(!/kısaltılmış/.test(s)) return null;
+  const m=/(\d+)×\[(\d+(?:dk|sn)(?:\d+sn)?)\s/.exec(s);
+  if(!m) return null;
+  const rep=parseInt(m[1],10), runSn=ykSureParse(m[2]);
+  return (rep>0&&runSn>0)?{rep,runSn}:null;
+}
+function ykGunMu(d){
+  if(!d) return false;
+  if(d.tip==='yuru_kos'||d._isYuruKos) return true;
+  return /Yürü-Koş[\s·]*S\d+/i.test((d.yapi_notu||'')+' '+(d.baslik||''));
+}
+// Haftada (henüz yapılmamış ya da yapılmış) en az bir Yürü-Koş günü varsa başlangıç programı haftasıdır.
+function ykHaftasiMi(days){ return (days||[]).some(d=>d&&d.tip!=='dinlenme'&&ykGunMu(d)); }
 function ykKaliteliKayit(w){return !!w&&_ykAntrenmanMi(w)&&ykSeviyeNo(w.yapi_notu)>=YK_ORTA_KALITELI_MIN_S;}
 // S13–S16: seansın yalnızca Z4 çalışma dakikaları eşik sayılır (ısınma/soğuma/yürüyüş aralar aerobik kalır).
 // Yapı notunda "N×[Xdk Z4" varsa oradan, yoksa seviye tablosundan (S13 6 · S14 10 · S15 12 · S16 15 dk).
@@ -17457,7 +17484,7 @@ function tplFromYapiNotu(tur, yapiNotu, band, sure_dk, zones, disiplin, phase, c
   if(tur==='yuru_kos'){
     const sM=yapiNotu.match(/S(\d+)/);
     const sLevel=sM?parseInt(sM[1]):1;
-    return tplYuruKos(sLevel,zones);
+    return tplYuruKos(sLevel,zones,yapiNotu);
   }
 
   return null;
@@ -18536,7 +18563,7 @@ function tplTirmanisAcik(band, sure_dk, zones, dpHedef, maxSureDk=0){
     if(tur==='yuru_kos'&&yapiNotu){
       const m=yapiNotu.match(/·\s*S(\d+)/);
       const s=m?parseInt(m[1]):1;
-      const tpl=tplYuruKos(Math.min(16,Math.max(1,s)),zones);
+      const tpl=tplYuruKos(Math.min(16,Math.max(1,s)),zones,yapiNotu);
       return tpl?{...tpl,yapi_notu:yapiNotu,__matched:true}:null;
     }
     return _orig(tur,yapiNotu,band,sure_dk,zones,disiplin,phase,ctl,recentLongRuns);
@@ -18546,7 +18573,7 @@ function tplTirmanisAcik(band, sure_dk, zones, dpHedef, maxSureDk=0){
 // ── Yürü-Koş Başlangıç Programı ─────────────────────────────────────────────
 // Galloway / C25K bazlı 12 seans. 30 dk sürekli koşuya ulaştırır.
 // zones parametresi ile pace + RPE bilgileri her seans için üretilir.
-function tplYuruKos(sLevel, zones){
+function tplYuruKos(sLevel, zones, kisaOpt){
   var s=Math.min(16,Math.max(1,sLevel));
   // Pace yardımcıları
   var wPace=600;                          // yürüyüş pace: sabit 10:00 /km
@@ -18740,6 +18767,27 @@ function tplYuruKos(sLevel, zones){
      ]},
   ];
   var seans=SEANSLAR[s];
+  // Kısaltılmış seans (hacim kontrolü): tekrar sayısı / koşu süresi yapı notundan ya da nesneden gelir.
+  // Isınma/soğuma ve yürüyüş molası sabit. S12 (sürekli koşu) kısaltılmaz.
+  var _kOpt=ykKisaOpts(kisaOpt);
+  var _kIv=seans&&seans.yapilar&&seans.yapilar[1]&&seans.yapilar[1]._rows&&seans.yapilar[1]._rows[0];
+  var _kisaltildi=false;
+  if(_kOpt&&_kIv&&_kIv.tekrar){
+    var _kDin=_kIv.din_sn;
+    var _kEskiBlok=(_kIv.sure_sn+_kDin)*_kIv.tekrar;
+    var _kYeniBlok=(_kOpt.runSn+_kDin)*_kOpt.rep;
+    var _kSure=Math.max(10,seans.sure+Math.round((_kYeniBlok-_kEskiBlok)/60));
+    var _kTr=function(sn){ return sn%60===0?(sn/60)+' dk':(sn<120?sn+' sn':Math.floor(sn/60)+' dk '+(sn%60)+' sn'); };
+    var _kYapilar=seans.yapilar.slice();
+    _kYapilar[1]={baslik:_kYapilar[1].baslik,
+      detay:_kOpt.rep+' tekrar: ['+_kTr(_kOpt.runSn)+' koşu → '+_kTr(_kDin)+' yürüyüş] · Koşu: '+runZoneStr+' · RPE '+runRpe+' — kısaltılmış seans',
+      _rows:[mkInterval(_kOpt.runSn,_kOpt.rep,_kDin)]};
+    seans=Object.assign({},seans,{
+      sure:_kSure,
+      yapi:seans.yapi.replace(/(\d+)×\[(\d+(?:dk|sn)(?:\d+sn)?)/,_kOpt.rep+'×['+ykSureStr(_kOpt.runSn)).replace(/\(~\d+dk\)/,'(~'+_kSure+'dk)')+' · kısaltılmış',
+      yapilar:_kYapilar});
+    _kisaltildi=true;
+  }
   // Seansın hedef koşu pace'i pratik alt sınırın (9:30/km) altındaysa (yani hesaplanan
   // pace bu sayıdan yavaşsa) bu seansın "Koşu" etiketlerini "Tempolu Yürüyüş"e çevir.
   // Hedef zon/nabız/pace AYNI kalır — sadece icra biçimi (jogging yerine hızlı yürüyüş) değişir.
@@ -18773,6 +18821,7 @@ function tplYuruKos(sLevel, zones){
     yapilar:seans.yapilar,
     _yuruKosSeason:s,
     _isYuruKos:true,
+    ...(_kisaltildi?{_ykKisaltilmis:true}:{}),
   };
 }
 
@@ -24039,6 +24088,163 @@ function _hmCalistir(days,o,out){
   degisti.forEach(i=>{ days[i]={...days[i],_hacimMutabakat:true}; });
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// YÜRÜ-KOŞ (BAŞLANGIÇ) HAFTASI — AŞAĞI YÖNLÜ HACİM KONTROLÜ (2026.10.16 — Göksel onayı)
+// Başlangıç programında seans ilerlemesi (S1→S16) kazanılan şeydir; hedefi doldurmak için seans UZATILMAZ ya da
+// gün eklenmez. Yalnızca kalan hedefi AŞAN haftalarda seanslar küçültülür:
+//   (1) seviye ↓ (en fazla 1 basamak, S1'de yok, yalnızca seans gerçekten kısalıyorsa) → (2) tekrar sayısı ↓
+//   → (3) koşu süresi ↓ (yalnızca ≥6 dk'lık bloklar, 5 dk'ya kadar). Isınma/soğuma (5+5 dk) ve yürüyüş molası sabit.
+//   Seans ~20 dk toplamın altına inecekse son çare: Rahat Yürüyüş (nedeni yazılır).
+// Küçültülen gün otomatik "(revize)" işaretlenir (_revizeOnaylandi) → seviye ilerlemesine sayılmaz, program aynı
+// seviyeden devam eder. Koç tikli / Serbest günler (sabit) değişmez, yalnızca km toplamına girer.
+// Yürü-Koş günleri "Planı Güncelle" sonrasında seviye zinciriyle (_ykCascadeMap) yeniden yazıldığı için bu geçiş
+// snapshot üzerinde ve zincirden SONRA çalışır (bkz. handlePlanGuncelle).
+// ═══════════════════════════════════════════════════════════════════════════════
+const HM_YK_MIN_DK=20;
+
+function _hmYkAdimlari(date,sNo,zones,races,disiplin){
+  if(!(sNo>=1&&sNo<=16)) return [];
+  const kmT=(t)=>gunOneriMesafeKm({date,tip:'yuru_kos',yapi_notu:t.yapi_notu,yapilar:t.yapilar,sure_dk:t.sure_dk},zones,races,disiplin)||0;
+  const adimlar=[];
+  let base=tplYuruKos(sNo,zones);
+  let s=sNo;
+  if(sNo>1){
+    const alt=tplYuruKos(sNo-1,zones);
+    if(alt&&kmT(alt)<kmT(base)-0.15){ adimlar.push({tpl:alt,tur:'seviye',from:'S'+sNo,to:'S'+(sNo-1)}); base=alt; s=sNo-1; }
+  }
+  const iv=base.yapilar&&base.yapilar[1]&&base.yapilar[1]._rows&&base.yapilar[1]._rows[0];
+  if(!iv||!iv.tekrar) return adimlar;       // S12 (sürekli koşu) kısaltılmaz
+  const din=iv.din_sn;
+  let rep=iv.tekrar, runSn=iv.sure_sn;
+  const blok=(r,u)=>(u+din)*r;
+  const topDk=(r,u)=>Math.max(1,base.sure_dk+Math.round((blok(r,u)-blok(iv.tekrar,iv.sure_sn))/60));
+  while(rep>2&&topDk(rep-1,runSn)>=HM_YK_MIN_DK){
+    rep--; adimlar.push({tpl:tplYuruKos(s,zones,{rep,runSn}),tur:'tekrar',from:String(rep+1),to:String(rep)});
+  }
+  while(runSn>=360&&topDk(rep,runSn-60)>=HM_YK_MIN_DK){
+    runSn-=60; adimlar.push({tpl:tplYuruKos(s,zones,{rep,runSn}),tur:'sure',from:ykSureStr(runSn+60),to:ykSureStr(runSn)});
+  }
+  return adimlar;
+}
+
+function _hmYkGirisUygula(ov,tpl){
+  return{...ov,tip:tpl.tip||'yuru_kos',baslik:tpl.baslik,yapi_notu:tpl.yapi_notu,sure_dk:tpl.sure_dk,
+    yukHedef:Math.round((tpl.sure_dk||0)*0.8),_isYuruKos:tpl.tip==='yuru_kos'?true:undefined,_yuruKosSeason:tpl._yuruKosSeason,
+    yapilar:(tpl.yapilar||[]).map(y=>({baslik:y.baslik,detay:y.detay||'',_caprazNot:y._caprazNot||false,
+      ...(y._rows&&y._rows.length?{_rows:y._rows}:{})}))};
+}
+
+function ykHacimSnapUygula(snap,o){
+  const out={uygulandi:false,haftalar:{},atlandi:null};
+  try{ _ykHacimSnapCalistir(snap,o||{},out); }catch(e){ console.warn('ykHacimSnapUygula hatası:',e); out.atlandi='hata: '+(e&&e.message); }
+  return out;
+}
+
+function _ykHacimSnapCalistir(snap,o,out){
+  const map=snap&&snap.overrideMap;
+  if(!map||!o.kalanByWeek){ out.atlandi='bağlam yok'; return; }
+  const bugun=o.todayStr||localDateStr(new Date());
+  const zones=o.zones, races=o.races||[], disiplin=o.disiplin;
+  const sabit=o.sabit||{};
+  const haftaAnahtari=(ds)=>{
+    const d=new Date(ds+'T12:00:00'); d.setDate(d.getDate()-((d.getDay()+6)%7)); return localDateStr(d);
+  };
+  // Haftalara ayır (yalnızca bugün ve sonrası; yapılmış günler zaten overrideMap'te yok)
+  const gruplar={};
+  Object.keys(map).filter(ds=>ds>=bugun).sort().forEach(ds=>{ (gruplar[haftaAnahtari(ds)]=gruplar[haftaAnahtari(ds)]||[]).push(ds); });
+  Object.keys(gruplar).forEach(wk=>{
+    const hedef=o.kalanByWeek[wk];
+    const dates=gruplar[wk];
+    if(!(hedef>0)) return;
+    if(!dates.some(ds=>map[ds]&&map[ds].tip==='yuru_kos')) return;      // başlangıç haftası değil
+    const kmOf=(ds)=>{
+      if(sabit[ds]&&sabit[ds].km!=null) return sabit[ds].km||0;
+      const ov=map[ds]; if(!ov||ov.tip==='dinlenme'||ov.tip==='capraz') return 0;
+      return gunOneriMesafeKm({...ov,date:ds},zones,races,disiplin)||0;
+    };
+    const toplam=()=>dates.reduce((s,ds)=>s+kmOf(ds),0);
+    // Üst sınır: ekrandaki "🎯 alt–üst" penceresinin üstü (Kalan × WEEKLY_VOL_TOL_HIGH) — başlangıç sporcusu için
+    // sağlıklı aralık; hedefe tam oturtmak için seansları gereğinden fazla küçültmeyiz.
+    const ust=hedef*WEEKLY_VOL_TOL_HIGH;
+    let top=toplam();
+    const rapor={hedefKm:round1(hedef),ustKm:round1(ust),oncekiKm:round1(top),sonKm:round1(top),degisen:[]};
+    out.haftalar[wk]=rapor;
+    if(top<=ust) return;
+    const aday=dates.filter(ds=>map[ds]&&map[ds].tip==='yuru_kos'&&!sabit[ds]&&!kocTikliMi(map[ds]));
+    const orijin={}, adimlar={}, ptr={}, acik={};
+    aday.forEach(ds=>{
+      orijin[ds]=map[ds];
+      adimlar[ds]=_hmYkAdimlari(ds,ykSeviyeNo(map[ds].yapi_notu),zones,races,disiplin);
+      ptr[ds]=0; acik[ds]=[];
+    });
+    const degisti=new Set();
+    let guard=80;
+    while(top>ust&&guard-->0){
+      const siradaki=aday.filter(ds=>ptr[ds]<adimlar[ds].length).sort((a,b)=>kmOf(b)-kmOf(a));
+      if(!siradaki.length) break;
+      const ds=siradaki[0];
+      const adim=adimlar[ds][ptr[ds]++];
+      map[ds]={...map[ds],..._hmYkGirisUygula(map[ds],adim.tpl),_revizeOnaylandi:true,_ykHacim:true};
+      acik[ds].push(adim);
+      degisti.add(ds);
+      top=toplam();
+    }
+    // Son çare: seans daha fazla küçülemiyor → Rahat Yürüyüş (yalnızca km'yi gerçekten düşürüyorsa)
+    // Rahat Yürüyüş yalnızca hedef aralığına GERÇEKTEN ulaştırıyorsa kullanılır (tüm adaylar yürüyüşe çevrilse bile
+    // üst sınırın üstünde kalacaksa seanslar küçültülmüş hâliyle bırakılır).
+    let rahatMumkun=false;
+    if(top>ust){
+      try{
+        const yedekMap={}; aday.forEach(ds=>{ yedekMap[ds]=map[ds]; });
+        let tplR0=tplFromYapiNotu('rahat_yurume','Rahat Yürüyüş · Toparlanma',o.band,25,zones,disiplin||'karma','Temel',0,[],o.athlete);
+        if(tplR0&&tplR0.yapilar&&tplR0.yapilar.length){
+          aday.forEach(ds=>{ if(map[ds].tip==='yuru_kos') map[ds]={...map[ds],..._hmYkGirisUygula(map[ds],{...tplR0,tip:'rahat_yurume',sure_dk:25}),tip:'rahat_yurume'}; });
+          rahatMumkun=toplam()<=ust;
+          aday.forEach(ds=>{ map[ds]=yedekMap[ds]; });
+        }
+      }catch(e){ rahatMumkun=false; }
+    }
+    if(top>ust&&rahatMumkun){
+      let g2=10;
+      while(top>ust&&g2-->0){
+        const adayR=aday.filter(ds=>map[ds].tip==='yuru_kos').sort((a,b)=>kmOf(b)-kmOf(a));
+        if(!adayR.length) break;
+        const ds=adayR[0];
+        let tplR=null;
+        try{ tplR=tplFromYapiNotu('rahat_yurume','Rahat Yürüyüş · Toparlanma',o.band,25,zones,disiplin||'karma','Temel',0,[],o.athlete); }catch(e){ tplR=null; }
+        if(!tplR||!tplR.yapilar||!tplR.yapilar.length) break;
+        const aday2={...map[ds],..._hmYkGirisUygula(map[ds],{...tplR,tip:'rahat_yurume',sure_dk:25}),tip:'rahat_yurume',_isYuruKos:undefined,_yuruKosSeason:undefined};
+        const eskiKm=kmOf(ds);
+        const eski=map[ds];
+        map[ds]=aday2;
+        if(kmOf(ds)>=eskiKm-0.1){ map[ds]=eski; break; }
+        map[ds]={...map[ds],_revizeOnaylandi:undefined,_ykHacim:true,_ykRahat:true};
+        acik[ds]=[{tur:'rahat'}];
+        degisti.add(ds);
+        top=toplam();
+      }
+    }
+    degisti.forEach(ds=>{
+      const o0=orijin[ds], s0=ykSeviyeNo(o0.yapi_notu), sonDk=map[ds].sure_dk;
+      // Önceki süre: seansın tam şablon süresi (entry.sure_dk band/yMod ile ölçeklenmiş olabilir; yapılar ise şablondur)
+      let onceDk=o0.sure_dk; try{ const t0=tplYuruKos(s0,zones); if(t0&&t0.sure_dk) onceDk=t0.sure_dk; }catch(e){}
+      // Art arda aynı türdeki adımlar tek ifadede birleşir (ör. "koşu süresi 12dk → 5dk")
+      const birlesik=[]; (acik[ds]||[]).forEach(a2=>{
+        const son=birlesik[birlesik.length-1];
+        if(son&&son.tur===a2.tur) son.to=a2.to; else birlesik.push({...a2});
+      });
+      const adimMetni=birlesik.map(a2=>a2.tur==='seviye'?`${a2.from} → ${a2.to}`:a2.tur==='tekrar'?`tekrar ${a2.from} → ${a2.to}`:`koşu süresi ${a2.from} → ${a2.to}`).join(' · ');
+      const metin=map[ds]._ykRahat
+        ?`Kalan haftalık hedef aralığına (üst sınır ${round1(ust)} km) sığmadığı için Yürü-Koş S${s0} seansı Rahat Yürüyüş olarak planlandı; program seviyesi ilerlemez.`
+        :`Kalan haftalık hedef aralığına (üst sınır ${round1(ust)} km) uymak için Yürü-Koş S${s0} seansı küçültüldü: ${adimMetni} (${onceDk} dk → ${sonDk} dk). (revize) işaretlendi; program aynı seviyeden devam eder.`;
+      map[ds]={...map[ds],hacimNotu:metin};
+      rapor.degisen.push({date:ds,onceki:onceDk,sonraki:sonDk});
+    });
+    rapor.sonKm=round1(top);
+    if(degisti.size) out.uygulandi=true;
+  });
+}
+
 function generateTwoWeekPlan(athlete, history, races, actualWorkouts, testPlanlar=[], optimizeMode=false, forceLastEntry=null, weekEffOverride=null, planOpts=null){
   athlete=hrvEfektifAth(athlete); // HRV hükmü: beyan + 7g sayısal bölge çift taraflı doğrulanmış durumla çalış
   // Revize kaydı (bkz. _REVIZE_KAYIT): senkron çalışan seviye motoru için son haftaların snapshot'larını
@@ -25137,7 +25343,7 @@ function generatePlanSnapshot(athlete,history,races,workouts,testPlanlar,targetW
       };
     }
   }));
-  return{
+  const _snapOut={
     weekKey:targetKey,athId:athlete.id,
     generatedAt:now.toISOString(),
     lastSavedAt:now.toISOString(),
@@ -25149,6 +25355,24 @@ function generatePlanSnapshot(athlete,history,races,workouts,testPlanlar,targetW
     athRaceOverride:(()=>{const {primary:p}=selectRaces(athlete,races);if(!p)return{};return getAthRaceOverride(athlete,p.id);})(),
     reviewLog:[{at:now.toISOString(),reason:'Plan oluşturuldu'}]
   };
+  // Yürü-Koş (başlangıç) haftası hacim kontrolü (aşağı yönlü) — bkz. ykHacimSnapUygula.
+  // Planı Güncelle, Yürü-Koş seviye zincirini bu fonksiyondan SONRA yazdığı için (planOpts.ykAtla) kontrolü
+  // zincirden sonra kendisi çalıştırır; bağlamı planOpts.ykBaglamOut ile alır.
+  try{
+    const _kalanByWeek={};
+    (plan.weeks||[]).forEach(wk=>{
+      if(!wk||!wk.start||!wk.wkStats||wk.wt?.isRaceWeek) return;
+      const kalan=wk.wkStats.kalanTargetKm||0;
+      if(kalan>0) _kalanByWeek[localDateStr(wk.start)]=kalan;
+    });
+    const _ykRaceIds=(athlete?.yarıslar||[]).map(x=>typeof x==='string'?x:x.id);
+    const _ykCtx={kalanByWeek:_kalanByWeek,todayStr,zones:calcZones(athlete),
+      races:(races||[]).filter(r=>_ykRaceIds.includes(r.id)),disiplin:athlete.disiplin,
+      sabit:planOpts?.sabitGunler||null,band:ctlBand(0),athlete};
+    if(planOpts&&planOpts.ykBaglamOut) Object.assign(planOpts.ykBaglamOut,_ykCtx);
+    if(!(planOpts&&planOpts.ykAtla)) ykHacimSnapUygula(_snapOut,_ykCtx);
+  }catch(_ykE){ console.warn('Yürü-Koş hacim kontrolü (snapshot) hatası:',_ykE); }
+  return _snapOut;
 }
 
 function reviewPlanSnapshot(snapshot,athlete,history,races,workouts,testPlanlar){
@@ -25367,7 +25591,7 @@ function buildEffectiveKosuYapilar(dayLike, kosuActual, zones, disiplin, athlete
   const _ykM=/Yürü-Koş[\s·]*S(\d+)/i.exec(_ykSrc);
   if(_ykM){
     try{
-      const _ykTpl=tplYuruKos(Math.min(16,Math.max(1,parseInt(_ykM[1]))),zones);
+      const _ykTpl=tplYuruKos(Math.min(16,Math.max(1,parseInt(_ykM[1]))),zones,dayLike?.yapi_notu);
       if(_ykTpl?.yapilar?.length>0) displayYapilar=_ykTpl.yapilar;
     }catch(e){}
   }
@@ -27752,7 +27976,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     const racesForSnap=dayRaces;
     let _sabitGunler=null;
     try{ _sabitGunler=hacimSabitGunleri(curSnapProt.overrideMap,todayStr,calcZones(freshAthlete),racesForSnap,freshAthlete.disiplin); }catch(_sg){ _sabitGunler=null; }
-    const newSnap=generatePlanSnapshot(freshAthlete,history,racesForSnap,freshWorkouts,testPlanlar||[],null,curSnap.weekEff||null,planMode==='optimize',{sabitGunler:_sabitGunler,guvenlikAtlaGunler:Object.keys(curSnap.guvenlikAtla||{})});
+    const _ykBaglam={};
+    const newSnap=generatePlanSnapshot(freshAthlete,history,racesForSnap,freshWorkouts,testPlanlar||[],null,curSnap.weekEff||null,planMode==='optimize',{sabitGunler:_sabitGunler,guvenlikAtlaGunler:Object.keys(curSnap.guvenlikAtla||{}),ykAtla:true,ykBaglamOut:_ykBaglam});
     if(curSnap.guvenlikAtla&&Object.keys(curSnap.guvenlikAtla).length) newSnap.guvenlikAtla=curSnap.guvenlikAtla; // koçun "kısaltmayı kaldır" tercihleri korunur
     newSnap.rotOffset=newRotOffset;
     newSnap.planMode=planMode;
@@ -28030,6 +28255,8 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       // 4. "Önceki + 1" zinciri uygula
       _ykCascadeMap(newSnap.overrideMap,_tS,_startDate,_startLevel,_zones);
     })();
+    // ── Yürü-Koş hacim kontrolü (aşağı yönlü) — seviye zincirinden SONRA (bkz. ykHacimSnapUygula) ──
+    try{ ykHacimSnapUygula(newSnap,_ykBaglam); }catch(_ykHE){ console.warn('Yürü-Koş hacim kontrolü hatası:',_ykHE); }
     // ── YK Cascade end ────────────────────────────────────────────────────────
     // ── TİK SİGORTASI (20.09.2026 — Göksel: "Gelecek Hafta Planını Göster butonu da tikli günleri
     // asla değiştirememeli") ────────────────────────────────────────────────────────────────────
@@ -30011,7 +30238,20 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
           },'📈 %'+rampRatePct+' Rampa')
         ),
         React.createElement('div',{className:'flex-gap',style:{alignItems:'center'}},
-          week.wt&&React.createElement('div',{className:'flex-gap',style:{fontSize:12,flexWrap:'wrap'}},
+          // 2026.10.16 — Başlangıç (Yürü-Koş) haftası: Hedef/Kalan/Uzun/D+ yerine PROGRAM (haftanın seansları) ve
+          // TAVAN (Yükleme Planı hedefi). Program tavanı doldurmak zorunda değildir; seanslar yalnızca tavan
+          // aralığını (Kalan × %120) aşarsa küçültülür. D+ ve haftanın uzunu bu programda anlamsız → gösterilmez.
+          // Koşu İzlerim ile paritesi: SporcuPlanView aynı ykHaftasiMi kuralını kullanır.
+          week.wt&&ykHaftasiMi(week.days)&&React.createElement('div',{className:'flex-gap',style:{fontSize:12,flexWrap:'wrap'}},
+            React.createElement('span',{style:{color:'var(--text-secondary)'}},'Program:'),
+            React.createElement('span',{style:{fontWeight:600},title:'Haftanın Yürü-Koş seanslarının toplam mesafesi (reçete satırlarından)'},haftaOneriKm+' km'),
+            hedefGosterilenKm>0&&React.createElement('span',{
+              style:{color:'var(--text-secondary)'},
+              title:'Yükleme Planı hedefi ('+hedefGosterilenKm+' km) — başlangıç programında doldurulması gerekmez. Seanslar yalnızca bu hedefin kalanının %120\'sini aşarsa küçültülür; hiçbir zaman uzatılmaz.'
+            },'· Tavan: '+hedefGosterilenKm+' km'),
+            week.wkActualKm>0&&React.createElement('span',{style:{color:'var(--success)'}},'Gerçek: '+week.wkActualKm+' km')
+          ),
+          week.wt&&!ykHaftasiMi(week.days)&&React.createElement('div',{className:'flex-gap',style:{fontSize:12,flexWrap:'wrap'}},
             React.createElement('span',{style:{color:'var(--text-secondary)'}},'Hedef:'),
             weekShowRevised
               ?React.createElement('span',null,
@@ -45378,7 +45618,7 @@ function SporcuPlanView(){
       let _ykOverrideApplied=false;
       if(_ykM){
         try{
-          const _ykTpl=tplYuruKos(Math.min(16,Math.max(1,parseInt(_ykM[1]))),zones);
+          const _ykTpl=tplYuruKos(Math.min(16,Math.max(1,parseInt(_ykM[1]))),zones,ov?.yapi_notu);
           if(_ykTpl?.yapilar?.length>0){ displayYapilar=_ykTpl.yapilar; _ykOverrideApplied=true; }
         }catch(e){}
       }
@@ -45771,6 +46011,14 @@ function SporcuPlanView(){
         })():null;
         const targetKm=isRevised?_effKm:(_origKm||_stableTarget?.km||0);
         const targetDp=isRevised?_effDp:(_origDp||_stableTarget?.dp||0);
+        // 2026.10.16 — Başlangıç (Yürü-Koş) haftası: Koç Paneli ile AYNI kural (ykHaftasiMi). Sporcu Yükleme Planı
+        // hedefini değil, haftanın PROGRAMINI (yapılan + kalan seanslar) görür; D+ hedefi gösterilmez.
+        const _ykHaftaSp=dayInfos.filter(x=>!x.nextWeek).some(x=>x.ov&&x.ov.tip!=='dinlenme'&&ykGunMu(x.ov));
+        const _ykProgramKm=_ykHaftaSp?round1(dayInfos.filter(x=>!x.nextWeek&&x.status!=='missed').reduce((sum,x)=>{
+          if(x.actuals&&x.actuals.length) return sum+x.actuals.filter(w=>(w.spor||'kosu')==='kosu').reduce((a,w)=>a+(parseFloat(w.mesafe)||0),0);
+          if(x.ov&&x.ov.tip!=='dinlenme'&&x.ov.tip!=='capraz'){ try{ return sum+(gunOneriMesafeKm({...x.ov,date:x.date},zones,races,athlete.disiplin)||0); }catch(e){ return sum; } }
+          return sum;
+        },0)):0;
 
         const ProgressBar=({val,max,rangeLow,rangeHigh,color,label,unit=''})=>{
           const pct=max>0?Math.min(110,(val/max)*100):0;
@@ -45854,12 +46102,15 @@ function SporcuPlanView(){
           React.createElement('div',null,
             React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',marginBottom:6}},'🎯 Bu Hafta'),
 
-            targetKm>0
+            (_ykHaftaSp&&_ykProgramKm>0)
+              ?React.createElement(ProgressBar,{val:actualKm,max:_ykProgramKm,color:'#60a5fa',label:'Mesafe (program)',unit:' km'})
+              :targetKm>0&&!_ykHaftaSp
               ?React.createElement(ProgressBar,{val:actualKm,max:round1(targetKm),rangeLow:round1(targetKm*WEEKLY_VOL_TOL_LOW),rangeHigh:round1(targetKm*WEEKLY_VOL_TOL_HIGH),color:'#60a5fa',label:'Mesafe',unit:' km'})
               :React.createElement('div',{style:{fontSize:10,color:'var(--text-tertiary)',marginBottom:6}},'Mesafe: ',actualKm,' km'),
             // D+ hedefi 100m altındaysa (düz parkur sayılır — bkz. DP_MEANINGFUL_THRESHOLD)
             // Koşu İzlerim'de hiç gösterilmez; ne ProgressBar ne de eski nokta-değer fallback'i.
-            targetDp>=100
+            // Başlangıç (Yürü-Koş) haftasında D+ hedefi hiç gösterilmez.
+            (!_ykHaftaSp&&targetDp>=100)
               ?React.createElement(ProgressBar,{val:actualDp,max:targetDp,rangeLow:Math.round(targetDp*WEEKLY_VOL_TOL_LOW),rangeHigh:Math.round(targetDp*WEEKLY_VOL_TOL_HIGH),color:'#f87171',label:'D+',unit:' m'})
               :null,
 
