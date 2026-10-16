@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.16-1403 --><!DOCTYPE html>
+<!-- Version: v2026.10.16-1430 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -392,7 +392,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.16-1403';
+const APP_VERSION='v2026.10.16-1430';
 // ── GENEL YÜKLEME İZLEYİCİSİ (2026.10.13) — tüm sekmeler için: bekleyen Firebase okumalarını sayar ──
 var _YUK={bekleyen:0,toplam:0,bitenSon:0,dinleyen:new Set(),arka:0,planAcik:false,liste:{},sira:0};
 // arka: Yükleme Planı tablosunun ARKA PLAN okumaları (fbGet(...,{arka:true})). Yükleme Planı gizliyken genel göstergeye
@@ -5010,10 +5010,32 @@ function initFirebase(){
 // Revize edilmiş gün orijinal seviyenin tam karşılığı OLMADIĞI için o günün antrenmanı seviye
 // kararına (yükselt/aynı/düşür) GİRMEZ. Tek paylaşılan kaynak → Koç Paneli ve Koşu İzlerim aynı sonucu görür.
 const _REVIZE_KAYIT={};
+// 2026.10.16 (Göksel: "reçete altındaki bildirim bazen 'Koç revize etti', bazen tam seviye kararı gösteriyor"):
+// Kayıt arka planda (asenkron) dolduğu için, ekran kayıt dolmadan çizildiyse revize işaretli gün "normal" sayılıp tam
+// seviye kararı gösteriliyor ve kayıt dolunca ekran kendini YENİLEMİYORDU (sayfa yenilenene/başka bir şey tetikleyene
+// kadar yanlış bildirim kalıyordu; plan da kayıt dolmadan hesaplanmış oluyordu). Artık kayıt DEĞİŞİNCE (kısa bir
+// gecikmeyle toplu) dinleyen bileşenler yeniden çizilir: useRevizeSurum() — bkz. HaftalikPlanTab.
+const _REVIZE_DINLEYICI=new Set();
+let _REVIZE_SURUM=0, _revizeBildirZaman=null;
+function _revizeBildir(){
+  if(_revizeBildirZaman) return;
+  _revizeBildirZaman=setTimeout(()=>{
+    _revizeBildirZaman=null; _REVIZE_SURUM++;
+    _REVIZE_DINLEYICI.forEach(f=>{ try{ f(_REVIZE_SURUM); }catch(_e){} });
+  },60);
+}
+function useRevizeSurum(){
+  const [s,setS]=React.useState(_REVIZE_SURUM);
+  React.useEffect(()=>{ _REVIZE_DINLEYICI.add(setS); setS(_REVIZE_SURUM); return ()=>{ _REVIZE_DINLEYICI.delete(setS); }; },[]);
+  return s;
+}
 function _revizeKayitAyarla(athId,date,val){
   if(!athId||!date) return;
-  if(val){ (_REVIZE_KAYIT[athId]||(_REVIZE_KAYIT[athId]={}))[date]=true; }
-  else if(_REVIZE_KAYIT[athId]) delete _REVIZE_KAYIT[athId][date];
+  if(val){
+    const m=(_REVIZE_KAYIT[athId]||(_REVIZE_KAYIT[athId]={}));
+    if(!m[date]){ m[date]=true; _revizeBildir(); }
+  }
+  else if(_REVIZE_KAYIT[athId]&&_REVIZE_KAYIT[athId][date]){ delete _REVIZE_KAYIT[athId][date]; _revizeBildir(); }
 }
 function _revizeKayitIsle(athId,ovMap){
   if(!athId||!ovMap||typeof ovMap!=='object') return;
@@ -6960,11 +6982,32 @@ const YK_DRIFT_FREN_MAX_TEKRAR=2;
 function _ykAntrenmanMi(w){
   return !!w&&((w.tur==='yuru_kos'||w._isYuruKos)||(w.yapi_notu&&(w.yapi_notu.startsWith('Yürü-Koş ·')||w.yapi_notu.startsWith('🚶🏃 Yürü-Koş ·'))));
 }
+// 2026.10.16 (Göksel onayı): REVİZE kayıtlar YALNIZCA FREN verebilir, seviye YÜKSELTEMEZ. Revize gün listeye girmez
+// (ilerleme/son seviye normal kayıtlardan belirlenir); ama EN SON kayıt revize ise ve fren sinyali (RPE/drift/uygulama/
+// toparlanma) verdiyse sıradaki seviye o revize seansın seviyesini aşamaz → seviye tekrarlanır. Fren sinyali yoksa revize
+// kayıt eskisi gibi yok sayılır. Aynı seviyede üst üste en fazla N tekrar sınırı (fren sınırları) revize kaydı da sayar.
 function ykSeviyeKarari(ykWorkouts){
-  const gecmis=[...(ykWorkouts||[])].filter(w=>!revizeliAntrenmanMi(w))
-    .map(w=>{const m=(w.yapi_notu||'').match(/·\s*S(\d+)/);return m?{date:w.date||'',sIdx:parseInt(m[1]),rpe:parseFloat(w.rpe)||null,w}:null;})
+  const kayitlar=[...(ykWorkouts||[])]
+    .map(w=>{const m=(w.yapi_notu||'').match(/·\s*S(\d+)/);return m?{date:w.date||'',sIdx:parseInt(m[1]),rpe:parseFloat(w.rpe)||null,w,revize:revizeliAntrenmanMi(w)}:null;})
     .filter(Boolean)
     .sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const gecmis=kayitlar.filter(g=>!g.revize);
+  const k=_ykKararListeden(gecmis);
+  const yeni=kayitlar[0];
+  if(yeni&&yeni.revize&&(!k.son||yeni.date>k.son.date)){
+    const kr=_ykKararListeden([yeni,...gecmis]);
+    if(kr.rpeTekrar||kr.driftTekrar||kr.uygTekrar||kr.recTekrar){
+      k.revizeFren=true; k.revizeKayit=yeni; k.revizeKar=kr;
+      const tavan=Math.max(yeni.sIdx,k.sonSeviye,1); // fren asla geriletmez: en fazla normal son seviye / revize seviyenin büyüğü
+      if(k.sonraki>tavan){
+        k.sonraki=tavan;
+        k.not+=' · son seans (revize) fren sinyali verdi'+kr.not.replace(/^ · /,' — ')+' (revize kayıt seviye yükseltmez, yalnızca frenler)';
+      }
+    }
+  }
+  return k;
+}
+function _ykKararListeden(gecmis){
   const son=gecmis[0]||null;
   const sonSeviye=son?son.sIdx:0;
   const k={son,sonSeviye,sonraki:sonSeviye+1,not:'',rpeTekrar:false,rpeOrt:null,driftTekrar:false,driftSayi:0,driftSerbest:false,driftOy:null,uygTekrar:false,uygSayi:0,uygSerbest:false,uygOy:null,recTekrar:false,recSayi:0,recSerbest:false,recOy:null};
@@ -7315,8 +7358,24 @@ function driftYorumUret(w,athWorkouts,athlete){
   // Blok değerlendirmeleri (drift yüzdeleri) olduğu gibi gösterilir.
   const _athId=w.athleteId||((athWorkouts||[]).find(x=>x&&x.athleteId)||{}).athleteId;
   if(revizeliAntrenmanMi(w,_athId)){
-    return {seviye:{k:'revize',baslik:'✏️ Koç revize etti — seviye önerisi uygulanmaz',
-      neden:'Bu antrenman koç tarafından değiştirilmiş (revize) olduğu için orijinal seviyenin tam karşılığı değil. Seviye değişikliği (yükselt / aynı / düşür) önerilmez ve bir sonraki program önerisinde bu kayıt seviye kararına katılmaz.',
+    // 2026.10.16 (Göksel onayı): revize kayıt seviye YÜKSELTMEZ ama FREN verebilir. Yürü-Koş'ta program önerisiyle AYNI karar
+    // fonksiyonu (ykSeviyeKarari) çalışır: fren sinyali varsa "aynı seviyeyi tekrarla", yoksa kayıt yok sayılır.
+    if(_ykAntrenmanMi(w)){
+      const _onc=(athWorkouts||[]).filter(x=>x&&x.id!==w.id&&x.date&&w.date&&x.date<w.date&&_ykAntrenmanMi(x));
+      const kar=ykSeviyeKarari([..._onc,w]);
+      if(kar.revizeFren&&kar.revizeKayit&&kar.revizeKayit.w===w){
+        const kr=kar.revizeKar||{}, nedenler=[];
+        if(kr.recTekrar) nedenler.push('toparlanma aralarında nabız bölge tavanının üstünde kaldı ('+kr.recSayi+'/'+REC_FREN_MAX_TEKRAR+')');
+        if(kr.uygTekrar) nedenler.push('kalite fazları hedef pace’in yavaş tarafında koşuldu ('+kr.uygSayi+'/'+UYG_FREN_MAX_TEKRAR+')');
+        if(kr.driftTekrar) nedenler.push('kardiyak drift yüksek ('+kr.driftSayi+'/'+YK_DRIFT_FREN_MAX_TEKRAR+')');
+        if(kr.rpeTekrar) nedenler.push('RPE kişisel ortalamanın belirgin üstünde');
+        return {seviye:{k:'ayni',baslik:'➡️ Revize gün — fren sinyali: aynı seviyeyi tekrarla (S'+kar.revizeKayit.sIdx+')',
+          neden:'Bu antrenman koç tarafından değiştirilmiş (revize) olduğu için seviye YÜKSELTMEZ; ancak fren sinyali verdi: '+nedenler.join('; ')+'. Bir sonraki program önerisi bu seviyeyi aşmaz, seviye düşürülmez.',
+          notlar:[]},kiyas:null,degerler};
+      }
+    }
+    return {seviye:{k:'revize',baslik:'✏️ Koç revize etti — seviye yükseltilmez',
+      neden:'Bu antrenman koç tarafından değiştirilmiş (revize) olduğu için orijinal seviyenin tam karşılığı değil: seviye yükseltmez. Olumsuz sinyal (RPE, drift, uygulama, toparlanma) yoksa kayıt bir sonraki program önerisinde yok sayılır; olumsuz sinyal varsa öneri aynı seviyeyi tekrarlar (seviye düşürülmez).',
       notlar:[]},kiyas:null,degerler};
   }
   const oy=driftSeviyeOyu(w);
@@ -17570,15 +17629,28 @@ function calcSeviyeFromHistory(tur, phaseMaxIdx, fallbackIdx, athWorkouts){
     // 2026.10.08 (Göksel talebi): koçun "(revize)" işaretlediği günün antrenmanı orijinal seviyenin
     // tam karşılığı DEĞİL — ne son kayıt olarak seviye kararını belirler ne de RPE referansına girer
     // (bkz. revizeliAntrenmanMi). Geriye kalan geçmişe göre karar verilir; hiç kalmadıysa fallbackIdx.
-    .filter(w=>!revizeliAntrenmanMi(w))
     .map(w=>{
       const m=/S(\d+)/.exec(w.yapi_notu);
       if(!m) return null;
-      return{date:w.date,sIdx:parseInt(m[1],10)-1,rpe:parseFloat(w.rpe)||null,w};
+      return{date:w.date,sIdx:parseInt(m[1],10)-1,rpe:parseFloat(w.rpe)||null,w,revize:revizeliAntrenmanMi(w)};
     })
     .filter(Boolean)
     .sort((a,b)=>b.date.localeCompare(a.date));
-  if(!gecmis.length) return fallbackIdx;
+  // 2026.10.16 (Göksel onayı): revize kayıtlar YALNIZCA FREN verebilir, seviye yükseltemez. Revize gün normal karar
+  // listesine girmez; ama EN SON kayıt revizeyse ve kendi sinyalleri 'yükselt' DEĞİLSE (aynı/düşür), sonuç o revize
+  // seansın seviyesini aşamaz (tekrar). Düşürme yönü bile yalnızca "aynı seviyede tut"a çevrilir (revize gün tam karşılık değil).
+  const normal=gecmis.filter(g=>!g.revize);
+  const temel=normal.length?_seviyeKarariListeden(normal,phaseMaxIdx):fallbackIdx;
+  const yeni=gecmis[0];
+  if(yeni&&yeni.revize&&(!normal.length||yeni.date>normal[0].date)){
+    const revS=Math.min(Math.max(yeni.sIdx,0),phaseMaxIdx);
+    const revSonuc=_seviyeKarariListeden([yeni,...normal],phaseMaxIdx);
+    const normS=normal.length?Math.min(Math.max(normal[0].sIdx,0),phaseMaxIdx):0;
+    if(revSonuc<=revS) return Math.min(temel,Math.max(revS,normS)); // fren asla geriletmez
+  }
+  return temel;
+}
+function _seviyeKarariListeden(gecmis,phaseMaxIdx){
   const son=gecmis[0];
   const sonSeviye=Math.min(Math.max(son.sIdx,0),phaseMaxIdx);
   // Drift sinyali (2026.10.02, Göksel talebi): son antrenmanda kardiyak drift ölçülmüşse RPE'ye
@@ -26663,7 +26735,8 @@ function anketGuncellemeBekleniyor({athlete,workouts,races,planSnap,todayStr}){
   return !anketGuncel;
 }
 
-function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapInit,onPlanSnapChange,onAthletesRefresh,onWorkoutsRefresh,onSaveWorkout,onSaveWorkoutGpx,onUpdateWorkout,onUpdateAthlete,onSaveTestPlan,onDeleteTestPlan}){  const [showLoading,setShowLoading]=useState(false);
+function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapInit,onPlanSnapChange,onAthletesRefresh,onWorkoutsRefresh,onSaveWorkout,onSaveWorkoutGpx,onUpdateWorkout,onUpdateAthlete,onSaveTestPlan,onDeleteTestPlan}){  const revizeSurum=useRevizeSurum(); // revize kaydı (asenkron) dolunca/değişince plan + GPX bildirimi yeniden hesaplanır
+  const [showLoading,setShowLoading]=useState(false);
   const [selectedPrimary,setSelectedPrimary]=useState(null);
   const [planMode,setPlanModeLocal]=useState('optimize');
   const [expandDay,setExpandDay]=useState(null);
@@ -27239,7 +27312,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       return{..._we,week1Proj:{effKm:_p1Km,effDp:0,isRevised:true},_rampCfg:{km:rampRatePct,dp:rampDpRatePct}};
     })(),{guvenlikAtlaGunler:Object.keys(planSnap?.guvenlikAtla||{})});
     }catch(e){console.error('plan useMemo error:',e);return{_error:e.message};}
-  },[athlete,history,races,workouts,selectedPrimary,planMode,dayRaces,planSnap,rampModeOn,rampRatePct,rampDpRatePct]);
+  },[athlete,history,races,workouts,selectedPrimary,planMode,dayRaces,planSnap,rampModeOn,rampRatePct,rampDpRatePct,revizeSurum]);
 
   // 2026.10.10 — Uygulama özeti (geçmiş kayıtlar), GÖRÜNTÜLENEN hafta için: reçete verisi zaten bellekte (planSnap),
   // ağ okuması gerekmez. Özeti olmayan o haftanın kayıtlarına yazılır; reçetede pace verisi yoksa n:0 işareti.
