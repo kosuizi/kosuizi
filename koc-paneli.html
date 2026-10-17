@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.17-1508 --><!DOCTYPE html>
+<!-- Version: v2026.10.17-1519 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -392,7 +392,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.17-1508';
+const APP_VERSION='v2026.10.17-1519';
 // ── GENEL YÜKLEME İZLEYİCİSİ (2026.10.13) — tüm sekmeler için: bekleyen Firebase okumalarını sayar ──
 var _YUK={bekleyen:0,toplam:0,bitenSon:0,dinleyen:new Set(),arka:0,planAcik:false,liste:{},sira:0};
 // arka: Yükleme Planı tablosunun ARKA PLAN okumaları (fbGet(...,{arka:true})). Yükleme Planı gizliyken genel göstergeye
@@ -7016,6 +7016,9 @@ function _ykAntrenmanMi(w){
 //  • Geri dönüş: aynı seviyede üst üste 2. kötü seansta (YK_GERI_DONUS_SAYI) fren bırakılıp ilerlemek yerine BİR seviye geri gidilir
 //    (_ykKararListeden: geriDon). Aynı seviyeden daha önce geri dönüldüyse otomatik geri dönülmez, seviye tekrarlanır ve koça uyarı verilir.
 //  • Uyarı: aynı seviyede ardışık ≥2 HACİM revizesi temiz geçtiyse (seviye hacim yüzünden tam yapılamıyor) koça bilgi (hacimTikanma).
+//  • 2026.10.17 (Göksel onayı) — ORTAK SEANS KARARI: her seans 3 bacağın (drift · RPE · pace/nabız) birlikte verdiği TEMİZ / ŞÜPHELİ / KÖTÜ
+//    kararıyla değerlendirilir (bkz. _ykSeansKarari). Revize kayıtta da aynı: KÖTÜ → sayaca girer, ŞÜPHELİ → seviye ilerletilmez ama sayaç nötr,
+//    TEMİZ → nötr. Geri dönüş: aynı seviyede YK_GERI_DONUS_SAYI (2). KÖTÜ seans.
 function ykSeviyeKarari(ykWorkouts){
   const kayitlar=[...(ykWorkouts||[])]
     .map(w=>{const m=(w.yapi_notu||'').match(/·\s*S(\d+)/);return m?{date:w.date||'',sIdx:parseInt(m[1]),rpe:parseFloat(w.rpe)||null,w,revize:revizeliAntrenmanMi(w),amac:revizeAmaci(w)}:null;})
@@ -7030,21 +7033,22 @@ function ykSeviyeKarari(ykWorkouts){
     const eff=(onc.son&&onc.sonraki>=1)?Math.min(16,onc.sonraki,Math.max(r.sIdx,onc.sonSeviye||0,1)):r.sIdx;
     const rr={...r,sIdx:eff,orijS:r.sIdx};
     const kr=_ykKararListeden([rr,...liste]);
-    const kotu=!!(kr.rpeTekrar||kr.driftTekrar||kr.uygTekrar||kr.recTekrar||kr.rpeSerbest||kr.driftSerbest||kr.uygSerbest||kr.recSerbest);
-    r.rev={kr,kotu,eff};
+    const kotu=(kr.seansKarar==='kotu');                 // sayaca girer
+    const fren=(kr.seansKarar==='kotu'||kr.seansKarar==='supheli');   // seviye ilerletilmez (şüpheli: sayaç nötr)
+    r.rev={kr,kotu,fren,eff};
     if(kotu) liste=[rr,...liste];
   });
   const k=_ykKararListeden(liste);
   if(k.son&&k.son.revize&&k.sonSeviye>15) k.sonSeviye=15;   // revize kayıt "S16 tamamlandı" sayılmaz
   const yeni=kayitlar[0];
   if(yeni&&yeni.revize&&yeni.rev){
-    k.revizeKayit=yeni; k.revizeKar=yeni.rev.kr; k.revizeAmac=yeni.amac||'zorlanma'; k.revizeEff=yeni.rev.eff; k.revizeFren=yeni.rev.kotu;
-    if(yeni.rev.kotu) k.not+=' · son seans (revize · '+(k.revizeAmac==='hacim'?'hacim':'zorlanma')+') fren sinyali verdi (revize kayıt seviye yükseltmez, yalnızca frenler)';
+    k.revizeKayit=yeni; k.revizeKar=yeni.rev.kr; k.revizeAmac=yeni.amac||'zorlanma'; k.revizeEff=yeni.rev.eff; k.revizeFren=yeni.rev.fren; k.revizeKotu=yeni.rev.kotu;
+    if(yeni.rev.fren) k.not+=' · son seans (revize · '+(k.revizeAmac==='hacim'?'hacim':'zorlanma')+') '+(yeni.rev.kotu?'KÖTÜ sayıldı (sayaca girdi)':'ŞÜPHELİ (sayaç nötr)')+' — revize kayıt seviye yükseltmez, yalnızca frenler';
   }
   // Ardışık temiz HACİM revizeleri (aynı beklenen seviyede) → seviye hacim yüzünden tam yapılamıyor uyarısı
   { let n=0, lv=null;
     for(const r of kayitlar){
-      if(!(r.revize&&r.amac==='hacim'&&r.rev&&!r.rev.kotu)) break;
+      if(!(r.revize&&r.amac==='hacim'&&r.rev&&!r.rev.fren)) break;
       if(lv==null) lv=r.rev.eff; else if(r.rev.eff!==lv) break;
       n++;
     }
@@ -7052,123 +7056,111 @@ function ykSeviyeKarari(ykWorkouts){
   }
   return k;
 }
+// 2026.10.17 (Göksel onayı) — SEANS KARARI: 3 bacak (drift · RPE · pace/nabız hedefi [kalite fazları + toparlanma]) tek ORTAK karara bağlanır.
+// Veri olmayan bacak oylamaya girmez. Ölçülen bacaklar arasında olumsuz oy: 0 → TEMİZ · ölçülen ≥2 iken tek olumsuz → ŞÜPHELİ ·
+// olumsuzlar ölçülenlerin çoğunluğu (olumsuz×2 > ölçülen) → KÖTÜ (ölçülen=1 ise o bacak olumsuzsa KÖTÜ).
+//   KÖTÜ → seviye tekrarlanır, aynı-seviye sayacı +1 (YK_GERI_DONUS_SAYI. kötü seansta bir alt seviye) ·
+//   ŞÜPHELİ → seviye ilerletilmez ama sayaç NÖTR (artmaz, sıfırlanmaz) · TEMİZ → ilerleyebilir, sayaç sıfırlanır.
+function _ykBacakOylari(gecmis,i){
+  const g=gecmis[i];
+  const bac={drift:null,rpe:null,uyg:null};      // null=ölçülmedi · true=olumsuz oy · false=olumlu/nötr
+  let dOy=null, rRef=null, uo=null, ro=null;
+  if(YK_DRIFT_FREN_AKTIF&&DRIFT_SEVIYE_SINYALI&&g.w){ dOy=driftSeviyeOyu(g.w); if(dOy) bac.drift=(dOy.yon==='alt'); }
+  if(g.rpe!=null){
+    // RPE: kişisel referans = kendinden önceki ≤5 RPE'li seans (≥2 gerekir); ≥ ort+1.0 → olumsuz
+    const ref=gecmis.slice(i+1,i+6).map(x=>x.rpe).filter(r=>r!=null&&r>0);
+    if(ref.length>=2){ const ort=ref.reduce((a,b)=>a+b,0)/ref.length; rRef={ort}; bac.rpe=(g.rpe>=ort+1.0); }
+  }
+  uo=g.w?uygulamaFrenOyu(g.w):null; ro=g.w?toparlanmaFrenOyu(g.w):null;
+  if(uo||ro) bac.uyg=!!((uo&&uo.fren)||(ro&&ro.fren));
+  return {bac,dOy,rRef,uo,ro};
+}
+function _ykSeansKarari(gecmis,i){
+  const o=_ykBacakOylari(gecmis,i);
+  const vals=[o.bac.drift,o.bac.rpe,o.bac.uyg].filter(v=>v!==null);
+  const olculen=vals.length, olumsuz=vals.filter(Boolean).length;
+  let karar='temiz';
+  if(olumsuz>0) karar=(olculen===1||olumsuz*2>olculen)?'kotu':'supheli';
+  return {...o,olculen,olumsuz,karar};
+}
 function _ykKararListeden(gecmis){
   const son=gecmis[0]||null;
   const sonSeviye=son?son.sIdx:0;
-  const k={son,sonSeviye,sonraki:sonSeviye+1,not:'',rpeTekrar:false,rpeSerbest:false,rpeSayi:0,rpeOrt:null,driftTekrar:false,driftSayi:0,driftSerbest:false,driftOy:null,uygTekrar:false,uygSayi:0,uygSerbest:false,uygOy:null,recTekrar:false,recSayi:0,recSerbest:false,recOy:null};
+  const k={son,sonSeviye,sonraki:sonSeviye+1,not:'',rpeTekrar:false,rpeSerbest:false,rpeSayi:0,rpeOrt:null,driftTekrar:false,driftSayi:0,driftSerbest:false,driftOy:null,uygTekrar:false,uygSayi:0,uygSerbest:false,uygOy:null,recTekrar:false,recSayi:0,recSerbest:false,recOy:null,
+    seansKarar:null,seansOlumsuz:0,seansOlculen:0,seansSayi:0};
   if(!son) return k;
-  if(son.rpe!=null){
-    // RPE freni (2026.10.17: sayaçlı): her kayıt KENDİ referansıyla (kendinden önceki ≤5 RPE'li seans, ≥2 gerekir) değerlendirilir;
-    // aynı seviyede üst üste kötü (≥ ort+1.0) seans sayısı n. n≤2 → seviye tekrarı; n≥3 → fren bırakılmaz, geri dönüş (bkz. aşağıda).
-    const rpeKotuMu=(i)=>{
-      const g=gecmis[i]; if(!g||g.rpe==null) return null;
-      const ref=gecmis.slice(i+1,i+6).map(x=>x.rpe).filter(r=>r!=null&&r>0);
-      if(ref.length<2) return null;
-      const ort=ref.reduce((a,b)=>a+b,0)/ref.length;
-      return {kotu:g.rpe>=ort+1.0,ort};
-    };
-    const r0=rpeKotuMu(0);
-    if(r0){
-      k.rpeOrt=r0.ort;
-      if(r0.kotu){
-        let n=0;
-        for(let i=0;i<gecmis.length;i++){
-          if(gecmis[i].sIdx!==son.sIdx) break;
-          const ri=rpeKotuMu(i);
-          if(ri&&ri.kotu) n++; else break;
-        }
-        k.rpeSayi=n;
-        if(n<=YK_RPE_FREN_MAX_TEKRAR){
-          k.rpeTekrar=true;
-          k.not=' · son seans kişisel ortalamaya göre zor geldi (RPE '+son.rpe+' vs ort. '+_r1(r0.ort)+'), seviye tekrarlanıyor ('+n+'/'+YK_GERI_DONUS_SAYI+')';
-        } else {
-          k.rpeSerbest=true;
-          k.not=' · \u26a0\ufe0f aynı seviyede '+n+'. seans üst üste kişisel ortalamaya göre zor geldi (RPE '+son.rpe+' vs ort. '+_r1(r0.ort)+') — tekrar sınırı doldu; koç kontrolü önerilir';
-        }
-      }
-    }
+  const h=_ykSeansKarari(gecmis,0);
+  k.seansKarar=h.karar; k.seansOlumsuz=h.olumsuz; k.seansOlculen=h.olculen;
+  k.driftOy=h.dOy; k.rpeOrt=h.rRef?h.rRef.ort:null; k.uygOy=h.uo; k.recOy=h.ro;
+  // Aynı-seviye KÖTÜ seans sayacı (yeniden eskiye): kötü +1 · şüpheli nötr · temiz keser · farklı seviye keser
+  let n=0;
+  for(let i=0;i<gecmis.length;i++){
+    if(gecmis[i].sIdx!==son.sIdx) break;
+    const d=i===0?h:_ykSeansKarari(gecmis,i);
+    if(d.karar==='kotu') n++; else if(d.karar==='temiz') break;
   }
-  if(YK_DRIFT_FREN_AKTIF&&DRIFT_SEVIYE_SINYALI){
-    const oy=son.w?driftSeviyeOyu(son.w):null;
-    k.driftOy=oy;
-    if(oy&&oy.yon==='alt'){
-      let n=0;
-      for(const g of gecmis){
-        if(g.sIdx!==son.sIdx) break;
-        const o=g.w?driftSeviyeOyu(g.w):null;
-        if(o&&o.yon==='alt') n++; else break;
-      }
-      k.driftSayi=n;
-      if(n<=YK_DRIFT_FREN_MAX_TEKRAR){
-        k.driftTekrar=true;
-        if(!k.rpeTekrar&&!k.rpeSerbest) k.not=' · son seansta kardiyak drift yüksek (ort. '+_kayipMetni(oy.ortKot)+'), seviye tekrarlanıyor ('+n+'/'+YK_GERI_DONUS_SAYI+')';
-        else k.not+=' · ayrıca drift yüksek';
-      } else {
-        k.driftSerbest=true;
-        if(!k.rpeTekrar&&!k.rpeSerbest) k.not=' · ⚠️ aynı seviyede '+n+'. seans üst üste drift yüksek — tekrar sınırı doldu; koç kontrolü önerilir (ısı/uyku/hastalık/ayakkabı/ölçüm)';
-      }
-    }
-  }
-  // Uygulama freni (2026.10.10): hedef pace'in yavaş tarafında koşulduysa seviye tekrarlanır (drift/RPE'den bağımsız fren).
-  { const u=uygulamaFrenDurumu(gecmis,YK_TEKRAR_HAKKI);
-    k.uygOy=u.oy; k.uygSayi=u.sayi; k.uygTekrar=u.tekrar; k.uygSerbest=u.serbest;
-    if(u.tekrar) k.not+=' · son seansta kalite fazları hedef pace\u2019in yavaş tarafında koşuldu ('+u.sayi+'/'+YK_GERI_DONUS_SAYI+'), seviye tekrarlanıyor';
-    else if(u.serbest) k.not+=' · \u26a0\ufe0f aynı seviyede '+u.sayi+'. seans üst üste hedef pace\u2019in yavaş tarafında — tekrar sınırı doldu; koç kontrolü önerilir (pace hedefi / form / ısı / ölçüm)';
-  }
-  // Toparlanma freni (2026.10.10 — 4. bacak): aralardaki yürüyüşlerde nabız bölge tavanının üstünde kalıyorsa seviye tekrarlanır.
-  { const r=toparlanmaFrenDurumu(gecmis,YK_TEKRAR_HAKKI);
-    k.recOy=r.oy; k.recSayi=r.sayi; k.recTekrar=r.tekrar; k.recSerbest=r.serbest;
-    if(r.tekrar) k.not+=' · son seansta aralar yeterince toparlatmadı ('+r.sayi+'/'+YK_GERI_DONUS_SAYI+'), seviye tekrarlanıyor';
-    else if(r.serbest) k.not+=' · \u26a0\ufe0f aynı seviyede '+r.sayi+'. seans üst üste toparlanma yetersiz — tekrar sınırı doldu; koç kontrolü önerilir (ara süresi / ısı / uyku / ölçüm)';
-  }
-  if(k.rpeTekrar||k.driftTekrar||k.uygTekrar||k.recTekrar) k.sonraki=Math.max(sonSeviye,1);
-  // GERİ DÖNÜŞ (2026.10.17 — Göksel onayı): aynı seviyede 2. kötü seans (YK_GERI_DONUS_SAYI) → ilerlemek yerine BİR seviye geri.
+  k.seansSayi=n;
+  const geriTetik=(h.karar==='kotu'&&n>=YK_GERI_DONUS_SAYI);
+  const neg={drift:h.bac.drift===true,rpe:h.bac.rpe===true,uyg:!!(h.uo&&h.uo.fren),rec:!!(h.ro&&h.ro.fren)};
+  k.driftSayi=k.rpeSayi=k.uygSayi=k.recSayi=n;
+  // Bacak bayrakları: "bu bacak olumsuz oy verdi" (Tekrar = seviye tekrarlanıyor; Serbest = geri dönüş tetiklendi)
+  k.driftTekrar=neg.drift&&!geriTetik; k.driftSerbest=neg.drift&&geriTetik;
+  k.rpeTekrar=neg.rpe&&!geriTetik;     k.rpeSerbest=neg.rpe&&geriTetik;
+  k.uygTekrar=neg.uyg&&!geriTetik;     k.uygSerbest=neg.uyg&&geriTetik;
+  k.recTekrar=neg.rec&&!geriTetik;     k.recSerbest=neg.rec&&geriTetik;
+  const adlar=[neg.drift&&'drift',neg.rpe&&'RPE',(neg.uyg||neg.rec)&&'pace/nabız hedefi'].filter(Boolean);
+  const oyM=h.olumsuz+'/'+h.olculen+' ölçülen bacak olumsuz'+(adlar.length?(': '+adlar.join(', ')):'');
+  if(h.karar==='kotu'&&!geriTetik) k.not=' · seans KÖTÜ ('+oyM+') — seviye tekrarlanıyor ('+n+'/'+YK_GERI_DONUS_SAYI+')';
+  else if(h.karar==='supheli') k.not=' · seans ŞÜPHELİ ('+oyM+') — seviye ilerletilmiyor, geri dönüş sayacı artmıyor';
+  if(h.olumsuz>0) k.sonraki=Math.max(sonSeviye,1);
+  // GERİ DÖNÜŞ (2026.10.17 — Göksel onayı): aynı seviyede YK_GERI_DONUS_SAYI. KÖTÜ seans → ilerlemek yerine BİR seviye geri.
   // Aynı seviyeden daha önce geri dönüldüyse otomatik geri dönülmez (salınım koruması): seviye tekrarlanır, karar koçta.
   k.geriDon=false; k.geriDonEngel=false; k.geriDonTaban=false; k.geriDonSayi=0; k.geriSayi=0;
-  if(k.driftSerbest||k.uygSerbest||k.recSerbest||k.rpeSerbest){
-    k.geriSayi=Math.max(k.driftSerbest?k.driftSayi:0,k.uygSerbest?k.uygSayi:0,k.recSerbest?k.recSayi:0,k.rpeSerbest?k.rpeSayi:0);
+  if(geriTetik){
+    k.geriSayi=n;
     let onceki=0;
     for(let i=1;i<gecmis.length;i++){ if(gecmis[i].sIdx===sonSeviye&&gecmis[i-1].sIdx<sonSeviye) onceki++; }
     k.geriDonSayi=onceki;
-    if(sonSeviye<=1){ k.geriDonTaban=true; k.sonraki=Math.max(sonSeviye,1); k.not+=' · \u26a0\ufe0f S1\u2019de daha aşağısı yok — seviye tekrarlanıyor; koç değerlendirmesi önerilir'; }
-    else if(onceki>=1){ k.geriDonEngel=true; k.sonraki=sonSeviye; k.not+=' · \u26a0\ufe0f bu seviyeden daha önce '+onceki+' kez geri dönüldü — otomatik geri dönüş yapılmıyor, seviye tekrarlanıyor; karar koçta (seviye dışı nedenleri ve programı değerlendir)'; }
-    else { k.geriDon=true; k.sonraki=sonSeviye-1; k.not+=' · \u26a0\ufe0f aynı seviyede '+k.geriSayi+'. seans üst üste zorlanma — tekrar sınırı doldu, bir önceki seviyeye dönülüyor (S'+sonSeviye+' \u2192 S'+(sonSeviye-1)+'); koç kontrolü önerilir'; }
+    if(sonSeviye<=1){ k.geriDonTaban=true; k.sonraki=Math.max(sonSeviye,1); k.not+=' · ⚠️ seans KÖTÜ ('+oyM+'); S1’de daha aşağısı yok — seviye tekrarlanıyor; koç değerlendirmesi önerilir'; }
+    else if(onceki>=1){ k.geriDonEngel=true; k.sonraki=sonSeviye; k.not+=' · ⚠️ seans KÖTÜ ('+oyM+'); bu seviyeden daha önce '+onceki+' kez geri dönüldü — otomatik geri dönüş yapılmıyor, seviye tekrarlanıyor; karar koçta (seviye dışı nedenleri ve programı değerlendir)'; }
+    else { k.geriDon=true; k.sonraki=sonSeviye-1; k.not+=' · ⚠️ aynı seviyede '+k.geriSayi+'. KÖTÜ seans ('+oyM+') — bir önceki seviyeye dönülüyor (S'+sonSeviye+' → S'+(sonSeviye-1)+'); koç kontrolü önerilir'; }
   }
   return k;
 }
 // GPX Analiz bildirimi (Yürü-Koş): program önerisiyle AYNI karar fonksiyonu → çelişmez. Yürü-Koş doğrusal
 // olduğundan tek kötü seans "aynı seviyeyi tekrarla" der; 2. kötü seansta (YK_GERI_DONUS_SAYI) "bir önceki seviyeye dön" denir.
+function _ykOyMetni(kr){
+  const ad=kr.seansKarar==='kotu'?'KÖTÜ':(kr.seansKarar==='supheli'?'ŞÜPHELİ':'TEMİZ');
+  return 'Seans kararı '+ad+' ('+kr.seansOlumsuz+'/'+kr.seansOlculen+' ölçülen bacak olumsuz)';
+}
+function _ykNedenler(kar,ort){
+  const n=[];
+  if(kar.recTekrar||kar.recSerbest) n.push('yürüyüş araları yeterince toparlatmadı (nabız bölge tavanının üstünde)');
+  if(kar.uygTekrar||kar.uygSerbest) n.push('kalite fazları hedef pace’in yavaş tarafında koşuldu');
+  if(kar.driftTekrar||kar.driftSerbest) n.push('kardiyak drift yüksek'+(ort?(' (ort. '+ort+')'):''));
+  if(kar.rpeTekrar||kar.rpeSerbest) n.push('RPE kişisel ortalamanın belirgin üstünde'+((kar.rpeOrt!=null&&kar.son)?(' (RPE '+kar.son.rpe+' vs ort. '+_r1(kar.rpeOrt)+')'):''));
+  return n;
+}
 function ykSeviyeMesaji(w,athWorkouts,oy){
   const onceki=(athWorkouts||[]).filter(x=>x&&x.id!==w.id&&x.date&&w.date&&x.date<w.date&&_ykAntrenmanMi(x));
   const kar=ykSeviyeKarari([...onceki,w]);
   if(!kar.son||kar.son.w!==w) return null; // bu seans seviye numarası taşımıyorsa (S yok) mesaj üretme
   const s=kar.sonSeviye;
   const ort=_kayipMetni(oy.ortKot);
+  const nd=_ykNedenler(kar,ort);
   if(kar.geriDon||kar.geriDonEngel||kar.geriDonTaban){
-    const lg=[];
-    if(kar.driftSerbest) lg.push('kardiyak drift yüksek ('+kar.driftSayi+'. seans üst üste, ort. '+ort+')');
-    if(kar.uygSerbest) lg.push('kalite fazları hedef pace’in yavaş tarafında ('+kar.uygSayi+'. seans üst üste)');
-    if(kar.recSerbest) lg.push('yürüyüş araları yeterince toparlatmadı ('+kar.recSayi+'. seans üst üste)');
-    if(kar.rpeSerbest) lg.push('RPE kişisel ortalamanın belirgin üstünde ('+kar.rpeSayi+'. seans üst üste)');
-    const bas=lg.join('; ')+'. Tekrar sınırı ('+YK_GERI_DONUS_SAYI+') doldu.';
+    const bas=_ykOyMetni(kar)+': '+nd.join('; ')+'. Aynı seviyede '+kar.geriSayi+'. KÖTÜ seans (sınır '+YK_GERI_DONUS_SAYI+').';
     if(kar.geriDon) return {k:'alt',baslik:'⬇️ Bir önceki seviyeye dön (S'+s+' → S'+(s-1)+') — koç kontrolü önerilir',
-      neden:bas+' Aynı seviyede '+kar.geriSayi+'. kez zorlanıldığı için sporcu ilerletilmiyor, bir seviye geri gidiliyor. Önce seviye dışı nedenleri (ısı, uyku, hastalık, ayakkabı, ölçüm) kontrol et.',notlar:[]};
+      neden:bas+' Sporcu ilerletilmiyor, bir seviye geri gidiliyor. Önce seviye dışı nedenleri (ısı, uyku, hastalık, ayakkabı, ölçüm) kontrol et.',notlar:[]};
     if(kar.geriDonEngel) return {k:'ayni',baslik:'➡️ Aynı seviyeyi tekrarla (S'+s+') — ⚠️ koç kararı gerekli',
       neden:bas+' Bu seviyeden daha önce '+kar.geriDonSayi+' kez geri dönüldü; salınımı önlemek için otomatik geri dönüş yapılmıyor. Seviye dışı nedenleri ve programı değerlendir, gerekirse seviyeyi elle belirle.',notlar:[]};
     return {k:'ayni',baslik:'➡️ Aynı seviyeyi tekrarla (S1) — ⚠️ koç değerlendirmesi önerilir',
       neden:bas+' S1’de daha aşağısı yok; seviye tekrarlanır. Programın bu sporcuya uygunluğunu değerlendir.',notlar:[]};
   }
-  if(kar.rpeTekrar||kar.driftTekrar||kar.uygTekrar||kar.recTekrar){
-    const nedenler=[];
-    if(kar.recTekrar) nedenler.push('Pace / nabız hedefi (toparlanma araları): '+toparlanmaFrenMetni({oy:kar.recOy})+' — pace/drift/RPE iyi olsa bile aralar yeterince toparlatmadığı için ilerleme onaylanmaz');
-    if(kar.uygTekrar) nedenler.push('Uygulama: '+uygulamaFrenMetni({oy:kar.uygOy})+' — drift/RPE iyi olsa bile hedef uyaran verilmediği için ilerleme onaylanmaz');
-    if(kar.driftTekrar) nedenler.push('Drift yüksek (ort. '+ort+') — RPE iyi gelse bile ölçülen verim kaybı ilerlemeyi durdurur');
-    if(kar.rpeTekrar) nedenler.push('RPE '+kar.son.rpe+', son seansların ortalamasının (RPE '+_r1(kar.rpeOrt)+') belirgin üstünde ('+kar.rpeSayi+'/'+YK_GERI_DONUS_SAYI+')');
-    const sinir=kar.driftTekrar?(' Aynı seviyede üst üste '+YK_GERI_DONUS_SAYI+'. kötü seansta bir önceki seviyeye dönülür ('+kar.driftSayi+'/'+YK_GERI_DONUS_SAYI+'). Isı, uyku, hidrasyon gibi geçici nedenleri de kontrol et.')
-      :(kar.uygTekrar?(' Aynı seviyede üst üste '+YK_GERI_DONUS_SAYI+'. kötü seansta bir önceki seviyeye dönülür ('+kar.uygSayi+'/'+YK_GERI_DONUS_SAYI+').')
-      :(kar.recTekrar?(' Aynı seviyede üst üste '+YK_GERI_DONUS_SAYI+'. kötü seansta bir önceki seviyeye dönülür ('+kar.recSayi+'/'+YK_GERI_DONUS_SAYI+'). Mümkünse yürüyüş süresini uzatmayı ya da koşu şiddetini gözden geçirmeyi düşün.'):''));
-    return {k:'ayni',baslik:'➡️ Aynı seviyeyi tekrarla (S'+s+')',neden:nedenler.join('; ')+'.'+sinir,notlar:[]};
-  }
+  if(kar.seansKarar==='kotu') return {k:'ayni',baslik:'➡️ Aynı seviyeyi tekrarla (S'+s+') — kötü seans ('+kar.seansSayi+'/'+YK_GERI_DONUS_SAYI+')',
+    neden:_ykOyMetni(kar)+': '+nd.join('; ')+'. Aynı seviyede '+YK_GERI_DONUS_SAYI+'. kötü seansta bir önceki seviyeye dönülür. Isı, uyku, hidrasyon gibi geçici nedenleri de kontrol et.',notlar:[]};
+  if(kar.seansKarar==='supheli') return {k:'ayni',baslik:'➡️ Aynı seviyeyi tekrarla (S'+s+') — şüpheli seans',
+    neden:_ykOyMetni(kar)+': '+nd.join('; ')+'. Tek bacak olumsuz olduğu için seans "kötü" sayılmadı (geri dönüş sayacı artmaz), ama ilerleme de onaylanmaz.',notlar:[]};
   const driftMetin=oy.yon==='ust'?'Drift kontrol altında':(oy.yon==='ayni'?'Drift orta düzeyde':'Drift');
   return {k:'ust',baslik:'⬆️ Sıradaki seviyeye geçilebilir (S'+s+' → S'+(s+1)+')',
     neden:driftMetin+' (ort. '+ort+') — ilerlemeyi engelleyen bir sinyal yok. Yürü-Koş programında drift yalnızca fren olarak kullanılır.',notlar:[]};
@@ -7215,9 +7207,8 @@ function seviyeKararDokumu(w,athWorkouts,oy,rpeBilgi){
   else {
     const ort='ort. '+_kayipMetni(driftOy.ortKot)+' · süre ağırlıklı: yüksek blok payı %'+Math.round(driftOy.kotuPay*100)+', iyi blok payı %'+Math.round(driftOy.ustPay*100);
     if(yk){
-      if(kar.driftTekrar) dr={durum:'olumsuz',baslik:'Yüksek — fren devrede',detay:[ort,'Kural: blokların ≥%50\'si "yüksek" → seviye tekrarlanır ('+kar.driftSayi+'/'+YK_GERI_DONUS_SAYI+', RPE iyi olsa bile); '+YK_GERI_DONUS_SAYI+'. kötü seansta bir önceki seviyeye dönülür.']};
-      else if(kar.driftSerbest) dr={durum:'olumsuz',baslik:'Yüksek — tekrar sınırı doldu',detay:[ort,'Aynı seviyede '+kar.driftSayi+'. seans üst üste yüksek: sınır ('+YK_GERI_DONUS_SAYI+') doldu → '+_gdMetin+'; koç kontrolü önerilir.']};
-      else dr={durum:'olumlu',baslik:driftOy.yon==='ust'?'Kontrol altında — fren yok':'Orta düzeyde — fren yok',detay:[ort,'Yürü-Koşta drift yalnızca FREN olarak kullanılır; hızlandırmaz.']};
+      if(kar.driftTekrar||kar.driftSerbest) dr={durum:'olumsuz',baslik:'Yüksek — olumsuz oy',detay:[ort,'Kural: blokların ≥%50\'si "yüksek" → bu bacak seans kararına OLUMSUZ oy verir (tek başına seansı "kötü" yapmaz; seans kararı 3 bacağın ortak kararıdır).']};
+      else dr={durum:'olumlu',baslik:driftOy.yon==='ust'?'Kontrol altında — olumsuz oy yok':'Orta düzeyde — olumsuz oy yok',detay:[ort,'Yürü-Koşta drift yalnızca FREN yönünde oy verir; hızlandırmaz.']};
     } else if(driftOy.yon==='ust') dr={durum:'olumlu',baslik:'Kontrol altında — yükseltmeyi destekler',detay:[ort,'Kural: hiç "yüksek" blok yok ve blokların ≥%67\'si "iyi".']};
     else if(driftOy.yon==='alt') dr={durum:'olumsuz',baslik:'Yüksek — düşürme yönünde',detay:[ort,'Kural: blokların süre ağırlıklı ≥%50\'si "yüksek". Drift tek başına seviye düşürmez; RPE de zorlandıysa düşer.']};
     else dr={durum:'notr',baslik:'Orta düzeyde — destek yok',detay:[ort,'Ne ≥%50 yüksek ne de ≥%67 iyi → yükseltme için yeterli kanıt yok, seviye tekrarlanır.']};
@@ -7228,9 +7219,8 @@ function seviyeKararDokumu(w,athWorkouts,oy,rpeBilgi){
   if(yk){
     if(!(rpeV>0)) rp={durum:'yok',baslik:'RPE girilmemiş',detay:['RPE olmadan RPE freni çalışmaz.']};
     else if(kar.rpeOrt==null) rp={durum:'yok',baslik:'Kıyas yapılamadı',detay:['RPE '+rpeV+'; önceki 5 seansta RPE\'li kayıt <2 (en az 2 gerekir) → RPE freni çalışmaz.']};
-    else if(kar.rpeTekrar) rp={durum:'olumsuz',baslik:'Zor geldi — fren devrede',detay:['RPE '+rpeV+' ≥ ort. '+_r1(kar.rpeOrt)+' + 1,0 (son 5 seans)','Seviye tekrarlanır ('+kar.rpeSayi+'/'+YK_GERI_DONUS_SAYI+'); '+YK_GERI_DONUS_SAYI+'. kötü seansta bir önceki seviyeye dönülür.']};
-    else if(kar.rpeSerbest) rp={durum:'olumsuz',baslik:'Zor geldi — tekrar sınırı doldu',detay:['RPE '+rpeV+' ≥ ort. '+_r1(kar.rpeOrt)+' + 1,0 (son 5 seans)','Aynı seviyede '+kar.rpeSayi+'. seans üst üste: sınır ('+YK_GERI_DONUS_SAYI+') doldu → '+_gdMetin+'; koç kontrolü önerilir.']};
-    else rp={durum:'olumlu',baslik:'Olağan — fren yok',detay:['RPE '+rpeV+', ort. '+_r1(kar.rpeOrt)+' (son 5 seans)','Yürü-Koşta RPE yalnızca FREN olarak kullanılır; hızlandırmaz.']};
+    else if(kar.rpeTekrar||kar.rpeSerbest) rp={durum:'olumsuz',baslik:'Zor geldi — olumsuz oy',detay:['RPE '+rpeV+' ≥ ort. '+_r1(kar.rpeOrt)+' + 1,0 (son 5 seans)','Bu bacak seans kararına OLUMSUZ oy verir (tek başına seansı "kötü" yapmaz).']};
+    else rp={durum:'olumlu',baslik:'Olağan — olumsuz oy yok',detay:['RPE '+rpeV+', ort. '+_r1(kar.rpeOrt)+' (son 5 seans)','Yürü-Koşta RPE yalnızca FREN yönünde oy verir; hızlandırmaz.']};
   } else {
     const rb=rpeBilgi||seviyeRpeBilgi(w,athWorkouts);
     if(rb.neden==='rpe_yok') rp={durum:'yok',baslik:'RPE girilmemiş',detay:['RPE yokken seviye asla düşürülmez; yükseltme yalnızca driftin tek başına iyi olmasıyla mümkündür.']};
@@ -7254,7 +7244,8 @@ function seviyeKararDokumu(w,athWorkouts,oy,rpeBilgi){
     const oo=u.oy;
     const l1='Kalite süresi '+dk(oo.top)+' · yavaş tarafta %'+Math.round(oo.pay*100)+(oo.ort!=null?(' · pace şiddeti ort. '+_r1(oo.ort)+' (eşik '+UYG_FREN_ORT_ESIK+'; 0 hedef · 1 bandın yavaş sınırı · 2 "çok yavaş")'):(' · eski özet: süre payı eşiği %'+Math.round(UYG_FREN_YAVAS_ESIK*100)));
     const hrL=(o.hrT>0)?('Nabız (bilgi, karara girmez): hedef bölgede %'+Math.round(100*(o.hrOk||0)/o.hrT)+' · yüksek %'+Math.round(100*(o.hrYuk||0)/o.hrT)+' · düşük %'+Math.round(100*(o.hrDus||0)/o.hrT)):'Nabız: bu fazlarda ölçülmemiş (bilgi).';
-    if(!oo.fren) up={durum:'olumlu',baslik:'Pace hedefe uygun — fren yok',detay:[l1,hrL]};
+    if(!oo.fren) up={durum:'olumlu',baslik:'Pace hedefe uygun — olumsuz oy yok',detay:[l1,hrL]};
+    else if(yk&&(u.tekrar||u.serbest)) up={durum:'olumsuz',baslik:'Hedef pace\'in gerisinde — olumsuz oy',detay:[l1,hrL,'Bu alt değerlendirme 3. bacağa OLUMSUZ oy verir (nabız hedefte olsa da pace hedefte değilse uyaran verilmemiştir).']};
     else if(u.tekrar) up={durum:'olumsuz',baslik:'Hedef pace\'in gerisinde — fren devrede',detay:[l1,hrL,'Seviye tekrarlanır ('+u.sayi+'/'+_uL+'); nabız hedefte olsa da pace hedefte değilse uyaran verilmemiştir. '+(yk?YK_GERI_DONUS_SAYI+'. kötü seansta bir önceki seviyeye dönülür.':'Seviye düşürülmez.')]};
     else up={durum:yk?'olumsuz':'notr',baslik:'Hedef pace\'in gerisinde — '+(yk?'tekrar':'fren')+' sınırı doldu',detay:[l1,hrL,'Aynı seviyede '+u.sayi+'. seans üst üste: sınır ('+_uL+') doldu, '+(yk?_gdMetin:'fren bırakıldı')+' → koç kontrolü önerilir (pace hedefi, form, ısı, ölçüm).']};
   }
@@ -7270,7 +7261,8 @@ function seviyeKararDokumu(w,athWorkouts,oy,rpeBilgi){
   else {
     const oo=tr.oy;
     const l1='Toparlanma süresi '+dk(oo.top)+' ('+oo.n+' ara) · nabız şiddeti ort. '+_r1(oo.ort)+' (eşik '+REC_FREN_ORT_ESIK+'; 0 bölge içi · 1 bölge tavanının bant sınırı · 2 "çok yüksek")'+(oo.ilk&&oo.son?(' · ilk ara '+oo.ilk+' → son ara '+oo.son+' bpm ('+(oo.son-oo.ilk>=0?'+':'')+(oo.son-oo.ilk)+')'):'');
-    if(!oo.fren) tp={durum:'olumlu',baslik:'Aralar yeterince toparlattı — fren yok',detay:[l1]};
+    if(!oo.fren) tp={durum:'olumlu',baslik:'Aralar yeterince toparlattı — olumsuz oy yok',detay:[l1]};
+    else if(yk&&(tr.tekrar||tr.serbest)) tp={durum:'olumsuz',baslik:'Toparlanma yetersiz — olumsuz oy',detay:[l1,'Bu alt değerlendirme 3. bacağa OLUMSUZ oy verir (aralarda nabız bölge tavanına inmiyorsa bir sonraki seviyenin yükü kaldırılamaz).']};
     else if(tr.tekrar) tp={durum:'olumsuz',baslik:'Toparlanma yetersiz — fren devrede',detay:[l1,'Seviye tekrarlanır ('+tr.sayi+'/'+_rL+'); aralarda nabız bölge tavanına inmiyorsa bir sonraki seviyenin yükü kaldırılamaz. '+(yk?YK_GERI_DONUS_SAYI+'. kötü seansta bir önceki seviyeye dönülür.':'Seviye düşürülmez.')]};
     else tp={durum:yk?'olumsuz':'notr',baslik:'Toparlanma yetersiz — '+(yk?'tekrar':'fren')+' sınırı doldu',detay:[l1,'Aynı seviyede '+tr.sayi+'. seans üst üste: sınır ('+_rL+') doldu, '+(yk?_gdMetin:'fren bırakıldı')+' → koç kontrolü önerilir (ara süresi, koşu şiddeti, ısı, uyku, ölçüm).']};
   }
@@ -7286,17 +7278,17 @@ function seviyeKararDokumu(w,athWorkouts,oy,rpeBilgi){
   // ── Birleşim ve nihai karar
   let karar,birlesim,aciklama=[], _nonYkFren=false;
   if(yk){
-    const fren=kar.rpeTekrar||kar.driftTekrar||kar.uygTekrar||kar.recTekrar;
+    const fren=kar.rpeTekrar||kar.driftTekrar||kar.uygTekrar||kar.recTekrar||kar.rpeSerbest||kar.driftSerbest||kar.uygSerbest||kar.recSerbest;
     karar=kar.geriDon?'alt':((fren||kar.geriDonEngel||kar.geriDonTaban||revizeW)?'ayni':'ust');
-    birlesim='Yürü-Koş doğrusal programdır: üç bacak yalnızca FREN olarak çalışır — biri bile frenlerse seviye tekrarlanır, hızlandırılmaz. Aynı seviyede '+YK_GERI_DONUS_SAYI+'. kötü seansta (tekrar sınırı dolunca) ilerlemek yerine bir önceki seviyeye dönülür.';
+    birlesim='Yürü-Koş doğrusal programdır: seans kararı 3 bacağın (drift · RPE · pace/nabız hedefi) ORTAK kararıdır — veri olmayan bacak oylamaya girmez. Olumsuz oy yoksa TEMİZ (ilerleyebilir, sayaç sıfırlanır); tek olumsuz oy ŞÜPHELİ (seviye ilerletilmez, sayaç nötr); ölçülen bacakların çoğunluğu olumsuzsa KÖTÜ (seviye tekrarlanır, sayaç +1). Aynı seviyede '+YK_GERI_DONUS_SAYI+'. KÖTÜ seansta ilerlemek yerine bir önceki seviyeye dönülür.';
     const fl=[(kar.driftTekrar||kar.driftSerbest)&&'Drift',(kar.rpeTekrar||kar.rpeSerbest)&&'RPE',(kar.uygTekrar||kar.uygSerbest)&&'Pace / nabız hedefi (kalite fazları)',(kar.recTekrar||kar.recSerbest)&&'Pace / nabız hedefi (toparlanma)'].filter(Boolean);
-    if(fl.length) aciklama.push('Fren yapan bacak(lar): '+fl.join(' + ')+'.');
+    aciklama.push('🗳 '+(kar.seansKarar==='kotu'?'⛔ ':(kar.seansKarar==='supheli'?'⚠️ ':'✅ '))+_ykOyMetni(kar)+(fl.length?(' — olumsuz oy: '+fl.join(' + ')):'')+'. Geri dönüş sayacı: '+kar.seansSayi+'/'+YK_GERI_DONUS_SAYI+'.');
     if(kar.geriDon) aciklama.push('⚠️ Aynı seviyede üst üste '+kar.geriSayi+'. kötü seans — tekrar sınırı doldu: ilerlemek yerine bir önceki seviyeye dönülür (S'+sG+' → S'+(sG-1)+'). Koç kontrolü önerilir (ısı / uyku / hastalık / ayakkabı / ölçüm).');
     else if(kar.geriDonEngel) aciklama.push('⚠️ Bu seviyeden daha önce '+kar.geriDonSayi+' kez geri dönüldü — otomatik geri dönüş yapılmaz, seviye tekrarlanır. Seviye dışı nedenleri (uyku, hastalık, hacim, ısı) ve programı değerlendir; gerekirse seviyeyi elle belirle.');
     else if(kar.geriDonTaban) aciklama.push('⚠️ S1’de de tekrar sınırı doldu — daha aşağısı yok, seviye tekrarlanır. Programın bu sporcuya uygunluğunu değerlendir.');
     if(revizeW){
       aciklama.push('ℹ️ Bu seans REVİZE ('+(revAmac==='hacim'?'Hacim — haftalık hedef için kısaltma':'Zorlanma — koçun 3 bacak kararı')+'): seviye YÜKSELTMEZ; yalnızca fren / geri dönüş sayacına girer.'
-        +((fren||kar.geriDon||kar.geriDonEngel||kar.geriDonTaban)?' Fren sinyali var → sayaca kötü seans olarak işlendi.':' Fren sinyali yok → sayaçta nötr, sıradaki seviye değişmez (S'+sG+').'));
+        +(kar.seansKarar==='kotu'?' Seans KÖTÜ → sayaca kötü seans olarak işlendi.':(kar.seansKarar==='supheli'?' Seans ŞÜPHELİ → seviye ilerletilmez, sayaç nötr.':' Olumsuz oy yok → sayaçta nötr, sıradaki seviye değişmez (S'+sG+').')));
     }
     if(karTum&&karTum.hacimTikanma) aciklama.push('⚠️ S'+karTum.hacimTikanma.seviye+' seviyesinde ardışık '+karTum.hacimTikanma.n+' hacim revizesi temiz geçti — seviye haftalık hacim yüzünden tam yapılamıyor, ilerleme tıkanıyor. Kararı sen ver (tam seans / ilerlet / hacim hedefi).');
   } else {
@@ -7462,15 +7454,12 @@ function _revizeSeviyeMesaji(w,athWorkouts,athId){
     if(kar.revizeKayit&&kar.revizeKayit.w===w){
       const kr=kar.revizeKar||{}, eff=kar.revizeEff;
       const nedenler=[];
-      if(kr.recTekrar||kr.recSerbest) nedenler.push('toparlanma aralarında nabız bölge tavanının üstünde kaldı ('+kr.recSayi+'. seans)');
-      if(kr.uygTekrar||kr.uygSerbest) nedenler.push('kalite fazları hedef pace’in yavaş tarafında koşuldu ('+kr.uygSayi+'. seans)');
-      if(kr.driftTekrar||kr.driftSerbest) nedenler.push('kardiyak drift yüksek ('+kr.driftSayi+'. seans)');
-      if(kr.rpeTekrar||kr.rpeSerbest) nedenler.push('RPE kişisel ortalamanın belirgin üstünde ('+kr.rpeSayi+'. seans)');
+      nedenler.push(..._ykNedenler(kr,null));
       const hacimUyari=kar.hacimTikanma?(' ⚠️ S'+kar.hacimTikanma.seviye+' seviyesinde ardışık '+kar.hacimTikanma.n+' hacim revizesi temiz geçti — seviye haftalık hacim yüzünden tam yapılamıyor, ilerleme tıkanıyor; kararı sen ver.'):'';
       if(kar.son&&kar.son.w===w&&kar.geriDon) return {k:'alt',baslik:'⬇️ Revize gün ('+amacM+') — tekrar sınırı doldu: bir önceki seviyeye dön (S'+eff+' → S'+(eff-1)+')',
-        neden:'Aynı seviyede '+YK_GERI_DONUS_SAYI+'. kötü seans: '+nedenler.join('; ')+'. İlerlemek yerine bir seviye geri gidiliyor; seviye dışı nedenleri (ısı, uyku, hastalık, ayakkabı, ölçüm, hacim) da kontrol et.',notlar:[]};
-      if(kar.revizeFren) return {k:'ayni',baslik:'➡️ Revize gün ('+amacM+') — fren sinyali: aynı seviyeyi tekrarla (S'+eff+')',
-        neden:'Revize seans seviye YÜKSELTMEZ; fren sinyali verdi: '+nedenler.join('; ')+'. Sayaca kötü seans olarak işlendi ('+YK_GERI_DONUS_SAYI+'. kötü seansta bir önceki seviyeye dönülür).'+hacimUyari,notlar:[]};
+        neden:_ykOyMetni(kr)+' — aynı seviyede '+YK_GERI_DONUS_SAYI+'. kötü seans: '+nedenler.join('; ')+'. İlerlemek yerine bir seviye geri gidiliyor; seviye dışı nedenleri (ısı, uyku, hastalık, ayakkabı, ölçüm, hacim) da kontrol et.',notlar:[]};
+      if(kar.revizeFren) return {k:'ayni',baslik:'➡️ Revize gün ('+amacM+') — '+(kar.revizeKotu?'kötü seans':'şüpheli seans')+': aynı seviyeyi tekrarla (S'+eff+')',
+        neden:'Revize seans seviye YÜKSELTMEZ. '+_ykOyMetni(kr)+': '+nedenler.join('; ')+'. '+(kar.revizeKotu?'Sayaca kötü seans olarak işlendi ('+YK_GERI_DONUS_SAYI+'. kötü seansta bir önceki seviyeye dönülür).':'Tek bacak olumsuz: sayaçta nötr, ama seviye ilerletilmez.')+hacimUyari,notlar:[]};
       return {k:'revize',baslik:'✏️ Revize gün ('+amacM+') — fren sinyali yok, seviye yükseltilmez',
         neden:'Revize seans o seviyenin gerçek sınavı sayılmaz: temiz geçse de seviye yükseltmez, sayaçta nötr kalır; sıradaki seans yine S'+eff+' (orijinal) olarak planlanır.'+hacimUyari,notlar:[]};
     }
