@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.17-1541 --><!DOCTYPE html>
+<!-- Version: v2026.10.17-1610 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -392,7 +392,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.17-1541';
+const APP_VERSION='v2026.10.17-1610';
 // ── GENEL YÜKLEME İZLEYİCİSİ (2026.10.13) — tüm sekmeler için: bekleyen Firebase okumalarını sayar ──
 var _YUK={bekleyen:0,toplam:0,bitenSon:0,dinleyen:new Set(),arka:0,planAcik:false,liste:{},sira:0};
 // arka: Yükleme Planı tablosunun ARKA PLAN okumaları (fbGet(...,{arka:true})). Yükleme Planı gizliyken genel göstergeye
@@ -23972,7 +23972,9 @@ function estimateTipikCaprazYuk(athWorkouts,athlete){
 // Güvenlik: HRV/sakatlık/TSB/ACWR kısaltması olan günler (yMod<1, _downgraded) ARTTIRILMAZ.
 // Kalite günü küçültülürse (revize) kutusu otomatik işaretlenir (_hacimRevize → _revizeOnaylandi).
 // ═══════════════════════════════════════════════════════════════════════════════
-const HM_KOLAY_MIN_DK=15;
+// 2026.10.17: 15 → 25 dk — 15 dakikalık koşu antrenman etkisi vermez; taban yetmezse reçete daha fazla küçültülmez,
+// gün 'dinlenmeye çevir' ÖNERİSİ olarak işaretlenir (bkz. _hmCalistir sonundaki öneri bloğu).
+const HM_KOLAY_MIN_DK=25;
 const HM_TOL_MIN_KM=0.4;
 const HM_KALITE_DESTEK=['tempo','esik','interval'];
 const HM_SABIT_TIPLER=['dinlenme','capraz','yaris','tirmanis','back_to_back','hazirlik','yuru_kos','serbest','rahat_yurume','tempolu_yurume','power_hiking'];
@@ -24384,6 +24386,51 @@ function _hmCalistir(days,o,out){
   if(out.programlanmayanKm>=1){
     const hedefGun=idx.map(i=>i).filter(i=>sinif[i]==='uzun'||sinif[i]==='kolay').pop();
     out.programlanmayanNot=`Kalan hedefin ${out.programlanmayanKm} km'si programlanamadı (band/progresyon tavanı ya da güvenlik kısaltması).`;
+  }
+  // ── Öneri (2026.10.17 — Göksel onayı): taban yetmezse reçeteyi küçültmek yerine günü "dinlenmeye çevir" öner ──
+  // Koşul: plan, kalan hedefin ÜST toleransını (WEEKLY_VOL_TOL_HIGH, ekrandaki 🎯 aralığının üst ucu) aşıyor ve
+  // kolay/aerobik günler zaten tabanda (daha fazla kısaltılamıyor). Sistem günü KENDİ iptal etmez; yalnızca işaretler
+  // (hacimOneri) — Koç Paneli'nde düğmeyle uygulanır, Koşu İzlerim'de gösterilmez.
+  // Sabit günler (Tırmanış, Back-to-back, test…) hacim için kısaltılmaz; tek başına hedefi aşıyorsa yalnızca uyarılır.
+  out.oneriler=[]; out.sabitUyari=null; out.gunSayisi=null;
+  {
+    const ust=hedef*WEEKLY_VOL_TOL_HIGH;
+    const SABIT_HARIC=['dinlenme','capraz','yaris','hazirlik'];
+    const aktifGun=(i)=>!SABIT_HARIC.includes(days[i].tip)&&kmOf(days[i])>0;
+    const planliGun=idx.filter(aktifGun).length;
+    let kalanTop=sonTop;
+    const adaylar=idx.filter(i=>{
+      if(sinif[i]!=='kolay'||!aktifGun(i)) return false;
+      let tabanKm=0; try{ tabanKm=gunOneriMesafeKm(_hmKolayKur(days[i],HM_KOLAY_MIN_DK,o),zones,o.races,o.disiplin)||0; }catch(e){ tabanKm=0; }
+      return kmOf(days[i])-tabanKm<=0.15; // tabanda: daha fazla kısaltılamaz
+    });
+    if(kalanTop>ust&&adaylar.length){
+      // Sıra: kalite/uzun/tırmanış gibi sert bir günün HEMEN ÖNCESİNDEKİ gün önce (önceki gün dinlenmek makul), sonra en erken gün
+      const sertSonraki=(i)=>{ const n=days[i+1]; return !!n&&!n.isPast&&!SABIT_HARIC.includes(n.tip)&&n.tip!=='kolay'&&n.tip!=='aerobik'?0:1; };
+      adaylar.sort((a,b)=>sertSonraki(a)-sertSonraki(b)||a-b);
+      for(const i of adaylar){
+        if(kalanTop<=ust) break;
+        const km=kmOf(days[i]);
+        out.oneriler.push({date:days[i].date,km:round1(km)});
+        kalanTop-=km;
+      }
+    }
+    // Sabit günlerin toplamı (hacim için kısaltılamayan günler)
+    const sabitIdx=idx.filter(i=>sinif[i]==='sabit'&&aktifGun(i));
+    const sabitKm=sabitIdx.reduce((x,i)=>x+kmOf(days[i]),0);
+    if(sabitKm>hedef+tol&&(out.oneriler.length||sabitKm>ust)){
+      const enBuyuk=[...sabitIdx].sort((a,b)=>kmOf(days[b])-kmOf(days[a]))[0];
+      out.sabitUyari={date:days[enBuyuk].date,tip:days[enBuyuk].tip,km:round1(sabitKm),fazla:round1(sabitKm-hedef)};
+    }
+    if(out.oneriler.length) out.gunSayisi={planli:planliGun,yeter:planliGun-out.oneriler.length};
+    out.oneriler.forEach(o2=>{
+      const i=days.findIndex(d=>d.date===o2.date);
+      days[i]={...days[i],hacimOneri:`Kalan hedefe (${round1(hedef)} km) göre bu gün önerilmiyor: kolay koşular zaten en kısa süresinde (${HM_KOLAY_MIN_DK} dk) ve plan hedefin üst toleransını (${round1(ust)} km) aşıyor. Dinlenmeye çevirmeyi düşün.`};
+    });
+    if(out.sabitUyari){
+      const i=days.findIndex(d=>d.date===out.sabitUyari.date);
+      days[i]={...days[i],hacimUyari:`Bu gün (${TIP_NAMES[days[i].tip]||days[i].tip}) hacim için kısaltılmaz; sabit günler tek başına kalan hedefi ${out.sabitUyari.fazla} km aşıyor (${out.sabitUyari.km} km / hedef ${round1(hedef)} km).`};
+    }
   }
   // Mutabakat sırasında değişen günler: bayrakları iliştir
   degisti.forEach(i=>{ days[i]={...days[i],_hacimMutabakat:true}; });
@@ -25635,6 +25682,8 @@ function generatePlanSnapshot(athlete,history,races,workouts,testPlanlar,targetW
         // 2026.10.16 — hacim mutabakatı / güvenlik kısaltması bilgileri snapshot'a yazılır (Koç Paneli + Koşu İzlerim okur)
         ...(day.hacimNotu?{hacimNotu:day.hacimNotu}:{}),
         ...(day.guvenlikNeden?{guvenlikNeden:day.guvenlikNeden}:{}),
+        ...(day.hacimOneri?{hacimOneri:day.hacimOneri}:{}),
+        ...(day.hacimUyari?{hacimUyari:day.hacimUyari}:{}),
         ...(day._hacimRevize?{_revizeOnaylandi:true,_revizeAmac:'hacim'}:{}),
         yapilar:(()=>{
           // generateTwoWeekPlan _rows eklemez — injectRowsFromTpl ile tüm yapilar dizisine
@@ -27476,7 +27525,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                 // ÖNCEKİ) haliyle gösterilir → ❤️ ikonu çıkar ama isim/reçete/süre
                 // eskisi kalır (Göksel'in bildirdiği tam senaryo: test onaylandı ama
                 // "Planı Güncelle" henüz basılmadı).
-                return{...day,tip:ovToday.tip,baslik:ovToday.baslik,yapi_notu:('yapi_notu' in ovToday)?ovToday.yapi_notu:(day.yapi_notu||''),sure_dk:ovToday.sure_dk,yukHedef:ovToday.yukHedef,isKosuCapraz:ovToday.isKosuCapraz||false,yapilar:ovToday.yapilar||[],isTest:ovToday.isTest||false,testTur:ovToday.testTur||null,dpHedef:('dpHedef' in ovToday)?ovToday.dpHedef:day.dpHedef,hacimNotu:ovToday.hacimNotu||undefined,guvenlikNeden:ovToday.guvenlikNeden||undefined};
+                return{...day,tip:ovToday.tip,baslik:ovToday.baslik,yapi_notu:('yapi_notu' in ovToday)?ovToday.yapi_notu:(day.yapi_notu||''),sure_dk:ovToday.sure_dk,yukHedef:ovToday.yukHedef,isKosuCapraz:ovToday.isKosuCapraz||false,yapilar:ovToday.yapilar||[],isTest:ovToday.isTest||false,testTur:ovToday.testTur||null,dpHedef:('dpHedef' in ovToday)?ovToday.dpHedef:day.dpHedef,hacimNotu:ovToday.hacimNotu||undefined,guvenlikNeden:ovToday.guvenlikNeden||undefined,hacimOneri:ovToday.hacimOneri||undefined,hacimUyari:ovToday.hacimUyari||undefined};
               }
               // overrideMap yok / dinlenme / boş yapilar → taze plana bak
               if(!kocTikliMi(ovToday)&&day.tip&&day.tip!=='dinlenme'&&(day.yapilar||[]).length>0){
@@ -27509,7 +27558,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
             }
             // Aynı kök neden düzeltmesi (bkz. yukarıdaki "bugün" dalı notu) — gelecek
             // günler için de isTest/testTur ov'dan açıkça alınır, ham day'den miras kalmaz.
-            return{...day,tip:ov.tip,baslik:ov.baslik,yapi_notu:('yapi_notu' in ov)?ov.yapi_notu:(day.yapi_notu||''),sure_dk:ov.sure_dk,yukHedef:ov.yukHedef,isKosuCapraz:ov.isKosuCapraz||false,yapilar:ov.yapilar||[],isTest:ov.isTest||false,testTur:ov.testTur||null,dpHedef:('dpHedef' in ov)?ov.dpHedef:day.dpHedef,hacimNotu:ov.hacimNotu||undefined,guvenlikNeden:ov.guvenlikNeden||undefined};
+            return{...day,tip:ov.tip,baslik:ov.baslik,yapi_notu:('yapi_notu' in ov)?ov.yapi_notu:(day.yapi_notu||''),sure_dk:ov.sure_dk,yukHedef:ov.yukHedef,isKosuCapraz:ov.isKosuCapraz||false,yapilar:ov.yapilar||[],isTest:ov.isTest||false,testTur:ov.testTur||null,dpHedef:('dpHedef' in ov)?ov.dpHedef:day.dpHedef,hacimNotu:ov.hacimNotu||undefined,guvenlikNeden:ov.guvenlikNeden||undefined,hacimOneri:ov.hacimOneri||undefined,hacimUyari:ov.hacimUyari||undefined};
           }
           // Manuel atama — testi geçersiz kılar (bkz. handleManuelAta/onDeleteTestPlan)
           const mo=manualDates.has(day.date)?manualOvMap[day.date]:null;
@@ -30753,6 +30802,20 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
           },'🔄 Hedefi Yeniden Hesapla')
         )
       ),
+      // ── 2026.10.17 — Hacim önerisi satırı (yalnızca Koç Paneli; Koşu İzlerim'de gösterilmez) ──
+      // Kolay günler tabandayken plan kalan hedefin üst toleransını aşıyorsa: kaç koşu günü yeter + hangi gün önerilmiyor.
+      (()=>{
+        const _onr=week.days.filter(d=>d.hacimOneri&&!d.isPast&&d.tip!=='dinlenme');
+        const _uyr=week.days.find(d=>d.hacimUyari&&!d.isPast);
+        if(!_onr.length&&!_uyr) return null;
+        const _gunAd=(d)=>new Date(d.date+'T12:00:00').toLocaleDateString('tr-TR',{weekday:'long'});
+        const _planli=week.days.filter(d=>!d.isPast&&!['dinlenme','capraz','yaris','hazirlik'].includes(d.tip)&&d.yapilar?.length>0).length;
+        const _kalanK=round1(hedefGosterilenKm-(week.wkActualKm||0));
+        const parcalar=[];
+        if(_onr.length) parcalar.push('Kalan hedefe ('+_kalanK+' km) '+Math.max(0,_planli-_onr.length)+' koşu günü yeter: '+_onr.map(_gunAd).join(', ')+' koşusu önerilmiyor.');
+        if(_uyr) parcalar.push(_gunAd(_uyr)+' '+(TIP_NAMES[_uyr.tip]||_uyr.tip)+' hacim için kısaltılmaz; sabit günler tek başına kalan hedefi aşıyor.');
+        return React.createElement('div',{'data-no-export':true,style:{marginTop:4,marginBottom:4,fontSize:11,color:'var(--warn)',padding:'5px 10px',background:'rgba(245,158,11,0.08)',border:'1px solid rgba(245,158,11,0.3)',borderRadius:'var(--radius)'}},'💤 '+parcalar.join(' '));
+      })(),
       // ── Revize hedef → orijinal hedefe kaç hafta ─────────────────────────
       // Yalnızca mevcut hafta + hedef aşağı revize edilmişse + coach paneli
       weekShowRevised&&displayCurWeekEff&&displayCurWeekEff.effKm<week.wt.targetKm&&week.weekOff===0&&(()=>{
@@ -31259,9 +31322,18 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                 // Koşu İzlerim'de AYNI bilgi gösterilir (bkz. SporcuPlanView) — panel paritesi.
                 const hacimKutusu=(()=>{
                   if(day.tip==='yaris'||day.tip==='dinlenme') return null;
-                  if(!day.hacimNotu&&!day.guvenlikNeden) return null;
+                  if(!day.hacimNotu&&!day.guvenlikNeden&&!day.hacimOneri&&!day.hacimUyari) return null;
                   const satirlar=[];
                   if(day.hacimNotu) satirlar.push(React.createElement('div',{key:'h',style:{color:'var(--text-secondary)'}},'📐 '+day.hacimNotu));
+                  if(day.hacimOneri){
+                    // 2026.10.17 — yalnızca Koç Paneli (Koşu İzlerim'de gösterilmez)
+                    satirlar.push(React.createElement('div',{key:'o',style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginTop:day.hacimNotu?4:0}},
+                      React.createElement('span',{style:{color:'var(--warn)',fontWeight:600}},'💤 '+day.hacimOneri),
+                      !day.isPast&&React.createElement('button',{type:'button',className:'btn btn-sm','data-no-export':true,
+                        onClick:(e)=>{e.stopPropagation();handleManuelAta(day.date,{tip:'dinlenme'});}},
+                        '😴 Dinlenmeye çevir')));
+                  }
+                  if(day.hacimUyari) satirlar.push(React.createElement('div',{key:'u',style:{color:'var(--warn)',marginTop:satirlar.length?4:0}},'⚠ '+day.hacimUyari));
                   if(day.guvenlikNeden){
                     satirlar.push(React.createElement('div',{key:'g',style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginTop:day.hacimNotu?4:0}},
                       React.createElement('span',{style:{color:'var(--warn)',fontWeight:600}},'🛡 '+day.guvenlikNeden+' nedeniyle bu günün süresi kısaltıldı.'),
