@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.17-1618 --><!DOCTYPE html>
+<!-- Version: v2026.10.17-1633 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -392,7 +392,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.17-1618';
+const APP_VERSION='v2026.10.17-1633';
 // ── GENEL YÜKLEME İZLEYİCİSİ (2026.10.13) — tüm sekmeler için: bekleyen Firebase okumalarını sayar ──
 var _YUK={bekleyen:0,toplam:0,bitenSon:0,dinleyen:new Set(),arka:0,planAcik:false,liste:{},sira:0};
 // arka: Yükleme Planı tablosunun ARKA PLAN okumaları (fbGet(...,{arka:true})). Yükleme Planı gizliyken genel göstergeye
@@ -24047,7 +24047,9 @@ function _hmSinif(day,o){
   if(day.isPast) return 'gecmis';
   if(day.isToday&&day.actual&&day.actual.length) return 'gecmis';
   if(o.sabit&&o.sabit[day.date]) return 'sabit';
-  if(day.isTest||day._b2bAutoAssigned||day.isKosuCapraz) return 'sabit';
+  // 2026.10.17: birleşik (koşu+çapraz) günün KOŞU kısmı artık normal gün gibi sınıflanır (çapraz kısmı ayrı sistemle değerlendirilir:
+  // bkz. caprazDinlenmeOnerileri). Çapraz işareti kısaltma sonrası korunur (bkz. _hmCalistir'deki çapraz-işareti onarımı).
+  if(day.isTest||day._b2bAutoAssigned) return 'sabit';
   const t=day.tip;
   if(t==='kolay'||t==='aerobik') return 'kolay';
   if(t==='uzun'&&(day.yapilar||[]).some(y=>(y.baslik||'').includes('Z2 Uzun'))) return 'uzun';
@@ -24132,7 +24134,9 @@ function caprazDinlenmeOnerileri(days,o){
   const sert=(d)=>!!d&&!d.isPast&&(['uzun','tirmanis','back_to_back'].includes(d.tip)||KALITELI_TIPLERI.includes(d.tip));
   const sinyalli=(d)=>!!d&&!d.isPast&&!!(d.guvenlikNeden||d._guvenlikKorumali||(d.yMod!=null&&d.yMod<1));
   days.forEach((d,i)=>{
-    if(d.isPast||d.tip!=='capraz'||(d.actual&&d.actual.length)) return;
+    if(d.isPast||!(d.tip==='capraz'||d.isKosuCapraz)) return;
+    // saf çapraz gün: herhangi bir kayıt varsa öneri yok; birleşik gün: yalnızca ÇAPRAZ seansı yapıldıysa öneri yok
+    if(d.tip==='capraz'?(d.actual&&d.actual.length):(d.actual||[]).some(w=>w&&w.spor&&w.spor!=='kosu')) return;
     const yuk=aths.filter(w=>w.date>=basla&&w.date<d.date).reduce((x,w)=>x+caprazYukSRPE(w,rpeVar),0);
     const nedenler=[];
     if(ort4>0&&yuk>=ort4*CAPRAZ_YUK_ESIK) nedenler.push('bu haftaki çapraz yük ('+Math.round(yuk)+') son 4 hafta ortalamasının ('+Math.round(ort4)+') belirgin üstünde');
@@ -24140,7 +24144,7 @@ function caprazDinlenmeOnerileri(days,o){
     if(sinyalli(days[i-1])||sinyalli(d)||sinyalli(days[i+1])) nedenler.push('yorgunluk/güvenlik sinyali var');
     if(!nedenler.length) return;
     cikti.push({date:d.date,nedenler});
-    days[i]={...d,caprazOneri:'Bu çapraz antrenman için dinlenme önerilir: '+nedenler.join('; ')+'.'};
+    days[i]={...d,caprazOneri:(d.isKosuCapraz?'Bu günün çapraz kısmı için dinlenme önerilir: ':'Bu çapraz antrenman için dinlenme önerilir: ')+nedenler.join('; ')+(d.isKosuCapraz?'. Çapraz kısmını kaldırmayı (koşu kalsın) düşün.':'.')};
   });
   return cikti;
 }
@@ -24430,6 +24434,13 @@ function _hmCalistir(days,o,out){
     const hedefGun=idx.map(i=>i).filter(i=>sinif[i]==='uzun'||sinif[i]==='kolay').pop();
     out.programlanmayanNot=`Kalan hedefin ${out.programlanmayanKm} km'si programlanamadı (band/progresyon tavanı ya da güvenlik kısaltması).`;
   }
+  // ── Birleşik gün onarımı (2026.10.17): kısaltma/dönüşüm yapilar'ı yeniden kurar → "➕ Çapraz Antrenman" işareti korunur ──
+  days.forEach((d,i)=>{
+    const o0=orijin[i];
+    if(!o0||!o0.isKosuCapraz||d===o0) return;
+    if((d.yapilar||[]).some(y=>y&&y._caprazNot)) { if(!d.isKosuCapraz) days[i]={...d,isKosuCapraz:true}; return; }
+    days[i]={...d,isKosuCapraz:true,yapilar:[...(d.yapilar||[]),...caprazYapilarAl(o0)]};
+  });
   // ── Öneri (2026.10.17 — Göksel onayı): taban yetmezse reçeteyi küçültmek yerine günü "dinlenmeye çevir" öner ──
   // Koşul: plan, kalan hedefin ÜST toleransını (WEEKLY_VOL_TOL_HIGH, ekrandaki 🎯 aralığının üst ucu) aşıyor ve
   // kolay/aerobik günler zaten tabanda (daha fazla kısaltılamıyor). Sistem günü KENDİ iptal etmez; yalnızca işaretler
@@ -24468,7 +24479,8 @@ function _hmCalistir(days,o,out){
     if(out.oneriler.length) out.gunSayisi={planli:planliGun,yeter:planliGun-out.oneriler.length};
     out.oneriler.forEach(o2=>{
       const i=days.findIndex(d=>d.date===o2.date);
-      days[i]={...days[i],hacimOneri:`Kalan hedefe (${round1(hedef)} km) göre bu gün önerilmiyor: kolay koşular zaten en kısa süresinde (${HM_KOLAY_MIN_DK} dk) ve plan hedefin üst toleransını (${round1(ust)} km) aşıyor. Dinlenmeye çevirmeyi düşün.`};
+      const _bir=!!days[i].isKosuCapraz;
+      days[i]={...days[i],hacimOneri:`Kalan hedefe (${round1(hedef)} km) göre ${_bir?'bu günün koşusu':'bu gün'} önerilmiyor: kolay koşular zaten en kısa süresinde (${HM_KOLAY_MIN_DK} dk) ve plan hedefin üst toleransını (${round1(ust)} km) aşıyor. ${_bir?'Koşu kısmını kaldırmayı (çapraz kalsın) düşün.':'Dinlenmeye çevirmeyi düşün.'}`};
     });
     if(out.sabitUyari){
       const i=days.findIndex(d=>d.date===out.sabitUyari.date);
@@ -28911,6 +28923,43 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     }
   };
 
+  // ── 2026.10.17 — Birleşik (koşu+çapraz) günün TEK parçasını kaldır ─────────────────────────────
+  // parca='capraz' → "➕ Çapraz" işareti silinir, gün saf koşu olur (koşu aynen kalır);
+  // parca='kosu'   → gün saf çapraz güne döner (planDay'in saf çapraz günüyle aynı şekil: sure_dk 0, tek çapraz işareti).
+  // Manuel atama gibi manualOverrides'a yazılır → "Planı Güncelle" geri getirmez.
+  const handleGunParcaKaldir=(dateStr,parca)=>{
+    const curSnap=planSnapRef.current||{};
+    const day=(plan?.weeks||[]).flatMap(w=>w.days||[]).find(d=>d.date===dateStr);
+    if(!day||!day.isKosuCapraz) return;
+    const temiz=(y)=>({baslik:y.baslik,detay:y.detay||'',...(y._caprazNot?{_caprazNot:y._caprazNot}:{}),...(y._rows?{_rows:y._rows}:{})});
+    const now=new Date();
+    const eski=curSnap.overrideMap?.[dateStr];
+    let yeni;
+    if(parca==='capraz'){
+      const kosuY=kosuYapilarAl(day).map(temiz);
+      yeni={...(eski||{tip:day.tip,baslik:day.baslik,sure_dk:day.sure_dk,yukHedef:day.yukHedef,yapi_notu:day.yapi_notu||'',approved:false,
+        ...(day.dpHedef!=null?{dpHedef:day.dpHedef}:{})}),isKosuCapraz:false,yapilar:kosuY};
+      delete yeni.caprazOneri;
+    } else {
+      yeni={tip:'capraz',baslik:'Çapraz Antrenman',sure_dk:0,yukHedef:0,yapi_notu:'',approved:false,isKosuCapraz:false,
+        yapilar:[{baslik:'➕ Çapraz Antrenman',detay:'',_caprazNot:true}]};
+    }
+    const newMap={...(curSnap.overrideMap||{}),[dateStr]:yeni};
+    const newRow={...(curSnap.rowOverrides||{})}; delete newRow[dateStr];
+    const newManual={...(curSnap.manualOverrides||{}),[dateStr]:{tip:yeni.tip,baslik:yeni.baslik,atAt:now.toISOString()}};
+    const newSnap={...curSnap,weekKey,athId:athlete.id,lastReviewAt:now.toISOString(),lastSavedAt:new Date().toISOString(),
+      overrideMap:newMap,rowOverrides:newRow,manualOverrides:newManual,
+      reviewLog:[...(curSnap.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} ${parca==='capraz'?'çapraz kısmı kaldırıldı':'koşu kısmı kaldırıldı'}`}].slice(-10)};
+    setPlanSnap(newSnap);
+    setReviewMsg(`${dateStr} — ${parca==='capraz'?'çapraz kısmı kaldırıldı (koşu kaldı)':'koşu kısmı kaldırıldı (çapraz kaldı)'}`);
+    if(db||initFirebase()){
+      const _snap=stripUndefined(newSnap);
+      fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,_snap)
+        .then(()=>{ _planSnapsCache[athlete.id]=_snap; })
+        .catch(e=>console.error('Parça kaldırma kayıt hatası:',e));
+    }
+  };
+
   // ── Madde 2: Antrenman Onay Kutusu ──────────────────────────────────────────
   const handleToggleApproved=(dateStr)=>{
     const curSnap=planSnapRef.current||{};
@@ -31376,21 +31425,26 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                   if(!day.hacimNotu&&!day.guvenlikNeden&&!day.hacimOneri&&!day.hacimUyari&&!day.caprazOneri) return null;
                   const satirlar=[];
                   if(day.hacimNotu) satirlar.push(React.createElement('div',{key:'h',style:{color:'var(--text-secondary)'}},'📐 '+day.hacimNotu));
+                  // 2026.10.17 — birleşik (koşu+çapraz) günde iki öneri AYRI değerlendirilir: yalnız koşu → "koşuyu kaldır, çapraz kalsın";
+                  // yalnız çapraz → "çapraz kısmını kaldır, koşu kalsın"; ikisi birden → "dinlenmeye çevir" (tek düğme).
+                  const _bir=!!day.isKosuCapraz;
+                  const _ikisi=_bir&&!!day.hacimOneri&&!!day.caprazOneri;
+                  const _oneriDugme=(k,etiket,fn)=>!day.isPast&&week.weekOff===0&&React.createElement('button',{key:k,type:'button',className:'btn btn-sm','data-no-export':true,
+                    onClick:(e)=>{e.stopPropagation();fn();}},etiket);
                   if(day.hacimOneri){
-                    // 2026.10.17 — yalnızca Koç Paneli (Koşu İzlerim'de gösterilmez)
+                    // yalnızca Koç Paneli (Koşu İzlerim'de gösterilmez)
                     satirlar.push(React.createElement('div',{key:'o',style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginTop:day.hacimNotu?4:0}},
                       React.createElement('span',{style:{color:'var(--warn)',fontWeight:600}},'💤 '+day.hacimOneri),
-                      !day.isPast&&React.createElement('button',{type:'button',className:'btn btn-sm','data-no-export':true,
-                        onClick:(e)=>{e.stopPropagation();handleManuelAta(day.date,{tip:'dinlenme'});}},
-                        '😴 Dinlenmeye çevir')));
+                      !_bir?_oneriDugme('b1','😴 Dinlenmeye çevir',()=>handleManuelAta(day.date,{tip:'dinlenme'}))
+                        :(_ikisi?_oneriDugme('b2','😴 Dinlenmeye çevir (koşu + çapraz)',()=>handleManuelAta(day.date,{tip:'dinlenme'}))
+                          :_oneriDugme('b3','🚴 Koşuyu kaldır, çapraz kalsın',()=>handleGunParcaKaldir(day.date,'kosu')))));
                   }
                   if(day.caprazOneri){
                     // 2026.10.17 — çapraz gün: yük (süre×RPE) + yorgunluk sinyaline dayalı öneri; yalnızca Koç Paneli
                     satirlar.push(React.createElement('div',{key:'co',style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginTop:satirlar.length?4:0}},
                       React.createElement('span',{style:{color:'var(--warn)',fontWeight:600},title:'Çapraz yük = süre (dk) × RPE; RPE girilmeyen seanslar sporcunun son 8 haftadaki çapraz RPE ortancasıyla (yoksa 5) tamamlanır'},'💤 '+day.caprazOneri),
-                      !day.isPast&&React.createElement('button',{type:'button',className:'btn btn-sm','data-no-export':true,
-                        onClick:(e)=>{e.stopPropagation();handleManuelAta(day.date,{tip:'dinlenme'});}},
-                        '😴 Dinlenmeye çevir')));
+                      !_bir?_oneriDugme('c1','😴 Dinlenmeye çevir',()=>handleManuelAta(day.date,{tip:'dinlenme'}))
+                        :(_ikisi?null:_oneriDugme('c2','🏃 Çapraz kısmını kaldır, koşu kalsın',()=>handleGunParcaKaldir(day.date,'capraz')))));
                   }
                   if(day.hacimUyari) satirlar.push(React.createElement('div',{key:'u',style:{color:'var(--warn)',marginTop:satirlar.length?4:0}},'⚠ '+day.hacimUyari));
                   if(day.guvenlikNeden){
