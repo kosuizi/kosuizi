@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.17-1653 --><!DOCTYPE html>
+<!-- Version: v2026.10.17-1704 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -392,7 +392,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.17-1653';
+const APP_VERSION='v2026.10.17-1704';
 // ── GENEL YÜKLEME İZLEYİCİSİ (2026.10.13) — tüm sekmeler için: bekleyen Firebase okumalarını sayar ──
 var _YUK={bekleyen:0,toplam:0,bitenSon:0,dinleyen:new Set(),arka:0,planAcik:false,liste:{},sira:0};
 // arka: Yükleme Planı tablosunun ARKA PLAN okumaları (fbGet(...,{arka:true})). Yükleme Planı gizliyken genel göstergeye
@@ -26999,6 +26999,19 @@ function haftaSnapshotMirasi(ownSnap,prevSnap){
 // Bu fonksiyon: Planı Güncelle koruması, Son temizlik, YK anchor, Koç Paneli plan gösterimi ve
 // Bugün sekmesinin "bayat kayıt" süzgeçleri için TEK doğruluk kaynağıdır (panel paritesi).
 function kocTikliMi(ov){ return !!ov&&ov.approved===true; }
+// 2026.10.17 — Planın dayandığı gün profili (planSnap.athleteProfile) ile sporcu kartı/anketteki güncel
+// seçimler arasındaki fark: koşu günleri, çapraz günleri, uzun koşu günü. Dizileri DEĞİŞTİRMEDEN kıyaslar.
+// Dönüş: {kosu,capraz,uzun} → fark varsa {snap:'Pzt,Cmt',ath:'Pzt'} aksi halde null.
+function planProfilFarki(snapProfile,ath){
+  const out={kosu:null,capraz:null,uzun:null};
+  if(!snapProfile||!ath) return out;
+  const nrm=(v)=>(Array.isArray(v)?v:[v].filter(Boolean)).slice().sort().join(',');
+  [['kosu','kosu_gunleri'],['capraz','capraz_gunleri'],['uzun','uzun_gun']].forEach(([k,f])=>{
+    const a=nrm(snapProfile[f]),b=nrm(ath[f]);
+    if(a!==b) out[k]={snap:a,ath:b};
+  });
+  return out;
+}
 
 // Hacim mutabakatı için SABİT (Planı Güncelle'nin değiştirmeyeceği) gelecek günler: koçun tikli günleri ve
 // Serbest Koşu. Bu günlerin km/D+'sı haftanın kalan hedefinden düşülür; mutabakat yalnızca diğer günleri ayarlar.
@@ -28841,7 +28854,9 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       const _ps=(opts&&opts.profilSync)?kocGunSecimiHesapla(dateStr,'dinlenme',curSnap):null;
       const newMapRest={...(curSnap?.overrideMap||{}),[dateStr]:{
         tip:'dinlenme',baslik:'Dinlenme',sure_dk:0,yukHedef:0,yapi_notu:'',
-        approved:true,isKosuCapraz:false,yapilar:[]
+        // Öneri butonundan gelen dinlenme TİKSİZ yazılır: koç sporcu kartı/anketi eski haline getirip
+        // Planı Güncelle'ye basarsa gün yeniden antrenman olur (tikli gün Planı Güncelle'de mutlak korunur).
+        approved:!(opts&&opts.profilSync),isKosuCapraz:false,yapilar:[]
       }};
       const newRowOverridesRest={...(curSnap?.rowOverrides||{})};
       delete newRowOverridesRest[dateStr];
@@ -29618,9 +29633,10 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
           }
           // OP-4: Koşu günleri uyumsuzluk uyarısı
           if(planSnap?.athleteProfile?.kosu_gunleri){
-            const snapGunler=(planSnap.athleteProfile.kosu_gunleri||[]).sort().join(',');
-            const athGunler=(athlete.kosu_gunleri||[]).sort().join(',');
-            if(snapGunler!==athGunler) uyarilar.push('📅 Koşu günleri değişmiş! Plan: ['+snapGunler+'] → Anket: ['+athGunler+']');
+            const _pf=planProfilFarki(planSnap.athleteProfile,athlete);
+            if(_pf.kosu) uyarilar.push('📅 Koşu günleri değişmiş! Plan: ['+_pf.kosu.snap+'] → Anket: ['+_pf.kosu.ath+']');
+            if(_pf.capraz) uyarilar.push('🚴 Çapraz günleri değişmiş! Plan: ['+_pf.capraz.snap+'] → Anket: ['+_pf.capraz.ath+']');
+            if(_pf.uzun) uyarilar.push('🛤 Uzun koşu günü değişmiş! Plan: ['+_pf.uzun.snap+'] → Anket: ['+_pf.uzun.ath+']');
           }
           if(planSnap?.lastSavedAt){
             const planTarih=new Date(planSnap.lastSavedAt);
@@ -30525,9 +30541,10 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
           snapshotBayat=true; bayatSebep='anket güncellemesi';
         }
         if(!snapshotBayat&&planSnap?.athleteProfile?.kosu_gunleri){
-          const snapG=(planSnap.athleteProfile.kosu_gunleri||[]).sort().join(',');
-          const athG=(athlete.kosu_gunleri||[]).sort().join(',');
-          if(snapG!==athG){snapshotBayat=true; bayatSebep='koşu günleri değişimi';}
+          const _pf2=planProfilFarki(planSnap.athleteProfile,athlete);
+          if(_pf2.kosu){snapshotBayat=true; bayatSebep='koşu günleri değişimi';}
+          else if(_pf2.capraz){snapshotBayat=true; bayatSebep='çapraz günleri değişimi';}
+          else if(_pf2.uzun){snapshotBayat=true; bayatSebep='uzun koşu günü değişimi';}
         }
         if(!snapshotBayat){
           const sonWk=[...athWks].sort((a,b)=>b.date.localeCompare(a.date))[0];
