@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.17-1435 --><!DOCTYPE html>
+<!-- Version: v2026.10.17-1501 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -392,7 +392,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.17-1435';
+const APP_VERSION='v2026.10.17-1501';
 // ── GENEL YÜKLEME İZLEYİCİSİ (2026.10.13) — tüm sekmeler için: bekleyen Firebase okumalarını sayar ──
 var _YUK={bekleyen:0,toplam:0,bitenSon:0,dinleyen:new Set(),arka:0,planAcik:false,liste:{},sira:0};
 // arka: Yükleme Planı tablosunun ARKA PLAN okumaları (fbGet(...,{arka:true})). Yükleme Planı gizliyken genel göstergeye
@@ -6999,6 +6999,7 @@ function driftKiyasla(w,athWorkouts){
 // ve koça "kontrol et" uyarısı verilir (eskiden fren bırakılıp program ilerliyordu — 2026.10.17'de değişti).
 const YK_DRIFT_FREN_AKTIF=true;
 const YK_DRIFT_FREN_MAX_TEKRAR=2;
+const NONYK_REVIZE_GERI_SAYI=2;   // 2026.10.17: Yürü-Koş dışı sporcularda aynı seviyede art arda 2 KÖTÜ revize seans → bir alt seviye
 const YK_RPE_FREN_MAX_TEKRAR=2;   // 2026.10.17: RPE freni de aynı seviyede üst üste en fazla 2 tekrar; 3. kötü seans → geri dönüş
 function _ykAntrenmanMi(w){
   return !!w&&((w.tur==='yuru_kos'||w._isYuruKos)||(w.yapi_notu&&(w.yapi_notu.startsWith('Yürü-Koş ·')||w.yapi_notu.startsWith('🚶🏃 Yürü-Koş ·'))));
@@ -7194,6 +7195,14 @@ function seviyeKararDokumu(w,athWorkouts,oy,rpeBilgi){
       kar=kar.revizeKar; sG=karTum.revizeEff||s;       // revize kaydın değerlendirmesi (beklenen seviye üzerinden)
     } else if(!kar.son||kar.son.w!==w) return null;
   }
+  // 2026.10.17: Yürü-Koş dışı revize günde art arda kötü revize sayacı (2. kötü revizede bir alt seviye)
+  let _nsy=null;
+  if(!yk&&revizeW){
+    try{
+      const g=_nonYkGecmis(w.tur,[...(athWorkouts||[]).filter(x=>x&&x.id!==w.id&&x.date&&w.date&&x.date<w.date),w]);
+      if(g.length&&g[0].w===w) _nsy=_nonYkRevizeSayac(g,99);
+    }catch(e){_nsy=null;}
+  }
   const _gdMetin=(yk&&kar)?(kar.geriDon?'bir önceki seviyeye (S'+sG+' → S'+(sG-1)+') dönülür':(kar.geriDonEngel?'bu seviyeden daha önce geri dönülmüş — otomatik geri dönüş yok, seviye tekrarlanır, karar koçta':'S1’de daha aşağısı yok — seviye tekrarlanır')):'';
   const driftOy=DRIFT_SEVIYE_SINYALI?oy:null;
   // ── 1) Kardiyak drift
@@ -7291,7 +7300,7 @@ function seviyeKararDokumu(w,athWorkouts,oy,rpeBilgi){
     const birl=driftOy?seviyeKarariBirlestir(rpeBilgi?rpeBilgi.yon:seviyeRpeBilgi(w,athWorkouts).yon,driftOy.yon):((rpeBilgi?rpeBilgi.yon:seviyeRpeBilgi(w,athWorkouts).yon)||'ayni');
     const ry=rpeBilgi?rpeBilgi.yon:seviyeRpeBilgi(w,athWorkouts).yon;
     karar=(birl==='ust'&&(u.tekrar||tr.tekrar))?'ayni':birl;
-    if(revizeW) karar='ayni';           // revize seans seviye yükseltmez / düşürmez; yalnızca fren verebilir
+    if(revizeW) karar=(_nsy&&_nsy.geriDon&&s>1)?'alt':'ayni';   // revize seans seviye yükseltmez; yalnızca fren verir — art arda 2 kötü revizede bir alt seviye
     _nonYkFren=(birl!=='ust')||u.tekrar||tr.tekrar;
     birlesim='RPE × Drift: RPE '+t1(ry)+(driftOy?(' + Drift '+t1(driftOy.yon)):' (drift yok)')+' → '+({ust:'yükselt',ayni:'aynı seviye',alt:'düşür'}[birl])+'. Kural: yükseltme için iki sinyal birlikte olumlu (RPE yoksa drift tek başına yeter); düşürme için RPE zorlanmış olmalı ve drift olumlu olmamalı; drift tek başına asla düşürmez.';
     if(birl==='ust'&&u.tekrar) aciklama.push('Drift/RPE yükseltmeyi destekliyor, ancak Uygulama freni devrede → seviye tekrarlanır ('+u.sayi+'/'+UYG_FREN_MAX_TEKRAR+').');
@@ -7300,7 +7309,11 @@ function seviyeKararDokumu(w,athWorkouts,oy,rpeBilgi){
     else if(tr.tekrar) aciklama.push('Toparlanma freni de devrede.');
     if(birl==='ust'&&tr.serbest) aciklama.push('⚠️ Toparlanma fren sınırı doldu → fren bırakıldı, program devam ediyor; koç kontrolü önerilir.');
     if(birl==='ust'&&u.serbest) aciklama.push('⚠️ Uygulama fren sınırı doldu → fren bırakıldı, program devam ediyor; koç kontrolü önerilir.');
-    if(revizeW) aciklama.push('ℹ️ Bu seans REVİZE ('+(revAmac==='hacim'?'Hacim — haftalık hedef için kısaltma':'Zorlanma — koçun 3 bacak kararı')+'): seviye YÜKSELTMEZ ve düşürmez; yalnızca fren verebilir ('+(birl==='ust'&&!u.tekrar&&!tr.tekrar?'fren sinyali yok → kayıt yok sayılır':'olumsuz sinyal → seviye tekrarlanır')+').');
+    if(revizeW){
+      aciklama.push('ℹ️ Bu seans REVİZE ('+(revAmac==='hacim'?'Hacim — haftalık hedef için kısaltma':'Zorlanma — koçun 3 bacak kararı')+'): seviye YÜKSELTMEZ; yalnızca fren verir ('+(birl==='ust'&&!u.tekrar&&!tr.tekrar?'fren sinyali yok → kayıt yok sayılır':'olumsuz sinyal → seviye tekrarlanır')+'). Aynı seviyede art arda '+NONYK_REVIZE_GERI_SAYI+' kötü revize seans → bir alt seviye.');
+      if(_nsy&&_nsy.geriDon) aciklama.push(s>1?('⚠️ Aynı seviyede (S'+s+') '+_nsy.sayi+'. kötü revize seans üst üste — sınır ('+NONYK_REVIZE_GERI_SAYI+') doldu: bir alt seviyeye dönülür (S'+s+' → S'+(s-1)+'). Koç kontrolü önerilir (ısı / uyku / hastalık / ayakkabı / ölçüm / hacim).'):'⚠️ S1’de de art arda kötü revize — daha aşağısı yok, seviye tekrarlanır. Programın bu sporcuya uygunluğunu değerlendir.');
+      else if(_nsy&&_nsy.basKotu) aciklama.push('Kötü revize sayacı: '+_nsy.sayi+'/'+NONYK_REVIZE_GERI_SAYI+' — aynı seviyede bir kötü revize daha gelirse bir alt seviyeye dönülür.');
+    }
   }
   const _revTemiz=revizeW&&!(yk?(kar.rpeTekrar||kar.rpeSerbest||kar.driftTekrar||kar.uygTekrar||kar.recTekrar||kar.geriDon||kar.geriDonEngel||kar.geriDonTaban):_nonYkFren);
   const etiket=revizeW&&karar!=='alt'?(_revTemiz?('➡️ Revize seans — seviyeyi değiştirmez (sıradaki S'+sG+')'):('➡️ Aynı seviyeyi tekrarla (S'+sG+')')):
@@ -7459,6 +7472,17 @@ function _revizeSeviyeMesaji(w,athWorkouts,athId){
         neden:'Revize seans o seviyenin gerçek sınavı sayılmaz: temiz geçse de seviye yükseltmez, sayaçta nötr kalır; sıradaki seans yine S'+eff+' (orijinal) olarak planlanır.'+hacimUyari,notlar:[]};
     }
   }
+  try{
+    const _sN=_sSeviyeNo(w&&w.yapi_notu);
+    const g=(_sN!=null&&w&&w.tur)?_nonYkGecmis(w.tur,[...(athWorkouts||[]).filter(x=>x&&x.id!==w.id&&x.date&&w.date&&x.date<w.date),w]):[];
+    if(g.length&&g[0].w===w){
+      const sy=_nonYkRevizeSayac(g,99);
+      if(sy.geriDon&&_sN>1) return {k:'alt',baslik:'⬇️ Revize gün ('+amacM+') — art arda '+sy.sayi+'. kötü revize: bir alt seviye (S'+_sN+' → S'+(_sN-1)+')',
+        neden:'Aynı seviyede '+sy.sayi+'. kötü revize seans (sınır '+NONYK_REVIZE_GERI_SAYI+'): bu seviyenin kısaltılmış hali bile zor geldi; bir alt seviyeye dönülür. Seviye dışı nedenleri (ısı, uyku, hastalık, ayakkabı, ölçüm, hacim) da kontrol et.',notlar:[]};
+      if(sy.basKotu) return {k:'ayni',baslik:'➡️ Revize gün ('+amacM+') — fren sinyali: aynı seviyeyi tekrarla (S'+_sN+') · kötü revize '+Math.min(sy.sayi,NONYK_REVIZE_GERI_SAYI)+'/'+NONYK_REVIZE_GERI_SAYI,
+        neden:'Revize seans seviye YÜKSELTMEZ; olumsuz sinyal verdi. Aynı seviyede '+NONYK_REVIZE_GERI_SAYI+'. kötü revize seansta bir alt seviyeye dönülür.',notlar:[]};
+    }
+  }catch(e){}
   return {k:'revize',baslik:'✏️ Revize gün ('+amacM+') — seviye yükseltilmez',
     neden:'Bu antrenman değiştirilmiş (revize) olduğu için orijinal seviyenin tam karşılığı değil: seviye yükseltmez. Olumsuz sinyal (RPE, drift, uygulama, toparlanma) yoksa kayıt bir sonraki program önerisinde yok sayılır; olumsuz sinyal varsa öneri aynı seviyeyi tekrarlar. 3 bacak dökümü aşağıdadır.',notlar:[]};
 }
@@ -17735,7 +17759,12 @@ let _PLANDAY_ATH_WORKOUTS=[];
 function calcSeviyeFromHistory(tur, phaseMaxIdx, fallbackIdx, athWorkouts){
   athWorkouts=athWorkouts||[];
   if(!athWorkouts.length) return fallbackIdx;
-  const gecmis=athWorkouts
+  const gecmis=_nonYkGecmis(tur,athWorkouts);
+  if(!gecmis.length) return fallbackIdx;
+  return _nonYkSeviyeHesapla(gecmis,phaseMaxIdx,fallbackIdx);
+}
+function _nonYkGecmis(tur,athWorkouts){
+  return (athWorkouts||[])
     .filter(w=>w&&w.tur===tur&&w.date&&w.yapi_notu&&(toSec(w.sure_sa,w.sure_dk,w.sure_sn)||0)>0)
     // 2026.10.08 (Göksel talebi): koçun "(revize)" işaretlediği günün antrenmanı orijinal seviyenin
     // tam karşılığı DEĞİL — ne son kayıt olarak seviye kararını belirler ne de RPE referansına girer
@@ -17747,6 +17776,31 @@ function calcSeviyeFromHistory(tur, phaseMaxIdx, fallbackIdx, athWorkouts){
     })
     .filter(Boolean)
     .sort((a,b)=>b.date.localeCompare(a.date));
+}
+// 2026.10.17: revize kaydın kendi sinyalleri (RPE × drift) NORMAL seans olsaydı seviyeyi düşürür müydü? (geri dönüş sayacında "kötü revize")
+function _nonYkRevizeKotuMu(gecmis,i,phaseMaxIdx){
+  const r=gecmis[i];
+  if(!r||!r.revize) return false;
+  const onceki=gecmis.slice(i+1).filter(g=>!g.revize);
+  const rs=Math.min(Math.max(r.sIdx,0),phaseMaxIdx);
+  return _seviyeKarariListeden([r,...onceki],phaseMaxIdx)<rs;
+}
+// 2026.10.17 (Göksel onayı): Yürü-Koş dışı sporcularda AYNI seviyede art arda NONYK_REVIZE_GERI_SAYI (2) kötü revize seans → bir alt seviye.
+// Sayım en yeni kayıttan geriye: yalnızca baştaki revize kaydın seviyesindeki revize kayıtlar; kötü olanlar sayılır, temiz/nötr olanlar
+// sayımı bozmaz (sıfırlamaz); normal seans ya da farklı seviye sayımı keser. Baştaki kayıt kötü değilse geri dönüş yok.
+function _nonYkRevizeSayac(gecmis,phaseMaxIdx){
+  const h=gecmis&&gecmis[0];
+  if(!h||!h.revize) return {sayi:0,seviye:null,basKotu:false,geriDon:false};
+  let sayi=0;
+  for(let i=0;i<gecmis.length;i++){
+    const r=gecmis[i];
+    if(!r.revize||r.sIdx!==h.sIdx) break;
+    if(_nonYkRevizeKotuMu(gecmis,i,phaseMaxIdx)) sayi++;
+  }
+  const basKotu=_nonYkRevizeKotuMu(gecmis,0,phaseMaxIdx);
+  return {sayi,seviye:h.sIdx,basKotu,geriDon:basKotu&&sayi>=NONYK_REVIZE_GERI_SAYI};
+}
+function _nonYkSeviyeHesapla(gecmis,phaseMaxIdx,fallbackIdx){
   // 2026.10.16 (Göksel onayı): revize kayıtlar YALNIZCA FREN verebilir, seviye yükseltemez. Revize gün normal karar
   // listesine girmez; ama EN SON kayıt revizeyse ve kendi sinyalleri 'yükselt' DEĞİLSE (aynı/düşür), sonuç o revize
   // seansın seviyesini aşamaz (tekrar). Düşürme yönü bile yalnızca "aynı seviyede tut"a çevrilir (revize gün tam karşılık değil).
@@ -17757,7 +17811,12 @@ function calcSeviyeFromHistory(tur, phaseMaxIdx, fallbackIdx, athWorkouts){
     const revS=Math.min(Math.max(yeni.sIdx,0),phaseMaxIdx);
     const revSonuc=_seviyeKarariListeden([yeni,...normal],phaseMaxIdx);
     const normS=normal.length?Math.min(Math.max(normal[0].sIdx,0),phaseMaxIdx):0;
-    if(revSonuc<=revS) return Math.min(temel,Math.max(revS,normS)); // fren asla geriletmez
+    if(revSonuc<=revS){
+      // Fren: aynı seviyede kal. İstisna (2026.10.17): aynı seviyede art arda 2 KÖTÜ revize → bir alt seviye (S1'de taban).
+      const base=Math.max(revS,normS);
+      if(_nonYkRevizeSayac(gecmis,phaseMaxIdx).geriDon) return Math.min(temel,Math.max(0,base-1));
+      return Math.min(temel,base);
+    }
   }
   return temel;
 }
