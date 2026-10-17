@@ -1,4 +1,4 @@
-<!-- Version: v2026.10.17-1633 --><!DOCTYPE html>
+<!-- Version: v2026.10.17-1646 --><!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
@@ -392,7 +392,7 @@ const round3=(v)=>Math.round(v*1000)/1000; // mekanik ATL/CTL oranı için — r
 
 // ── Hesap Motoru (TrainingPeaks referanslı) ──────────────────────────────────
 
-const APP_VERSION='v2026.10.17-1633';
+const APP_VERSION='v2026.10.17-1646';
 // ── GENEL YÜKLEME İZLEYİCİSİ (2026.10.13) — tüm sekmeler için: bekleyen Firebase okumalarını sayar ──
 var _YUK={bekleyen:0,toplam:0,bitenSon:0,dinleyen:new Set(),arka:0,planAcik:false,liste:{},sira:0};
 // arka: Yükleme Planı tablosunun ARKA PLAN okumaları (fbGet(...,{arka:true})). Yükleme Planı gizliyken genel göstergeye
@@ -7848,6 +7848,31 @@ function YarısModal({onClose,onSave,initial}){
   );
 }
 
+// ── 2026.10.17 — Koçun gün seçimi değişikliği notu (öneri butonları → sporcu kartı + anket) ──
+// Koç, haftalık plandaki öneri butonlarıyla (dinlenmeye çevir / koşuyu kaldır / çapraz kısmını kaldır)
+// bir günü değiştirdiğinde sporcu kartındaki gün seçimleri de güncellenir; değişiklik athlete.koc_gun_notlari
+// alanında [{gun,tarih,aksiyon,at}] olarak tutulur ve kartta + ankette bilgi notu olarak gösterilir.
+const KOC_GUN_NOTU_GUN=21;
+function kocGunNotlariAktif(arr,simdi){
+  const t=(simdi||Date.now());
+  return (Array.isArray(arr)?arr:[]).filter(n=>n&&n.gun&&n.at&&(t-new Date(n.at).getTime())<=KOC_GUN_NOTU_GUN*86400000);
+}
+function kocGunNotuMetni(n){
+  const a=n.aksiyon==='dinlenme'?'dinlenme günü yaptı':n.aksiyon==='kosu'?'koşu seçimini kaldırdı':'çapraz seçimini kaldırdı';
+  const p=String(n.tarih||'').split('-');
+  return n.gun+(p.length===3?' ('+p[2]+'.'+p[1]+')':'')+': '+a;
+}
+function KocGunNotuKutusu({notlar}){
+  const aktif=kocGunNotlariAktif(notlar);
+  if(!aktif.length) return null;
+  return React.createElement('div',{style:{
+    fontSize:11,color:'var(--info)',background:'var(--info-bg)',border:'1px solid var(--info)',
+    borderRadius:6,padding:'6px 10px',margin:'6px 0'}},
+    React.createElement('div',{style:{fontWeight:600,marginBottom:2}},'📝 Antrenör bu günlerin seçimini değiştirdi'),
+    aktif.map((n,i)=>React.createElement('div',{key:i},'• '+kocGunNotuMetni(n))),
+    React.createElement('div',{style:{opacity:0.8,marginTop:2}},'İstersen aşağıdaki gün seçimlerinden tekrar düzenleyebilirsin.')
+  );
+}
 function SporcuModal({onClose,onSave,initial,races}){
   const [f,setF]=useState(initial?{...initial}:{...EMPTY_A});
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
@@ -7876,6 +7901,7 @@ function SporcuModal({onClose,onSave,initial,races}){
     const arr=f[k]||[];
     const removing=arr.includes(g);
     set(k,removing?arr.filter(x=>x!==g):[...arr,g]);
+    if((f.koc_gun_notlari||[]).some(n=>n.gun===g)) set('koc_gun_notlari',(f.koc_gun_notlari||[]).filter(n=>n.gun!==g));
     // Koşu günü kaldırılıyorsa uzun_gun'dan da çıkar
     if(k==='kosu_gunleri'&&removing){
       const curUzun=Array.isArray(f.uzun_gun)?f.uzun_gun:[f.uzun_gun].filter(Boolean);
@@ -8202,6 +8228,7 @@ function SporcuModal({onClose,onSave,initial,races}){
           {v:'5x1',l:'5\'te 1 — İleri seviye'},
         ])
       ),
+      React.createElement(KocGunNotuKutusu,{notlar:f.koc_gun_notlari}),
       React.createElement('div',{className:'form-group',style:{marginBottom:8}},
         React.createElement('label',null,'Koşu günleri'),
         React.createElement('div',{className:'days-grid'},GUNLER.map(g=>{
@@ -28751,7 +28778,48 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     handlePlanGuncelle();
   },[athlete?.vlt,athlete?.lthr,athlete?.mhr,snapReady]);
 
-  const handleManuelAta=(dateStr,tpl)=>{
+  // ── 2026.10.17 — Öneri butonu → sporcu kartı (koşu/çapraz/uzun gün) + planSnap.athleteProfile + koç notu ──
+  // aksiyon: 'dinlenme' (gün tamamen dinlenme: günün türüne göre koşu ve/veya çapraz seçimi kalkar),
+  //          'kosu' (birleşik günde koşu kısmı kalkar → koşu günlerinden + uzun günden çıkar),
+  //          'capraz' (birleşik günde çapraz kısmı kalkar → çapraz günlerinden çıkar).
+  // Swap işleyicisiyle AYNI desen: kart değişikliği athlete'e (onUpdateAthlete), aynısı snapshot profiline yazılır.
+  const kocGunSecimiHesapla=(dateStr,aksiyon,curSnap)=>{
+    const asArr=(v)=>Array.isArray(v)?v:[v].filter(Boolean);
+    const day=(plan?.weeks||[]).flatMap(w=>w.days||[]).find(d=>d.date===dateStr);
+    const gun=DAYS_SHORT[new Date(dateStr+'T12:00:00').getDay()];
+    const birlesik=!!(day&&day.isKosuCapraz);
+    const saf_capraz=!!(day&&day.tip==='capraz'&&!birlesik);
+    let kosuCik=false,caprazCik=false;
+    if(aksiyon==='dinlenme'){ kosuCik=!saf_capraz||birlesik; caprazCik=saf_capraz||birlesik; }
+    else if(aksiyon==='kosu') kosuCik=true;
+    else if(aksiyon==='capraz') caprazCik=true;
+    const hesapla=(prof)=>{
+      const k=asArr(prof.kosu_gunleri),c=asArr(prof.capraz_gunleri),u=asArr(prof.uzun_gun);
+      const patch={};
+      if(kosuCik&&k.includes(gun)) patch.kosu_gunleri=k.filter(g=>g!==gun);
+      if(caprazCik&&c.includes(gun)) patch.capraz_gunleri=c.filter(g=>g!==gun);
+      if(kosuCik&&u.includes(gun)) patch.uzun_gun=u.filter(g=>g!==gun);
+      return patch;
+    };
+    const aPatch=hesapla(athlete);
+    const sPatch=curSnap&&curSnap.athleteProfile?hesapla(curSnap.athleteProfile):{};
+    const aDegisti=Object.keys(aPatch).length>0;
+    const sDegisti=Object.keys(sPatch).length>0;
+    if(!aDegisti&&!sDegisti) return {athPatch:null,snapProfile:null,ozet:''};
+    const not={gun,tarih:dateStr,aksiyon,at:new Date().toISOString()};
+    const eskiNotlar=kocGunNotlariAktif(athlete.koc_gun_notlari).filter(n=>!(n.gun===gun));
+    const parca=[];
+    if(aPatch.kosu_gunleri||sPatch.kosu_gunleri) parca.push('koşu günlerinden '+gun+' çıkarıldı');
+    if(aPatch.capraz_gunleri||sPatch.capraz_gunleri) parca.push('çapraz günlerinden '+gun+' çıkarıldı');
+    if(aPatch.uzun_gun||sPatch.uzun_gun) parca.push('uzun gün seçiminden '+gun+' çıkarıldı');
+    return {
+      athPatch:aDegisti?{...aPatch,koc_gun_notlari:[...eskiNotlar,not].slice(-8)}:null,
+      snapProfile:sDegisti?{...curSnap.athleteProfile,...sPatch}:null,
+      ozet:parca.join(', ')
+    };
+  };
+
+  const handleManuelAta=(dateStr,tpl,opts)=>{
     const now=new Date();
     const curSnap=planSnapRef.current;
     // KORUMA (Temmuz 2026 — gerçek satır verisi kaybı): Ata her zaman o günün eski
@@ -28799,6 +28867,7 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
     // önce yanlışlıkla yapıştırılmış (örn. çapraz-sporcu sızıntısı kaynaklı) bir manuel
     // antrenman kaydı varsa, bu da doğru içerikle üzerine yazılıp temizlenir.
     if(tpl.tip==='dinlenme'){
+      const _ps=(opts&&opts.profilSync)?kocGunSecimiHesapla(dateStr,'dinlenme',curSnap):null;
       const newMapRest={...(curSnap?.overrideMap||{}),[dateStr]:{
         tip:'dinlenme',baslik:'Dinlenme',sure_dk:0,yukHedef:0,yapi_notu:'',
         approved:true,isKosuCapraz:false,yapilar:[]
@@ -28814,11 +28883,13 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
         rowOverrides:newRowOverridesRest,
         manualOverrides:newManualOverridesRest,
         ykManualAnchor:curSnap?.ykManualAnchor||null,
-        reviewLog:[...(curSnap?.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} manuel: Dinlenme`}].slice(-10)
+        ...(_ps&&_ps.snapProfile?{athleteProfile:_ps.snapProfile}:{}),
+        reviewLog:[...(curSnap?.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} manuel: Dinlenme`+(_ps&&_ps.ozet?` · sporcu kartı: ${_ps.ozet}`:'')}].slice(-10)
       };
       setPlanSnap(newSnapRest);
       setManuelAtaGun(null);
-      setReviewMsg(`${dateStr} — Dinlenme olarak işaretlendi`);
+      if(_ps&&_ps.athPatch&&onUpdateAthlete) onUpdateAthlete({...athlete,..._ps.athPatch});
+      setReviewMsg(`${dateStr} — Dinlenme olarak işaretlendi`+(_ps&&_ps.ozet?` · Sporcu kartı: ${_ps.ozet}`:''));
       if(db||initFirebase()){
         const _ataSnapRest=stripUndefined(newSnapRest);
         fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,_ataSnapRest)
@@ -28944,14 +29015,17 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
       yeni={tip:'capraz',baslik:'Çapraz Antrenman',sure_dk:0,yukHedef:0,yapi_notu:'',approved:false,isKosuCapraz:false,
         yapilar:[{baslik:'➕ Çapraz Antrenman',detay:'',_caprazNot:true}]};
     }
+    const _ps=kocGunSecimiHesapla(dateStr,parca==='capraz'?'capraz':'kosu',curSnap);
     const newMap={...(curSnap.overrideMap||{}),[dateStr]:yeni};
     const newRow={...(curSnap.rowOverrides||{})}; delete newRow[dateStr];
     const newManual={...(curSnap.manualOverrides||{}),[dateStr]:{tip:yeni.tip,baslik:yeni.baslik,atAt:now.toISOString()}};
     const newSnap={...curSnap,weekKey,athId:athlete.id,lastReviewAt:now.toISOString(),lastSavedAt:new Date().toISOString(),
       overrideMap:newMap,rowOverrides:newRow,manualOverrides:newManual,
-      reviewLog:[...(curSnap.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} ${parca==='capraz'?'çapraz kısmı kaldırıldı':'koşu kısmı kaldırıldı'}`}].slice(-10)};
+      ...(_ps.snapProfile?{athleteProfile:_ps.snapProfile}:{}),
+      reviewLog:[...(curSnap.reviewLog||[]),{at:now.toISOString(),reason:`${dateStr} ${parca==='capraz'?'çapraz kısmı kaldırıldı':'koşu kısmı kaldırıldı'}`+(_ps.ozet?` · sporcu kartı: ${_ps.ozet}`:'')}].slice(-10)};
     setPlanSnap(newSnap);
-    setReviewMsg(`${dateStr} — ${parca==='capraz'?'çapraz kısmı kaldırıldı (koşu kaldı)':'koşu kısmı kaldırıldı (çapraz kaldı)'}`);
+    if(_ps.athPatch&&onUpdateAthlete) onUpdateAthlete({...athlete,..._ps.athPatch});
+    setReviewMsg(`${dateStr} — ${parca==='capraz'?'çapraz kısmı kaldırıldı (koşu kaldı)':'koşu kısmı kaldırıldı (çapraz kaldı)'}`+(_ps.ozet?` · Sporcu kartı: ${_ps.ozet}`:''));
     if(db||initFirebase()){
       const _snap=stripUndefined(newSnap);
       fbUpdate(`plan_snapshots/${athlete.id}/${weekKey}`,_snap)
@@ -31435,15 +31509,15 @@ function HaftalikPlanTab({athlete,history,races,workouts,testPlanlar,planSnapIni
                     // yalnızca Koç Paneli (Koşu İzlerim'de gösterilmez)
                     satirlar.push(React.createElement('div',{key:'o',style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginTop:day.hacimNotu?4:0}},
                       React.createElement('span',{style:{color:'var(--warn)',fontWeight:600}},'💤 '+day.hacimOneri),
-                      !_bir?_oneriDugme('b1','😴 Dinlenmeye çevir',()=>handleManuelAta(day.date,{tip:'dinlenme'}))
-                        :(_ikisi?_oneriDugme('b2','😴 Dinlenmeye çevir (koşu + çapraz)',()=>handleManuelAta(day.date,{tip:'dinlenme'}))
+                      !_bir?_oneriDugme('b1','😴 Dinlenmeye çevir',()=>handleManuelAta(day.date,{tip:'dinlenme'},{profilSync:true}))
+                        :(_ikisi?_oneriDugme('b2','😴 Dinlenmeye çevir (koşu + çapraz)',()=>handleManuelAta(day.date,{tip:'dinlenme'},{profilSync:true}))
                           :_oneriDugme('b3','🚴 Koşuyu kaldır, çapraz kalsın',()=>handleGunParcaKaldir(day.date,'kosu')))));
                   }
                   if(day.caprazOneri){
                     // 2026.10.17 — çapraz gün: yük (süre×RPE) + yorgunluk sinyaline dayalı öneri; yalnızca Koç Paneli
                     satirlar.push(React.createElement('div',{key:'co',style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginTop:satirlar.length?4:0}},
                       React.createElement('span',{style:{color:'var(--warn)',fontWeight:600},title:'Çapraz yük = süre (dk) × RPE; RPE girilmeyen seanslar sporcunun son 8 haftadaki çapraz RPE ortancasıyla (yoksa 5) tamamlanır'},'💤 '+day.caprazOneri),
-                      !_bir?_oneriDugme('c1','😴 Dinlenmeye çevir',()=>handleManuelAta(day.date,{tip:'dinlenme'}))
+                      !_bir?_oneriDugme('c1','😴 Dinlenmeye çevir',()=>handleManuelAta(day.date,{tip:'dinlenme'},{profilSync:true}))
                         :(_ikisi?null:_oneriDugme('c2','🏃 Çapraz kısmını kaldır, koşu kalsın',()=>handleGunParcaKaldir(day.date,'capraz')))));
                   }
                   if(day.hacimUyari) satirlar.push(React.createElement('div',{key:'u',style:{color:'var(--warn)',marginTop:satirlar.length?4:0}},'⚠ '+day.hacimUyari));
@@ -44491,6 +44565,7 @@ function SporcuAnketi(){
         kosu_gunleri:a.kosu_gunleri||[],
         capraz_gunleri:a.capraz_gunleri||[],
         uzun_gun:Array.isArray(a.uzun_gun)?a.uzun_gun:[a.uzun_gun].filter(Boolean),
+        koc_gun_notlari:a.koc_gun_notlari||[],
       });
     }
   },[athletes,selId]);
@@ -44535,6 +44610,7 @@ function SporcuAnketi(){
           kosu_gunleri:a.kosu_gunleri||[],
           capraz_gunleri:a.capraz_gunleri||[],
           uzun_gun:Array.isArray(a.uzun_gun)?a.uzun_gun:[a.uzun_gun].filter(Boolean),
+          koc_gun_notlari:a.koc_gun_notlari||[],
         });
       }
     }catch(e){}
@@ -44571,6 +44647,7 @@ function SporcuAnketi(){
       const arr=f[field]||[];
       const removing=arr.includes(gun);
       const updated=Object.assign({},f,{[field]:removing?arr.filter(function(x){return x!==gun;}):[...arr,gun]});
+      if((f.koc_gun_notlari||[]).some(function(n){return n.gun===gun;})) updated.koc_gun_notlari=(f.koc_gun_notlari||[]).filter(function(n){return n.gun!==gun;});
       // Koşu günü kaldırılıyorsa uzun_gun'dan da çıkar
       if(field==='kosu_gunleri'&&removing){
         const curUzun=Array.isArray(f.uzun_gun)?f.uzun_gun:[f.uzun_gun].filter(Boolean);
@@ -45007,6 +45084,7 @@ function SporcuAnketi(){
 
     React.createElement('div',{className:'card',style:{marginBottom:12}},
       React.createElement('div',{className:'card-title'},'Koşu Günleri'),
+      React.createElement(KocGunNotuKutusu,{notlar:form.koc_gun_notlari}),
       React.createElement('div',{className:'days-grid'},
         GUNLER_LIST.map(function(g){
           var isRace=!!buHaftaYarisGunleriAnket[g];
